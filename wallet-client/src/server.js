@@ -14,15 +14,71 @@ app.use(express.json({ limit: "2mb" }));
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Operation context tracking for better log organization (per session)
+const sessionOperationCounters = new Map();
+
 function makeSessionLogger(sessionId) {
+  if (!sessionId) {
+    return function sessionLog(...args) {
+      try { console.log(...args); } catch {}
+    };
+  }
+  
+  // Initialize per-session counter if needed
+  if (!sessionOperationCounters.has(sessionId)) {
+    sessionOperationCounters.set(sessionId, 0);
+  }
+  
   return function sessionLog(...args) {
     try { console.log(...args); } catch {}
     try {
-      const message = args.map((a) => {
-        if (typeof a === 'string') return a;
-        try { return JSON.stringify(a); } catch { return String(a); }
-      }).join(' ');
-      appendWalletLog(sessionId, { level: 'info', message }).catch(() => {});
+      // Separate string messages from structured data
+      const messages = [];
+      let data = null;
+      
+      // If last arg is a plain object (not null, not array, not Date, etc.), treat it as structured data
+      if (args.length > 0) {
+        const lastArg = args[args.length - 1];
+        if (lastArg && typeof lastArg === 'object' && !Array.isArray(lastArg) && 
+            !(lastArg instanceof Date) && !(lastArg instanceof Error) && 
+            Object.prototype.toString.call(lastArg) === '[object Object]') {
+          // Last argument is structured data
+          data = lastArg;
+          // Process remaining args as messages
+          for (let i = 0; i < args.length - 1; i++) {
+            const arg = args[i];
+            if (typeof arg === 'string') {
+              messages.push(arg);
+            } else {
+              try { messages.push(JSON.stringify(arg)); } catch { messages.push(String(arg)); }
+            }
+          }
+        } else {
+          // No structured data, convert all args to messages
+          for (const arg of args) {
+            if (typeof arg === 'string') {
+              messages.push(arg);
+            } else {
+              try { messages.push(JSON.stringify(arg)); } catch { messages.push(String(arg)); }
+            }
+          }
+        }
+      }
+      
+      const message = messages.join(' ');
+      const counter = sessionOperationCounters.get(sessionId);
+      sessionOperationCounters.set(sessionId, counter + 1);
+      
+      const logEntry = { 
+        level: 'info', 
+        message,
+        step: counter
+      };
+      
+      if (data) {
+        logEntry.data = data;
+      }
+      appendWalletLog(sessionId, logEntry).catch(() => {});
     } catch {}
   };
 }
@@ -595,13 +651,41 @@ function makeTxCode(cfg) {
 
 async function httpPostJson(url, body, logSessionId) {
   const slog = logSessionId ? makeSessionLogger(logSessionId) : (() => {});
-  const start = Date.now();
+  const bodyString = JSON.stringify(body || {});
+  const requestId = `req_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+  
   try { console.log("[http] POST JSON ->", url); } catch {}
-  try { slog("[http] POST JSON", { url }); } catch {}
-  const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body || {}) });
-  const duration = Date.now() - start;
-  try { console.log("[http] <-", url, res.status, duration + "ms"); } catch {}
-  try { slog("[http] response", { url, status: res.status, duration }); } catch {}
+  try { 
+    slog("[HTTP] [REQUEST] POST JSON", { 
+      requestId,
+      method: "POST",
+      url, 
+      headers: { "content-type": "application/json" },
+      body: body || {}
+    }); 
+  } catch {}
+  
+  const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: bodyString });
+  
+  // Clone the response so we can read it for logging without consuming the original
+  const resClone = res.clone();
+  const responseText = await resClone.text().catch(() => "");
+  let responseBody = null;
+  try {
+    responseBody = responseText ? JSON.parse(responseText) : null;
+  } catch {}
+  
+  try { console.log("[http] <-", url, res.status); } catch {}
+  try { 
+    slog("[HTTP] [RESPONSE] POST JSON", { 
+      requestId,
+      url, 
+      status: res.status,
+      statusText: res.statusText,
+      headers: Object.fromEntries(res.headers.entries()),
+      body: responseBody || responseText
+    }); 
+  } catch {}
   return res;
 }
 
@@ -609,17 +693,52 @@ async function httpPostForm(url, params, logSessionId, dpopHeader = null) {
   const slog = logSessionId ? makeSessionLogger(logSessionId) : (() => {});
   const form = new URLSearchParams();
   Object.entries(params || {}).forEach(([k, v]) => { if (typeof v !== 'undefined' && v !== null) form.set(k, String(v)); });
-  const start = Date.now();
+  const requestId = `req_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+  
   try { console.log("[http] POST FORM ->", url); } catch {}
-  try { slog("[http] POST FORM", { url }); } catch {}
+  // Log form parameters (redact sensitive values like tokens)
+  const logParams = { ...params };
+  if (logParams.client_assertion) logParams.client_assertion = "<redacted>";
+  if (logParams.code) logParams.code = "<redacted>";
+  if (logParams.access_token) logParams.access_token = "<redacted>";
+  
   const headers = { "content-type": "application/x-www-form-urlencoded" };
   if (dpopHeader) {
     headers["DPoP"] = dpopHeader;
   }
+  
+  try { 
+    slog("[HTTP] [REQUEST] POST FORM", { 
+      requestId,
+      method: "POST",
+      url, 
+      headers: { ...headers, DPoP: dpopHeader ? "<redacted>" : undefined },
+      params: logParams,
+      hasDPoP: !!dpopHeader
+    }); 
+  } catch {}
+  
   const res = await fetch(url, { method: "POST", headers, body: form.toString() });
-  const duration = Date.now() - start;
-  try { console.log("[http] <-", url, res.status, duration + "ms"); } catch {}
-  try { slog("[http] response", { url, status: res.status, duration }); } catch {}
+  
+  // Clone the response so we can read it for logging without consuming the original
+  const resClone = res.clone();
+  const responseText = await resClone.text().catch(() => "");
+  let responseBody = null;
+  try {
+    responseBody = responseText ? JSON.parse(responseText) : null;
+  } catch {}
+  
+  try { console.log("[http] <-", url, res.status); } catch {}
+  try { 
+    slog("[HTTP] [RESPONSE] POST FORM", { 
+      requestId,
+      url, 
+      status: res.status,
+      statusText: res.statusText,
+      headers: Object.fromEntries(res.headers.entries()),
+      body: responseBody || responseText
+    }); 
+  } catch {}
   return res;
 }
 
@@ -639,7 +758,7 @@ function safeParseJson(str) {
 
 async function runPreAuthorizedIssuance({ apiBase, issuerMeta, configurationId, preAuthorizedCode, txCodeConfig, authorizationServer, keyPath, pollTimeoutMs, pollIntervalMs, userPin }, logSessionId) {
   const slog = logSessionId ? makeSessionLogger(logSessionId) : (() => {});
-  try { slog("[preauth] start", { configurationId, hasTxCodeCfg: !!txCodeConfig }); } catch {}
+  try { slog("[ISSUANCE] [START] Pre-authorized issuance flow", { configurationId, apiBase, hasTxCodeCfg: !!txCodeConfig }); } catch {}
   // Draft-15: If tx_code is indicated in offer and not provided by user, do NOT fabricate. Require user input.
   let txCode = undefined;
   if (userPin) {
@@ -782,11 +901,11 @@ async function runPreAuthorizedIssuance({ apiBase, issuerMeta, configurationId, 
   try { slog("[preauth] tokenRes.body", { length: tokenResponseText.length }); } catch {}
   
   if (!tokenRes.ok) {
-    console.error("[preauth] token error", tokenRes.status, tokenResponseText?.slice(0, 500));
+    console.error("[preauth] token error", tokenRes.status, tokenResponseText);
     let err = {};
     try { err = JSON.parse(tokenResponseText); } catch {}
     console.error("[preauth] token error parsed:", JSON.stringify(err, null, 2)); 
-    try { slog("[preauth] token error", { status: tokenRes.status, err, body: tokenResponseText?.slice(0, 500) }); } catch {}
+    try { slog("[preauth] token error", { status: tokenRes.status, err, body: tokenResponseText }); } catch {}
     throw new Error(`token_error ${tokenRes.status}: ${JSON.stringify(err)}`);
   }
   
@@ -797,7 +916,7 @@ async function runPreAuthorizedIssuance({ apiBase, issuerMeta, configurationId, 
     try { slog("[preauth] token response parsed", { hasAccessToken: !!tokenBody.access_token, hasCNonce: !!tokenBody.c_nonce }); } catch {}
   } catch (e) {
     console.error("[preauth] failed to parse token response as JSON:", e?.message); 
-    try { slog("[preauth] token response parse failed", { error: e?.message, body: tokenResponseText?.slice(0, 500) }); } catch {}
+    try { slog("[preauth] token response parse failed", { error: e?.message, body: tokenResponseText }); } catch {}
     throw new Error(`token_error: invalid JSON response - ${e?.message}`);
   }
   const accessToken = tokenBody.access_token;
@@ -810,10 +929,10 @@ async function runPreAuthorizedIssuance({ apiBase, issuerMeta, configurationId, 
     const nonceRes = await httpPostJson(nonceEndpoint, {}, logSessionId); try { slog("[preauth] nonce request", { endpoint: nonceEndpoint, status: nonceRes.status }); } catch {}
     if (!nonceRes.ok) {
       const text = await nonceRes.text().catch(() => "");
-      console.error("[preauth] nonce error", nonceRes.status, text?.slice(0, 500));
+      console.error("[preauth] nonce error", nonceRes.status, text);
       let err = {};
       try { err = JSON.parse(text); } catch {}
-      try { slog("[preauth] nonce error", { status: nonceRes.status, err }); } catch {}
+      try { slog("[preauth] nonce error", { status: nonceRes.status, err, body: text }); } catch {}
       throw new Error(`nonce_error ${nonceRes.status}: ${JSON.stringify(err)}`);
     }
     const nonceJson = await nonceRes.json();
@@ -894,25 +1013,45 @@ async function runPreAuthorizedIssuance({ apiBase, issuerMeta, configurationId, 
   };
   console.log("[preauth] credential request:", JSON.stringify({ ...credReq, proofs: { jwt: ["<redacted>"] } }, null, 2)); try { slog("[preauth] credential request body", { hasBody: true }); } catch {}
   if (accessToken) {
-    console.log("[preauth] access_token preview:", `${accessToken.substring(0, 20)}...`); try { slog("[preauth] access_token preview", { preview: `${accessToken.substring(0, 20)}...` }); } catch {}
+    console.log("[preauth] access_token:", accessToken); try { slog("[preauth] access_token", { accessToken }); } catch {}
   } else {
     console.warn("[preauth] access_token missing in token response"); try { slog("[preauth] access_token missing"); } catch {}
   }
   try { slog("[preauth] credential request", { configurationId, hasProof: !!proofJwt }); } catch {}
   
+  const credReqBody = JSON.stringify(credReq);
+  const credRequestId = `cred_req_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+  try { 
+    slog("[CREDENTIAL] [REQUEST] Credential request", { 
+      requestId: credRequestId,
+      endpoint: credentialEndpoint,
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer <redacted>" },
+      body: { ...credReq, proofs: { jwt: ["<redacted>"] } }
+    }); 
+  } catch {}
   const credRes = await fetch(credentialEndpoint, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${accessToken}` },
-    body: JSON.stringify(credReq),
+    body: credReqBody,
   });
-  console.log("[preauth] credentialRes.status=", credRes.status); 
-  try { slog("[preauth] credentialRes.status", { status: credRes.status }); } catch {}
-  console.log("[preauth] credentialRes.headers:", Object.fromEntries(credRes.headers.entries())); 
-  try { slog("[preauth] credentialRes.headers", { headers: Object.fromEntries(credRes.headers.entries()) }); } catch {}
-
   const responseText = await credRes.text().catch(() => "");
-  console.log("[preauth] credentialRes.body length:", responseText.length); 
-  try { slog("[preauth] credentialRes.body", { length: responseText.length }); } catch {}
+  let responseBody = null;
+  try {
+    responseBody = responseText ? JSON.parse(responseText) : null;
+  } catch {}
+  
+  console.log("[preauth] credentialRes.status=", credRes.status); 
+  try { 
+    slog("[CREDENTIAL] [RESPONSE] Credential response", { 
+      requestId: credRequestId,
+      endpoint: credentialEndpoint,
+      status: credRes.status,
+      statusText: credRes.statusText,
+      headers: Object.fromEntries(credRes.headers.entries()),
+      body: responseBody || responseText
+    }); 
+  } catch {}
 
   if (!credRes.ok) {
     console.error("[preauth] credential error", credRes.status); 
@@ -927,19 +1066,18 @@ async function runPreAuthorizedIssuance({ apiBase, issuerMeta, configurationId, 
       try { slog("[preauth] credential error parsed", { err }); } catch {}
     } catch (parseErr) {
       console.error("[preauth] credential error response is not JSON, raw text:", responseText); 
-      try { slog("[preauth] credential error not JSON", { text: responseText?.slice(0, 500) }); } catch {}
-      err = { error: "invalid_response", error_description: responseText?.slice(0, 500) };
+      try { slog("[preauth] credential error not JSON", { text: responseText }); } catch {}
+      err = { error: "invalid_response", error_description: responseText };
     }
     
     try { slog("[preauth] credential error", { status: credRes.status, err }); } catch {}
     throw new Error(`credential_error ${credRes.status}: ${JSON.stringify(err)}`);
   }
 
-  // Log successful response body (may be large, so log preview)
+  // Log successful response body
   try {
-    const responsePreview = responseText.length > 1000 ? responseText.substring(0, 1000) + "..." : responseText;
-    console.log("[preauth] credential response preview:", responsePreview); 
-    try { slog("[preauth] credential response preview", { length: responseText.length, preview: responsePreview }); } catch {}
+    console.log("[preauth] credential response:", responseText); 
+    try { slog("[preauth] credential response", { length: responseText.length, body: responseText }); } catch {}
   } catch (e) {
     console.warn("[preauth] failed to log credential response:", e?.message); 
     try { slog("[preauth] failed to log response", { error: e?.message }); } catch {}
@@ -951,7 +1089,7 @@ async function runPreAuthorizedIssuance({ apiBase, issuerMeta, configurationId, 
       credBody = JSON.parse(responseText);
     } catch (e) {
       console.error("[preauth] failed to parse deferred response as JSON:", e?.message); 
-      try { slog("[preauth] deferred response parse failed", { error: e?.message, body: responseText?.slice(0, 500) }); } catch {}
+      try { slog("[preauth] deferred response parse failed", { error: e?.message, body: responseText }); } catch {}
       throw new Error(`credential_error ${credRes.status}: invalid JSON response`);
     }
     const { transaction_id } = credBody;
@@ -975,16 +1113,17 @@ async function runPreAuthorizedIssuance({ apiBase, issuerMeta, configurationId, 
           defBody = JSON.parse(defBodyText);
         } catch (e) {
           console.error("[preauth] failed to parse deferred credential as JSON:", e?.message); 
-          try { slog("[preauth] deferred credential parse failed", { error: e?.message, body: defBodyText?.slice(0, 500) }); } catch {}
+          try { slog("[preauth] deferred credential parse failed", { error: e?.message, body: defBodyText }); } catch {}
           throw new Error(`credential_error: invalid JSON in deferred credential response`);
         }
         try { slog("[preauth] deferred ready"); } catch {}
         await validateAndStoreCredential({ configurationId, credential: defBody, issuerMeta, apiBase, keyBinding: { privateJwk, publicJwk, didJwk }, metadata: { configurationId, c_nonce, c_nonce_expires_in }, authorizationServerMeta: issuerMeta._authorizationServerMeta }, logSessionId);
+        try { slog("[ISSUANCE] [COMPLETE] Pre-authorized issuance flow (deferred)", { configurationId, success: true }); } catch {}
         return defBody;
       } else {
         const defErrorText = await defRes.text().catch(() => "");
-        console.warn("[preauth] deferred poll error:", defRes.status, defErrorText?.slice(0, 500)); 
-        try { slog("[preauth] deferred poll error", { status: defRes.status, error: defErrorText?.slice(0, 500) }); } catch {}
+        console.warn("[preauth] deferred poll error:", defRes.status, defErrorText); 
+        try { slog("[preauth] deferred poll error", { status: defRes.status, error: defErrorText }); } catch {}
       }
     }
     try { slog("[preauth] deferred timeout"); } catch {}
@@ -996,7 +1135,7 @@ async function runPreAuthorizedIssuance({ apiBase, issuerMeta, configurationId, 
     credBody = JSON.parse(responseText);
   } catch (e) {
     console.error("[preauth] failed to parse credential response as JSON:", e?.message); 
-    try { slog("[preauth] credential response parse failed", { error: e?.message, body: responseText?.slice(0, 500) }); } catch {}
+    try { slog("[preauth] credential response parse failed", { error: e?.message, body: responseText }); } catch {}
     throw new Error(`credential_error: invalid JSON response - ${e?.message}`);
   }
   console.log("[preauth] credential received, starting validation"); 
@@ -1145,7 +1284,7 @@ async function runAuthorizationCodeIssuance({ apiBase, issuerMeta, configuration
         }
       } else {
         const text = await parRes.text().catch(() => "");
-        console.warn("[codeflow][par] failed status=", parRes.status, "body:", text?.slice(0, 300)); try { slog("[codeflow][par] failed", { status: parRes.status, body: text?.slice(0, 300) }); } catch {}
+        console.warn("[codeflow][par] failed status=", parRes.status, "body:", text); try { slog("[codeflow][par] failed", { status: parRes.status, body: text }); } catch {}
       }
     } catch (e) {
       console.warn("[codeflow][par] error:", e?.message || e); try { slog("[codeflow][par] error", { error: e?.message || String(e) }); } catch {}
@@ -1168,7 +1307,7 @@ async function runAuthorizationCodeIssuance({ apiBase, issuerMeta, configuration
   
   if (!redirectUrl) {
     const bodyText = await authRes.text().catch(() => "");
-    console.log("[codeflow] authRes body:", bodyText); try { slog("[codeflow] authRes body", { body: bodyText?.slice(0, 200) }); } catch {}
+    console.log("[codeflow] authRes body:", bodyText); try { slog("[codeflow] authRes body", { body: bodyText }); } catch {}
     const redirectPayload = safeParseJson(bodyText);
     console.log("[codeflow] parsed redirect payload:", redirectPayload); try { slog("[codeflow] parsed redirect payload", { payload: redirectPayload }); } catch {}
     if (redirectPayload?.redirect_uri) redirectUrl = redirectPayload.redirect_uri;
@@ -1251,10 +1390,10 @@ async function runAuthorizationCodeIssuance({ apiBase, issuerMeta, configuration
   console.log("[codeflow] tokenRes.status=", tokenRes.status); try { slog("[codeflow] tokenRes.status", { status: tokenRes.status }); } catch {}
   if (!tokenRes.ok) {
     const text = await tokenRes.text().catch(() => "");
-    console.error("[codeflow] token error", tokenRes.status, text?.slice(0, 500));
+    console.error("[codeflow] token error", tokenRes.status, text);
     let err = {};
     try { err = JSON.parse(text); } catch {}
-    try { slog("[codeflow] token error", { status: tokenRes.status, err }); } catch {}
+    try { slog("[codeflow] token error", { status: tokenRes.status, err, body: text }); } catch {}
     throw new Error(`token_error ${tokenRes.status}: ${JSON.stringify(err)}`);
   }
   const tokenBody = await tokenRes.json();
@@ -1270,7 +1409,7 @@ async function runAuthorizationCodeIssuance({ apiBase, issuerMeta, configuration
     const nonceRes = await httpPostJson(nonceEndpoint, {}, logSessionId); try { slog("[codeflow] nonce request", { endpoint: nonceEndpoint, status: nonceRes.status }); } catch {}
     if (!nonceRes.ok) {
       const text = await nonceRes.text().catch(() => "");
-      console.error("[codeflow] nonce error", nonceRes.status, text?.slice(0, 500)); try { slog("[codeflow] nonce error", { status: nonceRes.status, error: text?.slice(0, 200) }); } catch {}
+      console.error("[codeflow] nonce error", nonceRes.status, text); try { slog("[codeflow] nonce error", { status: nonceRes.status, error: text }); } catch {}
       let err = {};
       try { err = JSON.parse(text); } catch {}
       throw new Error(`nonce_error ${nonceRes.status}: ${JSON.stringify(err)}`);
@@ -1350,10 +1489,12 @@ async function runAuthorizationCodeIssuance({ apiBase, issuerMeta, configuration
     } 
   };
   console.log("[codeflow] credential request:", JSON.stringify({ ...credReq, proofs: { jwt: ["<redacted>"] } }, null, 2)); try { slog("[codeflow] credential request body", { hasBody: true }); } catch {}
+  const credReqBody = JSON.stringify(credReq);
+  try { slog("[codeflow] sending credential request", { endpoint: credentialEndpoint, body: { ...credReq, proofs: { jwt: ["<redacted>"] } } }); } catch {}
   const credRes = await fetch(credentialEndpoint, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${accessToken}` },
-    body: JSON.stringify(credReq),
+    body: credReqBody,
   });
   console.log("[codeflow] credentialRes.status=", credRes.status); 
   try { slog("[codeflow] credentialRes.status", { status: credRes.status }); } catch {}
@@ -1370,7 +1511,7 @@ async function runAuthorizationCodeIssuance({ apiBase, issuerMeta, configuration
       credBody = JSON.parse(responseText);
     } catch (e) {
       console.error("[codeflow] failed to parse deferred response as JSON:", e?.message); 
-      try { slog("[codeflow] deferred response parse failed", { error: e?.message, body: responseText?.slice(0, 500) }); } catch {}
+      try { slog("[codeflow] deferred response parse failed", { error: e?.message, body: responseText }); } catch {}
       throw new Error(`credential_error ${credRes.status}: invalid JSON response`);
     }
     const { transaction_id } = credBody;
@@ -1393,7 +1534,7 @@ async function runAuthorizationCodeIssuance({ apiBase, issuerMeta, configuration
           defBody = JSON.parse(defBodyText);
         } catch (e) {
           console.error("[codeflow] failed to parse deferred credential as JSON:", e?.message); 
-          try { slog("[codeflow] deferred credential parse failed", { error: e?.message, body: defBodyText?.slice(0, 500) }); } catch {}
+          try { slog("[codeflow] deferred credential parse failed", { error: e?.message, body: defBodyText }); } catch {}
           throw new Error(`credential_error: invalid JSON in deferred credential response`);
         }
         try { slog("[codeflow] deferred ready"); } catch {}
@@ -1401,8 +1542,8 @@ async function runAuthorizationCodeIssuance({ apiBase, issuerMeta, configuration
         return defBody;
       } else {
         const defErrorText = await defRes.text().catch(() => "");
-        console.warn("[codeflow] deferred poll error:", defRes.status, defErrorText?.slice(0, 500)); 
-        try { slog("[codeflow] deferred poll error", { status: defRes.status, error: defErrorText?.slice(0, 500) }); } catch {}
+        console.warn("[codeflow] deferred poll error:", defRes.status, defErrorText); 
+        try { slog("[codeflow] deferred poll error", { status: defRes.status, error: defErrorText }); } catch {}
       }
     }
     try { slog("[codeflow] deferred timeout"); } catch {}
@@ -1414,9 +1555,9 @@ async function runAuthorizationCodeIssuance({ apiBase, issuerMeta, configuration
     try { 
       err = JSON.parse(responseText); 
     } catch (parseErr) {
-      console.error("[codeflow] credential error response is not JSON, raw text:", responseText?.slice(0, 500)); 
-      try { slog("[codeflow] credential error not JSON", { text: responseText?.slice(0, 500) }); } catch {}
-      err = { error: "invalid_response", error_description: responseText?.slice(0, 500) };
+      console.error("[codeflow] credential error response is not JSON, raw text:", responseText); 
+      try { slog("[codeflow] credential error not JSON", { text: responseText }); } catch {}
+      err = { error: "invalid_response", error_description: responseText };
     }
     console.error("[codeflow] credential error parsed:", JSON.stringify(err, null, 2)); 
     try { slog("[codeflow] credential error", { status: credRes.status, err }); } catch {}
@@ -1428,7 +1569,7 @@ async function runAuthorizationCodeIssuance({ apiBase, issuerMeta, configuration
     credBody = JSON.parse(responseText);
   } catch (e) {
     console.error("[codeflow] failed to parse credential response as JSON:", e?.message); 
-    try { slog("[codeflow] credential response parse failed", { error: e?.message, body: responseText?.slice(0, 500) }); } catch {}
+    try { slog("[codeflow] credential response parse failed", { error: e?.message, body: responseText }); } catch {}
     throw new Error(`credential_error: invalid JSON response - ${e?.message}`);
   }
   console.log("[codeflow] credential received, starting validation"); 
@@ -1467,14 +1608,13 @@ async function validateAndStoreCredential({ configurationId, credential, issuerM
 
   console.log("[validate] configurationId=", configurationId, "issuer=", issuerMeta?.credential_issuer, "has.c_nonce=", !!metadata?.c_nonce); 
   try { slog("[validate] start", { configurationId, issuer: issuerMeta?.credential_issuer, hasCNonce: !!metadata?.c_nonce }); } catch {}
-  console.log("[validate] token preview:", typeof token === 'string' ? token.substring(0, 60) + "..." : typeof token); 
-  try { slog("[validate] token preview", { tokenType: typeof token, preview: typeof token === 'string' ? token.substring(0, 100) : typeof token }); } catch {}
+  console.log("[validate] token:", typeof token === 'string' ? token : typeof token); 
+  try { slog("[validate] token", { tokenType: typeof token, token: typeof token === 'string' ? token : typeof token }); } catch {}
   try {
     const dbgFull = process.env.WALLET_DEBUG_CREDENTIAL === 'full';
     const envelopeStr = typeof credential === 'string' ? credential : JSON.stringify(credential);
-    const shown = dbgFull ? envelopeStr : envelopeStr.substring(0, 2000);
-    console.log("[validate] credential envelope:"+ envelopeStr)
-    try { slog("[validate] envelope", { length: envelopeStr.length, mode: dbgFull ? "full" : "truncated" }); } catch {}
+    console.log("[validate] credential envelope:", envelopeStr)
+    try { slog("[validate] envelope", { length: envelopeStr.length, envelope: envelopeStr }); } catch {}
   } catch (e) {
     console.warn("[validate] failed to log credential envelope:", e?.message);
     try { slog("[validate] envelope log failed", { error: e?.message }); } catch {}
@@ -1734,9 +1874,9 @@ async function validateSdJwt({ sdJwt, issuerMeta, configurationId, expectedCNonc
       }
     } else {
       const errorText = await res.text().catch(() => "");
-      jwksVerificationError = `JWKS fetch failed with status ${res.status}${errorText ? `: ${errorText.slice(0, 200)}` : ''}`;
-      console.warn("[sd-jwt] JWKS fetch failed; status:", res.status, "body:", errorText?.slice(0, 200)); 
-      try { slog("[sd-jwt] JWKS fetch failed", { status: res.status, error: errorText?.slice(0, 200) }); } catch {}
+      jwksVerificationError = `JWKS fetch failed with status ${res.status}${errorText ? `: ${errorText}` : ''}`;
+      console.warn("[sd-jwt] JWKS fetch failed; status:", res.status, "body:", errorText); 
+      try { slog("[sd-jwt] JWKS fetch failed", { status: res.status, error: errorText }); } catch {}
     }
   }
 

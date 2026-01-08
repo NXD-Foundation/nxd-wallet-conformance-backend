@@ -8,11 +8,45 @@ function makeSessionLogger(sessionId) {
     try { console.log(...args); } catch {}
     if (!sessionId) return;
     try {
-      const message = args.map((a) => {
-        if (typeof a === 'string') return a;
-        try { return JSON.stringify(a); } catch { return String(a); }
-      }).join(' ');
-      appendWalletLog(sessionId, { level: 'info', message }).catch(() => {});
+      // Separate string messages from structured data
+      const messages = [];
+      let data = null;
+      
+      // If last arg is a plain object (not null, not array, not Date, etc.), treat it as structured data
+      if (args.length > 0) {
+        const lastArg = args[args.length - 1];
+        if (lastArg && typeof lastArg === 'object' && !Array.isArray(lastArg) && 
+            !(lastArg instanceof Date) && !(lastArg instanceof Error) && 
+            Object.prototype.toString.call(lastArg) === '[object Object]') {
+          // Last argument is structured data
+          data = lastArg;
+          // Process remaining args as messages
+          for (let i = 0; i < args.length - 1; i++) {
+            const arg = args[i];
+            if (typeof arg === 'string') {
+              messages.push(arg);
+            } else {
+              try { messages.push(JSON.stringify(arg)); } catch { messages.push(String(arg)); }
+            }
+          }
+        } else {
+          // No structured data, convert all args to messages
+          for (const arg of args) {
+            if (typeof arg === 'string') {
+              messages.push(arg);
+            } else {
+              try { messages.push(JSON.stringify(arg)); } catch { messages.push(String(arg)); }
+            }
+          }
+        }
+      }
+      
+      const message = messages.join(' ');
+      const logEntry = { level: 'info', message };
+      if (data) {
+        logEntry.data = data;
+      }
+      appendWalletLog(sessionId, logEntry).catch(() => {});
     } catch {}
   };
 }
@@ -41,7 +75,7 @@ async function fetchAuthorizationRequestJwt(requestUri, method) {
     });
     const text = await res.text().catch(() => "");
     console.log("[present] POST request_uri status:", res.status, "body.len=", text?.length);
-    if (!res.ok) throw new Error(`Auth request POST error ${res.status}${text ? ": " + text.slice(0, 300) : ""}`);
+    if (!res.ok) throw new Error(`Auth request POST error ${res.status}${text ? ": " + text : ""}`);
     return text;
   }
   console.log("[present] Fetching request JWT via GET:", requestUri);
@@ -115,7 +149,7 @@ function extractCredentialString(credentialEnvelope) {
       console.log("[present] Found credentials object, keys:", Object.keys(credentialEnvelope.credentials));
       // Look for SD-JWT, JWT, or mdoc in credentials object
       for (const [key, value] of Object.entries(credentialEnvelope.credentials)) {
-        console.log("[present] credentials[" + key + "] type:", typeof value, "value preview:", typeof value === "string" ? value.substring(0, 100) : JSON.stringify(value).substring(0, 100));
+        console.log("[present] credentials[" + key + "] type:", typeof value, "value:", typeof value === "string" ? value : JSON.stringify(value));
         if (typeof value === "string" && (value.includes("~") || value.split(".").length >= 3)) {
           console.log("[present] Found token in credentials." + key);
           return value;
@@ -145,8 +179,9 @@ function extractCredentialString(credentialEnvelope) {
 
 export async function performPresentation({ deepLink, verifierBase, credentialType, keyPath }, logSessionId) {
   const slog = logSessionId ? makeSessionLogger(logSessionId) : (() => {});
+  try { slog("[PRESENTATION] [START] Presentation flow", { deepLink, verifierBase, credentialType }); } catch {}
   const { requestUri, clientId, method } = parseOpenId4VpDeepLink(deepLink);
-  try { slog("[present] parsed deepLink", { requestUri, clientId, method }); } catch {}
+  try { slog("[PRESENTATION] Parsed deep link", { requestUri, clientId, method }); } catch {}
   const requestJwt = await fetchAuthorizationRequestJwt(requestUri, method);
   const { payload } = decodeJwt(requestJwt);
 
@@ -342,7 +377,7 @@ export async function performPresentation({ deepLink, verifierBase, credentialTy
           .setProtectedHeader(jweProtectedHeader)
           .encrypt(publicKey);
 
-        console.log('[present] Created JWE:', responseJwtOrJwe.substring(0, 100) + '...');
+        console.log('[present] Created JWE:', responseJwtOrJwe);
       } else {
         // Fallback: send signed JWT directly if no enc key is provided
         const signingKey = await importJWK(privateJwk, 'ES256');
@@ -379,7 +414,28 @@ export async function performPresentation({ deepLink, verifierBase, credentialTy
     contentType = "application/x-www-form-urlencoded";
   }
   
-  console.log("[present] Posting to response_uri:", responseUri, "body.keys=", Object.keys(body)); try { slog("[present] posting", { responseUri, keys: Object.keys(body) }); } catch {}
+  const presRequestId = `pres_req_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+  console.log("[present] Posting to response_uri:", responseUri, "body.keys=", Object.keys(body)); 
+  
+  // Log the request body being sent (with redaction for sensitive tokens)
+  const logBody = { ...body };
+  if (logBody.vp_token && typeof logBody.vp_token === 'string') {
+    logBody.vp_token = logBody.vp_token.substring(0, 200) + "...<truncated for size>";
+  }
+  if (logBody.response && typeof logBody.response === 'string') {
+    logBody.response = logBody.response.substring(0, 200) + "...<truncated for size>";
+  }
+  
+  try { 
+    slog("[PRESENTATION] [REQUEST] Sending to verifier", { 
+      requestId: presRequestId,
+      method: "POST",
+      url: responseUri,
+      contentType,
+      headers: { "content-type": contentType },
+      body: logBody
+    }); 
+  } catch {}
 
   const res = await fetch(responseUri, {
     method: "POST",
@@ -387,8 +443,23 @@ export async function performPresentation({ deepLink, verifierBase, credentialTy
     body: bodyContent,
   });
   const resText = await res.text().catch(() => "");
-  console.log("[present] Verifier response status:", res.status, "body.len=", resText?.length); try { slog("[present] verifier response", { status: res.status, bodyLen: resText?.length }); } catch {}
-  console.log("[present] Sent vp_token preview:", vpToken.substring(0, 200) + "...");
+  let responseBody = null;
+  try {
+    responseBody = resText ? JSON.parse(resText) : null;
+  } catch {}
+  
+  console.log("[present] Verifier response status:", res.status, "body.len=", resText?.length); 
+  try { 
+    slog("[PRESENTATION] [RESPONSE] Verifier response", { 
+      requestId: presRequestId,
+      url: responseUri,
+      status: res.status,
+      statusText: res.statusText,
+      headers: Object.fromEntries(res.headers.entries()),
+      body: responseBody || resText
+    }); 
+  } catch {}
+  console.log("[present] Sent vp_token:", vpToken);
   console.log("[present] Sent presentation_submission:", presentation_submission);
   console.log("[present] presentation_submission type:", typeof presentation_submission);
   console.log("[present] Full request body:", JSON.stringify(body, null, 2));
@@ -417,13 +488,14 @@ export async function performPresentation({ deepLink, verifierBase, credentialTy
             .encrypt(publicKey);
           const formParams2 = new URLSearchParams();
           formParams2.append('response', jwe);
+          try { slog("[present] sending fallback to verifier", { responseUri, hasResponse: true, responseLength: jwe?.length }); } catch {}
           const res2 = await fetch(responseUri, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: formParams2.toString() });
           const res2Text = await res2.text().catch(() => "");
           console.log("[present] Fallback verifier response status:", res2.status, "body.len=", res2Text?.length);
           if (!res2.ok) {
             let parsed2 = null;
             try { parsed2 = JSON.parse(res2Text); } catch {}
-            throw new Error(`Verifier response error ${res2.status}${parsed2 ? ": " + JSON.stringify(parsed2) : res2Text ? ": " + res2Text.slice(0, 500) : ""}`);
+            throw new Error(`Verifier response error ${res2.status}${parsed2 ? ": " + JSON.stringify(parsed2) : res2Text ? ": " + res2Text : ""}`);
           }
           try { return JSON.parse(res2Text); } catch { return { status: "ok" }; }
         }
@@ -434,9 +506,12 @@ export async function performPresentation({ deepLink, verifierBase, credentialTy
     
     let parsed = null;
     try { parsed = JSON.parse(resText); } catch {}
-    throw new Error(`Verifier response error ${res.status}${parsed ? ": " + JSON.stringify(parsed) : resText ? ": " + resText.slice(0, 500) : ""}`);
+    try { slog("[PRESENTATION] [ERROR] Verifier response error", { status: res.status, error: parsed || resText }); } catch {}
+    throw new Error(`Verifier response error ${res.status}${parsed ? ": " + JSON.stringify(parsed) : resText ? ": " + resText : ""}`);
   }
-  try { return JSON.parse(resText); } catch { return { status: "ok" }; }
+  const result = (() => { try { return JSON.parse(resText); } catch { return { status: "ok" }; } })();
+  try { slog("[PRESENTATION] [COMPLETE] Presentation flow", { success: true, verifierResponse: result }); } catch {}
+  return result;
 }
 
 export async function resolveDeepLinkFromEndpoint(verifierBase, path) {
