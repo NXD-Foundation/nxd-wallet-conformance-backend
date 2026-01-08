@@ -11,11 +11,12 @@ ST = GREECE
 L  = GREECE
 O  = UAegean
 OU = IT Department
-CN = dss.aegean.gr
+CN = dev-i4mlab.aegean.gr
 
 [ req_ext ]
 subjectAltName = @alt_names
 
 [ alt_names ]
-DNS.1 = dss.aegean.gr
-DNS.2 = www.dss.aegean.gr
+DNS.1 = dev-i4mlab.aegean.gr
+DNS.2 = dss.aegean.gr
+DNS.3 = www.dss.aegean.gr
