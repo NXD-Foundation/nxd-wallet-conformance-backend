@@ -1,24 +1,76 @@
 # ITB+ Issuer / Verifier Service
 
-A comprehensive Node.js implementation of **OpenID for Verifiable Credential Issuance (OID4VCI) v1.0** and **OpenID for Verifiable Presentations (OpenID4VP) v1.0**, designed as a flexible testbed for credential issuance and verification workflows.
+A comprehensive Node.js implementation of **OpenID for Verifiable Credential Issuance (OID4VCI) v1.0** and **OpenID for Verifiable Presentations (OpenID4VP) v1.0**, with support for **HAIP (High Assurance Identity Profile)** and **EUDI Wallet ARF (Architecture and Reference Framework)** specifications.
 
 ## Overview
 
-This project provides a unified backend service that implements:
+This project provides a unified backend service implementing three roles:
 
 - **Credential Issuer**: Full OID4VCI v1.0 implementation supporting multiple credential formats (SD-JWT, JWT VC, mDL/PID)
 - **Credential Verifier**: Full OpenID4VP v1.0 implementation supporting multiple client identification schemes and response modes
-- **Test Wallet**: Companion wallet-holder implementation for exercising all issuer and verifier capabilities
+- **Wallet Holder**: Companion wallet-holder implementation for exercising all issuer and verifier capabilities
 
 The service is **configuration-driven**, allowing new credential types and verifier scenarios to be added primarily through JSON configuration files rather than code changes.
+
+## Standards Compliance
+
+This implementation conforms to the following specifications:
+
+### Core Standards
+
+- **[OID4VCI v1.0](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html)** - OpenID for Verifiable Credential Issuance
+  - Pre-authorized code flow (Section 4.1.1)
+  - Authorization code flow (Section 4.1.2)
+  - Proof-of-Possession (Section 7.2)
+  - Deferred issuance (Section 9.2)
+  - Notification endpoint (Section 11)
+  - Nonce endpoint (Section 8.1)
+
+- **[OpenID4VP v1.0](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html)** - OpenID for Verifiable Presentations
+  - JWT Authorization Request (JAR) per RFC 9101
+  - Presentation Exchange (PEX) v2.0.0
+  - Digital Credentials Query Language (DCQL)
+  - Multiple client identification schemes
+  - Multiple response modes
+
+### Profile Extensions
+
+- **HAIP (High Assurance Identity Profile)**
+  - `haip://` URL scheme for credential offers
+  - Digital Credentials API (`dc_api` and `dc_api.jwt`) response modes
+  - HAIP-specific credential offer endpoints
+  - X.509 certificate-based signing for credentials
+
+- **EUDI Wallet ARF (Architecture and Reference Framework)**
+  - **Wallet Instance Attestation (WIA)** - TS3 specification
+    - WIA JWT generation and validation
+    - TTL validation (max 24 hours)
+    - Signature verification
+  - **Wallet Unit Attestation (WUA)** - TS3 specification
+    - WUA JWT generation and validation
+    - `eudi_wallet_info` structure validation
+    - `attested_keys` array validation
+    - Key attestation embedding in proof JWTs
+
+### Supporting Specifications
+
+- **RFC 9101** - JWT Authorization Request (JAR)
+- **RFC 9126** - Push Authorization Request (PAR)
+- **RFC 9449** - Demonstrating Proof-of-Possession (DPoP)
+- **RFC 7636** - Proof Key for Code Exchange (PKCE)
+- **ISO/IEC 18013-5:2021** - Mobile driving licence (mDL)
+- **DIF Presentation Exchange v2.0.0** - Presentation Exchange format
 
 ## Table of Contents
 
 - [Quick Start](#quick-start)
+- [Standards Compliance](#standards-compliance)
 - [Configuration](#configuration)
 - [Architecture](#architecture)
 - [Issuer Capabilities (OID4VCI v1.0)](#issuer-capabilities-oid4vci-v10)
 - [Verifier Capabilities (OpenID4VP v1.0)](#verifier-capabilities-openid4vp-v10)
+- [HAIP Profile Support](#haip-profile-support)
+- [EUDI Wallet ARF Support](#eudi-wallet-arf-support)
 - [Wallet Client Capabilities](#wallet-client-capabilities)
 - [Using the Wallet Client](#using-the-wallet-client)
 - [References](#references)
@@ -199,6 +251,7 @@ Per OID4VCI v1.0 Section 4.1.1:
 - **Grant type**: `urn:ietf:params:oauth:grant-type:pre-authorized_code`
 - **Transaction code (PIN) support**: Optional `user_pin_required` with configurable PIN length and input mode
 - **URL schemes**: Supports both `openid-credential-offer://` (standard) and `haip://` (HAIP profile)
+  - See [HAIP Profile Support](#haip-profile-support) section for HAIP-specific features
 - **Credential offer delivery**: Via deep links or credential offer URIs
 - **Authorization details**: Supports `authorization_details` parameter for credential selection in token request
 - **Session management**: Redis-backed session storage with configurable TTL
@@ -306,11 +359,12 @@ Per RFC 9449:
 
 ### Wallet Attestation
 
-Per EUDI Wallet specifications (TS3):
+**Per EUDI Wallet TS3 Specification** (see [EUDI Wallet ARF Support](#eudi-wallet-arf-support) section for details):
 
 - **Wallet Instance Attestation (WIA)**: Optional validation of WIA JWT in token requests
   - Validates WIA signature, claims (`iss`, `aud`, `iat`, `exp`, `jti`), and expiration
   - Extracts WIA from `client_assertion` parameter
+  - TTL validation (max 24 hours)
   - Graceful degradation: continues without attestation if not provided (logs warning)
 - **Wallet Unit Attestation (WUA)**: Optional validation of WUA JWT in credential requests
   - Validates WUA signature, claims, and expiration
@@ -370,6 +424,82 @@ Per OID4VCI v1.0 Section 7.1:
   - `credential_format`: `sd-jwt` or `mso_mdoc`
   - `signature_type`: `x509`, `jwk`, `kid-jwk`, or `did-web`
   - `url_scheme`: `haip` (optional, for HAIP links)
+
+## HAIP Profile Support
+
+The implementation supports the **High Assurance Identity Profile (HAIP)** for enhanced security and interoperability:
+
+### HAIP Credential Issuance
+
+- **HAIP URL Scheme**: Supports `haip://` deep links for credential offers (in addition to standard `openid-credential-offer://`)
+- **HAIP Endpoints**:
+  - `GET /haip-offer-tx-code`: HAIP pre-authorized flow with transaction code
+  - `GET /haip-credential-offer-tx-code/:id`: HAIP credential offer configuration retrieval
+- **X.509 Certificate Signing**: HAIP flows support X.509 certificate-based credential signing (`signature_type=x509`)
+- **HAIP Credential Offers**: Credential offers generated with `haip://` scheme when `url_scheme=haip` is specified
+
+### HAIP Verifiable Presentation
+
+- **Digital Credentials API Response Modes**:
+  - **`dc_api`**: Digital Credentials API response format (HAIP profile)
+    - Handles HAIP-specific response structures
+    - Supports credential object formats
+  - **`dc_api.jwt`**: Digital Credentials API with JWT-encapsulated response (HAIP profile)
+    - Decrypts JWE response using X.509 EC private key
+    - Extracts VP token from encrypted payload
+    - Handles both JWT string and payload object formats
+    - Supports mDL credential extraction from HAIP response structures
+
+- **HAIP-Specific Features**:
+  - Audience set to `https://self-issued.me/v2` for Digital Credentials API requests
+  - Timestamp claims (`iat`, `exp`) required for Digital Credentials API
+  - `expected_origins` claim support for origin validation
+
+## EUDI Wallet ARF Support
+
+The implementation supports **EUDI Wallet Architecture and Reference Framework (ARF)** specifications, specifically **TS3 Wallet Attestation**:
+
+### Wallet Instance Attestation (WIA)
+
+**Per EUDI Wallet TS3 Specification:**
+
+- **Issuer Support**: Validates WIA JWT in token endpoint and PAR requests
+  - Extracts WIA from `client_assertion` parameter
+  - Validates WIA signature, claims (`iss`, `aud`, `iat`, `exp`, `jti`), and expiration
+  - TTL validation: WIA SHALL have a time-to-live of less than 24 hours
+  - Graceful degradation: continues without attestation if not provided (logs warning)
+
+- **Wallet Support**: Generates WIA JWT for token endpoint and PAR requests
+  - Includes `iss`, `aud`, `iat`, `exp`, `jti` claims
+  - JWK in header for key resolution
+  - TTL limited to 24 hours (default: 1 hour)
+  - Uses `did:jwk:` as issuer identifier
+
+### Wallet Unit Attestation (WUA)
+
+**Per EUDI Wallet TS3 Specification:**
+
+- **Issuer Support**: Validates WUA JWT in credential requests
+  - Extracts WUA from proof JWT header `key_attestation` claim
+  - Validates WUA signature, claims, and expiration
+  - Validates `eudi_wallet_info` structure:
+    - `general_info`: General wallet information
+    - `key_storage_info`: Key storage information
+  - Validates `attested_keys` array (required per spec)
+  - Validates optional `status` claim for revocation information
+  - Graceful degradation: continues without attestation if not provided (logs warning)
+
+- **Wallet Support**: Generates WUA JWT for credential endpoint requests
+  - Includes `eudi_wallet_info` with general info and key storage info
+  - Includes `attested_keys` array with attested public keys
+  - Optional `status` claim for revocation information
+  - TTL up to 24 hours
+  - Embeds WUA in proof JWT header as `key_attestation` claim per spec
+
+### EUDI-Specific Credential Types
+
+- **PID (Personal Identification Document)**: Supports EUDI PID credential type `urn:eu.europa.ec.eudi:pid:1`
+- **EUDI Credential Format**: Supports EUDI-specific credential formats and claim paths
 
 ## Verifier Capabilities (OpenID4VP v1.0)
 
@@ -433,10 +563,13 @@ Per OpenID4VP v1.0 Section 6, the verifier supports:
 - **`dc_api`**: Digital Credentials API response format (HAIP profile)
   - Handles HAIP-specific response structures
   - Supports credential object formats
+  - See [HAIP Profile Support](#haip-profile-support) section for details
 - **`dc_api.jwt`**: Digital Credentials API with JWT-encapsulated response (HAIP profile)
   - Decrypts JWE response using X.509 EC private key
   - Extracts VP token from encrypted payload
   - Handles both JWT string and payload object formats
+  - Supports mDL credential extraction from HAIP response structures
+  - See [HAIP Profile Support](#haip-profile-support) section for details
 
 ### Credential Query Formats
 
@@ -623,6 +756,7 @@ Per OID4VCI v1.0 Section 4.1.1:
 - **Grant type**: `urn:ietf:params:oauth:grant-type:pre-authorized_code`
 - **Transaction code handling**: Supports `tx_code` parameter when `user_pin_required` is true
 - **Deep link support**: Handles both `openid-credential-offer://` and `haip://` URL schemes
+  - See [HAIP Profile Support](#haip-profile-support) section for HAIP-specific features
 - **Credential offer resolution**: Resolves credential offers from deep links or credential offer URIs
 - **Authorization details**: Includes `authorization_details` in token request for credential selection
 - **Metadata discovery**: Discovers issuer metadata from `.well-known/openid-credential-issuer`
@@ -661,12 +795,14 @@ Per RFC 9449:
 - **Token type detection**: Handles `DPoP` token type in token response
 
 #### Wallet Attestation
-Per EUDI Wallet specifications (TS3):
+
+**Per EUDI Wallet TS3 Specification** (see [EUDI Wallet ARF Support](#eudi-wallet-arf-support) section for details):
 
 - **Wallet Instance Attestation (WIA)**: Generates WIA JWT for token endpoint and PAR requests
   - Includes `iss`, `aud`, `iat`, `exp`, `jti` claims
   - JWK in header for key resolution
   - TTL limited to 24 hours (default: 1 hour)
+  - Uses `did:jwk:` as issuer identifier
 - **Wallet Unit Attestation (WUA)**: Generates WUA JWT for credential endpoint requests
   - Includes `eudi_wallet_info` with general info and key storage info
   - Includes `attested_keys` array with attested public keys
@@ -719,6 +855,7 @@ Per OpenID4VP v1.0 Section 6:
   - Uses wallet's encryption preferences from `authorization_encryption_alg_values_supported` and `authorization_encryption_enc_values_supported`
   - Includes `iss`, `aud`, `iat`, `exp`, `nonce`, `state` claims in response JWT
 - **`dc_api`** / **`dc_api.jwt`**: Supports Digital Credentials API response formats (HAIP profile)
+  - See [HAIP Profile Support](#haip-profile-support) section for details
 
 #### Credential Query Formats
 
