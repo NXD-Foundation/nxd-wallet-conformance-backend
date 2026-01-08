@@ -20,6 +20,7 @@ import {
 } from "../codeFlowJwtRoutes.js";
 
 import { getCodeFlowSession, storeCodeFlowSession, logInfo, logWarn, logError } from "../../services/cacheServiceRedis.js";
+import { makeSessionLogger, logHttpRequest, logHttpResponse } from "../../utils/sessionLogger.js";
 
 // Specification references
 const SPEC_REFS = {
@@ -547,9 +548,13 @@ codeFlowRouterSDJWT.get(["/credential-offer-code-sd-jwt/:id"], (req, res) => {
  ***************************************************************/
 codeFlowRouterSDJWT.post(["/par", "/authorize/par"], async (req, res) => {
   let issuerState = null;
+  let slog = null;
+  let requestId = null;
+  
   try {
     issuerState = req.body?.issuer_state ? decodeURIComponent(req.body.issuer_state) : null;
     if (issuerState) {
+      slog = makeSessionLogger(issuerState);
       bindSessionLoggingContext(req, res, issuerState);
     }
 
@@ -571,41 +576,47 @@ codeFlowRouterSDJWT.post(["/par", "/authorize/par"], async (req, res) => {
       user_hint: req.body.user_hint,
     };
 
+    if (slog) {
+      const bodyForLog = { ...req.body };
+      if (bodyForLog.code_challenge) bodyForLog.code_challenge = "[REDACTED]";
+      requestId = logHttpRequest(slog, "POST", "/par", req.headers, bodyForLog);
+      try { slog("[ISSUER] [PAR] [START] Processing PAR request", { hasIssuerState: !!issuerState, hasState: !!requestData.state }); } catch {}
+    }
+
     // Extract and validate Wallet Instance Attestation (WIA) if present
     // Based on TS3 spec: https://github.com/eu-digital-identity-wallet/eudi-doc-standards-and-technical-specifications/blob/main/docs/technical-specifications/ts3-wallet-unit-attestation.md
     const wiaJwt = extractWIAFromTokenRequest(req.body, req.headers);
     if (wiaJwt) {
       const wiaValidation = await validateWIA(wiaJwt, issuerState);
       if (wiaValidation.valid) {
-        if (issuerState) {
-          await logInfo(issuerState, "WIA validated successfully in PAR request", {
-            wiaIssuer: wiaValidation.payload?.iss,
-            wiaExp: wiaValidation.payload?.exp
-          }).catch(() => {});
+        if (slog) {
+          try { slog("[ISSUER] [PAR] WIA validated successfully", { wiaIssuer: wiaValidation.payload?.iss, wiaExp: wiaValidation.payload?.exp }); } catch {}
         }
       } else {
-        if (issuerState) {
-          await logWarn(issuerState, "WIA validation failed in PAR request (continuing without WIA)", {
-            error: wiaValidation.error
-          }).catch(() => {});
+        if (slog) {
+          try { slog("[ISSUER] [PAR] [WARN] WIA validation failed (continuing without WIA)", { error: wiaValidation.error }); } catch {}
         }
       }
     } else {
-      // Log that WIA was not found, but don't fail
-      if (issuerState) {
-        await logInfo(issuerState, "WIA not found in PAR request (continuing without WIA)", {}).catch(() => {});
+      if (slog) {
+        try { slog("[ISSUER] [PAR] WIA not found (continuing without WIA)"); } catch {}
       }
     }
 
     const result = createPARRequest(requestData);
 
-    console.log("par state " + requestData.state);
-    console.log("issuer state " + requestData.issuerState);
+    if (slog) {
+      logHttpResponse(slog, requestId, "/par", 201, "Created", res.getHeaders(), result);
+      try { slog("[ISSUER] [PAR] [COMPLETE] PAR request processed successfully", { success: true, requestUri: result.request_uri }); } catch {}
+    }
 
-    // res.status(201).json(result);
     res.statusCode = 201;
     return res.json(result);
   } catch (error) {
+    if (slog) {
+      try { slog("[ISSUER] [PAR] [ERROR] Error processing PAR request", { error: error.message }); } catch {}
+      logHttpResponse(slog, requestId, "/par", 500, "Internal Server Error", res.getHeaders(), { error: error.message });
+    }
     handleRouteError(error, "PAR endpoint", res, issuerState);
   }
 });
@@ -618,6 +629,9 @@ codeFlowRouterSDJWT.post(["/par", "/authorize/par"], async (req, res) => {
  * Second way is through the use of scope
  ****************************************************************/
 codeFlowRouterSDJWT.get("/authorize", async (req, res) => {
+  let slog = null;
+  let requestId = null;
+  
   try {
     // Extract and process request parameters
     let requestData = {
@@ -637,7 +651,17 @@ codeFlowRouterSDJWT.get("/authorize", async (req, res) => {
       request_uri: req.query.request_uri,
     };
 
-    bindSessionLoggingContext(req, res, requestData.issuerState);
+    if (requestData.issuerState) {
+      slog = makeSessionLogger(requestData.issuerState);
+      bindSessionLoggingContext(req, res, requestData.issuerState);
+    }
+
+    if (slog) {
+      const queryForLog = { ...req.query };
+      if (queryForLog.code_challenge) queryForLog.code_challenge = "[REDACTED]";
+      requestId = logHttpRequest(slog, "GET", "/authorize", req.headers, queryForLog);
+      try { slog("[ISSUER] [AUTHORIZATION] [START] Processing authorization request", { hasRequestUri: !!requestData.request_uri, hasState: !!requestData.state }); } catch {}
+    }
 
     // Handle PAR request if present
     const parRequest = handlePARRequest(requestData.request_uri);
@@ -725,15 +749,24 @@ codeFlowRouterSDJWT.get("/authorize", async (req, res) => {
     }
 
     // Handle authorization based on flow type
+    let redirectUrl;
     if (existingCodeSession.isDynamic) {
-      const redirectUrl = handleDynamicAuthorizationRedirect(existingCodeSession, updatedRequestData);
-      return res.redirect(302, redirectUrl);
+      redirectUrl = handleDynamicAuthorizationRedirect(existingCodeSession, updatedRequestData);
     } else {
-      const redirectUrl = await handleNonDynamicAuthorization(existingCodeSession, updatedRequestData);
-      return res.redirect(302, redirectUrl);
+      redirectUrl = await handleNonDynamicAuthorization(existingCodeSession, updatedRequestData);
     }
+
+    if (slog) {
+      logHttpResponse(slog, requestId, "/authorize", 302, "Found", res.getHeaders(), { redirectUrl });
+      try { slog("[ISSUER] [AUTHORIZATION] [COMPLETE] Authorization request processed successfully", { success: true, isDynamic: existingCodeSession.isDynamic }); } catch {}
+    }
+    
+    return res.redirect(302, redirectUrl);
   } catch (error) {
-    console.error("Error in authorize endpoint:", error);
+    if (slog) {
+      try { slog("[ISSUER] [AUTHORIZATION] [ERROR] Error processing authorization request", { error: error.message }); } catch {}
+      logHttpResponse(slog, requestId, "/authorize", 500, "Internal Server Error", res.getHeaders(), { error: error.message });
+    }
     
     // Try to mark session as failed if we have issuerState
     try {
@@ -753,7 +786,9 @@ codeFlowRouterSDJWT.get("/authorize", async (req, res) => {
         }
       }
     } catch (sessionError) {
-      console.error("Failed to update session status after authorize error:", sessionError);
+      if (slog) {
+        try { slog("[ISSUER] [AUTHORIZATION] [WARN] Failed to update session status after authorize error", { error: sessionError.message }); } catch {}
+      }
     }
     
     const errorRedirectUrl = `${DEFAULT_REDIRECT_URI}?error=invalid_request&error_description=${encodeURIComponent(error.message)}`;

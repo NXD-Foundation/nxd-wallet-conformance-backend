@@ -34,6 +34,7 @@ import {
   setSessionContext,
   clearSessionContext
 } from "../../services/cacheServiceRedis.js";
+import { makeSessionLogger, logHttpRequest, logHttpResponse } from "../../utils/sessionLogger.js";
 import redirectUriRouter from "../redirectUriRoutes.js";
 import x509Router from "./x509Routes.js";
 import didRouter from "./didRoutes.js";
@@ -200,29 +201,30 @@ verifierRouter.use("/did-jwk", didJwkRouter);
 verifierRouter.post("/direct_post/:id", async (req, res) => {
   try {
     const sessionId = req.params.id;
-    await logInfo(sessionId, "Processing direct_post VP response", {
-      endpoint: "/direct_post/:id",
-      sessionId
-    });
+    const slog = sessionId ? makeSessionLogger(sessionId) : null;
+    let requestId = null;
+    
+    if (slog) {
+      const logBody = { ...req.body };
+      if (logBody.vp_token && typeof logBody.vp_token === 'string') {
+        logBody.vp_token = logBody.vp_token.substring(0, 200) + "...<truncated for size>";
+      }
+      requestId = logHttpRequest(slog, "POST", `/direct_post/${sessionId}`, req.headers, logBody);
+      try { slog("[PRESENTATION] [START] Processing direct_post VP response", { sessionId }); } catch {}
+    }
     
     const vpSession = await getVPSession(sessionId);
     
     if (!vpSession) {
-      await logError(sessionId, "VP session not found for direct_post request", {
-        sessionId,
-        endpoint: "/direct_post/:id",
-        error: "Session validation failed - session not found"
-      });
+      if (slog) {
+        try { slog("[PRESENTATION] [ERROR] VP session not found for direct_post request", { sessionId }); } catch {}
+      }
       return res.status(400).json({ error: `Session ID ${sessionId} not found.` });
     }
     
-    await logInfo(sessionId, "VP session retrieved successfully", {
-      hasNonce: !!vpSession.nonce,
-      hasPresentationDefinition: !!vpSession.presentation_definition,
-      hasDcqlQuery: !!vpSession.dcql_query,
-      responseMode: vpSession.response_mode,
-      status: vpSession.status
-    });
+    if (slog) {
+      try { slog("[PRESENTATION] VP session retrieved successfully", { hasNonce: !!vpSession.nonce, hasPresentationDefinition: !!vpSession.presentation_definition, hasDcqlQuery: !!vpSession.dcql_query, responseMode: vpSession.response_mode, status: vpSession.status }); } catch {}
+    }
 
     // Check if this is an MDL presentation in multiple ways:
     // 1. From presentation definition format (PEX - explicit format declaration)
@@ -1474,10 +1476,11 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
       vpSession.claims = { ...claimsFromExtraction };
       await storeVPSession(sessionId, vpSession);
 
-      await logInfo(sessionId, "direct_post processing completed successfully", {
-        status: "success",
-        claimsCount: Object.keys(claimsFromExtraction || {}).length
-      });
+      if (slog) {
+        try { slog("[PRESENTATION] direct_post processing completed successfully", { status: "success", claimsCount: Object.keys(claimsFromExtraction || {}).length }); } catch {}
+        logHttpResponse(slog, requestId, `/direct_post/${sessionId}`, 200, "OK", res.getHeaders(), { status: "ok" });
+        try { slog("[PRESENTATION] [COMPLETE] Processing direct_post VP response", { success: true }); } catch {}
+      }
       
       return res.status(200).json({ status: "ok" });
     }

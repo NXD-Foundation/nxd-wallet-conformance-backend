@@ -18,6 +18,7 @@ import {
   setSessionContext,
   clearSessionContext,
 } from "../../services/cacheServiceRedis.js";
+import { makeSessionLogger, logHttpRequest, logHttpResponse } from "../../utils/sessionLogger.js";
 
 const x509Router = express.Router();
 
@@ -63,16 +64,16 @@ const { presentationDefinition, clientMetadata } = loadConfigurationFiles(
  * Generate VP request with presentation definition
  */
 x509Router.get("/generateVPRequest", async (req, res) => {
+  const sessionId = req.query.sessionId || uuidv4();
+  const slog = makeSessionLogger(sessionId);
+  let requestId = null;
+  
   try {
-    const sessionId = req.query.sessionId || uuidv4();
     const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
     const jarAlg = req.query.jar_alg || CONFIG.DEFAULT_JAR_ALG;
     
-    await logInfo(sessionId, "Starting VP request generation", { 
-      endpoint: "/generateVPRequest", 
-      responseMode,
-      jarAlg
-    });
+    requestId = logHttpRequest(slog, "GET", "/generateVPRequest", req.headers, req.query);
+    try { slog("[VERIFIER] [START] VP request generation", { responseMode, jarAlg }); } catch {}
 
     const result = await generateVPRequest({
       sessionId,
@@ -87,10 +88,14 @@ x509Router.get("/generateVPRequest", async (req, res) => {
       routePath: "/x509/x509VPrequest",
     });
 
-    await logInfo(sessionId, "VP request generated successfully", { result });
+    logHttpResponse(slog, requestId, "/generateVPRequest", 200, "OK", res.getHeaders(), result);
+    try { slog("[VERIFIER] [COMPLETE] VP request generation", { success: true, hasDeepLink: !!result.deepLink }); } catch {}
     res.json(result);
   } catch (error) {
-    await logError(sessionId, "Error generating VP request", { error: error.message, stack: error.stack });
+    if (slog) {
+      try { slog("[VERIFIER] [ERROR] Error generating VP request", { error: error.message }); } catch {}
+      logHttpResponse(slog, requestId, "/generateVPRequest", 500, "Internal Server Error", res.getHeaders(), { error: error.message });
+    }
     const errorResponse = createErrorResponse(error.message, "generateVPRequest", 500, sessionId);
     res.status(500).json(errorResponse);
   }
@@ -100,16 +105,16 @@ x509Router.get("/generateVPRequest", async (req, res) => {
  * Generate VP request for GET method
  */
 x509Router.get("/generateVPRequestGet", async (req, res) => {
+  const sessionId = req.query.sessionId || uuidv4();
+  const slog = makeSessionLogger(sessionId);
+  let requestId = null;
+  
   try {
-    const sessionId = req.query.sessionId || uuidv4();
     const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
     const jarAlg = req.query.jar_alg || CONFIG.DEFAULT_JAR_ALG;
     
-    await logInfo(sessionId, "Starting VP request generation (GET method)", { 
-      endpoint: "/generateVPRequestGet", 
-      responseMode,
-      jarAlg
-    });
+    requestId = logHttpRequest(slog, "GET", "/generateVPRequestGet", req.headers, req.query);
+    try { slog("[VERIFIER] [START] VP request generation (GET method)", { responseMode, jarAlg }); } catch {}
 
     const result = await generateVPRequest({
       sessionId,
@@ -124,10 +129,14 @@ x509Router.get("/generateVPRequestGet", async (req, res) => {
       routePath: "/x509/x509VPrequest",
     });
 
-    await logInfo(sessionId, "VP request generated successfully (GET method)", { result });
+    logHttpResponse(slog, requestId, "/generateVPRequestGet", 200, "OK", res.getHeaders(), result);
+    try { slog("[VERIFIER] [COMPLETE] VP request generation (GET method)", { success: true }); } catch {}
     res.json(result);
   } catch (error) {
-    await logError(sessionId, "Error generating VP request (GET method)", { error: error.message, stack: error.stack });
+    if (slog) {
+      try { slog("[VERIFIER] [ERROR] Error generating VP request (GET method)", { error: error.message }); } catch {}
+      logHttpResponse(slog, requestId, "/generateVPRequestGet", 500, "Internal Server Error", res.getHeaders(), { error: error.message });
+    }
     const errorResponse = createErrorResponse(error.message, "generateVPRequestGet", 500, sessionId);
     res.status(500).json(errorResponse);
   }
@@ -137,16 +146,16 @@ x509Router.get("/generateVPRequestGet", async (req, res) => {
  * Generate VP request with DCQL query
  */
 x509Router.get("/generateVPRequestDCQL", async (req, res) => {
+  const sessionId = req.query.sessionId || uuidv4();
+  const slog = makeSessionLogger(sessionId);
+  let requestId = null;
+  
   try {
-    const sessionId = req.query.sessionId || uuidv4();
     const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
     const jarAlg = req.query.jar_alg || CONFIG.DEFAULT_JAR_ALG;
     
-    await logInfo(sessionId, "Starting VP request generation with DCQL", { 
-      endpoint: "/generateVPRequestDCQL", 
-      responseMode,
-      jarAlg
-    });
+    requestId = logHttpRequest(slog, "GET", "/generateVPRequestDCQL", req.headers, req.query);
+    try { slog("[VERIFIER] [START] VP request generation with DCQL", { responseMode, jarAlg }); } catch {}
 
     const result = await generateVPRequest({
       sessionId,
@@ -162,10 +171,14 @@ x509Router.get("/generateVPRequestDCQL", async (req, res) => {
       routePath: "/x509/x509VPrequest",
     });
 
-    await logInfo(sessionId, "VP request with DCQL generated successfully", { result });
+    logHttpResponse(slog, requestId, "/generateVPRequestDCQL", 200, "OK", res.getHeaders(), result);
+    try { slog("[VERIFIER] [COMPLETE] VP request generation with DCQL", { success: true }); } catch {}
     res.json(result);
   } catch (error) {
-    await logError(sessionId, "Error generating VP request with DCQL", { error: error.message, stack: error.stack });
+    if (slog) {
+      try { slog("[VERIFIER] [ERROR] Error generating VP request with DCQL", { error: error.message }); } catch {}
+      logHttpResponse(slog, requestId, "/generateVPRequestDCQL", 500, "Internal Server Error", res.getHeaders(), { error: error.message });
+    }
     const errorResponse = createErrorResponse(error.message, "generateVPRequestDCQL", 500, sessionId);
     res.status(500).json(errorResponse);
   }
@@ -175,16 +188,16 @@ x509Router.get("/generateVPRequestDCQL", async (req, res) => {
  * Generate VP request with DCQL query for GET method
  */
 x509Router.get("/generateVPRequestDCQLGET", async (req, res) => {
+  const sessionId = req.query.sessionId || uuidv4();
+  const slog = makeSessionLogger(sessionId);
+  let requestId = null;
+  
   try {
-    const sessionId = req.query.sessionId || uuidv4();
     const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
     const jarAlg = req.query.jar_alg || CONFIG.DEFAULT_JAR_ALG;
     
-    await logInfo(sessionId, "Starting VP request generation with DCQL (GET method)", { 
-      endpoint: "/generateVPRequestDCQLGET", 
-      responseMode,
-      jarAlg
-    });
+    requestId = logHttpRequest(slog, "GET", "/generateVPRequestDCQLGET", req.headers, req.query);
+    try { slog("[VERIFIER] [START] VP request generation with DCQL (GET method)", { responseMode, jarAlg }); } catch {}
 
     const result = await generateVPRequest({
       sessionId,
@@ -200,10 +213,14 @@ x509Router.get("/generateVPRequestDCQLGET", async (req, res) => {
       routePath: "/x509/x509VPrequest",
     });
 
-    await logInfo(sessionId, "VP request with DCQL generated successfully (GET method)", { result });
+    logHttpResponse(slog, requestId, "/generateVPRequestDCQLGET", 200, "OK", res.getHeaders(), result);
+    try { slog("[VERIFIER] [COMPLETE] VP request generation with DCQL (GET method)", { success: true }); } catch {}
     res.json(result);
   } catch (error) {
-    await logError(sessionId, "Error generating VP request with DCQL (GET method)", { error: error.message, stack: error.stack });
+    if (slog) {
+      try { slog("[VERIFIER] [ERROR] Error generating VP request with DCQL (GET method)", { error: error.message }); } catch {}
+      logHttpResponse(slog, requestId, "/generateVPRequestDCQLGET", 500, "Internal Server Error", res.getHeaders(), { error: error.message });
+    }
     const errorResponse = createErrorResponse(error.message, "generateVPRequestDCQLGET", 500, sessionId);
     res.status(500).json(errorResponse);
   }
@@ -213,16 +230,16 @@ x509Router.get("/generateVPRequestDCQLGET", async (req, res) => {
  * Generate VP request with transaction data
  */
 x509Router.get("/generateVPRequestTransaction", async (req, res) => {
+  const sessionId = req.query.sessionId || uuidv4();
+  const slog = makeSessionLogger(sessionId);
+  let requestId = null;
+  
   try {
-    const sessionId = req.query.sessionId || uuidv4();
     const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
     const jarAlg = req.query.jar_alg || CONFIG.DEFAULT_JAR_ALG;
     
-    await logInfo(sessionId, "Starting VP request generation with transaction data", { 
-      endpoint: "/generateVPRequestTransaction", 
-      responseMode,
-      jarAlg
-    });
+    requestId = logHttpRequest(slog, "GET", "/generateVPRequestTransaction", req.headers, req.query);
+    try { slog("[VERIFIER] [START] VP request generation with transaction data", { responseMode, jarAlg }); } catch {}
 
     const transactionDataObj = createTransactionData(presentationDefinition);
     const base64UrlEncodedTxData = Buffer.from(JSON.stringify(transactionDataObj))
@@ -243,10 +260,14 @@ x509Router.get("/generateVPRequestTransaction", async (req, res) => {
       routePath: "/x509/x509VPrequest",
     });
 
-    await logInfo(sessionId, "VP request with transaction data generated successfully", { result });
+    logHttpResponse(slog, requestId, "/generateVPRequestTransaction", 200, "OK", res.getHeaders(), result);
+    try { slog("[VERIFIER] [COMPLETE] VP request generation with transaction data", { success: true }); } catch {}
     res.json(result);
   } catch (error) {
-    await logError(sessionId, "Error generating VP request with transaction data", { error: error.message, stack: error.stack });
+    if (slog) {
+      try { slog("[VERIFIER] [ERROR] Error generating VP request with transaction data", { error: error.message }); } catch {}
+      logHttpResponse(slog, requestId, "/generateVPRequestTransaction", 500, "Internal Server Error", res.getHeaders(), { error: error.message });
+    }
     const errorResponse = createErrorResponse(error.message, "generateVPRequestTransaction", 500, sessionId);
     res.status(500).json(errorResponse);
   }
@@ -259,21 +280,14 @@ x509Router
   .route("/x509VPrequest/:id")
   .post(express.urlencoded({ extended: true }), async (req, res) => {
     const sessionId = req.params.id;
+    const slog = makeSessionLogger(sessionId);
+    let requestId = null;
+    
     try {
       const { wallet_nonce: walletNonce, wallet_metadata: walletMetadata } = req.body;
 
-      await logInfo(sessionId, "Processing POST VP request", { 
-        endpoint: "POST /x509VPrequest/:id",
-        hasWalletNonce: !!walletNonce,
-        hasWalletMetadata: !!walletMetadata
-      });
-
-      if (walletNonce || walletMetadata) {
-        await logInfo(sessionId, "Received wallet data", { 
-          walletNonce, 
-          walletMetadata 
-        });
-      }
+      requestId = logHttpRequest(slog, "POST", `/x509VPrequest/${sessionId}`, req.headers, req.body);
+      try { slog("[VERIFIER] [START] Processing POST x509 VP request", { hasWalletNonce: !!walletNonce, hasWalletMetadata: !!walletMetadata }); } catch {}
 
       const result = await processVPRequest({
         sessionId,
@@ -286,10 +300,10 @@ x509Router
       });
 
       if (result.error) {
-        await logError(sessionId, "VP request processing failed", { 
-          error: result.error, 
-          status: result.status 
-        });
+        if (slog) {
+          try { slog("[VERIFIER] [ERROR] VP request processing failed", { error: result.error, status: result.status }); } catch {}
+          logHttpResponse(slog, requestId, `/x509VPrequest/${sessionId}`, result.status, "Error", res.getHeaders(), { error: result.error });
+        }
         // Mark session as failed
         try {
           const { getVPSession, storeVPSession } = await import("../../services/cacheServiceRedis.js");
@@ -301,34 +315,34 @@ x509Router
             await storeVPSession(sessionId, vpSession);
           }
         } catch (storageError) {
-          await logError(sessionId, "Failed to update session status after x509 VP request processing failure", {
-            error: storageError.message,
-            stack: storageError.stack
-          }).catch(() => {});
+          if (slog) {
+            try { slog("[VERIFIER] [WARN] Failed to update session status after x509 VP request processing failure", { error: storageError.message }); } catch {}
+          }
         }
         return res.status(result.status).json({ error: result.error });
       }
 
-      await logInfo(sessionId, "VP request processed successfully (POST)", { 
-        jwtLength: result.jwt?.length 
-      });
+      logHttpResponse(slog, requestId, `/x509VPrequest/${sessionId}`, 200, "OK", res.getHeaders(), { jwtLength: result.jwt?.length });
+      try { slog("[VERIFIER] [COMPLETE] VP request processed successfully (POST)", { success: true, jwtLength: result.jwt?.length }); } catch {}
       res.type(CONFIG.CONTENT_TYPE).send(result.jwt);
     } catch (error) {
-      await logError(sessionId, "Error processing POST VP request", { 
-        error: error.message, 
-        stack: error.stack 
-      });
+      if (slog) {
+        try { slog("[VERIFIER] [ERROR] Error processing POST x509 VP request", { error: error.message }); } catch {}
+        logHttpResponse(slog, requestId, `/x509VPrequest/${sessionId}`, 500, "Internal Server Error", res.getHeaders(), { error: error.message });
+      }
       const errorResponse = createErrorResponse(error.message, "POST /x509VPrequest/:id", 500, sessionId);
       res.status(500).json(errorResponse);
     }
   })
   .get(async (req, res) => {
+    const sessionId = req.params.id;
+    const slog = makeSessionLogger(sessionId);
+    let requestId = null;
+    
     try {
-      const sessionId = req.params.id;
+      requestId = logHttpRequest(slog, "GET", `/x509VPrequest/${sessionId}`, req.headers, req.query);
+      try { slog("[VERIFIER] [START] Processing GET x509 VP request"); } catch {}
       
-      await logInfo(sessionId, "Processing GET VP request", { 
-        endpoint: "GET /x509VPrequest/:id" 
-      });
       const result = await processVPRequest({
         sessionId,
         clientMetadata,
@@ -338,10 +352,10 @@ x509Router
       });
 
       if (result.error) {
-        await logError(sessionId, "VP request processing failed", { 
-          error: result.error, 
-          status: result.status 
-        });
+        if (slog) {
+          try { slog("[VERIFIER] [ERROR] VP request processing failed", { error: result.error, status: result.status }); } catch {}
+          logHttpResponse(slog, requestId, `/x509VPrequest/${sessionId}`, result.status, "Error", res.getHeaders(), { error: result.error });
+        }
         // Mark session as failed
         try {
           const { getVPSession, storeVPSession } = await import("../../services/cacheServiceRedis.js");
@@ -353,23 +367,21 @@ x509Router
             await storeVPSession(sessionId, vpSession);
           }
         } catch (storageError) {
-          await logError(sessionId, "Failed to update session status after x509 VP request processing failure", {
-            error: storageError.message,
-            stack: storageError.stack
-          }).catch(() => {});
+          if (slog) {
+            try { slog("[VERIFIER] [WARN] Failed to update session status after x509 VP request processing failure", { error: storageError.message }); } catch {}
+          }
         }
         return res.status(result.status).json({ error: result.error });
       }
 
-      await logInfo(sessionId, "VP request processed successfully (GET)", { 
-        jwtLength: result.jwt?.length 
-      });
+      logHttpResponse(slog, requestId, `/x509VPrequest/${sessionId}`, 200, "OK", res.getHeaders(), { jwtLength: result.jwt?.length });
+      try { slog("[VERIFIER] [COMPLETE] VP request processed successfully (GET)", { success: true, jwtLength: result.jwt?.length }); } catch {}
       res.type(CONFIG.CONTENT_TYPE).send(result.jwt);
     } catch (error) {
-      await logError(sessionId, "Error processing GET VP request", { 
-        error: error.message, 
-        stack: error.stack 
-      });
+      if (slog) {
+        try { slog("[VERIFIER] [ERROR] Error processing GET x509 VP request", { error: error.message }); } catch {}
+        logHttpResponse(slog, requestId, `/x509VPrequest/${sessionId}`, 500, "Internal Server Error", res.getHeaders(), { error: error.message });
+      }
       const errorResponse = createErrorResponse(error.message, "GET /x509VPrequest/:id", 500, sessionId);
       res.status(500).json(errorResponse);
     }

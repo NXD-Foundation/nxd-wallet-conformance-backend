@@ -40,6 +40,7 @@ import {
   setSessionContext,
   clearSessionContext,
 } from "../../services/cacheServiceRedis.js";
+import { makeSessionLogger, logHttpRequest, logHttpResponse } from "../../utils/sessionLogger.js";
 
 import * as jose from "jose";
 import { SDJwtVcInstance } from "@sd-jwt/sd-jwt-vc";
@@ -706,6 +707,8 @@ const handleDeferredCredentialIssuance = async (requestBody, sessionObject, sess
 
 sharedRouter.post("/token_endpoint", async (req, res) => {
   let sessionId = null;
+  let slog = null;
+  let requestId = null;
 
   try {
     const {
@@ -716,47 +719,47 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
       authorization_details,
     } = req.body;
 
+    // Extract sessionId early for logging
+    if (preAuthorizedCode) {
+      sessionId = preAuthorizedCode;
+    } else if (code) {
+      sessionId = await getSessionKeyAuthCode(code);
+    }
+    
+    // Create session logger if we have a sessionId
+    if (sessionId) {
+      slog = makeSessionLogger(sessionId);
+      setSessionContext(sessionId);
+      res.on("finish", () => clearSessionContext());
+      res.on("close", () => clearSessionContext());
+      
+      // Log HTTP request
+      const logParams = { ...req.body };
+      if (logParams.code) logParams.code = "<redacted>";
+      if (logParams["pre-authorized_code"]) logParams["pre-authorized_code"] = "<redacted>";
+      if (logParams.code_verifier) logParams.code_verifier = "<redacted>";
+      
+      requestId = logHttpRequest(slog, "POST", "/token_endpoint", req.headers, logParams);
+      try { slog("[TOKEN] [START] Token endpoint request", { grant_type, hasCode: !!code, hasPreAuthCode: !!preAuthorizedCode }); } catch {}
+    }
+
     // Extract and validate Wallet Instance Attestation (WIA) if present
     // Based on TS3 spec: https://github.com/eu-digital-identity-wallet/eudi-doc-standards-and-technical-specifications/blob/main/docs/technical-specifications/ts3-wallet-unit-attestation.md
     const wiaJwt = extractWIAFromTokenRequest(req.body, req.headers);
     if (wiaJwt) {
-      // Extract sessionId early for logging if available
-      let tempSessionId = sessionId;
-      if (!tempSessionId) {
-        if (preAuthorizedCode) {
-          tempSessionId = preAuthorizedCode;
-        } else if (code) {
-          tempSessionId = await getSessionKeyAuthCode(code);
-        }
-      }
-      
-      const wiaValidation = await validateWIA(wiaJwt, tempSessionId);
+      const wiaValidation = await validateWIA(wiaJwt, sessionId);
       if (wiaValidation.valid) {
-        if (tempSessionId) {
-          await logInfo(tempSessionId, "WIA validated successfully", {
-            wiaIssuer: wiaValidation.payload?.iss,
-            wiaExp: wiaValidation.payload?.exp
-          }).catch(() => {});
+        if (slog) {
+          try { slog("[TOKEN] WIA validated successfully", { wiaIssuer: wiaValidation.payload?.iss, wiaExp: wiaValidation.payload?.exp }); } catch {}
         }
       } else {
-        if (tempSessionId) {
-          await logWarn(tempSessionId, "WIA validation failed (continuing without WIA)", {
-            error: wiaValidation.error
-          }).catch(() => {});
+        if (slog) {
+          try { slog("[TOKEN] [WARN] WIA validation failed (continuing without WIA)", { error: wiaValidation.error }); } catch {}
         }
       }
     } else {
-      // Log that WIA was not found, but don't fail
-      let tempSessionId = sessionId;
-      if (!tempSessionId) {
-        if (preAuthorizedCode) {
-          tempSessionId = preAuthorizedCode;
-        } else if (code) {
-          tempSessionId = await getSessionKeyAuthCode(code);
-        }
-      }
-      if (tempSessionId) {
-        await logInfo(tempSessionId, "WIA not found in token request (continuing without WIA)", {}).catch(() => {});
+      if (slog) {
+        try { slog("[TOKEN] WIA not found in token request (continuing without WIA)"); } catch {}
       }
     }
 
@@ -766,30 +769,12 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
 
     // Validate required parameters
     if (!(code || preAuthorizedCode)) {
+      if (slog) {
+        try { slog("[TOKEN] [ERROR] Missing required parameters", { hasCode: !!code, hasPreAuthCode: !!preAuthorizedCode }); } catch {}
+      }
       return res.status(400).json({
         error: "invalid_request",
         error_description: ERROR_MESSAGES.INVALID_REQUEST,
-      });
-    }
-
-    // Extract sessionId for logging
-    // For pre-authorized code flow, the preAuthorizedCode IS the sessionId
-    if (preAuthorizedCode) {
-      sessionId = preAuthorizedCode;
-    } else if (code) {
-      // For authorization code flow, we need to look up the sessionId from the code
-      sessionId = await getSessionKeyAuthCode(code);
-    }
-
-    // Set session context for console interception to capture all logs
-    if (sessionId) {
-      setSessionContext(sessionId);
-      // Clear context when response finishes
-      res.on("finish", () => {
-        clearSessionContext();
-      });
-      res.on("close", () => {
-        clearSessionContext();
       });
     }
 
@@ -806,25 +791,26 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
             "sha256"
           );
           dpopCnf = { jkt };
-        } else if (sessionId) {
+          if (slog) {
+            try { slog("[TOKEN] DPoP header validated, issuing DPoP-bound token", { hasJkt: true }); } catch {}
+          }
+        } else if (slog) {
           // Header present but missing jwk -> will fall back to Bearer
-          logWarn(sessionId, "DPoP header present but missing 'jwk'; issuing Bearer access token", {
-            hasDpopHeader: true,
-            hasJwkInHeader: !!(protectedHeader && protectedHeader.jwk),
-          }).catch(() => {});
+          try { slog("[TOKEN] [WARN] DPoP header present but missing 'jwk'; issuing Bearer access token", { hasDpopHeader: true, hasJwkInHeader: false }); } catch {}
         }
       } catch (e) {
+        if (slog) {
+          try { slog("[TOKEN] [ERROR] Invalid DPoP proof", { error: e.message }); } catch {}
+        }
         // If DPoP proof is malformed, respond with an error specific to DPoP
         return res.status(400).json({
           error: "invalid_dpop_proof",
           error_description: `Invalid DPoP proof: ${e.message}`,
         });
       }
-    } else if (sessionId) {
+    } else if (slog) {
       // No DPoP header at all -> behavior falls back to Bearer-style token
-      logWarn(sessionId, "DPoP header not present; issuing Bearer access token", {
-        hasDpopHeader: false,
-      }).catch(() => {});
+      try { slog("[TOKEN] DPoP header not present; issuing Bearer access token"); } catch {}
     }
 
     let tokenResponse;
@@ -833,12 +819,18 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
       grant_type ===
       "urn:ietf:params:oauth:grant-type:pre-authorized_code"
     ) {
+      if (slog) {
+        try { slog("[TOKEN] Processing pre-authorized code flow"); } catch {}
+      }
       tokenResponse = await handlePreAuthorizedCodeFlow(
         preAuthorizedCode,
         authorization_details,
         dpopCnf
       );
     } else if (grant_type === "authorization_code") {
+      if (slog) {
+        try { slog("[TOKEN] Processing authorization code flow"); } catch {}
+      }
       tokenResponse = await handleAuthorizationCodeFlow(
         code,
         code_verifier,
@@ -846,19 +838,28 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
         dpopCnf
       );
     } else {
+      if (slog) {
+        try { slog("[TOKEN] [ERROR] Unsupported grant type", { grant_type }); } catch {}
+      }
       return res.status(400).json({
         error: "unsupported_grant_type",
         error_description: `${ERROR_MESSAGES.UNSUPPORTED_GRANT}: '${grant_type}'`,
       });
     }
 
+    // Log HTTP response
+    if (slog) {
+      const logResponse = { ...tokenResponse };
+      if (logResponse.access_token) logResponse.access_token = "<redacted>";
+      if (logResponse.refresh_token) logResponse.refresh_token = "<redacted>";
+      logHttpResponse(slog, requestId, "/token_endpoint", 200, "OK", res.getHeaders(), logResponse);
+      try { slog("[TOKEN] [COMPLETE] Token endpoint request", { success: true, hasAccessToken: !!tokenResponse.access_token }); } catch {}
+    }
+
     res.json(tokenResponse);
   } catch (error) {
-    if (sessionId) {
-      logError(sessionId, "Token endpoint error", {
-        error: error.message,
-        stack: error.stack,
-      }).catch(() => {});
+    if (slog) {
+      try { slog("[TOKEN] [ERROR] Token endpoint error", { error: error.message, errorCode: error.errorCode }); } catch {}
     }
 
     // Handle authorization_pending and slow_down errors
@@ -903,6 +904,8 @@ sharedRouter.post("/credential", async (req, res) => {
   let sessionKey;
   let flowType;
   let sessionId = null;
+  let slog = null;
+  let requestId = null;
   
   try {
     const requestBody = req.body;
@@ -921,23 +924,26 @@ sharedRouter.post("/credential", async (req, res) => {
     sessionKey = sessionData.sessionKey;
     sessionId = extractSessionId(sessionKey);
     
-    // Set session context for console interception to capture all logs
+    // Create session logger if we have a sessionId
     if (sessionId) {
+      slog = makeSessionLogger(sessionId);
       setSessionContext(sessionId);
-      // Clear context when response finishes
-      res.on('finish', () => {
-        clearSessionContext();
-      });
-      res.on('close', () => {
-        clearSessionContext();
-      });
+      res.on('finish', () => clearSessionContext());
+      res.on('close', () => clearSessionContext());
+      
+      // Log HTTP request
+      const logBody = { ...requestBody };
+      if (logBody.proof) logBody.proof = "<redacted>";
+      if (logBody.proofs) logBody.proofs = "<redacted>";
+      if (logBody.proofJwt) logBody.proofJwt = "<redacted>";
+      
+      requestId = logHttpRequest(slog, "POST", "/credential", req.headers, logBody);
+      try { slog("[CREDENTIAL] [START] Credential request", { credential_configuration_id: requestBody.credential_configuration_id, credential_identifier: requestBody.credential_identifier }); } catch {}
     }
     
     if (!sessionObject) {
-      if (sessionId) {
-        await logError(sessionId, "Session not found for credential request", {
-          error: ERROR_MESSAGES.SESSION_LOST
-        }).catch(() => {});
+      if (slog) {
+        try { slog("[CREDENTIAL] [ERROR] Session not found for credential request", { error: ERROR_MESSAGES.SESSION_LOST }); } catch {}
       }
       return res.status(500).json({
         error: "server_error",
@@ -951,36 +957,18 @@ sharedRouter.post("/credential", async (req, res) => {
     if (wuaJwt) {
       const wuaValidation = await validateWUA(wuaJwt, sessionId);
       if (wuaValidation.valid) {
-        if (sessionId) {
-          await logInfo(sessionId, "WUA validated successfully", {
-            wuaIssuer: wuaValidation.payload?.iss,
-            wuaExp: wuaValidation.payload?.exp,
-            hasAttestedKeys: Array.isArray(wuaValidation.payload?.attested_keys) && wuaValidation.payload.attested_keys.length > 0,
-            hasStatus: !!wuaValidation.payload?.status
-          }).catch(() => {});
+        if (slog) {
+          try { slog("[CREDENTIAL] WUA validated successfully", { wuaIssuer: wuaValidation.payload?.iss, wuaExp: wuaValidation.payload?.exp, hasAttestedKeys: Array.isArray(wuaValidation.payload?.attested_keys) && wuaValidation.payload.attested_keys.length > 0 }); } catch {}
         }
       } else {
-        if (sessionId) {
-          await logWarn(sessionId, "WUA validation failed (continuing without WUA)", {
-            error: wuaValidation.error
-          }).catch(() => {});
+        if (slog) {
+          try { slog("[CREDENTIAL] [WARN] WUA validation failed (continuing without WUA)", { error: wuaValidation.error }); } catch {}
         }
       }
     } else {
-      // Log that WUA was not found, but don't fail
-      if (sessionId) {
-        await logInfo(sessionId, "WUA not found in credential request (continuing without WUA)", {}).catch(() => {});
+      if (slog) {
+        try { slog("[CREDENTIAL] WUA not found in credential request (continuing without WUA)"); } catch {}
       }
-    }
-
-    // Log credential request received
-    if (sessionId) {
-      await logInfo(sessionId, "Credential request received", {
-        credential_configuration_id: requestBody.credential_configuration_id,
-        credential_identifier: requestBody.credential_identifier,
-        hasProof: !!requestBody.proof || !!requestBody.proofs,
-        hasWUA: !!wuaJwt
-      }).catch(() => {});
     }
 
     // Validate proof if configuration ID is available
@@ -1066,20 +1054,21 @@ sharedRouter.post("/credential", async (req, res) => {
     // Handle credential issuance
     if (sessionObject.isDeferred) {
       const response = await handleDeferredCredentialIssuance(requestBody, sessionObject, sessionKey, flowType);
-      if (sessionId) {
-        await logInfo(sessionId, "Deferred credential issuance initiated", {
-          transaction_id: response.transaction_id
-        }).catch(() => {});
+      if (slog) {
+        try { slog("[CREDENTIAL] Deferred credential issuance initiated", { transaction_id: response.transaction_id }); } catch {}
+        logHttpResponse(slog, requestId, "/credential", 202, "Accepted", res.getHeaders(), response);
+        try { slog("[CREDENTIAL] [COMPLETE] Credential request (deferred)", { success: true }); } catch {}
       }
       return res.status(202).json(response);
     } else {
       try {
         const response = await handleImmediateCredentialIssuance(requestBody, sessionObject, effectiveConfigurationId, sessionId);
-        if (sessionId) {
-          await logInfo(sessionId, "Credential issued successfully", {
-            effectiveConfigurationId,
-            notification_id: response.notification_id
-          }).catch(() => {});
+        if (slog) {
+          try { slog("[CREDENTIAL] Credential issued successfully", { effectiveConfigurationId, notification_id: response.notification_id }); } catch {}
+          const logResponse = { ...response };
+          if (logResponse.credential) logResponse.credential = "<redacted>";
+          logHttpResponse(slog, requestId, "/credential", 200, "OK", res.getHeaders(), logResponse);
+          try { slog("[CREDENTIAL] [COMPLETE] Credential request", { success: true }); } catch {}
         }
 
         // Mark session as successful after credential issuance and store notification_id
@@ -1095,10 +1084,8 @@ sharedRouter.post("/credential", async (req, res) => {
             }
           } catch (storageError) {
             console.error("Failed to update session status after successful credential issuance:", storageError);
-            if (sessionId) {
-              await logError(sessionId, "Failed to update session status after successful credential issuance", {
-                error: storageError.message
-              }).catch(() => {});
+            if (slog) {
+              try { slog("[CREDENTIAL] [WARN] Failed to update session status after successful credential issuance", { error: storageError.message }); } catch {}
             }
           }
         }
@@ -1106,11 +1093,8 @@ sharedRouter.post("/credential", async (req, res) => {
         return res.json(response);
       } catch (credError) {
         console.error("Credential generation error:", credError);
-        if (sessionId) {
-          await logError(sessionId, "Credential generation error", {
-            error: credError.message,
-            stack: credError.stack
-          }).catch(err => console.error("Failed to log credential generation error:", err));
+        if (slog) {
+          try { slog("[CREDENTIAL] [ERROR] Credential generation error", { error: credError.message }); } catch {}
         }
         
         // Mark session as failed when credential generation fails
@@ -1127,12 +1111,15 @@ sharedRouter.post("/credential", async (req, res) => {
             }
           } catch (storageError) {
             console.error("Failed to update session status after credential generation failure:", storageError);
-            if (sessionId) {
-              await logError(sessionId, "Failed to update session status after credential generation failure", {
-                error: storageError.message
-              }).catch(() => {});
+            if (slog) {
+              try { slog("[CREDENTIAL] [WARN] Failed to update session status after credential generation failure", { error: storageError.message }); } catch {}
             }
           }
+        }
+        
+        if (slog) {
+          logHttpResponse(slog, requestId, "/credential", 500, "Internal Server Error", res.getHeaders(), { error: "server_error", error_description: credError.message });
+          try { slog("[CREDENTIAL] [COMPLETE] Credential request", { success: false, error: credError.message }); } catch {}
         }
         
         // If credential generation fails, it's a server error, not a client error
@@ -1144,13 +1131,8 @@ sharedRouter.post("/credential", async (req, res) => {
     }
   } catch (error) {
     console.error("Credential endpoint error:", error);
-    const sessionId = extractSessionId(sessionKey);
-    if (sessionId) {
-      await logError(sessionId, "Credential endpoint error", {
-        error: error.message,
-        stack: error.stack,
-        errorCode: error.errorCode
-      }).catch(err => console.error("Failed to log credential endpoint error:", err));
+    if (slog) {
+      try { slog("[CREDENTIAL] [ERROR] Credential endpoint error", { error: error.message, errorCode: error.errorCode }); } catch {}
     }
 
     const proofRelatedErrors = [

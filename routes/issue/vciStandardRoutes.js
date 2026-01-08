@@ -24,6 +24,7 @@ import {
   logInfo,
   logError,
 } from "../../services/cacheServiceRedis.js";
+import { makeSessionLogger, logHttpRequest, logHttpResponse } from "../../utils/sessionLogger.js";
 
 const vciStandardRouter = express.Router();
 
@@ -39,9 +40,13 @@ const vciStandardRouter = express.Router();
  */
 vciStandardRouter.get("/vci/offer", async (req, res) => {
   let sessionId;
+  let slog = null;
+  let requestId = null;
+  
   try {
     // Extract standardized parameters
     sessionId = req.query.session_id || getSessionId(req);
+    slog = makeSessionLogger(sessionId);
     bindSessionLoggingContext(req, res, sessionId);
 
     const flow = req.query.flow || "authorization_code";
@@ -50,13 +55,8 @@ vciStandardRouter.get("/vci/offer", async (req, res) => {
     const credentialFormat = req.query.credential_format || "sd-jwt";
     const signatureType = req.query.signature_type || getSignatureType(req);
 
-    await logInfo(sessionId, "Processing standardized VCI offer request", {
-      flow,
-      txCodeRequired,
-      credentialType,
-      credentialFormat,
-      signatureType,
-    });
+    requestId = logHttpRequest(slog, "GET", "/vci/offer", req.headers, req.query);
+    try { slog("[ISSUER] [VCI] [START] Processing standardized VCI offer request", { flow, txCodeRequired, credentialType, credentialFormat, signatureType }); } catch {}
 
     // Map signature_type to internal format
     let internalSignatureType = signatureType;
@@ -105,16 +105,18 @@ vciStandardRouter.get("/vci/offer", async (req, res) => {
       
       const encodedQR = await generateQRCode(credentialOffer, sessionId);
       
-      await logInfo(sessionId, "Authorization code flow offer generated", {
-        hasQR: !!encodedQR,
-        deepLinkLength: credentialOffer?.length,
-      });
-
-      return res.json({
+      const response = {
         qr: encodedQR,
         deepLink: credentialOffer,
         sessionId,
-      });
+      };
+
+      if (slog) {
+        logHttpResponse(slog, requestId, "/vci/offer", 200, "OK", res.getHeaders(), response);
+        try { slog("[ISSUER] [VCI] Authorization code flow offer generated", { hasQR: !!encodedQR, deepLinkLength: credentialOffer?.length }); } catch {}
+      }
+
+      return res.json(response);
     }
     // Handle pre-authorized code flow
     else if (flow === "pre_authorized_code") {
@@ -139,11 +141,10 @@ vciStandardRouter.get("/vci/offer", async (req, res) => {
 
       const response = await createCredentialOfferResponse(credentialOffer, sessionId);
 
-      await logInfo(sessionId, "Pre-authorized code flow offer generated", {
-        txCodeRequired,
-        hasQR: !!response.qr,
-        deepLinkLength: response.deepLink?.length,
-      });
+      if (slog) {
+        logHttpResponse(slog, requestId, "/vci/offer", 200, "OK", res.getHeaders(), response);
+        try { slog("[ISSUER] [VCI] Pre-authorized code flow offer generated", { txCodeRequired, hasQR: !!response.qr, deepLinkLength: response.deepLink?.length }); } catch {}
+      }
 
       return res.json(response);
     } else {
@@ -152,10 +153,10 @@ vciStandardRouter.get("/vci/offer", async (req, res) => {
       );
     }
   } catch (error) {
-    await logError(sessionId, "Error in standardized VCI offer endpoint", {
-      error: error.message,
-      stack: error.stack,
-    });
+    if (slog) {
+      try { slog("[ISSUER] [VCI] [ERROR] Error in standardized VCI offer endpoint", { error: error.message }); } catch {}
+      logHttpResponse(slog, requestId, "/vci/offer", 500, "Internal Server Error", res.getHeaders(), { error: error.message });
+    }
     handleRouteError(error, "vci/offer", res, sessionId);
   }
 });

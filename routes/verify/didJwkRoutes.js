@@ -20,6 +20,7 @@ import {
   setSessionContext,
   clearSessionContext,
 } from "../../services/cacheServiceRedis.js";
+import { makeSessionLogger, logHttpRequest, logHttpResponse } from "../../utils/sessionLogger.js";
 
 const didJwkRouter = express.Router();
 
@@ -50,17 +51,15 @@ const didJwkIdentifier = generateDidJwkIdentifier(privateKey);
  */
 didJwkRouter.get("/generateVPRequest", async (req, res) => {
   const sessionId = req.query.sessionId || uuidv4();
+  const slog = makeSessionLogger(sessionId);
+  let requestId = null;
+  
   try {
-    
     const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
     const { client_id, kid } = generateDidJwkIdentifiers(didJwkIdentifier);
     
-    await logInfo(sessionId, "Starting DID JWK VP request generation", {
-      endpoint: "/generateVPRequest",
-      responseMode,
-      clientId: client_id,
-      kid
-    });
+    requestId = logHttpRequest(slog, "GET", "/generateVPRequest", req.headers, req.query);
+    try { slog("[VERIFIER] [START] DID JWK VP request generation", { responseMode, clientId: client_id, kid }); } catch {}
 
     const result = await generateVPRequest({
       sessionId,
@@ -76,17 +75,14 @@ didJwkRouter.get("/generateVPRequest", async (req, res) => {
       routePath: "/did-jwk/didJwkVPrequest",
     });
 
-    await logInfo(sessionId, "DID JWK VP request generated successfully", {
-      hasQR: !!result.qr,
-      deepLinkLength: result.deepLink?.length
-    });
-    
+    logHttpResponse(slog, requestId, "/generateVPRequest", 200, "OK", res.getHeaders(), result);
+    try { slog("[VERIFIER] [COMPLETE] DID JWK VP request generation", { success: true, hasQR: !!result.qr }); } catch {}
     res.json(result);
   } catch (error) {
-    await logError(sessionId, "Error generating DID JWK VP request", {
-      error: error.message,
-      stack: error.stack
-    });
+    if (slog) {
+      try { slog("[VERIFIER] [ERROR] Error generating DID JWK VP request", { error: error.message }); } catch {}
+      logHttpResponse(slog, requestId, "/generateVPRequest", 500, "Internal Server Error", res.getHeaders(), { error: error.message });
+    }
     const errorResponse = createErrorResponse(error.message, "generateVPRequest", 500, sessionId);
     res.status(500).json(errorResponse);
   }
@@ -96,17 +92,16 @@ didJwkRouter.get("/generateVPRequest", async (req, res) => {
  * Generate VP request for GET method with DCQL query
  */
 didJwkRouter.get("/generateVPRequestGET", async (req, res) => {
+  const sessionId = req.query.sessionId || uuidv4();
+  const slog = makeSessionLogger(sessionId);
+  let requestId = null;
+  
   try {
-    const sessionId = req.query.sessionId || uuidv4();
     const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
     const { client_id, kid } = generateDidJwkIdentifiers(didJwkIdentifier);
     
-    await logInfo(sessionId, "Starting DID JWK VP request generation (GET method)", {
-      endpoint: "/generateVPRequestGET",
-      responseMode,
-      clientId: client_id,
-      kid
-    });
+    requestId = logHttpRequest(slog, "GET", "/generateVPRequestGET", req.headers, req.query);
+    try { slog("[VERIFIER] [START] DID JWK VP request generation (GET method)", { responseMode, clientId: client_id, kid }); } catch {}
 
     const result = await generateVPRequest({
       sessionId,
@@ -122,17 +117,14 @@ didJwkRouter.get("/generateVPRequestGET", async (req, res) => {
       routePath: "/did-jwk/didJwkVPrequest",
     });
 
-    await logInfo(sessionId, "DID JWK VP request generated successfully (GET method)", {
-      hasQR: !!result.qr,
-      deepLinkLength: result.deepLink?.length
-    });
-    
+    logHttpResponse(slog, requestId, "/generateVPRequestGET", 200, "OK", res.getHeaders(), result);
+    try { slog("[VERIFIER] [COMPLETE] DID JWK VP request generation (GET method)", { success: true }); } catch {}
     res.json(result);
   } catch (error) {
-    await logError(sessionId, "Error generating DID JWK VP request (GET method)", {
-      error: error.message,
-      stack: error.stack
-    });
+    if (slog) {
+      try { slog("[VERIFIER] [ERROR] Error generating DID JWK VP request (GET method)", { error: error.message }); } catch {}
+      logHttpResponse(slog, requestId, "/generateVPRequestGET", 500, "Internal Server Error", res.getHeaders(), { error: error.message });
+    }
     const errorResponse = createErrorResponse(error.message, "generateVPRequestGET", 500, sessionId);
     res.status(500).json(errorResponse);
   }
@@ -142,17 +134,16 @@ didJwkRouter.get("/generateVPRequestGET", async (req, res) => {
  * Generate VP request with DCQL query
  */
 didJwkRouter.get("/generateVPRequestDCQL", async (req, res) => {
+  const sessionId = req.query.sessionId || uuidv4();
+  const slog = makeSessionLogger(sessionId);
+  let requestId = null;
+  
   try {
-    const sessionId = req.query.sessionId || uuidv4();
     const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
     const { client_id, kid } = generateDidJwkIdentifiers(didJwkIdentifier);
     
-    await logInfo(sessionId, "Starting DID JWK VP request generation with DCQL", {
-      endpoint: "/generateVPRequestDCQL",
-      responseMode,
-      clientId: client_id,
-      kid
-    });
+    requestId = logHttpRequest(slog, "GET", "/generateVPRequestDCQL", req.headers, req.query);
+    try { slog("[VERIFIER] [START] DID JWK VP request generation with DCQL", { responseMode, clientId: client_id, kid }); } catch {}
 
     const result = await generateVPRequest({
       sessionId,
@@ -168,17 +159,14 @@ didJwkRouter.get("/generateVPRequestDCQL", async (req, res) => {
       routePath: "/did-jwk/didJwkVPrequest",
     });
 
-    await logInfo(sessionId, "DID JWK VP request with DCQL generated successfully", {
-      hasQR: !!result.qr,
-      deepLinkLength: result.deepLink?.length
-    });
-    
+    logHttpResponse(slog, requestId, "/generateVPRequestDCQL", 200, "OK", res.getHeaders(), result);
+    try { slog("[VERIFIER] [COMPLETE] DID JWK VP request generation with DCQL", { success: true }); } catch {}
     res.json(result);
   } catch (error) {
-    await logError(sessionId, "Error generating DID JWK VP request with DCQL", {
-      error: error.message,
-      stack: error.stack
-    });
+    if (slog) {
+      try { slog("[VERIFIER] [ERROR] Error generating DID JWK VP request with DCQL", { error: error.message }); } catch {}
+      logHttpResponse(slog, requestId, "/generateVPRequestDCQL", 500, "Internal Server Error", res.getHeaders(), { error: error.message });
+    }
     const errorResponse = createErrorResponse(error.message, "generateVPRequestDCQL", 500, sessionId);
     res.status(500).json(errorResponse);
   }
@@ -188,17 +176,16 @@ didJwkRouter.get("/generateVPRequestDCQL", async (req, res) => {
  * Generate VP request with DCQL query for GET method
  */
 didJwkRouter.get("/generateVPRequestDCQLGET", async (req, res) => {
+  const sessionId = req.query.sessionId || uuidv4();
+  const slog = makeSessionLogger(sessionId);
+  let requestId = null;
+  
   try {
-    const sessionId = req.query.sessionId || uuidv4();
     const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
     const { client_id, kid } = generateDidJwkIdentifiers(didJwkIdentifier);
     
-    await logInfo(sessionId, "Starting DID JWK VP request generation with DCQL (GET method)", {
-      endpoint: "/generateVPRequestDCQLGET",
-      responseMode,
-      clientId: client_id,
-      kid
-    });
+    requestId = logHttpRequest(slog, "GET", "/generateVPRequestDCQLGET", req.headers, req.query);
+    try { slog("[VERIFIER] [START] DID JWK VP request generation with DCQL (GET method)", { responseMode, clientId: client_id, kid }); } catch {}
 
     const result = await generateVPRequest({
       sessionId,
@@ -214,17 +201,14 @@ didJwkRouter.get("/generateVPRequestDCQLGET", async (req, res) => {
       routePath: "/did-jwk/didJwkVPrequest",
     });
 
-    await logInfo(sessionId, "DID JWK VP request with DCQL generated successfully (GET method)", {
-      hasQR: !!result.qr,
-      deepLinkLength: result.deepLink?.length
-    });
-    
+    logHttpResponse(slog, requestId, "/generateVPRequestDCQLGET", 200, "OK", res.getHeaders(), result);
+    try { slog("[VERIFIER] [COMPLETE] DID JWK VP request generation with DCQL (GET method)", { success: true }); } catch {}
     res.json(result);
   } catch (error) {
-    await logError(sessionId, "Error generating DID JWK VP request with DCQL (GET method)", {
-      error: error.message,
-      stack: error.stack
-    });
+    if (slog) {
+      try { slog("[VERIFIER] [ERROR] Error generating DID JWK VP request with DCQL (GET method)", { error: error.message }); } catch {}
+      logHttpResponse(slog, requestId, "/generateVPRequestDCQLGET", 500, "Internal Server Error", res.getHeaders(), { error: error.message });
+    }
     const errorResponse = createErrorResponse(error.message, "generateVPRequestDCQLGET", 500, sessionId);
     res.status(500).json(errorResponse);
   }
@@ -234,17 +218,16 @@ didJwkRouter.get("/generateVPRequestDCQLGET", async (req, res) => {
  * Generate VP request with transaction data using DCQL query
  */
 didJwkRouter.get("/generateVPRequestTransaction", async (req, res) => {
+  const sessionId = req.query.sessionId || uuidv4();
+  const slog = makeSessionLogger(sessionId);
+  let requestId = null;
+  
   try {
-    const sessionId = req.query.sessionId || uuidv4();
     const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
     const { client_id, kid } = generateDidJwkIdentifiers(didJwkIdentifier);
     
-    await logInfo(sessionId, "Starting DID JWK VP request generation with transaction data", {
-      endpoint: "/generateVPRequestTransaction",
-      responseMode,
-      clientId: client_id,
-      kid
-    });
+    requestId = logHttpRequest(slog, "GET", "/generateVPRequestTransaction", req.headers, req.query);
+    try { slog("[VERIFIER] [START] DID JWK VP request generation with transaction data", { responseMode, clientId: client_id, kid }); } catch {}
 
     const transactionDataObj = createTransactionData(DEFAULT_DCQL_QUERY);
   const base64UrlEncodedTxData = Buffer.from(JSON.stringify(transactionDataObj))
@@ -265,17 +248,14 @@ didJwkRouter.get("/generateVPRequestTransaction", async (req, res) => {
       routePath: "/did-jwk/didJwkVPrequest",
     });
 
-    await logInfo(sessionId, "DID JWK VP request with transaction data generated successfully", {
-      hasQR: !!result.qr,
-      deepLinkLength: result.deepLink?.length
-    });
-    
+    logHttpResponse(slog, requestId, "/generateVPRequestTransaction", 200, "OK", res.getHeaders(), result);
+    try { slog("[VERIFIER] [COMPLETE] DID JWK VP request generation with transaction data", { success: true }); } catch {}
     res.json(result);
   } catch (error) {
-    await logError(sessionId, "Error generating DID JWK VP request with transaction data", {
-      error: error.message,
-      stack: error.stack
-    });
+    if (slog) {
+      try { slog("[VERIFIER] [ERROR] Error generating DID JWK VP request with transaction data", { error: error.message }); } catch {}
+      logHttpResponse(slog, requestId, "/generateVPRequestTransaction", 500, "Internal Server Error", res.getHeaders(), { error: error.message });
+    }
     const errorResponse = createErrorResponse(error.message, "generateVPRequestTransaction", 500, sessionId);
     res.status(500).json(errorResponse);
   }
@@ -287,25 +267,16 @@ didJwkRouter.get("/generateVPRequestTransaction", async (req, res) => {
 didJwkRouter
   .route("/didJwkVPrequest/:id")
   .post(async (req, res) => {
+    const sessionId = req.params.id;
+    const slog = makeSessionLogger(sessionId);
+    let requestId = null;
+    
     try {
-      const sessionId = req.params.id;
       const { client_id, kid } = generateDidJwkIdentifiers(didJwkIdentifier);
       const { wallet_nonce: walletNonce, wallet_metadata: walletMetadata } = req.body;
 
-      await logInfo(sessionId, "Processing POST DID JWK VP request", {
-        endpoint: "POST /didJwkVPrequest/:id",
-        clientId: client_id,
-        kid,
-        hasWalletNonce: !!walletNonce,
-        hasWalletMetadata: !!walletMetadata
-      });
-
-      if (walletNonce || walletMetadata) {
-        await logInfo(sessionId, "Received wallet data", {
-          walletNonce,
-          walletMetadata
-        });
-      }
+      requestId = logHttpRequest(slog, "POST", `/didJwkVPrequest/${sessionId}`, req.headers, req.body);
+      try { slog("[VERIFIER] [START] Processing POST DID JWK VP request", { clientId: client_id, kid, hasWalletNonce: !!walletNonce, hasWalletMetadata: !!walletMetadata }); } catch {}
 
       const result = await processVPRequest({
         sessionId,
@@ -319,10 +290,10 @@ didJwkRouter
       });
 
     if (result.error) {
-      await logError(sessionId, "DID JWK VP request processing failed", {
-        error: result.error,
-        status: result.status
-      });
+      if (slog) {
+        try { slog("[VERIFIER] [ERROR] DID JWK VP request processing failed", { error: result.error, status: result.status }); } catch {}
+        logHttpResponse(slog, requestId, `/didJwkVPrequest/${sessionId}`, result.status, "Error", res.getHeaders(), { error: result.error });
+      }
       // Mark session as failed
       try {
         const { getVPSession, storeVPSession } = await import("../../services/cacheServiceRedis.js");
@@ -334,38 +305,35 @@ didJwkRouter
           await storeVPSession(sessionId, vpSession);
         }
       } catch (storageError) {
-        await logError(sessionId, "Failed to update session status after DID JWK VP request processing failure", {
-          error: storageError.message,
-          stack: storageError.stack
-        }).catch(() => {});
+        if (slog) {
+          try { slog("[VERIFIER] [WARN] Failed to update session status after DID JWK VP request processing failure", { error: storageError.message }); } catch {}
+        }
       }
       return res.status(result.status).json({ error: result.error });
     }
 
-      await logInfo(sessionId, "DID JWK VP request processed successfully (POST)", {
-        jwtLength: result.jwt?.length
-      });
-      
+      logHttpResponse(slog, requestId, `/didJwkVPrequest/${sessionId}`, 200, "OK", res.getHeaders(), { jwtLength: result.jwt?.length });
+      try { slog("[VERIFIER] [COMPLETE] DID JWK VP request processed successfully (POST)", { success: true, jwtLength: result.jwt?.length }); } catch {}
       res.type(CONFIG.CONTENT_TYPE).send(result.jwt);
     } catch (error) {
-      await logError(sessionId, "Error processing POST DID JWK VP request", {
-        error: error.message,
-        stack: error.stack
-      });
+      if (slog) {
+        try { slog("[VERIFIER] [ERROR] Error processing POST DID JWK VP request", { error: error.message }); } catch {}
+        logHttpResponse(slog, requestId, `/didJwkVPrequest/${sessionId}`, 500, "Internal Server Error", res.getHeaders(), { error: error.message });
+      }
       const errorResponse = createErrorResponse(error.message, "POST /didJwkVPrequest/:id", 500, sessionId);
       res.status(500).json(errorResponse);
     }
   })
   .get(async (req, res) => {
+    const sessionId = req.params.id;
+    const slog = makeSessionLogger(sessionId);
+    let requestId = null;
+    
     try {
-      const sessionId = req.params.id;
       const { client_id, kid } = generateDidJwkIdentifiers(didJwkIdentifier);
       
-      await logInfo(sessionId, "Processing GET DID JWK VP request", {
-        endpoint: "GET /didJwkVPrequest/:id",
-        clientId: client_id,
-        kid
-      });
+      requestId = logHttpRequest(slog, "GET", `/didJwkVPrequest/${sessionId}`, req.headers, req.query);
+      try { slog("[VERIFIER] [START] Processing GET DID JWK VP request", { clientId: client_id, kid }); } catch {}
 
       const result = await processVPRequest({
         sessionId,
@@ -377,23 +345,21 @@ didJwkRouter
       });
 
     if (result.error) {
-      await logError(sessionId, "DID JWK VP request processing failed (GET)", {
-        error: result.error,
-        status: result.status
-      });
+      if (slog) {
+        try { slog("[VERIFIER] [ERROR] DID JWK VP request processing failed (GET)", { error: result.error, status: result.status }); } catch {}
+        logHttpResponse(slog, requestId, `/didJwkVPrequest/${sessionId}`, result.status, "Error", res.getHeaders(), { error: result.error });
+      }
       return res.status(result.status).json({ error: result.error });
     }
 
-      await logInfo(sessionId, "DID JWK VP request processed successfully (GET)", {
-        jwtLength: result.jwt?.length
-      });
-      
+      logHttpResponse(slog, requestId, `/didJwkVPrequest/${sessionId}`, 200, "OK", res.getHeaders(), { jwtLength: result.jwt?.length });
+      try { slog("[VERIFIER] [COMPLETE] DID JWK VP request processed successfully (GET)", { success: true, jwtLength: result.jwt?.length }); } catch {}
       res.type(CONFIG.CONTENT_TYPE).send(result.jwt);
     } catch (error) {
-      await logError(sessionId, "Error processing GET DID JWK VP request", {
-        error: error.message,
-        stack: error.stack
-      });
+      if (slog) {
+        try { slog("[VERIFIER] [ERROR] Error processing GET DID JWK VP request", { error: error.message }); } catch {}
+        logHttpResponse(slog, requestId, `/didJwkVPrequest/${sessionId}`, 500, "Internal Server Error", res.getHeaders(), { error: error.message });
+      }
       const errorResponse = createErrorResponse(error.message, "GET /didJwkVPrequest/:id", 500, sessionId);
       res.status(500).json(errorResponse);
     }
