@@ -9,6 +9,31 @@ import { Resolver } from "did-resolver";
 import { getResolver } from "@cef-ebsi/key-did-resolver";
 import fetch from "node-fetch";
 
+/**
+ * Extract certificate chain from a PEM file (fullchain or single cert)
+ * Returns an array of base64-encoded certificates (without PEM headers)
+ * @param {string} certPem - Certificate in PEM format (can contain multiple certs)
+ * @returns {string[]} Array of base64-encoded certificates
+ */
+function extractCertificateChain(certPem) {
+  // Split by certificate boundaries
+  const certMatches = certPem.match(
+    /-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g
+  );
+
+  if (!certMatches || certMatches.length === 0) {
+    throw new Error("No certificates found in PEM data");
+  }
+
+  // Extract base64 content from each certificate
+  return certMatches.map((cert) => {
+    return cert
+      .replace("-----BEGIN CERTIFICATE-----", "")
+      .replace("-----END CERTIFICATE-----", "")
+      .replace(/\s+/g, "");
+  });
+}
+
 export function pemToJWK(pem, keyType) {
   let key;
   let jwk;
@@ -206,20 +231,21 @@ buildVpRequestJWT(
   if (response_mode === "dc_api.jwt" || response_mode === "dc_api") {
     // Use EC certificates for Digital Credentials API
     privateKey = fs.readFileSync("./x509EC/ec_private_pkcs8.key", "utf8");
-    const certificate = fs.readFileSync(
-      "./x509EC/client_certificate.crt",
-      "utf8"
-    );
-    // Convert certificate to Base64 without headers
-    const certBase64 = certificate
-      .replace("-----BEGIN CERTIFICATE-----", "")
-      .replace("-----END CERTIFICATE-----", "")
-      .replace(/\s+/g, "");
+    // Try to use fullchain if available (for Let's Encrypt), otherwise use single cert
+    let certificate;
+    const fullchainPath = "./certbot/conf/live/dev-i4mlab.aegean.gr/fullchain.pem";
+    if (fs.existsSync(fullchainPath)) {
+      certificate = fs.readFileSync(fullchainPath, "utf8");
+    } else {
+      certificate = fs.readFileSync("./x509EC/client_certificate.crt", "utf8");
+    }
+    // Extract certificate chain (leaf + intermediate)
+    const certChain = extractCertificateChain(certificate);
 
     const header = {
       alg: "ES256",
       typ: "oauth-authz-req+jwt",
-      x5c: [certBase64],
+      x5c: certChain,
     };
 
     signedJwt = await new jose.SignJWT(jwtPayload)
@@ -227,11 +253,8 @@ buildVpRequestJWT(
       .sign(await jose.importPKCS8(privateKey, "ES256"));
   } else if (client_id.startsWith("x509_san_dns:")) {
     privateKey = fs.readFileSync("./x509/client_private_pkcs8.key", "utf8");
-    const certificate = fs.readFileSync(
-      "./x509/client_certificate.crt",
-      "utf8"
-    );
-    // Convert certificate to Base64 without headers
+    // For RSA certificates: Use only leaf certificate
+    const certificate = fs.readFileSync("./x509/client_certificate.crt", "utf8");
     const certBase64 = certificate
       .replace("-----BEGIN CERTIFICATE-----", "")
       .replace("-----END CERTIFICATE-----", "")
@@ -401,11 +424,8 @@ export async function buildPaymentVpRequestJWT(
 
   if (client_id.startsWith("x509_san_dns:")) {
     privateKey = fs.readFileSync("./x509/client_private_pkcs8.key", "utf8");
-    const certificate = fs.readFileSync(
-      "./x509/client_certificate.crt",
-      "utf8"
-    );
-    // Convert certificate to Base64 without headers
+    // For RSA certificates: Use only leaf certificate
+    const certificate = fs.readFileSync("./x509/client_certificate.crt", "utf8");
     const certBase64 = certificate
       .replace("-----BEGIN CERTIFICATE-----", "")
       .replace("-----END CERTIFICATE-----", "")

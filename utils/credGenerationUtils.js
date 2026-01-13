@@ -51,6 +51,87 @@ const certificatePemX509 = fs.readFileSync(
   "utf8"
 );
 
+/**
+ * Normalize COSE_Sign1 issuerAuth headers produced by @auth0/mdl.
+ *
+ * Context / rationale:
+ * - The @auth0/mdl library builds the COSE_Sign1 structure (issuerAuth) internally when
+ *   we call document.sign({ issuerPrivateKey, issuerCertificate, alg }).
+ * - Its public API does NOT expose direct control over the COSE header maps (protected /
+ *   unprotected) or individual parameters like header 4 (kid).
+ * - In some cases, the resulting unprotected headers map may contain entries whose values
+ *   are `undefined` (e.g., field 4 = kid -> undefined).
+ *
+ * COSE & RFC 9052 requirements:
+ * - Header parameter 4 (key identifier / kid) is defined as a bstr.
+ * - Optional header parameters MUST be omitted when not used; they MUST NOT appear with
+ *   an invalid value such as `undefined`.
+ *   - IANA COSE header registry: https://www.iana.org/assignments/cose/cose.xhtml#header-parameters
+ *   - RFC 9052 Section 3.1: header parameters are CBOR encoded according to their types.
+ *
+ * Because we cannot influence the library's header construction, we perform a small,
+ * spec‑compliant normalization step after prepare():
+ * - Walk the unprotected headers (issuerAuth[1]).
+ * - Drop any entries whose value is `undefined`, so that optional fields (like 4/kid)
+ *   are effectively "absent" rather than "present with an invalid value".
+ *
+ * This helper keeps that behavior encapsulated and self‑documented instead of inlining
+ * it in the issuance flow.
+ *
+ * @param {object} preparedIssuerSigned - The IssuerSigned structure returned by signedDocument.prepare().get("issuerSigned").
+ */
+function normalizeIssuerAuthHeaders(preparedIssuerSigned) {
+  if (!preparedIssuerSigned || !Array.isArray(preparedIssuerSigned.issuerAuth)) {
+    return;
+  }
+
+  const issuerAuth = preparedIssuerSigned.issuerAuth;
+  if (issuerAuth.length < 2) {
+    return;
+  }
+
+  const unprotectedHeaders = issuerAuth[1];
+
+  // Case 1: Map (expected when using CBOR Maps for COSE headers)
+  if (unprotectedHeaders instanceof Map) {
+    const cleanedMap = new Map();
+    for (const [key, value] of unprotectedHeaders.entries()) {
+      if (value !== undefined) {
+        cleanedMap.set(key, value);
+      } else {
+        console.log(
+          `[mdl-issue] Removing undefined value from unprotected header field ${key} (COSE header should be omitted when not set)`
+        );
+      }
+    }
+    issuerAuth[1] = cleanedMap;
+    console.log(
+      `[mdl-issue] ✅ Normalized unprotected headers (Map): removed undefined values, kept ${cleanedMap.size} valid entries`
+    );
+    return;
+  }
+
+  // Case 2: Plain object (defensive: in case any future refactor returns a JS object)
+  if (unprotectedHeaders && typeof unprotectedHeaders === "object") {
+    const cleanedMap = new Map();
+    for (const [key, value] of Object.entries(unprotectedHeaders)) {
+      if (value !== undefined) {
+        // Convert numeric string keys to integers to preserve COSE label semantics
+        const intKey = /^\d+$/.test(key) ? parseInt(key, 10) : key;
+        cleanedMap.set(intKey, value);
+      } else {
+        console.log(
+          `[mdl-issue] Removing undefined value from unprotected header field ${key} (COSE header should be omitted when not set)`
+        );
+      }
+    }
+    issuerAuth[1] = cleanedMap;
+    console.log(
+      `[mdl-issue] ✅ Normalized unprotected headers (object -> Map): removed undefined values, kept ${cleanedMap.size} valid entries`
+    );
+  }
+}
+
 // Load issuer configuration for KID and JWK header preference
 let issuerConfigValues = {};
 try {
@@ -868,7 +949,11 @@ async function generateMdlCredentialWithAuth0Library(
     console.log(`[mdl-issue] IssuerSigned structure extracted from prepared document`);
     console.log(`[mdl-issue] issuerAuth is array: ${Array.isArray(preparedIssuerSigned.issuerAuth)}`);
     console.log(`[mdl-issue] nameSpaces is Map: ${preparedIssuerSigned.nameSpaces instanceof Map}`);
-    
+
+    // Normalize issuerAuth headers from @auth0/mdl so that optional COSE fields (e.g., 4/kid)
+    // are omitted rather than present with `undefined` values.
+    normalizeIssuerAuthHeaders(preparedIssuerSigned);
+
     // Encode the properly prepared IssuerSigned structure using the library's cborEncode
     // which uses cbor-x with the correct options for ISO 18013-5 compliance
     // Note: cborEncode is exported from @auth0/mdl/lib/cbor, not the main module
