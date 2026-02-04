@@ -198,6 +198,60 @@ export async function performPresentation({ deepLink, verifierBase, credentialTy
   console.log("[present] Request payload summary →", { responseMode, hasResponseUri: !!responseUri, hasNonce: !!nonce, hasPD: !!presentationDefinition, state });
   try { slog("[present] request payload", { responseMode, hasResponseUri: !!responseUri, hasNonce: !!nonce, hasPD: !!presentationDefinition, state }); } catch {}
 
+  // Validate transaction_data vs DCQL query, if present
+  // Per OpenID4VP 5.1.2.8.2.2, credential_ids in transaction_data MUST match
+  // the id fields from the DCQL credential query.
+  const dcqlQuery = payload.dcql_query;
+  const txData = payload.transaction_data;
+  if (dcqlQuery && Array.isArray(dcqlQuery.credentials) && Array.isArray(txData) && txData.length > 0) {
+    const dcqlIds = dcqlQuery.credentials
+      .map((c) => c && c.id)
+      .filter((id) => typeof id === "string" && id.length > 0);
+
+    if (dcqlIds.length > 0) {
+      for (const entry of txData) {
+        if (typeof entry !== "string") continue;
+        try {
+          const decoded = JSON.parse(Buffer.from(entry, "base64url").toString("utf8"));
+          if (Array.isArray(decoded.credential_ids)) {
+            if (decoded.credential_ids.length === 0) {
+              throw new Error(
+                "credential_ids in transaction_data must be a non-empty array per OpenID4VP 5.1.2.8.2.2"
+              );
+            }
+            const invalid = decoded.credential_ids.filter((id) => !dcqlIds.includes(id));
+            if (invalid.length > 0) {
+              throw new Error(
+                `Invalid credential_ids in transaction_data: ${invalid.join(
+                  ", "
+                )}. credential_ids must match id fields from dcql_query.credentials[].id. Expected one of: ${dcqlIds.join(
+                  ", "
+                )}, Found: ${decoded.credential_ids.join(", ")}`
+              );
+            }
+          }
+        } catch (e) {
+          // Use structured logging for transaction_data validation failures
+          try {
+            slog("[PRESENTATION] [ERROR] Invalid transaction_data entry", {
+              error: e?.message || String(e),
+              dcqlCredentialIds: dcqlIds,
+              rawEntry: typeof entry === "string" ? entry : null,
+            });
+          } catch {}
+          // Also emit to console for local debugging
+          console.log(
+            "[present] Warning: could not decode/validate transaction_data entry:",
+            e?.message || String(e)
+          );
+          // Treat decoding/validation errors as fatal so the wallet
+          // does not act on an invalid authorization request.
+          throw e;
+        }
+      }
+    }
+  }
+
   if (!responseUri) throw new Error("Missing response_uri in request");
   if (!nonce) throw new Error("Missing nonce in request");
 

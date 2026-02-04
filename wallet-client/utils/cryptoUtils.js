@@ -161,8 +161,29 @@ buildVpRequestJWT(
     throw new Error(`Invalid response_mode. Must be one of: ${allowedResponseModes.join(", ")}`);
   }
 
-  // Note: encryption metadata should be provided in client_metadata from verifier-config.json
-  // The verifier-config.json should contain jwks and encrypted_response_enc_values_supported
+  // Note: encryption metadata should be provided in client_metadata from verifier-config.json.
+  // The verifier-config.json should contain jwks and encrypted_response_enc_values_supported.
+  //
+  // For OpenID4VP, encrypted_response_enc_values_supported MUST be absent when using
+  // plain direct_post (non-JWT) response mode. Only direct_post.jwt / dc_api(.jwt)
+  // are allowed to advertise encryption options.
+  //
+  // On the wallet side we treat a verifier that sends this field for direct_post
+  // as a spec violation and fail fast instead of papering over it.
+  if (
+    response_mode === "direct_post" &&
+    client_metadata &&
+    typeof client_metadata === "object" &&
+    client_metadata.encrypted_response_enc_values_supported !== undefined
+  ) {
+    const msg =
+      "Verifier metadata error: encrypted_response_enc_values_supported MUST NOT be present for response_mode=direct_post per OpenID4VP 5.1.2.4.2.2";
+    console.warn("[wallet] " + msg, {
+      encrypted_response_enc_values_supported:
+        client_metadata.encrypted_response_enc_values_supported,
+    });
+    throw new Error(msg);
+  }
 
   // Construct the JWT payload
   let jwtPayload = {
