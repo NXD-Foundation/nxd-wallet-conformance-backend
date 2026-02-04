@@ -1,0 +1,455 @@
+# Hovi Test Suite - Test Case Requests
+# Source: Hovi Test Suite 25-Jan-2026.pdf
+# Base URL: https://testsuite.hovi.id (or override via HOVI_BASE_URL)
+# All endpoints protected via header: x-api-key: <token>
+
+base_url: "https://testsuite.hovi.id"
+
+# ==============================================================================
+# SECURITY
+# ==============================================================================
+security:
+  header: "x-api-key"
+  description: "All endpoints are protected via the JWT token in the header"
+
+# ==============================================================================
+# CREDENTIAL ISSUANCE (OID4VCI) TEST CASES
+# ==============================================================================
+credential_issuance:
+
+  # ----------------------------------------------------------------------------
+  # EAA Credential Issuance (Hovi Business Wallet - Q(EAA) Issuer)
+  # ----------------------------------------------------------------------------
+  eaa_issuance:
+
+    - id: "HOVI-VCI-01"
+      name: "Employee ID (mDoc, EAA)"
+      description: "Issue an Employee Identification credential as an ISO mDoc using OID4VCI with pre-authorized code flow under EAA assurance"
+      method: "GET"
+      path: "/eudi/credentialIssuanceRequest"
+      url: "https://testsuite.hovi.id/eudi/credentialIssuanceRequest?credentialType=employee-id-mdoc-eaa&sessionId=s1"
+      parameters:
+        credentialType: "employee-id-mdoc-eaa"
+        sessionId: "s1"
+      credential_type: "eu.europa.ec.eudi.employee.1"
+      credential_format: "mso_mdoc"
+      issuance_protocol: "OID4VCI 1.0"
+      assurance_level: "EAA"
+
+    - id: "HOVI-VCI-02"
+      name: "Loyalty Card (mDoc, EAA)"
+      description: "Issue a Loyalty Card credential as an ISO mDoc using OID4VCI with pre-authorized code flow under EAA assurance"
+      method: "GET"
+      path: "/eudi/credentialIssuanceRequest"
+      url: "https://testsuite.hovi.id/eudi/credentialIssuanceRequest?credentialType=loyalty-card-mdoc-eaa&sessionId=s2"
+      parameters:
+        credentialType: "loyalty-card-mdoc-eaa"
+        sessionId: "s2"
+      credential_type: "eu.europa.ec.eudi.loyalty.1"
+      credential_format: "mso_mdoc"
+      issuance_protocol: "OID4VCI 1.0"
+      assurance_level: "EAA"
+
+    - id: "HOVI-VCI-03"
+      name: "Reservation Credential (mDoc, EAA)"
+      description: "Issue a Reservation credential as an ISO mDoc aligned with ISO/IEC 18013-5 data model, issued via OID4VCI"
+      method: "GET"
+      path: "/eudi/credentialIssuanceRequest"
+      url: "https://testsuite.hovi.id/eudi/credentialIssuanceRequest?credentialType=reservation-mdoc-eaa&sessionId=s3"
+      parameters:
+        credentialType: "reservation-mdoc-eaa"
+        sessionId: "s3"
+      credential_type: "org.iso.18013.5.1.reservation"
+      credential_format: "mso_mdoc"
+      issuance_protocol: "OID4VCI 1.0"
+      assurance_level: "EAA"
+
+  # ----------------------------------------------------------------------------
+  # QEAA Credential Issuance - mDoc
+  # ----------------------------------------------------------------------------
+  qeaa_mdoc_issuance:
+
+    - id: "HOVI-VCI-04"
+      name: "Certificate of Residence (mDoc, QEAA)"
+      description: "Issue a Certificate of Residence credential as an ISO mDoc using OID4VCI under QEAA assurance level"
+      method: "GET"
+      path: "/eudi/credentialIssuanceRequest"
+      url: "https://testsuite.hovi.id/eudi/credentialIssuanceRequest?credentialType=residence-cert-mdoc-qeaa&sessionId=s4"
+      parameters:
+        credentialType: "residence-cert-mdoc-qeaa"
+        sessionId: "s4"
+      credential_type: "eu.europa.ec.eudi.cor.1"
+      credential_format: "mso_mdoc"
+      issuance_protocol: "OID4VCI 1.0"
+      assurance_level: "QEAA"
+
+    - id: "HOVI-VCI-05"
+      name: "Photo ID Credential (mDoc, QEAA)"
+      description: "Issue a Photo Identification credential as an ISO mDoc using OID4VCI under QEAA assurance level"
+      method: "GET"
+      path: "/eudi/credentialIssuanceRequest"
+      url: "https://testsuite.hovi.id/eudi/credentialIssuanceRequest?credentialType=photo-id-mdoc-qeaa&sessionId=s5"
+      parameters:
+        credentialType: "photo-id-mdoc-qeaa"
+        sessionId: "s5"
+      credential_type: "org.iso.23220.photoid.1"
+      credential_format: "mso_mdoc"
+      issuance_protocol: "OID4VCI 1.0"
+      assurance_level: "QEAA"
+
+    - id: "HOVI-VCI-06"
+      name: "Health ID [HIID] Credential (mDoc, QEAA)"
+      description: "Issue a Health Identification credential as an ISO mDoc using OID4VCI under QEAA assurance level"
+      method: "GET"
+      path: "/eudi/credentialIssuanceRequest"
+      url: "https://testsuite.hovi.id/eudi/credentialIssuanceRequest?credentialType=health-insurance-mdoc-qeaa&sessionId=s6"
+      parameters:
+        credentialType: "health-insurance-mdoc-qeaa"
+        sessionId: "s6"
+      credential_type: "eu.europa.ec.eudi.hiid.1"
+      credential_format: "mso_mdoc"
+      issuance_protocol: "OID4VCI 1.0"
+      assurance_level: "QEAA"
+
+  # ----------------------------------------------------------------------------
+  # QEAA Credential Issuance - SD-JWT
+  # ----------------------------------------------------------------------------
+  qeaa_sdjwt_issuance:
+
+    - id: "HOVI-VCI-07"
+      name: "Diploma Credential (SD-JWT, QEAA)"
+      description: "Issue a Diploma credential as a Verifiable Credential using SD-JWT with selective disclosure under QEAA assurance level"
+      method: "GET"
+      path: "/eudi/credentialIssuanceRequest"
+      url: "https://testsuite.hovi.id/eudi/credentialIssuanceRequest?credentialType=diploma-sdjwt-qeaa&sessionId=s7"
+      parameters:
+        credentialType: "diploma-sdjwt-qeaa"
+        sessionId: "s7"
+      credential_type: "urn:eu.europa.ec.eudi:diploma:1:1"
+      credential_format: "dc+sd-jwt"
+      issuance_protocol: "OID4VCI 1.0"
+      assurance_level: "QEAA"
+
+    - id: "HOVI-VCI-08"
+      name: "IBAN Credential (SD-JWT, QEAA)"
+      description: "Issue an IBAN credential as a Verifiable Credential using SD-JWT with selective disclosure under QEAA assurance level"
+      method: "GET"
+      path: "/eudi/credentialIssuanceRequest"
+      url: "https://testsuite.hovi.id/eudi/credentialIssuanceRequest?credentialType=iban-sdjwt-qeaa&sessionId=s8"
+      parameters:
+        credentialType: "iban-sdjwt-qeaa"
+        sessionId: "s8"
+      credential_type: "urn:eu.europa.ec.eudi:iban:1"
+      credential_format: "dc+sd-jwt"
+      issuance_protocol: "OID4VCI 1.0"
+      assurance_level: "QEAA"
+
+    - id: "HOVI-VCI-09"
+      name: "Proof of Representation [PoR] Credential (SD-JWT, QEAA)"
+      description: "Issue a Proof of Representation credential asserting legal or organizational representation using SD-JWT under QEAA assurance level"
+      method: "GET"
+      path: "/eudi/credentialIssuanceRequest"
+      url: "https://testsuite.hovi.id/eudi/credentialIssuanceRequest?credentialType=representative-por-sdjwt-qeaa&sessionId=s9"
+      parameters:
+        credentialType: "representative-por-sdjwt-qeaa"
+        sessionId: "s9"
+      credential_type: "urn:eu.europa.ec.eudi:por:1"
+      credential_format: "dc+sd-jwt"
+      issuance_protocol: "OID4VCI 1.0"
+      assurance_level: "QEAA"
+
+    - id: "HOVI-VCI-10"
+      name: "Tax Identification Credential (SD-JWT, QEAA)"
+      description: "Issue a Tax Identification credential as a Verifiable Credential using SD-JWT with selective disclosure under QEAA assurance level"
+      method: "GET"
+      path: "/eudi/credentialIssuanceRequest"
+      url: "https://testsuite.hovi.id/eudi/credentialIssuanceRequest?credentialType=tax-id-sdjwt-qeaa&sessionId=s10"
+      parameters:
+        credentialType: "tax-id-sdjwt-qeaa"
+        sessionId: "s10"
+      credential_type: "urn:eu.europa.ec.eudi:tax:1"
+      credential_format: "dc+sd-jwt"
+      issuance_protocol: "OID4VCI 1.0"
+      assurance_level: "QEAA"
+
+# ==============================================================================
+# VERIFICATION (OID4VP) TEST CASES
+# ==============================================================================
+verifiable_presentations:
+
+  # ----------------------------------------------------------------------------
+  # EAA Verification
+  # ----------------------------------------------------------------------------
+  eaa_verification:
+
+    - id: "HOVI-VP-01"
+      name: "Employee ID Verification"
+      description: "Verify an Employee Identification credential presented as ISO mDoc under EAA assurance"
+      method: "GET"
+      path: "/eudi/verificationRequest"
+      url: "https://testsuite.hovi.id/eudi/verificationRequest?credentialType=employee-id-mdoc-eaa&sessionId=s1"
+      parameters:
+        credentialType: "employee-id-mdoc-eaa"
+        sessionId: "s1"
+      presentation_protocol: "OID4VP 1.0 (DCQL)"
+      credential_type: "eu.europa.ec.eudi.employee.1"
+
+    - id: "HOVI-VP-02"
+      name: "Loyalty Card Verification"
+      description: "Verify a Loyalty Card credential presented as ISO mDoc under EAA assurance"
+      method: "GET"
+      path: "/eudi/verificationRequest"
+      url: "https://testsuite.hovi.id/eudi/verificationRequest?credentialType=loyalty-card-mdoc-eaa&sessionId=s2"
+      parameters:
+        credentialType: "loyalty-card-mdoc-eaa"
+        sessionId: "s2"
+      presentation_protocol: "OID4VP 1.0 (DCQL)"
+      credential_type: "eu.europa.ec.eudi.loyalty.1"
+
+    - id: "HOVI-VP-03"
+      name: "Reservation Credential Verification"
+      description: "Verify a Reservation credential aligned with ISO/IEC 18013-5"
+      method: "GET"
+      path: "/eudi/verificationRequest"
+      url: "https://testsuite.hovi.id/eudi/verificationRequest?credentialType=reservation-mdoc-eaa&sessionId=s3"
+      parameters:
+        credentialType: "reservation-mdoc-eaa"
+        sessionId: "s3"
+      presentation_protocol: "OID4VP 1.0 (DCQL)"
+      credential_type: "org.iso.18013.5.1.reservation"
+
+  # ----------------------------------------------------------------------------
+  # QEAA Verification - mDoc
+  # ----------------------------------------------------------------------------
+  qeaa_mdoc_verification:
+
+    - id: "HOVI-VP-04"
+      name: "Certificate of Residence Verification"
+      description: "Verify a Certificate of Residence credential under QEAA assurance"
+      method: "GET"
+      path: "/eudi/verificationRequest"
+      url: "https://testsuite.hovi.id/eudi/verificationRequest?credentialType=residence-cert-mdoc-qeaa&sessionId=s4"
+      parameters:
+        credentialType: "residence-cert-mdoc-qeaa"
+        sessionId: "s4"
+      presentation_protocol: "OID4VP 1.0 (DCQL)"
+      credential_type: "eu.europa.ec.eudi.cor.1"
+
+    - id: "HOVI-VP-05"
+      name: "Photo ID Verification"
+      description: "Verify a Photo ID credential presented as ISO mDoc"
+      method: "GET"
+      path: "/eudi/verificationRequest"
+      url: "https://testsuite.hovi.id/eudi/verificationRequest?credentialType=photo-id-mdoc-qeaa&sessionId=s5"
+      parameters:
+        credentialType: "photo-id-mdoc-qeaa"
+        sessionId: "s5"
+      presentation_protocol: "OID4VP 1.0 (DCQL)"
+      credential_type: "org.iso.23220.photoid.1"
+
+    - id: "HOVI-VP-06"
+      name: "Health ID [HIID] Verification"
+      description: "Verify a Health Identification credential under QEAA"
+      method: "GET"
+      path: "/eudi/verificationRequest"
+      url: "https://testsuite.hovi.id/eudi/verificationRequest?credentialType=health-insurance-mdoc-qeaa&sessionId=s6"
+      parameters:
+        credentialType: "health-insurance-mdoc-qeaa"
+        sessionId: "s6"
+      presentation_protocol: "OID4VP 1.0 (DCQL)"
+      credential_type: "eu.europa.ec.eudi.hiid.1"
+
+  # ----------------------------------------------------------------------------
+  # QEAA Verification - SD-JWT
+  # ----------------------------------------------------------------------------
+  qeaa_sdjwt_verification:
+
+    - id: "HOVI-VP-07"
+      name: "Diploma Verification"
+      description: "Verify a Diploma credential using SD-JWT selective disclosure"
+      method: "GET"
+      path: "/eudi/verificationRequest"
+      url: "https://testsuite.hovi.id/eudi/verificationRequest?credentialType=diploma-sdjwt-qeaa&sessionId=s7"
+      parameters:
+        credentialType: "diploma-sdjwt-qeaa"
+        sessionId: "s7"
+      presentation_protocol: "OID4VP 1.0 (DCQL)"
+      credential_type: "urn:eu.europa.ec.eudi:diploma:1:1"
+
+    - id: "HOVI-VP-08"
+      name: "IBAN Verification"
+      description: "Verify an IBAN credential with selective disclosure"
+      method: "GET"
+      path: "/eudi/verificationRequest"
+      url: "https://testsuite.hovi.id/eudi/verificationRequest?credentialType=iban-sdjwt-qeaa&sessionId=s8"
+      parameters:
+        credentialType: "iban-sdjwt-qeaa"
+        sessionId: "s8"
+      presentation_protocol: "OID4VP 1.0 (DCQL)"
+      credential_type: "urn:eu.europa.ec.eudi:iban:1"
+
+    - id: "HOVI-VP-09"
+      name: "Proof of Representation Verification"
+      description: "Verify representation authority using SD-JWT"
+      method: "GET"
+      path: "/eudi/verificationRequest"
+      url: "https://testsuite.hovi.id/eudi/verificationRequest?credentialType=representative-por-sdjwt-qeaa&sessionId=s9"
+      parameters:
+        credentialType: "representative-por-sdjwt-qeaa"
+        sessionId: "s9"
+      presentation_protocol: "OID4VP 1.0 (DCQL)"
+      credential_type: "urn:eu.europa.ec.eudi:por:1"
+
+    - id: "HOVI-VP-10"
+      name: "Tax ID Verification"
+      description: "Verify a Tax Identification credential with selective disclosure"
+      method: "GET"
+      path: "/eudi/verificationRequest"
+      url: "https://testsuite.hovi.id/eudi/verificationRequest?credentialType=tax-id-sdjwt-qeaa&sessionId=s10"
+      parameters:
+        credentialType: "tax-id-sdjwt-qeaa"
+        sessionId: "s10"
+      presentation_protocol: "OID4VP 1.0 (DCQL)"
+      credential_type: "urn:eu.europa.ec.eudi:tax:1"
+
+# ==============================================================================
+# STATUS / POLLING ENDPOINTS
+# ==============================================================================
+status_endpoints:
+
+  - id: "HOVI-STATUS-01"
+    name: "Issuance Status Polling"
+    description: "Poll issuance status for a credential issuance session"
+    method: "GET"
+    path: "/eudi/issuanceStatus"
+    url: "https://testsuite.hovi.id/eudi/issuanceStatus?sessionId=s1"
+    parameters:
+      sessionId: "s1"
+
+  - id: "HOVI-STATUS-02"
+    name: "Verification Status Polling"
+    description: "Poll verification status for a VP session"
+    method: "GET"
+    path: "/eudi/verificationStatus"
+    url: "https://testsuite.hovi.id/eudi/verificationStatus?sessionId=s1"
+    parameters:
+      sessionId: "s1"
+
+# ==============================================================================
+# HOLDER ENDPOINTS (Hovi Business Wallet Cloud)
+# ==============================================================================
+holder_endpoints:
+
+  - id: "HOVI-HOLDER-01"
+    name: "Holder Request (POST)"
+    description: "Submit credential offer or VP request URI to holder. Supports openid-credential-offer:// and openid4vp://"
+    method: "POST"
+    path: "/eudi/holderRequest"
+    url: "https://testsuite.hovi.id/eudi/holderRequest"
+    body_example:
+      sessionId: "s1"
+      uri: "openid-credential-offer://?credential_offer_uri=..."
+      pin: "9334"
+    parameters:
+      sessionId: "s1"
+      uri: "openid-credential-offer:// or openid4vp://"
+      pin: "optional"
+
+  - id: "HOVI-HOLDER-02"
+    name: "Holder Status (GET)"
+    description: "Check holder processing status for a session"
+    method: "GET"
+    path: "/eudi/holderStatus"
+    url: "https://testsuite.hovi.id/eudi/holderStatus?sessionId=s1"
+    parameters:
+      sessionId: "s1"
+
+# ==============================================================================
+# CREDENTIAL TYPE REFERENCE (Hovi Test Suite)
+# ==============================================================================
+credential_types:
+  - name: "Employee ID (EAA)"
+    identifier: "eu.europa.ec.eudi.employee.1"
+    format: "mso_mdoc"
+    assurance: "EAA"
+  - name: "Loyalty Card (EAA)"
+    identifier: "eu.europa.ec.eudi.loyalty.1"
+    format: "mso_mdoc"
+    assurance: "EAA"
+  - name: "Reservation (EAA)"
+    identifier: "org.iso.18013.5.1.reservation"
+    format: "mso_mdoc"
+    assurance: "EAA"
+  - name: "Certificate of Residence (QEAA)"
+    identifier: "eu.europa.ec.eudi.cor.1"
+    format: "mso_mdoc"
+    assurance: "QEAA"
+  - name: "Photo ID (QEAA)"
+    identifier: "org.iso.23220.photoid.1"
+    format: "mso_mdoc"
+    assurance: "QEAA"
+  - name: "Health ID / HIID (QEAA)"
+    identifier: "eu.europa.ec.eudi.hiid.1"
+    format: "mso_mdoc"
+    assurance: "QEAA"
+  - name: "Diploma (QEAA)"
+    identifier: "urn:eu.europa.ec.eudi:diploma:1:1"
+    format: "dc+sd-jwt"
+    assurance: "QEAA"
+  - name: "IBAN (QEAA)"
+    identifier: "urn:eu.europa.ec.eudi:iban:1"
+    format: "dc+sd-jwt"
+    assurance: "QEAA"
+  - name: "Proof of Representation (QEAA)"
+    identifier: "urn:eu.europa.ec.eudi:por:1"
+    format: "dc+sd-jwt"
+    assurance: "QEAA"
+  - name: "Tax Identification (QEAA)"
+    identifier: "urn:eu.europa.ec.eudi:tax:1"
+    format: "dc+sd-jwt"
+    assurance: "QEAA"
+
+# ==============================================================================
+# TEST CASE MAPPING (Issuance ↔ Verification)
+# ==============================================================================
+test_case_mapping:
+  s1:
+    issuance: "HOVI-VCI-01"
+    verification: "HOVI-VP-01"
+    credential: "Employee ID (mDoc, EAA)"
+  s2:
+    issuance: "HOVI-VCI-02"
+    verification: "HOVI-VP-02"
+    credential: "Loyalty Card (mDoc, EAA)"
+  s3:
+    issuance: "HOVI-VCI-03"
+    verification: "HOVI-VP-03"
+    credential: "Reservation (mDoc, EAA)"
+  s4:
+    issuance: "HOVI-VCI-04"
+    verification: "HOVI-VP-04"
+    credential: "Certificate of Residence (mDoc, QEAA)"
+  s5:
+    issuance: "HOVI-VCI-05"
+    verification: "HOVI-VP-05"
+    credential: "Photo ID (mDoc, QEAA)"
+  s6:
+    issuance: "HOVI-VCI-06"
+    verification: "HOVI-VP-06"
+    credential: "Health ID (mDoc, QEAA)"
+  s7:
+    issuance: "HOVI-VCI-07"
+    verification: "HOVI-VP-07"
+    credential: "Diploma (SD-JWT, QEAA)"
+  s8:
+    issuance: "HOVI-VCI-08"
+    verification: "HOVI-VP-08"
+    credential: "IBAN (SD-JWT, QEAA)"
+  s9:
+    issuance: "HOVI-VCI-09"
+    verification: "HOVI-VP-09"
+    credential: "Proof of Representation (SD-JWT, QEAA)"
+  s10:
+    issuance: "HOVI-VCI-10"
+    verification: "HOVI-VP-10"
+    credential: "Tax Identification (SD-JWT, QEAA)"

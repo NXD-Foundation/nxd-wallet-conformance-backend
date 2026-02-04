@@ -251,7 +251,11 @@ async function getOfferDeepLink(issuerBase, path, credentialType) {
 }
 
 async function resolveOfferConfig(deepLink) {
-  const url = new URL(deepLink.replace(/^haip:\/\//, "openid-credential-offer://"));
+  // Normalize HAIP profile schemes (haip://, haip-vci://) to the standard
+  // openid-credential-offer:// scheme.
+  const url = new URL(
+    deepLink.replace(/^haip(-vci)?:\/\//, "openid-credential-offer://")
+  );
   if (url.protocol !== "openid-credential-offer:") {
     throw new Error("Unsupported offer scheme");
   }

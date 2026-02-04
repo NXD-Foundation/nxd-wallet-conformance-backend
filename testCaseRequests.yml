@@ -1,0 +1,774 @@
+# Test Case Requests for RFC Issuer/Verifier Service
+# This file contains all credential offer and VP request endpoints for testing
+# Base URL: http://localhost:3000 (or your SERVER_URL environment variable)
+
+base_url: "http://localhost:3000"
+
+# ==============================================================================
+# CREDENTIAL ISSUANCE (OIDC4VCI) TEST CASES
+# ==============================================================================
+credential_issuance:
+  
+  # ----------------------------------------------------------------------------
+  # Standardized VCI Offer Endpoint
+  # Single endpoint with query parameters to control all issuance flows
+  # ----------------------------------------------------------------------------
+  standardized_endpoint:
+    - id: "VCI-STD-01"
+      name: "Standardized VCI - Pre-authorized code, no tx_code, SD-JWT PID"
+      description: "Pre-authorized code flow without transaction code for SD-JWT PID credential"
+      method: "GET"
+      path: "/vci/offer"
+      url: "http://localhost:3000/vci/offer?session_id=test-session-001&flow=pre_authorized_code&tx_code_required=false&credential_type=urn:eu.europa.ec.eudi:pid:1&credential_format=sd-jwt&signature_type=x509"
+      parameters:
+        session_id: "test-session-001"
+        flow: "pre_authorized_code"
+        tx_code_required: "false"
+        credential_type: "urn:eu.europa.ec.eudi:pid:1"
+        credential_format: "sd-jwt"
+        signature_type: "x509"
+      rfc_reference: "OIDC4VCI"
+      test_case_mapping: "TC02"
+
+    - id: "VCI-STD-02"
+      name: "Standardized VCI - Pre-authorized code with tx_code, SD-JWT PID"
+      description: "Pre-authorized code flow with transaction code for SD-JWT PID credential"
+      method: "GET"
+      path: "/vci/offer"
+      url: "http://localhost:3000/vci/offer?session_id=test-session-002&flow=pre_authorized_code&tx_code_required=true&credential_type=urn:eu.europa.ec.eudi:pid:1&credential_format=sd-jwt&signature_type=x509"
+      parameters:
+        session_id: "test-session-002"
+        flow: "pre_authorized_code"
+        tx_code_required: "true"
+        credential_type: "urn:eu.europa.ec.eudi:pid:1"
+        credential_format: "sd-jwt"
+        signature_type: "x509"
+      rfc_reference: "OIDC4VCI"
+      test_case_mapping: "TC01"
+
+    - id: "VCI-STD-03"
+      name: "Standardized VCI - Authorization code flow, SD-JWT PID"
+      description: "Authorization code flow for SD-JWT PID credential"
+      method: "GET"
+      path: "/vci/offer"
+      url: "http://localhost:3000/vci/offer?session_id=test-session-003&flow=authorization_code&credential_type=urn:eu.europa.ec.eudi:pid:1&credential_format=sd-jwt&signature_type=x509"
+      parameters:
+        session_id: "test-session-003"
+        flow: "authorization_code"
+        credential_type: "urn:eu.europa.ec.eudi:pid:1"
+        credential_format: "sd-jwt"
+        signature_type: "x509"
+      rfc_reference: "OIDC4VCI"
+      test_case_mapping: "TC03"
+
+    - id: "VCI-STD-04"
+      name: "Standardized VCI - MDL mso_mdoc credential"
+      description: "Pre-authorized code flow for mDL (mobile Driving License) in mso_mdoc format"
+      method: "GET"
+      path: "/vci/offer"
+      url: "http://localhost:3000/vci/offer?session_id=test-session-004&flow=pre_authorized_code&tx_code_required=false&credential_type=org.iso.18013.5.1.mDL&credential_format=mso_mdoc&signature_type=x509"
+      parameters:
+        session_id: "test-session-004"
+        flow: "pre_authorized_code"
+        tx_code_required: "false"
+        credential_type: "org.iso.18013.5.1.mDL"
+        credential_format: "mso_mdoc"
+        signature_type: "x509"
+      rfc_reference: "OIDC4VCI"
+
+    - id: "VCI-STD-05"
+      name: "Standardized VCI - HAIP pre-authorized with X509 signature"
+      description: "HAIP profile: Pre-authorized code flow with X509 signature (haip:// URL scheme)"
+      method: "GET"
+      path: "/vci/offer"
+      url: "http://localhost:3000/vci/offer?session_id=test-session-005&flow=pre_authorized_code&tx_code_required=false&credential_type=urn:eu.europa.ec.eudi:pid:1&signature_type=x509&url_scheme=haip"
+      parameters:
+        session_id: "test-session-005"
+        flow: "pre_authorized_code"
+        tx_code_required: "false"
+        credential_type: "urn:eu.europa.ec.eudi:pid:1"
+        signature_type: "x509"
+        url_scheme: "haip"
+      rfc_reference: "HAIP"
+      test_case_mapping: "TC10"
+
+  # ----------------------------------------------------------------------------
+  # Pre-Authorized Code Flow Endpoints
+  # ----------------------------------------------------------------------------
+  pre_authorized_code_flow:
+    
+    - id: "PREAUTH-01"
+      name: "Pre-auth with transaction code - SD-JWT PID"
+      description: "Pre-authorized flow WITH transaction code for SD-JWT PID credential"
+      method: "GET"
+      path: "/offer-tx-code"
+      url: "http://localhost:3000/offer-tx-code?credentialType=urn:eu.europa.ec.eudi:pid:1&sessionId=test-preauth-001&signatureType=x509"
+      parameters:
+        credentialType: "urn:eu.europa.ec.eudi:pid:1"
+        sessionId: "test-preauth-001"
+        signatureType: "x509"
+      rfc_reference: "OIDC4VCI"
+      test_case_mapping: "TC01"
+
+    - id: "PREAUTH-02"
+      name: "Pre-auth without transaction code - SD-JWT PID"
+      description: "Pre-authorized flow WITHOUT transaction code for SD-JWT PID credential"
+      method: "GET"
+      path: "/offer-no-code"
+      url: "http://localhost:3000/offer-no-code?credentialType=urn:eu.europa.ec.eudi:pid:1&sessionId=test-preauth-002&signatureType=x509"
+      parameters:
+        credentialType: "urn:eu.europa.ec.eudi:pid:1"
+        sessionId: "test-preauth-002"
+        signatureType: "x509"
+      rfc_reference: "OIDC4VCI"
+      test_case_mapping: "TC02"
+
+    - id: "PREAUTH-03"
+      name: "Pre-auth without transaction code - mDL mso_mdoc"
+      description: "Pre-authorized flow for mDL credential in mso_mdoc format"
+      method: "GET"
+      path: "/offer-no-code"
+      url: "http://localhost:3000/offer-no-code?credentialType=urn:eu.europa.ec.eudi:pid:1:mso_mdoc&sessionId=test-preauth-003&signatureType=x509"
+      parameters:
+        credentialType: "urn:eu.europa.ec.eudi:pid:1:mso_mdoc"
+        sessionId: "test-preauth-003"
+        signatureType: "x509"
+      rfc_reference: "OIDC4VCI"
+
+    - id: "PREAUTH-04"
+      name: "Pre-auth without transaction code - DID:WEB signature"
+      description: "Pre-authorized flow with DID:WEB signature type"
+      method: "GET"
+      path: "/offer-no-code"
+      url: "http://localhost:3000/offer-no-code?credentialType=urn:eu.europa.ec.eudi:pid:1&sessionId=test-preauth-004&signatureType=did:web"
+      parameters:
+        credentialType: "urn:eu.europa.ec.eudi:pid:1"
+        sessionId: "test-preauth-004"
+        signatureType: "did:web"
+      rfc_reference: "OIDC4VCI"
+
+    - id: "PREAUTH-05"
+      name: "Pre-auth without transaction code - JWK signature"
+      description: "Pre-authorized flow with JWK signature type"
+      method: "GET"
+      path: "/offer-no-code"
+      url: "http://localhost:3000/offer-no-code?credentialType=urn:eu.europa.ec.eudi:pid:1&sessionId=test-preauth-005&signatureType=jwk"
+      parameters:
+        credentialType: "urn:eu.europa.ec.eudi:pid:1"
+        sessionId: "test-preauth-005"
+        signatureType: "jwk"
+      rfc_reference: "OIDC4VCI"
+
+    - id: "PREAUTH-06"
+      name: "Pre-auth without transaction code - KID-JWK signature"
+      description: "Pre-authorized flow with KID-JWK signature type"
+      method: "GET"
+      path: "/offer-no-code"
+      url: "http://localhost:3000/offer-no-code?credentialType=urn:eu.europa.ec.eudi:pid:1&sessionId=test-preauth-006&signatureType=kid-jwk"
+      parameters:
+        credentialType: "urn:eu.europa.ec.eudi:pid:1"
+        sessionId: "test-preauth-006"
+        signatureType: "kid-jwk"
+      rfc_reference: "OIDC4VCI"
+
+  # ----------------------------------------------------------------------------
+  # HAIP (High Assurance Interoperability Profile) Endpoints
+  # ----------------------------------------------------------------------------
+  haip_flow:
+    
+    - id: "HAIP-01"
+      name: "HAIP pre-auth with transaction code"
+      description: "HAIP profile: Pre-authorized code flow with haip:// URL scheme and tx_code"
+      method: "GET"
+      path: "/haip-offer-tx-code"
+      url: "http://localhost:3000/haip-offer-tx-code?credentialType=urn:eu.europa.ec.eudi:pid:1&sessionId=test-haip-001"
+      parameters:
+        credentialType: "urn:eu.europa.ec.eudi:pid:1"
+        sessionId: "test-haip-001"
+      rfc_reference: "HAIP"
+      test_case_mapping: "TC10"
+
+  # ----------------------------------------------------------------------------
+  # Authorization Code Flow Endpoints
+  # ----------------------------------------------------------------------------
+  authorization_code_flow:
+    
+    - id: "AUTHCODE-01"
+      name: "Authorization code flow - redirect_uri scheme"
+      description: "Authorization code flow with client_id_scheme=redirect_uri"
+      method: "GET"
+      path: "/offer-code-sd-jwt"
+      url: "http://localhost:3000/offer-code-sd-jwt?credentialType=urn:eu.europa.ec.eudi:pid:1&sessionId=test-authcode-001&client_id_scheme=redirect_uri"
+      parameters:
+        credentialType: "urn:eu.europa.ec.eudi:pid:1"
+        sessionId: "test-authcode-001"
+        client_id_scheme: "redirect_uri"
+      rfc_reference: "OIDC4VCI"
+      test_case_mapping: "TC03"
+
+    - id: "AUTHCODE-02"
+      name: "Authorization code flow - x509_san_dns scheme"
+      description: "Authorization code flow with client_id_scheme=x509_san_dns"
+      method: "GET"
+      path: "/offer-code-sd-jwt"
+      url: "http://localhost:3000/offer-code-sd-jwt?credentialType=urn:eu.europa.ec.eudi:pid:1&sessionId=test-authcode-002&client_id_scheme=x509_san_dns&signatureType=x509"
+      parameters:
+        credentialType: "urn:eu.europa.ec.eudi:pid:1"
+        sessionId: "test-authcode-002"
+        client_id_scheme: "x509_san_dns"
+        signatureType: "x509"
+      rfc_reference: "OIDC4VCI"
+      test_case_mapping: "TC06b"
+
+    - id: "AUTHCODE-03"
+      name: "Authorization code flow - did:jwk scheme"
+      description: "Authorization code flow with client_id_scheme=did:jwk"
+      method: "GET"
+      path: "/offer-code-sd-jwt"
+      url: "http://localhost:3000/offer-code-sd-jwt?credentialType=urn:eu.europa.ec.eudi:pid:1&sessionId=test-authcode-003&client_id_scheme=did:jwk"
+      parameters:
+        credentialType: "urn:eu.europa.ec.eudi:pid:1"
+        sessionId: "test-authcode-003"
+        client_id_scheme: "did:jwk"
+      rfc_reference: "OIDC4VCI"
+      test_case_mapping: "TC07"
+
+    - id: "AUTHCODE-04"
+      name: "Authorization code flow - dynamic credential request"
+      description: "Authorization code flow with dynamic credential request"
+      method: "GET"
+      path: "/offer-code-sd-jwt-dynamic"
+      url: "http://localhost:3000/offer-code-sd-jwt-dynamic?credentialType=urn:eu.europa.ec.eudi:pid:1&sessionId=test-authcode-004&client_id_scheme=redirect_uri"
+      parameters:
+        credentialType: "urn:eu.europa.ec.eudi:pid:1"
+        sessionId: "test-authcode-004"
+        client_id_scheme: "redirect_uri"
+      rfc_reference: "OIDC4VCI"
+      test_case_mapping: "TC06a"
+
+    - id: "AUTHCODE-05"
+      name: "Authorization code flow - deferred issuance"
+      description: "Authorization code flow with deferred credential issuance"
+      method: "GET"
+      path: "/offer-code-defered"
+      url: "http://localhost:3000/offer-code-defered?credentialType=urn:eu.europa.ec.eudi:pid:1&sessionId=test-authcode-005&client_id_scheme=redirect_uri"
+      parameters:
+        credentialType: "urn:eu.europa.ec.eudi:pid:1"
+        sessionId: "test-authcode-005"
+        client_id_scheme: "redirect_uri"
+      rfc_reference: "OIDC4VCI"
+
+    - id: "AUTHCODE-06"
+      name: "Authorization code flow - HAIP URL scheme"
+      description: "Authorization code flow with haip:// URL scheme"
+      method: "GET"
+      path: "/offer-code-sd-jwt"
+      url: "http://localhost:3000/offer-code-sd-jwt?credentialType=urn:eu.europa.ec.eudi:pid:1&sessionId=test-authcode-006&client_id_scheme=redirect_uri&url_scheme=haip"
+      parameters:
+        credentialType: "urn:eu.europa.ec.eudi:pid:1"
+        sessionId: "test-authcode-006"
+        client_id_scheme: "redirect_uri"
+        url_scheme: "haip"
+      rfc_reference: "HAIP"
+
+  # ----------------------------------------------------------------------------
+  # PID Issuance Specific Endpoints
+  # ----------------------------------------------------------------------------
+  pid_issuance:
+    
+    - id: "PID-01"
+      name: "PID pre-authorization code flow"
+      description: "PID-specific pre-authorization code flow with tx_code"
+      method: "GET"
+      path: "/issue-pid-pre-auth"
+      url: "http://localhost:3000/issue-pid-pre-auth?sessionId=test-pid-001"
+      parameters:
+        sessionId: "test-pid-001"
+      rfc_reference: "PID Issuance"
+      test_case_mapping: "TC11"
+
+    - id: "PID-02"
+      name: "PID authorization code flow"
+      description: "PID-specific authorization code flow"
+      method: "GET"
+      path: "/issue-pid-code"
+      url: "http://localhost:3000/issue-pid-code?sessionId=test-pid-002&client_id_scheme=redirect_uri"
+      parameters:
+        sessionId: "test-pid-002"
+        client_id_scheme: "redirect_uri"
+      rfc_reference: "PID Issuance"
+      test_case_mapping: "TC09"
+
+    - id: "PID-03"
+      name: "PID authorization code flow - x509 scheme"
+      description: "PID authorization code flow with X509 client_id_scheme"
+      method: "GET"
+      path: "/issue-pid-code"
+      url: "http://localhost:3000/issue-pid-code?sessionId=test-pid-003&client_id_scheme=x509_san_dns"
+      parameters:
+        sessionId: "test-pid-003"
+        client_id_scheme: "x509_san_dns"
+      rfc_reference: "PID Issuance"
+
+  # ----------------------------------------------------------------------------
+  # Batch Credential Issuance
+  # ----------------------------------------------------------------------------
+  batch_issuance:
+    
+    - id: "BATCH-01"
+      name: "Batch credential issuance - no tx_code"
+      description: "Batch issuance of multiple credentials (PID + PhotoID) without transaction code"
+      method: "GET"
+      path: "/offer-no-code-batch"
+      url: "http://localhost:3000/offer-no-code-batch?sessionId=test-batch-001&credentialType=CombinedCredentials"
+      parameters:
+        sessionId: "test-batch-001"
+        credentialType: "CombinedCredentials"
+      rfc_reference: "OIDC4VCI Batch"
+
+# ==============================================================================
+# VERIFIABLE PRESENTATIONS (OIDC4VP) TEST CASES
+# ==============================================================================
+verifiable_presentations:
+
+  # ----------------------------------------------------------------------------
+  # Standardized VP Request Endpoint
+  # Single endpoint with query parameters to control all VP request flows
+  # ----------------------------------------------------------------------------
+  standardized_endpoint:
+    
+    - id: "VP-STD-01"
+      name: "Standardized VP Request - x509, DCQL, PID"
+      description: "VP request with x509 client_id_scheme, DCQL query, requesting PID credential"
+      method: "GET"
+      path: "/vp/request"
+      url: "http://localhost:3000/vp/request?session_id=test-vp-001&client_id_scheme=x509&profile=dcql&credential_profile=pid&request_uri_method=post&response_mode=direct_post"
+      parameters:
+        session_id: "test-vp-001"
+        client_id_scheme: "x509"
+        profile: "dcql"
+        credential_profile: "pid"
+        request_uri_method: "post"
+        response_mode: "direct_post"
+      rfc_reference: "OIDC4VP"
+      test_case_mapping: "TC05"
+
+    - id: "VP-STD-02"
+      name: "Standardized VP Request - did:web, DCQL, PID"
+      description: "VP request with did:web client_id_scheme"
+      method: "GET"
+      path: "/vp/request"
+      url: "http://localhost:3000/vp/request?session_id=test-vp-002&client_id_scheme=did:web&profile=dcql&credential_profile=pid&request_uri_method=post&response_mode=direct_post"
+      parameters:
+        session_id: "test-vp-002"
+        client_id_scheme: "did:web"
+        profile: "dcql"
+        credential_profile: "pid"
+        request_uri_method: "post"
+        response_mode: "direct_post"
+      rfc_reference: "OIDC4VP"
+
+    - id: "VP-STD-03"
+      name: "Standardized VP Request - did:jwk, DCQL, PID"
+      description: "VP request with did:jwk client_id_scheme"
+      method: "GET"
+      path: "/vp/request"
+      url: "http://localhost:3000/vp/request?session_id=test-vp-003&client_id_scheme=did:jwk&profile=dcql&credential_profile=pid&request_uri_method=post&response_mode=direct_post"
+      parameters:
+        session_id: "test-vp-003"
+        client_id_scheme: "did:jwk"
+        profile: "dcql"
+        credential_profile: "pid"
+        request_uri_method: "post"
+        response_mode: "direct_post"
+      rfc_reference: "OIDC4VP"
+      test_case_mapping: "TC08"
+
+    - id: "VP-STD-04"
+      name: "Standardized VP Request - x509, transaction data"
+      description: "VP request with transaction data for payment/signing use cases"
+      method: "GET"
+      path: "/vp/request"
+      url: "http://localhost:3000/vp/request?session_id=test-vp-004&client_id_scheme=x509&profile=tx&credential_profile=pid&request_uri_method=post&response_mode=direct_post&tx_data=true"
+      parameters:
+        session_id: "test-vp-004"
+        client_id_scheme: "x509"
+        profile: "tx"
+        credential_profile: "pid"
+        request_uri_method: "post"
+        response_mode: "direct_post"
+        tx_data: "true"
+      rfc_reference: "OIDC4VP"
+
+    - id: "VP-STD-05"
+      name: "Standardized VP Request - x509, mDL"
+      description: "VP request for mDL (mobile Driving License) credential"
+      method: "GET"
+      path: "/vp/request"
+      url: "http://localhost:3000/vp/request?session_id=test-vp-005&client_id_scheme=x509&profile=mdl&credential_profile=mdl&request_uri_method=post&response_mode=direct_post"
+      parameters:
+        session_id: "test-vp-005"
+        client_id_scheme: "x509"
+        profile: "mdl"
+        credential_profile: "mdl"
+        request_uri_method: "post"
+        response_mode: "direct_post"
+      rfc_reference: "OIDC4VP"
+
+    - id: "VP-STD-06"
+      name: "Standardized VP Request - direct_post.jwt response mode"
+      description: "VP request with encrypted response mode (direct_post.jwt)"
+      method: "GET"
+      path: "/vp/request"
+      url: "http://localhost:3000/vp/request?session_id=test-vp-006&client_id_scheme=x509&profile=dcql&credential_profile=pid&request_uri_method=post&response_mode=direct_post.jwt"
+      parameters:
+        session_id: "test-vp-006"
+        client_id_scheme: "x509"
+        profile: "dcql"
+        credential_profile: "pid"
+        request_uri_method: "post"
+        response_mode: "direct_post.jwt"
+      rfc_reference: "OIDC4VP"
+
+  # ----------------------------------------------------------------------------
+  # X509 Client ID Scheme Endpoints
+  # ----------------------------------------------------------------------------
+  x509_scheme:
+    
+    - id: "X509-VP-01"
+      name: "X509 VP Request - Presentation Definition (POST)"
+      description: "Generate VP request with X509 client_id_scheme using presentation definition, POST method for request_uri"
+      method: "GET"
+      path: "/x509/generateVPRequest"
+      url: "http://localhost:3000/x509/generateVPRequest?sessionId=test-x509-001&response_mode=direct_post"
+      parameters:
+        sessionId: "test-x509-001"
+        response_mode: "direct_post"
+      rfc_reference: "OIDC4VP"
+      test_case_mapping: "TC05"
+
+    - id: "X509-VP-02"
+      name: "X509 VP Request - Presentation Definition (GET)"
+      description: "Generate VP request with X509 client_id_scheme, GET method for request_uri"
+      method: "GET"
+      path: "/x509/generateVPRequestGet"
+      url: "http://localhost:3000/x509/generateVPRequestGet?sessionId=test-x509-002&response_mode=direct_post"
+      parameters:
+        sessionId: "test-x509-002"
+        response_mode: "direct_post"
+      rfc_reference: "OIDC4VP"
+
+    - id: "X509-VP-03"
+      name: "X509 VP Request - DCQL Query (POST)"
+      description: "Generate VP request with X509 using DCQL query instead of presentation definition"
+      method: "GET"
+      path: "/x509/generateVPRequestDCQL"
+      url: "http://localhost:3000/x509/generateVPRequestDCQL?sessionId=test-x509-003&response_mode=direct_post"
+      parameters:
+        sessionId: "test-x509-003"
+        response_mode: "direct_post"
+      rfc_reference: "OIDC4VP"
+
+    - id: "X509-VP-04"
+      name: "X509 VP Request - DCQL Query (GET)"
+      description: "Generate VP request with X509 using DCQL query, GET method"
+      method: "GET"
+      path: "/x509/generateVPRequestDCQLGET"
+      url: "http://localhost:3000/x509/generateVPRequestDCQLGET?sessionId=test-x509-004&response_mode=direct_post"
+      parameters:
+        sessionId: "test-x509-004"
+        response_mode: "direct_post"
+      rfc_reference: "OIDC4VP"
+
+    - id: "X509-VP-05"
+      name: "X509 VP Request - with Transaction Data"
+      description: "Generate VP request with X509 including transaction data for payments/signing"
+      method: "GET"
+      path: "/x509/generateVPRequestTransaction"
+      url: "http://localhost:3000/x509/generateVPRequestTransaction?sessionId=test-x509-005&response_mode=direct_post"
+      parameters:
+        sessionId: "test-x509-005"
+        response_mode: "direct_post"
+      rfc_reference: "OIDC4VP"
+
+    - id: "X509-VP-06"
+      name: "X509 VP Request - direct_post.jwt response mode"
+      description: "Generate VP request with X509 using encrypted response mode"
+      method: "GET"
+      path: "/x509/generateVPRequest"
+      url: "http://localhost:3000/x509/generateVPRequest?sessionId=test-x509-006&response_mode=direct_post.jwt"
+      parameters:
+        sessionId: "test-x509-006"
+        response_mode: "direct_post.jwt"
+      rfc_reference: "OIDC4VP"
+
+  # ----------------------------------------------------------------------------
+  # DID:JWK Client ID Scheme Endpoints
+  # ----------------------------------------------------------------------------
+  did_jwk_scheme:
+    
+    - id: "DIDJWK-VP-01"
+      name: "DID:JWK VP Request - DCQL Query (POST)"
+      description: "Generate VP request with did:jwk client_id_scheme using DCQL query"
+      method: "GET"
+      path: "/did-jwk/generateVPRequest"
+      url: "http://localhost:3000/did-jwk/generateVPRequest?sessionId=test-didjwk-001&response_mode=direct_post"
+      parameters:
+        sessionId: "test-didjwk-001"
+        response_mode: "direct_post"
+      rfc_reference: "OIDC4VP"
+      test_case_mapping: "TC08"
+
+    - id: "DIDJWK-VP-02"
+      name: "DID:JWK VP Request - DCQL Query (GET)"
+      description: "Generate VP request with did:jwk, GET method for request_uri"
+      method: "GET"
+      path: "/did-jwk/generateVPRequestGET"
+      url: "http://localhost:3000/did-jwk/generateVPRequestGET?sessionId=test-didjwk-002&response_mode=direct_post"
+      parameters:
+        sessionId: "test-didjwk-002"
+        response_mode: "direct_post"
+      rfc_reference: "OIDC4VP"
+
+    - id: "DIDJWK-VP-03"
+      name: "DID:JWK VP Request - with Transaction Data"
+      description: "Generate VP request with did:jwk including transaction data"
+      method: "GET"
+      path: "/did-jwk/generateVPRequestTransaction"
+      url: "http://localhost:3000/did-jwk/generateVPRequestTransaction?sessionId=test-didjwk-003&response_mode=direct_post"
+      parameters:
+        sessionId: "test-didjwk-003"
+        response_mode: "direct_post"
+      rfc_reference: "OIDC4VP"
+
+  # ----------------------------------------------------------------------------
+  # Redirect URI Client ID Scheme Endpoints
+  # ----------------------------------------------------------------------------
+  redirect_uri_scheme:
+    
+    - id: "REDIRECT-VP-01"
+      name: "Redirect URI VP Request - JWT-VC"
+      description: "Generate VP request with redirect_uri client_id_scheme for JWT-VC credentials"
+      method: "GET"
+      path: "/generateVPRequest-jwt"
+      url: "http://localhost:3000/generateVPRequest-jwt?id=test-redirect-001"
+      parameters:
+        id: "test-redirect-001"
+      rfc_reference: "OIDC4VP"
+      test_case_mapping: "TC04"
+
+  # ----------------------------------------------------------------------------
+  # Credential Type Specific VP Requests
+  # ----------------------------------------------------------------------------
+  credential_type_specific:
+    
+    - id: "CRED-VP-01"
+      name: "VP Request for PID"
+      description: "Request presentation of PID (Person Identification Data) credential"
+      method: "GET"
+      path: "/vp-request/pid"
+      url: "http://localhost:3000/vp-request/pid?id=test-cred-001"
+      parameters:
+        id: "test-cred-001"
+      rfc_reference: "OIDC4VP"
+
+    - id: "CRED-VP-02"
+      name: "VP Request for ePassport"
+      description: "Request presentation of ePassport credential"
+      method: "GET"
+      path: "/vp-request/epassport"
+      url: "http://localhost:3000/vp-request/epassport?id=test-cred-002"
+      parameters:
+        id: "test-cred-002"
+      rfc_reference: "OIDC4VP"
+
+    - id: "CRED-VP-03"
+      name: "VP Request for Education ID"
+      description: "Request presentation of Education ID credential"
+      method: "GET"
+      path: "/vp-request/educationId"
+      url: "http://localhost:3000/vp-request/educationId?id=test-cred-003"
+      parameters:
+        id: "test-cred-003"
+      rfc_reference: "OIDC4VP"
+
+    - id: "CRED-VP-04"
+      name: "VP Request for Alliance ID"
+      description: "Request presentation of Alliance ID credential"
+      method: "GET"
+      path: "/vp-request/allianceId"
+      url: "http://localhost:3000/vp-request/allianceId?id=test-cred-004"
+      parameters:
+        id: "test-cred-004"
+      rfc_reference: "OIDC4VP"
+
+    - id: "CRED-VP-05"
+      name: "VP Request for Ferry Boarding Pass"
+      description: "Request presentation of Ferry Boarding Pass credential"
+      method: "GET"
+      path: "/vp-request/ferryboardingpass"
+      url: "http://localhost:3000/vp-request/ferryboardingpass?id=test-cred-005"
+      parameters:
+        id: "test-cred-005"
+      rfc_reference: "OIDC4VP"
+
+    - id: "CRED-VP-06"
+      name: "VP Request for ERUA ID (Combined)"
+      description: "Request presentation of ERUA ID (Alliance + Education ID combined)"
+      method: "GET"
+      path: "/vp-request/erua-id"
+      url: "http://localhost:3000/vp-request/erua-id?id=test-cred-006"
+      parameters:
+        id: "test-cred-006"
+      rfc_reference: "OIDC4VP"
+
+    - id: "CRED-VP-07"
+      name: "VP Request for CFF (Swiss Federal Railways)"
+      description: "Request presentation of CFF credential"
+      method: "GET"
+      path: "/vp-request/cff"
+      url: "http://localhost:3000/vp-request/cff?id=test-cred-007"
+      parameters:
+        id: "test-cred-007"
+      rfc_reference: "OIDC4VP"
+
+# ==============================================================================
+# STATUS CHECK ENDPOINTS
+# ==============================================================================
+status_endpoints:
+  
+  - id: "STATUS-01"
+    name: "Check Issuance Status"
+    description: "Check the status of a credential issuance session"
+    method: "GET"
+    path: "/issuance-status"
+    url: "http://localhost:3000/issuance-status?sessionId=test-session-001"
+    parameters:
+      sessionId: "test-session-001"
+
+  - id: "STATUS-02"
+    name: "Check Verification Status"
+    description: "Check the status of a VP verification session"
+    method: "GET"
+    path: "/verificationStatus"
+    url: "http://localhost:3000/verificationStatus?sessionId=test-vp-001"
+    parameters:
+      sessionId: "test-vp-001"
+
+  - id: "STATUS-03"
+    name: "Check Verification Status History"
+    description: "Check the historical status of a VP verification session"
+    method: "GET"
+    path: "/verificationStatusHistory"
+    url: "http://localhost:3000/verificationStatusHistory?sessionId=test-vp-001"
+    parameters:
+      sessionId: "test-vp-001"
+
+# ==============================================================================
+# CREDENTIAL TYPE REFERENCE
+# ==============================================================================
+credential_types:
+  - name: "EU PID SD-JWT"
+    identifier: "urn:eu.europa.ec.eudi:pid:1"
+    format: "sd-jwt"
+    description: "European Person Identification Data in SD-JWT format"
+    
+  - name: "EU PID MSO_MDOC"
+    identifier: "urn:eu.europa.ec.eudi:pid:1:mso_mdoc"
+    format: "mso_mdoc"
+    description: "European Person Identification Data in ISO 18013-5 format"
+    
+  - name: "Mobile Driving License"
+    identifier: "org.iso.18013.5.1.mDL"
+    format: "mso_mdoc"
+    description: "ISO 18013-5 compliant mobile Driving License"
+    
+  - name: "Photo ID"
+    identifier: "PhotoID"
+    format: "sd-jwt"
+    description: "Photo identification credential"
+
+# ==============================================================================
+# SIGNATURE TYPE REFERENCE
+# ==============================================================================
+signature_types:
+  - name: "X.509 Certificate"
+    identifier: "x509"
+    description: "X.509 certificate-based signature (x509_san_dns)"
+    
+  - name: "DID:WEB"
+    identifier: "did:web"
+    description: "Decentralized Identifier using web domain"
+    
+  - name: "DID:JWK"
+    identifier: "did:jwk"
+    description: "Decentralized Identifier using JSON Web Key"
+    
+  - name: "JWK"
+    identifier: "jwk"
+    description: "JSON Web Key signature"
+    
+  - name: "KID-JWK"
+    identifier: "kid-jwk"
+    description: "JSON Web Key with Key ID reference"
+
+# ==============================================================================
+# CLIENT ID SCHEME REFERENCE
+# ==============================================================================
+client_id_schemes:
+  - name: "Redirect URI"
+    identifier: "redirect_uri"
+    description: "Client identified by redirect URI"
+    
+  - name: "X.509 SAN DNS"
+    identifier: "x509_san_dns"
+    description: "Client identified by X.509 certificate SAN DNS entry"
+    
+  - name: "DID:WEB"
+    identifier: "did:web"
+    description: "Client identified by did:web DID"
+    
+  - name: "DID:JWK"
+    identifier: "did:jwk"
+    description: "Client identified by did:jwk DID"
+
+# ==============================================================================
+# TEST CASE MAPPING TO RFC REQUIREMENTS
+# ==============================================================================
+test_case_mapping:
+  TC01:
+    description: "pre-authorized_code and tx_code"
+    requests: ["PREAUTH-01", "VCI-STD-02"]
+  TC02:
+    description: "pre-authorized_code and no tx_code"
+    requests: ["PREAUTH-02", "VCI-STD-01"]
+  TC03:
+    description: "authorized_code dynamic linking, redirect uri"
+    requests: ["AUTHCODE-01", "VCI-STD-03"]
+  TC04:
+    description: "VP redirect_uri"
+    requests: ["REDIRECT-VP-01"]
+  TC05:
+    description: "VP X509_san_dns"
+    requests: ["X509-VP-01", "VP-STD-01"]
+  TC06a:
+    description: "authorized_code dynamic linking, redirect uri"
+    requests: ["AUTHCODE-04"]
+  TC06b:
+    description: "authorized_code dynamic linking, X509_san_dns"
+    requests: ["AUTHCODE-02"]
+  TC07:
+    description: "authorized_code dynamic linking, did:jwk"
+    requests: ["AUTHCODE-03"]
+  TC08:
+    description: "VP did:jwk"
+    requests: ["DIDJWK-VP-01", "VP-STD-03"]
+  TC09:
+    description: "PID authorization code flow"
+    requests: ["PID-02"]
+  TC10:
+    description: "HAIP pre-authorized_code no tx_code X509 sig"
+    requests: ["HAIP-01", "VCI-STD-05"]
+  TC11:
+    description: "PID pre-authorization code flow no tx_code"
+    requests: ["PID-01"]

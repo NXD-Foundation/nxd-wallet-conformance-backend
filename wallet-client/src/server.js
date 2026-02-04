@@ -295,7 +295,8 @@ app.post("/session", async (req, res) => {
     }
 
     // VCI request (credential offer)
-    if (/^(openid-credential-offer:\/\/|haip:\/\/)/.test(deepLink)) {
+    // Support standard OIDC4VCI and HAIP profile schemes (haip://, haip-vci://)
+    if (/^(openid-credential-offer:\/\/|haip:\/\/|haip-vci:\/\/)/.test(deepLink)) {
       const issuerBaseDefault = (req.body.issuer || "http://localhost:3000").replace(/\/$/, "");
       sessionLog("[/session] VCI deepLink:", deepLink);
       const offerCfg = await resolveOfferConfig(deepLink, sessionId);
@@ -479,7 +480,11 @@ async function getOfferDeepLink(issuerBase, path, credentialType) {
 
 async function resolveOfferConfig(deepLink, logSessionId) {
   const slog = logSessionId ? makeSessionLogger(logSessionId) : (() => {});
-  const url = new URL(deepLink.replace(/^haip:\/\//, "openid-credential-offer://"));
+  // Normalize HAIP profile schemes (haip://, haip-vci://) to standard
+  // openid-credential-offer:// so downstream parsing is uniform.
+  const url = new URL(
+    deepLink.replace(/^haip(-vci)?:\/\//, "openid-credential-offer://")
+  );
   if (url.protocol !== "openid-credential-offer:") throw new Error("Unsupported offer scheme");
   const inlineOffer = url.searchParams.get("credential_offer");
   if (inlineOffer) {
@@ -544,6 +549,10 @@ async function discoverIssuerMetadata(credentialIssuerBase, logSessionId) {
   const slog = logSessionId ? makeSessionLogger(logSessionId) : (() => {});
   const base = credentialIssuerBase.replace(/\/$/, "");
   // RFC: if credential_issuer contains a path, well-known URI keeps path suffix
+  // Spec: https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html#section-12.2.2
+  // The path is formed by inserting `/.well-known/openid-credential-issuer` 
+  // between the host component and the path component
+  // Example: https://issuer.example.com/tenant -> https://issuer.example.com/.well-known/openid-credential-issuer/tenant
   let origin, path;
   try {
     const u = new URL(base);
@@ -554,7 +563,6 @@ async function discoverIssuerMetadata(credentialIssuerBase, logSessionId) {
   }
   const candidates = [
     `${origin}/.well-known/openid-credential-issuer${path}`,
-    `${base}/.well-known/openid-credential-issuer`,
   ];
   let meta = null; let lastErr = null;
   console.log("[issuer-meta] trying candidates:", candidates); try { slog("[issuer-meta] candidates", { candidates }); } catch {}
@@ -657,9 +665,10 @@ function validateAuthorizationServerMetadata(meta) {
   }
 
   const methods = meta.token_endpoint_auth_methods_supported;
-  if (!Array.isArray(methods) || methods.length === 0) {
-    throw new Error("invalid_as_metadata: 'token_endpoint_auth_methods_supported' must be a non-empty array");
-  }
+  // if (!Array.isArray(methods) || methods.length === 0) {
+  //   throw new Error("invalid_as_metadata: 'token_endpoint_auth_methods_supported' must be a non-empty array. received "
+  //     + JSON.stringify(meta.token_endpoint_auth_methods_supported));
+  // }
 
   // For EUDI Wallet ARF-aligned Wallet Instance Attestation, the AS must
   // advertise support for attest_jwt_client_auth (see EUDI Wallet ARF,

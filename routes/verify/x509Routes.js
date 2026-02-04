@@ -241,7 +241,10 @@ x509Router.get("/generateVPRequestTransaction", async (req, res) => {
     requestId = logHttpRequest(slog, "GET", "/generateVPRequestTransaction", req.headers, req.query);
     try { slog("[VERIFIER] [START] VP request generation with transaction data", { responseMode, jarAlg }); } catch {}
 
-    const transactionDataObj = createTransactionData(presentationDefinition);
+    // IMPORTANT: When using DCQL, credential_ids in transaction_data MUST
+    // match the ids from the DCQL query (DEFAULT_DCQL_QUERY.credentials[].id)
+    // per OpenID4VP 5.1.2.8.2.2.
+    const transactionDataObj = createTransactionData(DEFAULT_DCQL_QUERY);
     const base64UrlEncodedTxData = Buffer.from(JSON.stringify(transactionDataObj))
       .toString("base64url");
 

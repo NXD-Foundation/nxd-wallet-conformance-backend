@@ -215,7 +215,13 @@ export async function buildVpRequestJWT(
   }
 
   // Note: encryption metadata should be provided in client_metadata from verifier-config.json
-  // The verifier-config.json should contain jwks and encrypted_response_enc_values_supported
+  // for direct_post.jwt (encrypted response). Per OpenID4VP 5.1.2.4.2.2,
+  // encrypted_response_enc_values_supported MUST be absent when using direct_post (non-JWT) response mode.
+  let clientMetadataForPayload = client_metadata;
+  if (response_mode === "direct_post" && client_metadata && typeof client_metadata === "object") {
+    const { encrypted_response_enc_values_supported, ...rest } = client_metadata;
+    clientMetadataForPayload = rest;
+  }
 
   // Determine client scheme and effective identifier
   const schemeSeparatorIdx = client_id.indexOf(":");
@@ -238,7 +244,7 @@ export async function buildVpRequestJWT(
     nonce: nonce,
     state: state,
     // For redirect_uri scheme, client_metadata MUST be omitted (wallet discovers metadata)
-    ...(isRedirectUriScheme ? {} : { client_metadata: client_metadata }),
+    ...(isRedirectUriScheme ? {} : { client_metadata: clientMetadataForPayload }),
     // NOTE: Per OpenID4VP, wallets MUST ignore an iss claim in the authorization request.
     // To avoid confusion for implementers, we intentionally omit iss here.
     aud: audience, // Use the audience parameter
@@ -291,6 +297,55 @@ export async function buildVpRequestJWT(
 
   // Add transaction_data if provided
   if (transaction_data) {
+    // Validate credential_ids match DCQL query when both are present
+    // Per OpenID4VP 5.1.2.8.2.2: credential_ids must match id field in DCQL Credential Query
+    if (dcql_query && dcql_query.credentials && Array.isArray(dcql_query.credentials)) {
+      const dcqlCredentialIds = dcql_query.credentials
+        .map((cred) => cred.id)
+        .filter((id) => id !== undefined);
+      
+      if (dcqlCredentialIds.length > 0 && Array.isArray(transaction_data)) {
+        // Decode and validate each transaction_data entry
+        for (const txDataEntry of transaction_data) {
+          if (typeof txDataEntry === 'string') {
+            // Decode base64url encoded transaction_data
+            try {
+              const decodedTxData = JSON.parse(
+                Buffer.from(txDataEntry, 'base64url').toString('utf8')
+              );
+              if (decodedTxData.credential_ids && Array.isArray(decodedTxData.credential_ids)) {
+                // Validate all credential_ids in transaction_data are present in DCQL query
+                const invalidIds = decodedTxData.credential_ids.filter(
+                  (id) => !dcqlCredentialIds.includes(id)
+                );
+                if (invalidIds.length > 0) {
+                  throw new Error(
+                    `Invalid credential_ids in transaction_data: ${invalidIds.join(', ')}. ` +
+                    `credential_ids must match id fields from dcql_query.credentials[].id. ` +
+                    `Expected: ${dcqlCredentialIds.join(', ')}, Found: ${decodedTxData.credential_ids.join(', ')}`
+                  );
+                }
+                // Validate credential_ids is non-empty as per spec
+                if (decodedTxData.credential_ids.length === 0) {
+                  throw new Error(
+                    'credential_ids in transaction_data must be a non-empty array per OpenID4VP 5.1.2.8.2.2'
+                  );
+                }
+              }
+            } catch (error) {
+              // If decoding fails, it might be a different format - let it pass through
+              // but log a warning
+              if (error.message.includes('Invalid credential_ids') || error.message.includes('non-empty array')) {
+                throw error; // Re-throw validation errors
+              }
+              // Otherwise, decoding error - might be malformed, but don't fail here
+              console.warn('Warning: Could not decode transaction_data for credential_ids validation:', error.message);
+            }
+          }
+        }
+      }
+    }
+    
     jwtPayload.transaction_data = transaction_data;
   }
 
