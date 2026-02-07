@@ -25,7 +25,17 @@ export function generateDidJwkFromPrivateJwk(publicJwk) {
   return `did:jwk:${jwkStr}`;
 }
 
-export async function createProofJwt({ privateJwk, publicJwk, audience, nonce, issuer, typ = "JWT", alg = "ES256", key_attestation = null }) {
+export async function createProofJwt({
+  privateJwk,
+  publicJwk,
+  audience,
+  nonce,
+  issuer,
+  typ = "JWT",
+  alg = "ES256",
+  key_attestation = null,
+  sdJwt = null,
+}) {
   const header = { alg, typ, jwk: publicJwk };
   if (key_attestation) {
     header.key_attestation = key_attestation;
@@ -40,6 +50,18 @@ export async function createProofJwt({ privateJwk, publicJwk, audience, nonce, i
     nonce,
     jti: base64url(crypto.randomBytes(16)),
   };
+
+  // For SD-JWT Key Binding JWTs, optionally include sd_hash as defined in
+  // draft-ietf-oauth-selective-disclosure-jwt-14 Section 4.3.1.
+  // The hash is taken over the US-ASCII bytes of the encoded SD-JWT
+  // (<Issuer-signed JWT>~<Disclosure 1>~...~<Disclosure N>~), and the
+  // digest bytes are base64url-encoded.
+  if (sdJwt) {
+    const sdJwtBytes = Buffer.from(sdJwt, "ascii");
+    const hash = crypto.createHash("sha256").update(sdJwtBytes).digest();
+    const sdHash = base64url(hash);
+    payload.sd_hash = sdHash;
+  }
 
   const key = await importJWK(privateJwk, alg);
   const jwt = await new SignJWT(payload).setProtectedHeader(header).sign(key);

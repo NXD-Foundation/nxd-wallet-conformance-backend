@@ -272,7 +272,26 @@ export async function performPresentation({ deepLink, verifierBase, credentialTy
   console.log("[present] Stored credential found:", !!stored, "has.credential=", !!stored?.credential); try { slog("[present] stored credential", { found: !!stored, hasCredential: !!stored?.credential }); } catch {}
   if (!stored || !stored.credential) throw new Error("Credential not found in wallet cache");
 
-  // Build key-binding JWT
+  // Extract the credential token from the wallet cache
+  let vpToken = extractCredentialString(stored.credential);
+  console.log(
+    "[present] Extracted credential string present=",
+    typeof vpToken === "string",
+    vpToken ? (vpToken.includes("~") ? "sd-jwt" : "jwt/other") : "none"
+  );
+  try { slog("[present] token extracted", { present: !!vpToken }); } catch {}
+  if (!vpToken) throw new Error("Unable to extract presentable credential token from wallet cache");
+
+  // Check if this is an mdoc credential or SD-JWT
+  const isMdoc = isMdocCredential(vpToken);
+  const isSdJwt = !isMdoc && typeof vpToken === "string" && vpToken.includes("~");
+  console.log(
+    "[present] Credential type detected:",
+    isMdoc ? "mdoc" : (isSdJwt ? "sd-jwt" : "jwt")
+  );
+  try { slog("[present] credential type", { isMdoc, isSdJwt }); } catch {}
+
+  // Build key-binding JWT. For SD-JWT, include sd_hash per SD-JWT spec and use typ "kb+jwt".
   const { privateJwk, publicJwk } = await ensureOrCreateEcKeyPair(keyPath || undefined);
   const didJwk = generateDidJwkFromPrivateJwk(publicJwk);
   const kbAudience = clientId || responseUri || verifierBase;
@@ -285,25 +304,19 @@ export async function performPresentation({ deepLink, verifierBase, credentialTy
     audience: kbAudience,
     nonce,
     issuer: didJwk,
-    typ: "openid4vp-proof+jwt",
+    typ: isSdJwt ? "kb+jwt" : "openid4vp-proof+jwt",
+    sdJwt: isSdJwt ? vpToken : undefined,
   });
   console.log("[present] Built kbJwt len:", kbJwt.length); try { slog("[present] kbJwt created", { length: kbJwt.length }); } catch {}
 
-  // Debug: decode kbJwt to verify nonce
+  // Debug: decode kbJwt to verify nonce (and optionally sd_hash presence)
   try {
     const kbPayload = decodeJwt(kbJwt).payload;
-    console.log("[present] kbJwt payload nonce:", kbPayload.nonce, "expected:", nonce); try { slog("[present] kbJwt payload", { hasNonce: !!kbPayload?.nonce }); } catch {}
+    console.log("[present] kbJwt payload nonce:", kbPayload.nonce, "expected:", nonce, "has sd_hash:", !!kbPayload.sd_hash);
+    try { slog("[present] kbJwt payload", { hasNonce: !!kbPayload?.nonce, hasSdHash: !!kbPayload?.sd_hash }); } catch {}
   } catch (e) {
     console.log("[present] Could not decode kbJwt for debugging:", e.message); try { slog("[present] kbJwt decode failed", { error: e?.message || String(e) }); } catch {}
   }
-
-  let vpToken = extractCredentialString(stored.credential);
-  console.log("[present] Extracted credential string present=", typeof vpToken === "string", vpToken ? (vpToken.includes("~") ? "sd-jwt" : "jwt/other") : "none"); try { slog("[present] token extracted", { present: !!vpToken }); } catch {}
-  if (!vpToken) throw new Error("Unable to extract presentable credential token from wallet cache");
-
-  // Check if this is an mdoc credential
-  const isMdoc = isMdocCredential(vpToken);
-  console.log("[present] Credential type detected:", isMdoc ? "mdoc" : (vpToken.includes("~") ? "sd-jwt" : "jwt")); try { slog("[present] credential type", { isMdoc, isSdJwt: vpToken.includes("~") }); } catch {}
 
   if (isMdoc) {
     // For mdoc, construct proper DeviceResponse structure
@@ -350,6 +363,43 @@ export async function performPresentation({ deepLink, verifierBase, credentialTy
   const presentation_submission = buildPresentationSubmission(presentationDefinition, credentialFormat);
   if (presentation_submission) { console.log("[present] Built presentation_submission len:", presentation_submission.length); try { slog("[present] submission built", { length: presentation_submission.length }); } catch {} }
 
+  // Build vp_token according to OpenID4VP 1.0 Section 8.1:
+  // When DCQL is used, vp_token MUST be a JSON object mapping credential query IDs to presentations.
+  // Per spec: "The object MUST contain one member for each Credential Query ... The member value
+  // MUST be a string or an array of strings". We use array form for consistency, e.g.:
+  // { "vp_token": { "example_credential_id": ["eyJhb...YMetA"] }, ... }
+  let vpTokenValue;
+  if (dcqlQuery && Array.isArray(dcqlQuery.credentials) && dcqlQuery.credentials.length > 0) {
+    // DCQL query is present - build vp_token as an object mapping credential query IDs to arrays of presentations
+    const vpTokenObject = {};
+    for (const credQuery of dcqlQuery.credentials) {
+      if (credQuery && credQuery.id && typeof credQuery.id === 'string') {
+        // Use the credential query ID as the key; value is always an array of presentation string(s)
+        if (credQuery.multiple === true) {
+          vpTokenObject[credQuery.id] = [vpToken];
+        } else {
+          vpTokenObject[credQuery.id] = [vpToken]; // single presentation as one-element array
+        }
+      }
+    }
+    // If we found at least one credential query ID, use the object format
+    if (Object.keys(vpTokenObject).length > 0) {
+      vpTokenValue = vpTokenObject;
+      console.log("[present] Built vp_token as DCQL object", { credentialIds: Object.keys(vpTokenObject) }); 
+      try { slog("[present] vp_token DCQL format", { credentialIds: Object.keys(vpTokenObject) }); } catch {}
+    } else {
+      // Fallback: no valid credential query IDs found, use string format
+      vpTokenValue = vpToken;
+      console.log("[present] No valid credential query IDs in DCQL, using string format"); 
+      try { slog("[present] vp_token fallback to string"); } catch {}
+    }
+  } else {
+    // No DCQL query - use string format (legacy/compatibility)
+    vpTokenValue = vpToken;
+    console.log("[present] No DCQL query, using string format for vp_token"); 
+    try { slog("[present] vp_token string format"); } catch {}
+  }
+
   // Send the credential token (SD-JWT, mdoc DeviceResponse, or JWT VC)
   // Per OpenID4VP spec:
   // - direct_post: application/x-www-form-urlencoded with vp_token (+ optional presentation_submission)
@@ -361,7 +411,7 @@ export async function performPresentation({ deepLink, verifierBase, credentialTy
   if (presentation_submission) {
     // Use presentation_submission format
     body = {
-      vp_token: vpToken,
+      vp_token: vpTokenValue,
       presentation_submission, // Send as JSON string (as expected by verifier)
       ...(state ? { state } : {}),
     };
@@ -369,7 +419,7 @@ export async function performPresentation({ deepLink, verifierBase, credentialTy
   } else {
     // Direct format
     body = {
-      vp_token: vpToken,
+      vp_token: vpTokenValue,
       ...(state ? { state } : {}),
     };
     console.log("[present] Using direct format"); try { slog("[present] using direct format"); } catch {}
@@ -391,7 +441,7 @@ export async function performPresentation({ deepLink, verifierBase, credentialTy
         try { presentationSubmissionObj = JSON.parse(presentation_submission); } catch {}
       }
       const jwtPayload = {
-        vp_token: vpToken,
+        vp_token: vpTokenValue, // Use the DCQL-formatted vp_token value (object or string)
         ...(presentationSubmissionObj ? { presentation_submission: presentationSubmissionObj } : {}),
         ...(state ? { state } : {}),
         ...(nonce ? { nonce } : {}),
@@ -457,7 +507,12 @@ export async function performPresentation({ deepLink, verifierBase, credentialTy
   if (!bodyContent) {
     // Default: direct_post
     const formParams = new URLSearchParams();
-    formParams.append("vp_token", vpToken);
+    // When vp_token is an object (DCQL format), serialize it as JSON string
+    if (typeof vpTokenValue === 'object' && vpTokenValue !== null) {
+      formParams.append("vp_token", JSON.stringify(vpTokenValue));
+    } else {
+      formParams.append("vp_token", vpTokenValue);
+    }
     if (presentation_submission) {
       formParams.append("presentation_submission", presentation_submission);
     }
@@ -473,8 +528,23 @@ export async function performPresentation({ deepLink, verifierBase, credentialTy
   
   // Log the request body being sent (with redaction for sensitive tokens)
   const logBody = { ...body };
-  if (logBody.vp_token && typeof logBody.vp_token === 'string') {
-    logBody.vp_token = logBody.vp_token.substring(0, 200) + "...<truncated for size>";
+  if (logBody.vp_token) {
+    if (typeof logBody.vp_token === 'string') {
+      logBody.vp_token = logBody.vp_token.substring(0, 200) + "...<truncated for size>";
+    } else if (typeof logBody.vp_token === 'object' && logBody.vp_token !== null) {
+      // For DCQL object format, show structure but truncate values
+      const truncated = {};
+      for (const [key, value] of Object.entries(logBody.vp_token)) {
+        if (typeof value === 'string') {
+          truncated[key] = value.substring(0, 50) + "...<truncated>";
+        } else if (Array.isArray(value)) {
+          truncated[key] = value.map(v => typeof v === 'string' ? v.substring(0, 50) + "...<truncated>" : v);
+        } else {
+          truncated[key] = value;
+        }
+      }
+      logBody.vp_token = truncated;
+    }
   }
   if (logBody.response && typeof logBody.response === 'string') {
     logBody.response = logBody.response.substring(0, 200) + "...<truncated for size>";
@@ -513,7 +583,7 @@ export async function performPresentation({ deepLink, verifierBase, credentialTy
       body: responseBody || resText
     }); 
   } catch {}
-  console.log("[present] Sent vp_token:", vpToken);
+  console.log("[present] Sent vp_token:", typeof vpTokenValue === 'object' ? JSON.stringify(vpTokenValue, null, 2) : vpTokenValue.substring(0, 100) + "...");
   console.log("[present] Sent presentation_submission:", presentation_submission);
   console.log("[present] presentation_submission type:", typeof presentation_submission);
   console.log("[present] Full request body:", JSON.stringify(body, null, 2));
@@ -535,7 +605,7 @@ export async function performPresentation({ deepLink, verifierBase, credentialTy
           const preferredEnc = supportedEnc.find((e) => ['A256GCM','A192GCM','A128GCM','A256CBC-HS512','A192CBC-HS384','A128CBC-HS256'].includes(e));
           const enc = preferredEnc || 'A256GCM';
           const publicKey = await importJWK(encKey, alg.startsWith('ECDH-ES') ? 'ECDH-ES' : undefined);
-          const fallbackPayload = { vp_token: vpToken, ...(presentation_submission ? { presentation_submission: JSON.parse(presentation_submission) } : {}), ...(state ? { state } : {}) };
+          const fallbackPayload = { vp_token: vpTokenValue, ...(presentation_submission ? { presentation_submission: JSON.parse(presentation_submission) } : {}), ...(state ? { state } : {}) };
           // Build a JWE with JSON payload (so jwtDecrypt returns { payload })
           const jwe = await new EncryptJWT(fallbackPayload)
             .setProtectedHeader({ alg, enc, kid: encKey.kid })
