@@ -1,5 +1,6 @@
 import express from "express";
 import fs from "fs";
+import crypto from "crypto";
 import { v4 as uuidv4 } from "uuid";
 import {
   pemToJWK,
@@ -54,7 +55,41 @@ const SPEC_REFS = {
   VP_CREDENTIAL_RESPONSE: "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#name-credential-response",
   VP_NONCE: "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#name-nonce",
   VP_STATE: "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#name-state",
+  SD_JWT_KEY_BINDING: "https://datatracker.ietf.org/doc/html/draft-ietf-oauth-selective-disclosure-jwt-20#name-key-binding-jwt",
 };
+
+/**
+ * Compute sd_hash over the SD-JWT string as defined in
+ * draft-ietf-oauth-selective-disclosure-jwt-20 Section 4.3.1
+ * (<Issuer-signed JWT>~<Disclosure 1>~...~<Disclosure N>~).
+ *
+ * The Holder presents SD-JWT+KB as:
+ *   <Issuer-signed JWT>~<Disclosure 1>~...~<Disclosure N>~<KB-JWT>
+ * or bare SD-JWT as:
+ *   <Issuer-signed JWT>~<Disclosure 1>~...~<Disclosure N>~
+ *
+ * This helper reconstructs the string that is hashed for sd_hash.
+ */
+function computeSdHashFromPresentedToken(sdJwtToken) {
+  if (typeof sdJwtToken !== "string") return null;
+
+  let prefix = sdJwtToken;
+  const parts = sdJwtToken.split("~");
+
+  // If the last segment looks like a JWT (has dots), treat it as KB-JWT and drop it.
+  if (parts.length > 1 && parts[parts.length - 1].includes(".")) {
+    parts.pop();
+    prefix = parts.join("~");
+  }
+
+  // Ensure trailing '~' as required by the sd_hash input format.
+  if (!prefix.endsWith("~")) {
+    prefix += "~";
+  }
+
+  const hash = crypto.createHash("sha256").update(Buffer.from(prefix, "ascii")).digest();
+  return hash.toString("base64url");
+}
 
 const verifierRouter = express.Router();
 
@@ -244,6 +279,129 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
       dcqlCredentialsCount: vpSession.dcql_query?.credentials?.length || 0
     });
 
+    // Validate vp_token format when DCQL is used
+    // Per OpenID4VP 1.0 Section 8.1: When DCQL is used, vp_token MUST be a JSON object
+    // mapping credential query IDs to presentations, not a bare string
+    const hasDcqlQuery = vpSession.dcql_query && 
+                         Array.isArray(vpSession.dcql_query.credentials) && 
+                         vpSession.dcql_query.credentials.length > 0;
+    
+    if (hasDcqlQuery && vpToken !== undefined) {
+      let vpTokenToValidate = vpToken;
+      
+      // Handle case where vp_token might be a JSON string that needs parsing
+      if (typeof vpToken === 'string') {
+        // Check if it's a JSON string (starts with {)
+        if (vpToken.trim().startsWith('{')) {
+          try {
+            vpTokenToValidate = JSON.parse(vpToken);
+            await logDebug(sessionId, "Parsed vp_token from JSON string for DCQL validation", {
+              parsedType: typeof vpTokenToValidate,
+              isObject: typeof vpTokenToValidate === 'object' && vpTokenToValidate !== null && !Array.isArray(vpTokenToValidate)
+            });
+          } catch (e) {
+            // Not valid JSON, will be caught by validation below
+            await logDebug(sessionId, "Failed to parse vp_token JSON string", {
+              error: e.message
+            });
+          }
+        } else {
+          // It's a bare string, which is invalid for DCQL
+          const specRef = "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#name-response-parameters";
+          await logError(sessionId, "Invalid vp_token format for DCQL query", {
+            received: `vp_token is a string (${vpToken.substring(0, 50)}...)`,
+            expected: "vp_token must be a JSON object mapping credential query IDs to presentations when DCQL is used",
+            specRef,
+            dcqlCredentialIds: vpSession.dcql_query.credentials.map(c => c.id).filter(Boolean)
+          });
+          
+          // Mark session as failed
+          try {
+            vpSession.status = "failed";
+            vpSession.error = "invalid_request";
+            vpSession.error_description = `Invalid vp_token format for DCQL query. When DCQL is used, vp_token MUST be a JSON object mapping credential query IDs to presentations, not a bare string. See ${specRef}`;
+            await storeVPSession(sessionId, vpSession);
+          } catch (storageError) {
+            await logError(sessionId, "Failed to update session status after vp_token format validation error", {
+              error: storageError.message,
+              stack: storageError.stack
+            }).catch(() => {});
+          }
+          
+          return res.status(400).json({ 
+            error: "invalid_request",
+            error_description: `Invalid vp_token format for DCQL query. When DCQL is used, vp_token MUST be a JSON object mapping credential query IDs to presentations, not a bare string. See ${specRef}`
+          });
+        }
+      }
+      
+      // Validate that vp_token is an object (not string, not array, not null)
+      if (typeof vpTokenToValidate !== 'object' || vpTokenToValidate === null || Array.isArray(vpTokenToValidate)) {
+        const specRef = "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#name-response-parameters";
+        const received = typeof vpTokenToValidate === 'object' && Array.isArray(vpTokenToValidate) 
+          ? "vp_token is an array" 
+          : typeof vpTokenToValidate === 'object' && vpTokenToValidate === null
+          ? "vp_token is null"
+          : `vp_token is ${typeof vpTokenToValidate}`;
+        
+        await logError(sessionId, "Invalid vp_token format for DCQL query", {
+          received,
+          expected: "vp_token must be a JSON object mapping credential query IDs to presentations when DCQL is used",
+          specRef,
+          dcqlCredentialIds: vpSession.dcql_query.credentials.map(c => c.id).filter(Boolean)
+        });
+        
+        // Mark session as failed
+        try {
+          vpSession.status = "failed";
+          vpSession.error = "invalid_request";
+          vpSession.error_description = `Invalid vp_token format for DCQL query. When DCQL is used, vp_token MUST be a JSON object mapping credential query IDs to presentations. Received: ${received}. See ${specRef}`;
+          await storeVPSession(sessionId, vpSession);
+        } catch (storageError) {
+          await logError(sessionId, "Failed to update session status after vp_token format validation error", {
+            error: storageError.message,
+            stack: storageError.stack
+          }).catch(() => {});
+        }
+        
+        return res.status(400).json({ 
+          error: "invalid_request",
+          error_description: `Invalid vp_token format for DCQL query. When DCQL is used, vp_token MUST be a JSON object mapping credential query IDs to presentations. Received: ${received}. See ${specRef}`
+        });
+      }
+      
+      // Additional validation: check that the object keys match credential query IDs
+      const expectedCredentialIds = vpSession.dcql_query.credentials
+        .map(c => c.id)
+        .filter(id => typeof id === 'string' && id.length > 0);
+      
+      if (expectedCredentialIds.length > 0) {
+        const receivedKeys = Object.keys(vpTokenToValidate);
+        const missingIds = expectedCredentialIds.filter(id => !receivedKeys.includes(id));
+        
+        if (missingIds.length > 0) {
+          await logWarn(sessionId, "vp_token object missing some credential query IDs", {
+            expectedCredentialIds,
+            receivedKeys,
+            missingIds,
+            specRef: "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#name-response-parameters"
+          });
+          // Note: This is a warning, not an error, as the spec allows returning only matching credentials
+        }
+        
+        await logDebug(sessionId, "DCQL vp_token format validation passed", {
+          expectedCredentialIds,
+          receivedKeys,
+          vpTokenValueTypes: Object.fromEntries(
+            Object.entries(vpTokenToValidate).map(([k, v]) => [
+              k, 
+              Array.isArray(v) ? `array[${v.length}]` : typeof v
+            ])
+          )
+        });
+      }
+    }
+
     if (isMdoc) {
       await logInfo(sessionId, "Processing mDL verification using custom cbor-x decoder", {
         isMdoc: true
@@ -271,29 +429,29 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
           return res.status(400).json({ error: `No vp_token found in the request body. Received: ${received}, expected: vp_token string` });
         }
         
-        // Handle JSON string format (e.g., '{"cred1":["token"]}')
+        // Handle DCQL object format: vp_token is object e.g. {"example_credential_id": ["eyJ..."]}
+        const extractFirstCredentialFromObject = (obj) => {
+          for (const value of Object.values(obj)) {
+            if (Array.isArray(value) && value.length > 0 && typeof value[0] === 'string') return value[0];
+            if (typeof value === 'string') return value;
+          }
+          return null;
+        };
         if (typeof vpToken === 'string' && vpToken.trim().startsWith('{')) {
           try {
             const parsed = JSON.parse(vpToken);
-            // Extract token from object structure like {"cred1": ["token"]}
             if (typeof parsed === 'object' && parsed !== null) {
-              const values = Object.values(parsed);
-              for (const value of values) {
-                if (Array.isArray(value) && value.length > 0 && typeof value[0] === 'string') {
-                  vpToken = value[0];
-                  break;
-                } else if (typeof value === 'string') {
-                  vpToken = value;
-                  break;
-                }
-              }
+              const first = extractFirstCredentialFromObject(parsed);
+              if (first) vpToken = first;
             }
           } catch (e) {
-            // Not JSON, treat as raw token string
             await logDebug(sessionId, "VP token is not JSON, treating as raw token", {
               error: e.message
             });
           }
+        } else if (typeof vpToken === 'object' && vpToken !== null && !Array.isArray(vpToken)) {
+          const first = extractFirstCredentialFromObject(vpToken);
+          if (first) vpToken = first;
         }
         
         await logDebug(sessionId, "VP token found in mDL request", {
@@ -422,7 +580,10 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
       responseMode: vpSession.response_mode
     });
     let claimsFromExtraction;
-    let jwtFromKeybind;
+  let jwtFromKeybind;
+  // Raw SD-JWT string associated with the key-binding JWT (if any),
+  // used to validate the sd_hash claim in the KB-JWT.
+  let sdJwtForKeybind;
 
     // Handle dc_api.jwt response mode
     // This is for HAIP Digital Credentials API responses where the wallet
@@ -512,16 +673,23 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
         });
 
         // For HAIP dc_api.jwt with Digital Credentials API, the vpToken might be an object
-        // with credential IDs as keys and mdoc data as values
+        // with credential IDs as keys and mdoc data as values (string or array of strings per DCQL)
         let mdocData;
         if (typeof vpToken === 'object' && vpToken !== null && !Array.isArray(vpToken)) {
           // Extract the actual mdoc data from the object structure
           const credentialKeys = Object.keys(vpToken);
           if (credentialKeys.length > 0) {
-            mdocData = vpToken[credentialKeys[0]];
+            const raw = vpToken[credentialKeys[0]];
+            // DCQL format: value is array of strings e.g. ["eyJ..."]; spec also allows single string
+            mdocData = Array.isArray(raw) && raw.length > 0 && typeof raw[0] === 'string'
+              ? raw[0]
+              : typeof raw === 'string'
+              ? raw
+              : undefined;
             await logDebug(sessionId, "Extracted mdoc data from HAIP dc_api.jwt credential", {
               credentialId: credentialKeys[0],
-              credentialCount: credentialKeys.length
+              credentialCount: credentialKeys.length,
+              valueWasArray: Array.isArray(raw)
             });
           } else {
             return res.status(400).json({ 
@@ -687,6 +855,34 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
               console.log(`No VP token in decrypted JWT response. Received: ${received}, expected: vp_token string in JWT payload`);
               return res.status(400).json({ error: `No VP token in decrypted JWT response. Received: ${received}, expected: vp_token string in JWT payload` });
             }
+            
+            // Validate vp_token format when DCQL is used (for direct_post.jwt with JWE)
+            const hasDcqlQuery = vpSession.dcql_query && 
+                                 Array.isArray(vpSession.dcql_query.credentials) && 
+                                 vpSession.dcql_query.credentials.length > 0;
+            if (hasDcqlQuery) {
+              if (typeof vpToken !== 'object' || vpToken === null || Array.isArray(vpToken)) {
+                const specRef = "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#name-response-parameters";
+                const received = typeof vpToken === 'object' && Array.isArray(vpToken) 
+                  ? "vp_token is an array" 
+                  : typeof vpToken === 'object' && vpToken === null
+                  ? "vp_token is null"
+                  : `vp_token is ${typeof vpToken}`;
+                
+                await logError(sessionId, "Invalid vp_token format for DCQL query in direct_post.jwt JWE", {
+                  received,
+                  expected: "vp_token must be a JSON object mapping credential query IDs to presentations when DCQL is used",
+                  specRef,
+                  dcqlCredentialIds: vpSession.dcql_query.credentials.map(c => c.id).filter(Boolean)
+                });
+                
+                return res.status(400).json({ 
+                  error: "invalid_request",
+                  error_description: `Invalid vp_token format for DCQL query. When DCQL is used, vp_token MUST be a JSON object mapping credential query IDs to presentations. Received: ${received}. See ${specRef}`
+                });
+              }
+            }
+            
             if (typeof vpToken === 'string') {
               primaryVpJwt = vpToken;
             }
@@ -716,6 +912,33 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
                   error: parseError.message
                 });
                 // Keep as string, maybe it's actually an SD-JWT
+              }
+            }
+            
+            // Validate vp_token format when DCQL is used (for direct_post.jwt with JWE payload object)
+            const hasDcqlQuery = vpSession.dcql_query && 
+                                 Array.isArray(vpSession.dcql_query.credentials) && 
+                                 vpSession.dcql_query.credentials.length > 0;
+            if (hasDcqlQuery) {
+              if (typeof vpToken !== 'object' || vpToken === null || Array.isArray(vpToken)) {
+                const specRef = "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#name-response-parameters";
+                const received = typeof vpToken === 'object' && Array.isArray(vpToken) 
+                  ? "vp_token is an array" 
+                  : typeof vpToken === 'object' && vpToken === null
+                  ? "vp_token is null"
+                  : `vp_token is ${typeof vpToken}`;
+                
+                await logError(sessionId, "Invalid vp_token format for DCQL query in direct_post.jwt JWE payload", {
+                  received,
+                  expected: "vp_token must be a JSON object mapping credential query IDs to presentations when DCQL is used",
+                  specRef,
+                  dcqlCredentialIds: vpSession.dcql_query.credentials.map(c => c.id).filter(Boolean)
+                });
+                
+                return res.status(400).json({ 
+                  error: "invalid_request",
+                  error_description: `Invalid vp_token format for DCQL query. When DCQL is used, vp_token MUST be a JSON object mapping credential query IDs to presentations. Received: ${received}. See ${specRef}`
+                });
               }
             }
             // await logDebug(sessionId, "vp_token object received", {
@@ -836,7 +1059,8 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
             digest
           );
           claimsFromExtraction = result.extractedClaims;
-          jwtFromKeybind = result.keybindJwt;
+        jwtFromKeybind = result.keybindJwt;
+        sdJwtForKeybind = result.sdJwtForKeybind || sdJwtForKeybind;
           
           await logDebug(sessionId, "After extractClaimsFromRequest", {
             resultKeys: Object.keys(result),
@@ -881,7 +1105,8 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
             digest
           );
           claimsFromExtraction = result.extractedClaims;
-          jwtFromKeybind = result.keybindJwt;
+        jwtFromKeybind = result.keybindJwt;
+        sdJwtForKeybind = result.sdJwtForKeybind || sdJwtForKeybind;
         }
 
         // Verify nonce
@@ -1017,6 +1242,76 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
           }
         }
 
+        // Verify sd_hash in key-binding JWT for SD-JWT presentations
+        if (jwtFromKeybind && jwtFromKeybind.payload) {
+          const kbPayload = jwtFromKeybind.payload;
+          const kbHeader = jwtFromKeybind.header || {};
+
+          if (!kbPayload.sd_hash) {
+            await logError(sessionId, "SD-JWT Key Binding JWT missing sd_hash claim", {
+              hasKeybindJwt: true,
+              hasPayload: !!kbPayload,
+              hasSdHash: false,
+              specRef: SPEC_REFS.SD_JWT_KEY_BINDING,
+              kbTyp: kbHeader.typ || null
+            });
+            try {
+              vpSession.status = "failed";
+              vpSession.error = "invalid_key_binding_jwt";
+              vpSession.error_description = `Key Binding JWT for SD-JWT is missing required sd_hash claim. See ${SPEC_REFS.SD_JWT_KEY_BINDING}`;
+              await storeVPSession(sessionId, vpSession);
+            } catch (storageError) {
+              await logError(sessionId, "Failed to update session status after sd_hash missing error", {
+                error: storageError.message,
+                stack: storageError.stack
+              }).catch(() => {});
+            }
+            return res.status(400).json({
+              error: `Key Binding JWT for SD-JWT is missing required sd_hash claim. See ${SPEC_REFS.SD_JWT_KEY_BINDING}`
+            });
+          }
+
+          if (sdJwtForKeybind) {
+            const expectedSdHash = computeSdHashFromPresentedToken(sdJwtForKeybind);
+            if (!expectedSdHash || kbPayload.sd_hash !== expectedSdHash) {
+              await logError(sessionId, "SD-JWT Key Binding JWT sd_hash mismatch", {
+                hasKeybindJwt: true,
+                hasPayload: !!kbPayload,
+                kbSdHash: kbPayload.sd_hash,
+                expectedSdHash,
+                specRef: SPEC_REFS.SD_JWT_KEY_BINDING,
+                sdJwtPreview: sdJwtForKeybind.substring(0, 100) + "...",
+              });
+              try {
+                vpSession.status = "failed";
+                vpSession.error = "invalid_key_binding_jwt";
+                vpSession.error_description = `Key Binding JWT sd_hash does not match presented SD-JWT. See ${SPEC_REFS.SD_JWT_KEY_BINDING}`;
+                await storeVPSession(sessionId, vpSession);
+              } catch (storageError) {
+                await logError(sessionId, "Failed to update session status after sd_hash mismatch", {
+                  error: storageError.message,
+                  stack: storageError.stack
+                }).catch(() => {});
+              }
+              return res.status(400).json({
+                error: `Key Binding JWT sd_hash does not match presented SD-JWT. See ${SPEC_REFS.SD_JWT_KEY_BINDING}`
+              });
+            }
+
+            await logDebug(sessionId, "SD-JWT Key Binding JWT sd_hash verified successfully", {
+              hasKeybindJwt: true,
+              hasPayload: !!kbPayload,
+              specRef: SPEC_REFS.SD_JWT_KEY_BINDING
+            });
+          } else {
+            // Should not normally happen, but log for diagnostics.
+            await logWarn(sessionId, "sdJwtForKeybind missing while key-binding JWT present; skipping sd_hash verification", {
+              hasKeybindJwt: true,
+              specRef: SPEC_REFS.SD_JWT_KEY_BINDING
+            }).catch(() => {});
+          }
+        }
+
         // Process claims as before
         if (vpSession.sdsRequested && !hasOnlyAllowedFields(claimsFromExtraction, vpSession.sdsRequested)) {
           const receivedClaims = JSON.stringify(claimsFromExtraction);
@@ -1121,6 +1416,7 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
         const result = await extractClaimsFromRequest(req, digest);
         claimsFromExtraction = result.extractedClaims;
         jwtFromKeybind = result.keybindJwt;
+        sdJwtForKeybind = result.sdJwtForKeybind || sdJwtForKeybind;
         
         // Log VP token structure for debugging
         const vpTokenForDebug = req.body["vp_token"];

@@ -33,6 +33,9 @@ export async function extractClaimsFromRequest(req, digest, isPaymentVP, session
   const sessionId = req.params?req.params.id:sessionIdentifier;
   let extractedClaims = [];
   let keybindJwt; // This might need to be an array if multiple SD-JWTs with different kbJwts are possible
+  // Keep track of the SD-JWT string associated with the key-binding JWT so the verifier
+  // can validate the sd_hash in the KB-JWT per SD-JWT spec.
+  let sdJwtForKeybind;
 
   const vpToken = req.body["vp_token"];
   if (!vpToken) {
@@ -136,7 +139,8 @@ export async function extractClaimsFromRequest(req, digest, isPaymentVP, session
           ) {
             const decodedSdJwt = await decodeSdJwt(credString, digest);
             if (decodedSdJwt.kbJwt) {
-                keybindJwt = decodedSdJwt.kbJwt
+              keybindJwt = decodedSdJwt.kbJwt;
+              sdJwtForKeybind = credString;
             }
             const claims = await getClaims(
               decodedSdJwt.jwt.payload,
@@ -294,13 +298,22 @@ export async function extractClaimsFromRequest(req, digest, isPaymentVP, session
             });
             if (decodedSdJwt.kbJwt) {
               try {
-                keybindJwt = jwt.decode(decodedSdJwt.kbJwt, { complete: true });
+                // If kbJwt is already a decoded object with payload, use it directly.
+                if (typeof decodedSdJwt.kbJwt === 'object' && decodedSdJwt.kbJwt.payload) {
+                  keybindJwt = decodedSdJwt.kbJwt;
+                } else if (typeof decodedSdJwt.kbJwt === 'string') {
+                  // Otherwise, decode from string representation.
+                  keybindJwt = jwt.decode(decodedSdJwt.kbJwt, { complete: true });
+                } else {
+                  keybindJwt = decodedSdJwt.kbJwt;
+                }
                 console.log(`[DEBUG extractClaimsFromRequest] Successfully decoded kbJwt:`, {
-                  hasPayload: !!keybindJwt.payload,
-                  payloadKeys: keybindJwt.payload ? Object.keys(keybindJwt.payload) : 'N/A'
+                  hasPayload: !!(keybindJwt && keybindJwt.payload),
+                  payloadKeys: keybindJwt && keybindJwt.payload ? Object.keys(keybindJwt.payload) : 'N/A'
                 });
+                sdJwtForKeybind = token;
               } catch (e) {
-                console.warn("Failed to decode kbJwt, passing raw string.", e);
+                console.warn("Failed to decode kbJwt, passing raw value.", e);
                 keybindJwt = decodedSdJwt.kbJwt;
               }
             } else {
@@ -376,9 +389,9 @@ export async function extractClaimsFromRequest(req, digest, isPaymentVP, session
     }
   }
 
-  // console.log("Final keybindJwt (could be from the last processed SD-JWT with one):");
-  // console.log(keybindJwt);
-  return { sessionId, extractedClaims, keybindJwt };
+  // console.log("Final keybindJwt (could be from the last processed SD-JWT with one):", keybindJwt);
+  // sdJwtForKeybind carries the SD-JWT string associated with the key-binding JWT (if any)
+  return { sessionId, extractedClaims, keybindJwt, sdJwtForKeybind };
 }
 
 export async function validatePoP(
