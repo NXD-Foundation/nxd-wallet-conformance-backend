@@ -2,10 +2,24 @@
 import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
 import fetch from "node-fetch";
+import crypto from "node:crypto";
 import { createProofJwt, generateDidJwkFromPrivateJwk, ensureOrCreateEcKeyPair, createWIA, createWUA, createDPoP } from "./lib/crypto.js";
 import { storeWalletCredentialByType } from "./lib/cache.js";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function base64url(input) {
+  return Buffer.from(input)
+    .toString("base64")
+    .replace(/=/g, "")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_");
+}
+
+function computeAth(accessToken) {
+  const hash = crypto.createHash("sha256").update(accessToken).digest();
+  return base64url(hash);
+}
 
 async function main() {
   const argv = yargs(hideBin(process.argv))
@@ -70,8 +84,12 @@ async function main() {
   
   // Generate DPoP (Demonstrating Proof-of-Possession) for token request
   let dpopJwt = null;
+  let dpopPrivateJwk = null;
+  let dpopPublicJwk = null;
   try {
-    const { privateJwk: dpopPrivateJwk, publicJwk: dpopPublicJwk } = await ensureOrCreateEcKeyPair(argv.key, "ES256");
+    const dpopKeys = await ensureOrCreateEcKeyPair(argv.key, "ES256");
+    dpopPrivateJwk = dpopKeys.privateJwk;
+    dpopPublicJwk = dpopKeys.publicJwk;
     dpopJwt = await createDPoP({
       privateJwk: dpopPrivateJwk,
       publicJwk: dpopPublicJwk,
@@ -191,12 +209,35 @@ async function main() {
     },
   };
 
+  // Generate DPoP for credential request using the same key as the token request
+  let credentialDpopJwt = null;
+  try {
+    if (accessToken && dpopPrivateJwk && dpopPublicJwk) {
+      const ath = computeAth(accessToken);
+      credentialDpopJwt = await createDPoP({
+        privateJwk: dpopPrivateJwk,
+        publicJwk: dpopPublicJwk,
+        htu: credentialEndpoint,
+        htm: "POST",
+        ath,
+        alg: "ES256"
+      });
+    }
+  } catch (dpopError) {
+    console.warn("Failed to generate DPoP for credential request:", dpopError?.message);
+  }
+
+  const credHeaders = {
+    "content-type": "application/json",
+    authorization: `Bearer ${accessToken}`,
+  };
+  if (credentialDpopJwt) {
+    credHeaders["DPoP"] = credentialDpopJwt;
+  }
+
   const credRes = await fetch(credentialEndpoint, {
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${accessToken}`,
-    },
+    headers: credHeaders,
     body: JSON.stringify(credReq),
   });
 

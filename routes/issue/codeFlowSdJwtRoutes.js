@@ -21,6 +21,7 @@ import {
 
 import { getCodeFlowSession, storeCodeFlowSession, logInfo, logWarn, logError } from "../../services/cacheServiceRedis.js";
 import { makeSessionLogger, logHttpRequest, logHttpResponse } from "../../utils/sessionLogger.js";
+import jwt from "jsonwebtoken";
 
 // Specification references
 const SPEC_REFS = {
@@ -587,6 +588,13 @@ codeFlowRouterSDJWT.post(["/par", "/authorize/par"], async (req, res) => {
     // Based on TS3 spec: https://github.com/eu-digital-identity-wallet/eudi-doc-standards-and-technical-specifications/blob/main/docs/technical-specifications/ts3-wallet-unit-attestation.md
     const wiaJwt = extractWIAFromTokenRequest(req.body, req.headers);
     if (wiaJwt) {
+      if (slog) {
+        try {
+          const decoded = jwt.decode(wiaJwt, { complete: true });
+          const p = decoded?.payload;
+          slog("[ISSUER] [PAR] WIA received", { length: wiaJwt.length, iss: p?.iss, aud: p?.aud, iat: p?.iat, exp: p?.exp, jti: p?.jti });
+        } catch {}
+      }
       const wiaValidation = await validateWIA(wiaJwt, issuerState);
       if (wiaValidation.valid) {
         if (slog) {

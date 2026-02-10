@@ -206,7 +206,7 @@ export async function createWUA({
   const now = Math.floor(Date.now() / 1000);
   const exp = now + Math.floor(ttlHours * 3600);
   
-  const header = { alg, typ: "JWT", jwk: publicJwk };
+  const header = { alg, typ: "key-attestation+jwt", jwk: publicJwk };
   const payload = {
     iss: issuer,
     aud: audience,

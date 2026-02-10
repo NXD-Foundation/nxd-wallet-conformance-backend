@@ -747,6 +747,13 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
     // Based on TS3 spec: https://github.com/eu-digital-identity-wallet/eudi-doc-standards-and-technical-specifications/blob/main/docs/technical-specifications/ts3-wallet-unit-attestation.md
     const wiaJwt = extractWIAFromTokenRequest(req.body, req.headers);
     if (wiaJwt) {
+      if (slog) {
+        try {
+          const decoded = jwt.decode(wiaJwt, { complete: true });
+          const p = decoded?.payload;
+          slog("[TOKEN] WIA received", { length: wiaJwt.length, iss: p?.iss, aud: p?.aud, iat: p?.iat, exp: p?.exp, jti: p?.jti });
+        } catch {}
+      }
       const wiaValidation = await validateWIA(wiaJwt, sessionId);
       if (wiaValidation.valid) {
         if (slog) {
@@ -955,6 +962,13 @@ sharedRouter.post("/credential", async (req, res) => {
     // Based on TS3 spec: https://github.com/eu-digital-identity-wallet/eudi-doc-standards-and-technical-specifications/blob/main/docs/technical-specifications/ts3-wallet-unit-attestation.md
     const wuaJwt = extractWUAFromCredentialRequest(requestBody);
     if (wuaJwt) {
+      if (slog) {
+        try {
+          const decoded = jwt.decode(wuaJwt, { complete: true });
+          const p = decoded?.payload;
+          slog("[CREDENTIAL] WUA received", { length: wuaJwt.length, iss: p?.iss, aud: p?.aud, iat: p?.iat, exp: p?.exp, jti: p?.jti, hasAttestedKeys: Array.isArray(p?.attested_keys) && p.attested_keys.length > 0 });
+        } catch {}
+      }
       const wuaValidation = await validateWUA(wuaJwt, sessionId);
       if (wuaValidation.valid) {
         if (slog) {
