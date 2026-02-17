@@ -62,6 +62,7 @@ import {
   validateWUA,
   extractWIAFromTokenRequest,
   extractWUAFromCredentialRequest,
+  proofKeyMatchesWUAAttestedKeys,
 } from "../../utils/routeUtils.js";
 
 const sharedRouter = express.Router();
@@ -961,6 +962,7 @@ sharedRouter.post("/credential", async (req, res) => {
     // Extract and validate Wallet Unit Attestation (WUA) if present
     // Based on TS3 spec: https://github.com/eu-digital-identity-wallet/eudi-doc-standards-and-technical-specifications/blob/main/docs/technical-specifications/ts3-wallet-unit-attestation.md
     const wuaJwt = extractWUAFromCredentialRequest(requestBody);
+    let wuaValidationResult = null;
     if (wuaJwt) {
       if (slog) {
         try {
@@ -969,14 +971,14 @@ sharedRouter.post("/credential", async (req, res) => {
           slog("[CREDENTIAL] WUA received", { length: wuaJwt.length, iss: p?.iss, aud: p?.aud, iat: p?.iat, exp: p?.exp, jti: p?.jti, hasAttestedKeys: Array.isArray(p?.attested_keys) && p.attested_keys.length > 0 });
         } catch {}
       }
-      const wuaValidation = await validateWUA(wuaJwt, sessionId);
-      if (wuaValidation.valid) {
+      wuaValidationResult = await validateWUA(wuaJwt, sessionId);
+      if (wuaValidationResult.valid) {
         if (slog) {
-          try { slog("[CREDENTIAL] WUA validated successfully", { wuaIssuer: wuaValidation.payload?.iss, wuaExp: wuaValidation.payload?.exp, hasAttestedKeys: Array.isArray(wuaValidation.payload?.attested_keys) && wuaValidation.payload.attested_keys.length > 0 }); } catch {}
+          try { slog("[CREDENTIAL] WUA validated successfully", { wuaIssuer: wuaValidationResult.payload?.iss, wuaExp: wuaValidationResult.payload?.exp, hasAttestedKeys: Array.isArray(wuaValidationResult.payload?.attested_keys) && wuaValidationResult.payload.attested_keys.length > 0 }); } catch {}
         }
       } else {
         if (slog) {
-          try { slog("[CREDENTIAL] [WARN] WUA validation failed (continuing without WUA)", { error: wuaValidation.error }); } catch {}
+          try { slog("[CREDENTIAL] [WARN] WUA validation failed (continuing without WUA)", { error: wuaValidationResult.error }); } catch {}
         }
       }
     } else {
@@ -1026,6 +1028,47 @@ sharedRouter.post("/credential", async (req, res) => {
         
         const publicKeyForProof = await resolvePublicKeyForProof(headerForVerification, sessionId);
         await verifyProofJWT(requestBody.proofJwt, publicKeyForProof, flowType, sessionId);
+        
+        // EUDI Wallet ARF: when WUA is present, the proof key (bound in credential cnf) MUST be one of attested_keys
+        if (wuaJwt && wuaValidationResult?.valid && wuaValidationResult?.payload) {
+          if (slog) {
+            try {
+              const attestedKeysCount = Array.isArray(wuaValidationResult.payload.attested_keys) ? wuaValidationResult.payload.attested_keys.length : 0;
+              slog("[CREDENTIAL] Checking proof key against WUA attested_keys", {
+                proofKeyKty: publicKeyForProof?.kty,
+                proofKeyCrv: publicKeyForProof?.crv,
+                attestedKeysCount,
+                wuaIssuer: wuaValidationResult.payload?.iss
+              });
+            } catch {}
+          }
+          if (!proofKeyMatchesWUAAttestedKeys(publicKeyForProof, wuaValidationResult.payload)) {
+            const attestedKeysCount = Array.isArray(wuaValidationResult.payload.attested_keys) ? wuaValidationResult.payload.attested_keys.length : 0;
+            const errorMsg = `invalid_proof: The key used in the proof (credential binding/cnf) must be one of the keys attested in the Wallet Unit Attestation (attested_keys). Per EUDI Wallet ARF, the credential is bound only to attested keys.`;
+            if (slog) {
+              try {
+                slog("[CREDENTIAL] [ERROR] Proof key not found in WUA attested_keys", {
+                  proofKeyKty: publicKeyForProof?.kty,
+                  proofKeyCrv: publicKeyForProof?.crv,
+                  proofKeyX: publicKeyForProof?.x?.substring(0, 16) + "...",
+                  attestedKeysCount,
+                  wuaIssuer: wuaValidationResult.payload?.iss,
+                  error: errorMsg
+                });
+              } catch {}
+            }
+            throw new Error(errorMsg);
+          }
+          if (slog) {
+            try {
+              slog("[CREDENTIAL] Proof key validated against WUA attested_keys", {
+                proofKeyKty: publicKeyForProof?.kty,
+                proofKeyCrv: publicKeyForProof?.crv,
+                attestedKeysCount: Array.isArray(wuaValidationResult.payload.attested_keys) ? wuaValidationResult.payload.attested_keys.length : 0
+              });
+            } catch {}
+          }
+        }
         
         // Delete the nonce after successful signature verification
         await deleteNonce(nonceValue);

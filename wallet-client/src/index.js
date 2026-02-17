@@ -162,7 +162,10 @@ async function main() {
   // credential request
   const credentialEndpoint = `${apiBase}/credential`;
   
-  // Generate WUA (Wallet Unit Attestation) for credential request
+  // Generate WUA (Wallet Unit Attestation) for credential request.
+  // Per OIDC 4VCI v1.0 + EUDI Wallet ARF: the key used for the PoP proof (publicJwk above) is the
+  // same key we attest in WUA and that the issuer binds in the credential's cnf. Same key file
+  // => same key pair for proof and WUA; attested_keys MUST contain the proof key.
   let wuaJwt = null;
   try {
     const { privateJwk: wuaPrivateJwk, publicJwk: wuaPublicJwk } = await ensureOrCreateEcKeyPair(argv.key, "ES256");
@@ -172,7 +175,7 @@ async function main() {
       publicJwk: wuaPublicJwk,
       issuer: wuaIssuer,
       audience: credentialEndpoint,
-      attestedKeys: [publicJwk], // Attest the key used for proof
+      attestedKeys: [publicJwk], // Proof key: same as in proof JWT header; issuer puts this in cnf
       eudiWalletInfo: {
         general_info: {
           name: "Test Wallet Client",

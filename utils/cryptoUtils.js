@@ -1,9 +1,11 @@
 import crypto from "crypto";
+import { execSync } from "child_process";
 import jwt from "jsonwebtoken";
 import * as jose from "jose";
 import base64url from "base64url";
 import { error } from "console";
 import fs from "fs";
+import path from "path";
 import { generateRefreshToken } from "./tokenUtils.js";
 import { Resolver } from "did-resolver";
 import { getResolver } from "@cef-ebsi/key-did-resolver";
@@ -32,6 +34,46 @@ function extractCertificateChain(certPem) {
       .replace("-----END CERTIFICATE-----", "")
       .replace(/\s+/g, "");
   });
+}
+
+/**
+ * Load certificate chain and private key from WE-BUILD Verifier P12 file.
+ * Uses openssl for reliable extraction (node-forge may fail on some p12 formats).
+ * Used for x509 and dc_api flows.
+ * @returns {{ privateKeyPkcs8: string, certChain: string[] }}
+ */
+function loadVerifierP12() {
+  const p12Path = path.resolve(process.cwd(), "certs", "WE-BUILD-Verifier.p12");
+  const passphrase = process.env.WEBUILD_P12_PASSWORD || "webuild";
+
+  if (!fs.existsSync(p12Path)) {
+    throw new Error(
+      `WE-BUILD Verifier P12 not found at ${p12Path}. Place the p12 file in ./certs/`
+    );
+  }
+
+  try {
+    const envWithPass = { ...process.env, WEBUILD_P12_PASS: passphrase };
+    const certPem = execSync(
+      `openssl pkcs12 -in "${p12Path}" -nokeys -passin env:WEBUILD_P12_PASS`,
+      { encoding: "utf8", maxBuffer: 64 * 1024, env: envWithPass }
+    );
+    const privateKeyPem = execSync(
+      `openssl pkcs12 -in "${p12Path}" -nodes -nocerts -passin env:WEBUILD_P12_PASS`,
+      { encoding: "utf8", maxBuffer: 64 * 1024, env: envWithPass }
+    );
+    const certChain = extractCertificateChain(certPem);
+    const privateKey = crypto.createPrivateKey(privateKeyPem);
+    const privateKeyPkcs8 = privateKey.export({
+      type: "pkcs8",
+      format: "pem",
+    });
+    return { privateKeyPkcs8, certChain };
+  } catch (err) {
+    throw new Error(
+      `Failed to extract cert/key from P12: ${err.message}. Ensure openssl is installed.`
+    );
+  }
 }
 
 export function pemToJWK(pem, keyType) {
@@ -352,18 +394,8 @@ export async function buildVpRequestJWT(
   let signedJwt;
 
   if (response_mode === "dc_api.jwt" || response_mode === "dc_api") {
-    // Use EC certificates for Digital Credentials API
-    privateKey = fs.readFileSync("./x509EC/ec_private_pkcs8.key", "utf8");
-    // Try to use fullchain if available (for Let's Encrypt), otherwise use single cert
-    let certificate;
-    const fullchainPath = "./certbot/conf/live/dev-i4mlab.aegean.gr/fullchain.pem";
-    if (fs.existsSync(fullchainPath)) {
-      certificate = fs.readFileSync(fullchainPath, "utf8");
-    } else {
-      certificate = fs.readFileSync("./x509EC/client_certificate.crt", "utf8");
-    }
-    // Extract certificate chain (leaf + intermediate)
-    const certChain = extractCertificateChain(certificate);
+    // Use WE-BUILD Verifier P12 certificate for Digital Credentials API
+    const { privateKeyPkcs8, certChain } = loadVerifierP12();
 
     const header = {
       alg: "ES256",
@@ -373,7 +405,7 @@ export async function buildVpRequestJWT(
 
     signedJwt = await new jose.SignJWT(jwtPayload)
       .setProtectedHeader(header)
-      .sign(await jose.importPKCS8(privateKey, "ES256"));
+      .sign(await jose.importPKCS8(privateKeyPkcs8, "ES256"));
   } else if (
     effectiveClientId.startsWith("x509_san_dns:") ||
     effectiveClientId.startsWith("x509_san_uri:")
@@ -382,28 +414,14 @@ export async function buildVpRequestJWT(
     const useEs256 =
       typeof jar_alg === "string" && jar_alg.toUpperCase() === "ES256";
 
+    let certChain;
     if (useEs256) {
-      privateKey = fs.readFileSync("./x509EC/ec_private_pkcs8.key", "utf8");
+      const p12 = loadVerifierP12();
+      privateKey = p12.privateKeyPkcs8;
+      certChain = p12.certChain;
     } else {
       privateKey = fs.readFileSync("./x509/client_private_pkcs8.key", "utf8");
-    }
-
-    let certificate;
-    let certChain;
-    
-    if (useEs256) {
-      // For EC certificates: Use full chain if available (for Let's Encrypt)
-      const fullchainPath = "./certbot/conf/live/dev-i4mlab.aegean.gr/fullchain.pem";
-      if (fs.existsSync(fullchainPath)) {
-        certificate = fs.readFileSync(fullchainPath, "utf8");
-        certChain = extractCertificateChain(certificate);
-      } else {
-        certificate = fs.readFileSync("./x509EC/client_certificate.crt", "utf8");
-        certChain = extractCertificateChain(certificate);
-      }
-    } else {
-      // For RSA certificates: Use only leaf certificate
-      certificate = fs.readFileSync("./x509/client_certificate.crt", "utf8");
+      const certificate = fs.readFileSync("./x509/client_certificate.crt", "utf8");
       const certBase64 = certificate
         .replace("-----BEGIN CERTIFICATE-----", "")
         .replace("-----END CERTIFICATE-----", "")
@@ -425,28 +443,14 @@ export async function buildVpRequestJWT(
     const useEs256 =
       typeof jar_alg === "string" && jar_alg.toUpperCase() === "ES256";
 
+    let certChain;
     if (useEs256) {
-      privateKey = fs.readFileSync("./x509EC/ec_private_pkcs8.key", "utf8");
+      const p12 = loadVerifierP12();
+      privateKey = p12.privateKeyPkcs8;
+      certChain = p12.certChain;
     } else {
       privateKey = fs.readFileSync("./x509/client_private_pkcs8.key", "utf8");
-    }
-
-    let certificate;
-    let certChain;
-    
-    if (useEs256) {
-      // For EC certificates: Use full chain if available (for Let's Encrypt)
-      const fullchainPath = "./certbot/conf/live/dev-i4mlab.aegean.gr/fullchain.pem";
-      if (fs.existsSync(fullchainPath)) {
-        certificate = fs.readFileSync(fullchainPath, "utf8");
-        certChain = extractCertificateChain(certificate);
-      } else {
-        certificate = fs.readFileSync("./x509EC/client_certificate.crt", "utf8");
-        certChain = extractCertificateChain(certificate);
-      }
-    } else {
-      // For RSA certificates: Use only leaf certificate
-      certificate = fs.readFileSync("./x509/client_certificate.crt", "utf8");
+      const certificate = fs.readFileSync("./x509/client_certificate.crt", "utf8");
       const certBase64 = certificate
         .replace("-----BEGIN CERTIFICATE-----", "")
         .replace("-----END CERTIFICATE-----", "")

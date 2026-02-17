@@ -1058,7 +1058,7 @@ async function runPreAuthorizedIssuance({ apiBase, issuerMeta, configurationId, 
       publicJwk: wuaPublicJwk,
       issuer: wuaIssuer,
       audience: credentialEndpoint,
-      attestedKeys: [publicJwk], // Attest the key used for proof
+      attestedKeys: [publicJwk], // Proof key; issuer binds this in credential cnf (OIDC 4VCI + EUDI ARF)
       eudiWalletInfo: {
         general_info: {
           name: "Test Wallet Client",
@@ -1536,7 +1536,7 @@ async function runAuthorizationCodeIssuance({ apiBase, issuerMeta, configuration
       publicJwk: wuaPublicJwk,
       issuer: wuaIssuer,
       audience: credentialEndpoint,
-      attestedKeys: [publicJwk], // Attest the key used for proof
+      attestedKeys: [publicJwk], // Proof key; issuer binds this in credential cnf (OIDC 4VCI + EUDI ARF)
       eudiWalletInfo: {
         general_info: {
           name: "Test Wallet Client",

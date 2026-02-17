@@ -1378,4 +1378,30 @@ export const extractWUAFromCredentialRequest = (requestBody) => {
   }
   
   return null;
-}; 
+};
+
+/**
+ * Check whether the proof's public key (used for credential cnf binding) is one of the keys
+ * attested in the WUA. Per EUDI Wallet ARF: the key bound in the credential MUST be attested.
+ *
+ * @param {object} proofPublicKeyJwk - Resolved JWK from the proof JWT (header jwk or from kid)
+ * @param {object} wuaPayload - Decoded WUA JWT payload (must have attested_keys array)
+ * @returns {boolean} - true if proof key is in attested_keys (normalized comparison)
+ */
+export function proofKeyMatchesWUAAttestedKeys(proofPublicKeyJwk, wuaPayload) {
+  const attested = wuaPayload?.attested_keys;
+  if (!Array.isArray(attested) || attested.length === 0) return false;
+  const norm = (jwk) => {
+    if (!jwk || jwk.kty !== proofPublicKeyJwk?.kty) return null;
+    if (jwk.kty === 'EC') {
+      return [jwk.kty, jwk.crv, jwk.x, jwk.y].filter(Boolean).join('|');
+    }
+    if (jwk.kty === 'RSA') {
+      return [jwk.kty, jwk.n, jwk.e].filter(Boolean).join('|');
+    }
+    return JSON.stringify(jwk);
+  };
+  const proofNorm = norm(proofPublicKeyJwk);
+  if (!proofNorm) return false;
+  return attested.some((a) => norm(a) === proofNorm);
+} 
