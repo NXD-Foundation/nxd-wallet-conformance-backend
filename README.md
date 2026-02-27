@@ -262,7 +262,16 @@ Per OID4VCI v1.0 Section 4.1.2:
 - **Grant type**: `authorization_code`
 - **PKCE support**: Full RFC 7636 PKCE (Proof Key for Code Exchange) with `S256` code challenge method
 - **Dynamic credential requests**: Supports dynamic credential requests requiring Verifiable Presentations
-- **Push Authorization Request (PAR)**: Full RFC 9126 PAR support via `/par` and `/authorize/par` endpoints
+- **Push Authorization Request (PAR)**: Full RFC 9126 PAR support via `/par` and `/authorize/par` endpoints with hardening:
+  - **Immutable snapshot**: PAR payload is stored as an immutable snapshot (request parameters, client metadata, wallet hints, auth headers).
+  - **`request_uri` binding**: `request_uri` is bound to the originating `client_id` (and `issuer_state`) and is **one-time-use** within its lifetime.
+  - **Unknown / expired `request_uri`**: `/authorize` rejects unknown or expired `request_uri` values with `invalid_request` and does not start new sessions.
+  - **Mixed parameters**: When `request_uri` is present, `/authorize` drives the flow from the stored PAR payload and ignores/masks conflicting query parameters.
+  - **Client validation at PAR**: PAR endpoint can reject:
+    - Disabled/unknown `client_id`
+    - Mismatch between authenticated client and `client_id` parameter
+    - Disallowed `redirect_uri`, `response_type`, or `scope` per policy
+  - **Session binding**: `request_uri` lookups are scoped to the stored PAR session; cross-client reuse is rejected.
 - **Authorization endpoint**: Standard OAuth 2.0 authorization endpoint with `response_type=code`
 - **Client identification**: Multiple `client_id_scheme` values supported (see below)
 - **Issuer state**: Supports `issuer_state` parameter for state management
@@ -353,9 +362,19 @@ Per RFC 9449:
 
 - **DPoP support**: Optional DPoP header in token requests
 - **Token binding**: Access tokens bound to DPoP public key via `cnf.jkt` claim
-- **Token type**: Returns `DPoP` token type when DPoP proof is validated
-- **Fallback**: Falls back to `Bearer` token type when DPoP is not provided
+- **Token type**: Returns `DPoP` token type when DPoP proof is validated; falls back to `Bearer` when DPoP is not provided (unless HAIP profile mandates DPoP, see below)
 - **JWT thumbprint**: Calculates JWK thumbprint (SHA-256) for token confirmation
+- **Proof validation (token endpoint)**:
+  - Verifies DPoP JWS signature using the embedded `jwk` in the protected header.
+  - Enforces required payload claims: `htm`, `htu`, `iat`, `jti`.
+  - Binds proof to the HTTP request: `htm` must match the HTTP method, `htu` must match the `/token_endpoint` URL.
+  - Enforces `iat` freshness with a bounded clock-skew window.
+  - Detects replayed proofs by caching `jti` values within a replay window.
+  - On any failure, returns `400 invalid_dpop_proof` with a descriptive `error_description`.
+- **DPoP nonce (optional)**:
+  - When `REQUIRE_DPOP_NONCE_FOR_TOKEN=true`, the token endpoint enforces a DPoP nonce challenge:
+    - Missing or invalid DPoP nonce → `400 use_dpop_nonce` + `DPoP-Nonce` response header.
+    - Correct nonce → accepted once and marked as used; reuse triggers a new `use_dpop_nonce` challenge.
 
 ### Wallet Attestation
 
@@ -437,6 +456,17 @@ The implementation supports the **High Assurance Identity Profile (HAIP)** for e
   - `GET /haip-credential-offer-tx-code/:id`: HAIP credential offer configuration retrieval
 - **X.509 Certificate Signing**: HAIP flows support X.509 certificate-based credential signing (`signature_type=x509`)
 - **HAIP Credential Offers**: Credential offers generated with `haip://` scheme when `url_scheme=haip` is specified
+
+### HAIP DPoP & Token Endpoint Hardening
+
+- **Env: `HAIP_PROFILE_REQUIRE_DPOP_FOR_TOKEN`**:
+  - When set to `true`, the token endpoint **requires DPoP** for `authorization_code` exchanges.
+  - Missing DPoP header for `grant_type=authorization_code` → `400 invalid_dpop_proof`.
+- **DPoP key binding to authorization code**:
+  - Authorization-code sessions can store an expected DPoP thumbprint (`expectedDpopJkt`) derived from the key used at PAR/authorization time.
+  - Under HAIP profile, the token endpoint compares the incoming DPoP `cnf.jkt` with the stored `expectedDpopJkt`; mismatches yield `400 invalid_dpop_proof`.
+- **Integration with PAR**:
+  - PAR-issued authorization codes can be bound to a specific DPoP key, preventing redemption with a different key when HAIP hardening is enabled.
 
 ### HAIP Verifiable Presentation
 

@@ -72,6 +72,32 @@ const getServerUrl = () => process.env.SERVER_URL || "http://localhost:3000";
 const SERVER_URL = getServerUrl(); // Keep for backward compatibility
 const TOKEN_EXPIRES_IN = 86400;
 const NONCE_EXPIRES_IN = 86400;
+const DPOP_MAX_IAT_SKEW_SECONDS = 300; // 5 minutes clock skew window
+const DPOP_MAX_FUTURE_IAT_SKEW_SECONDS = 60; // allow small future skew
+
+// In-memory cache for DPoP jti replay detection (per-process)
+// Maps jti -> iat (seconds since epoch)
+const usedDpopJtis = new Map();
+const dpopNonces = new Map(); // nonce -> { endpoint: string, used: boolean }
+
+const isDpopJtiReplay = (jti, iatSeconds) => {
+  const nowSeconds = Math.floor(Date.now() / 1000);
+
+  // Garbage collect old entries outside replay window
+  for (const [storedJti, storedIat] of usedDpopJtis.entries()) {
+    if (storedIat < nowSeconds - DPOP_MAX_IAT_SKEW_SECONDS) {
+      usedDpopJtis.delete(storedJti);
+    }
+  }
+
+  const existingIat = usedDpopJtis.get(jti);
+  if (existingIat && existingIat >= nowSeconds - DPOP_MAX_IAT_SKEW_SECONDS) {
+    return true;
+  }
+
+  usedDpopJtis.set(jti, iatSeconds);
+  return false;
+};
 
 // Specification references
 const SPEC_REFS = {
@@ -602,6 +628,26 @@ const handleAuthorizationCodeFlow = async (
 
   const parsedAuthDetails = parseAuthorizationDetails(authorizationDetails);
   const chosenCredentialConfigurationId = parsedAuthDetails?.[0]?.credential_configuration_id;
+
+  // HAIP profile: when enabled and an expected DPoP thumbprint is stored on the session,
+  // ensure the incoming DPoP-bound token (dpopCnf.jkt) matches that thumbprint.
+  const requireDpopForToken =
+    process.env.HAIP_PROFILE_REQUIRE_DPOP_FOR_TOKEN === "true";
+  if (
+    requireDpopForToken &&
+    existingCodeSession.expectedDpopJkt &&
+    dpopCnf &&
+    typeof dpopCnf.jkt === "string"
+  ) {
+    if (dpopCnf.jkt !== existingCodeSession.expectedDpopJkt) {
+      const err = new Error(
+        "DPoP key thumbprint does not match expected session binding (HAIP profile)"
+      );
+      err.errorCode = "invalid_dpop_proof";
+      throw err;
+    }
+  }
+
   const generatedAccessToken = buildAccessToken(
     getServerUrl(),
     loadCryptographicKeys().privateKey,
@@ -794,17 +840,150 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
         // Per RFC 9449, the public key used for DPoP is carried in the JWS header as "jwk"
         const protectedHeader = jose.decodeProtectedHeader(dpopHeader);
         if (protectedHeader && protectedHeader.jwk) {
+          // Verify the DPoP proof using the embedded JWK (self-signed)
+          const publicKey = await jose.importJWK(
+            protectedHeader.jwk,
+            protectedHeader.alg || "ES256"
+          );
+
+          const { payload } = await jose.jwtVerify(dpopHeader, publicKey, {
+            clockTolerance: DPOP_MAX_FUTURE_IAT_SKEW_SECONDS,
+          });
+
+          const { htm, htu, iat, jti, nonce: dpopNonce } = payload;
+
+          // DPOP-03 — required claims (htm, htu, iat, jti)
+          if (!htm || !htu || typeof iat === "undefined" || !jti) {
+            throw new Error(
+              "DPoP proof is missing required claims (htm, htu, iat, jti)"
+            );
+          }
+
+          // DPOP-04 — HTTP method and URI binding
+          const expectedHtm = req.method.toUpperCase();
+          if (htm !== expectedHtm) {
+            throw new Error(
+              `DPoP proof htm claim mismatch. Received: '${htm}', expected: '${expectedHtm}'`
+            );
+          }
+
+          const expectedHtu = `${SERVER_URL}/token_endpoint`;
+          if (htu !== expectedHtu) {
+            throw new Error(
+              `DPoP proof htu claim mismatch. Received: '${htu}', expected: '${expectedHtu}'`
+            );
+          }
+
+          // DPOP-05 — iat freshness
+          const iatSeconds =
+            typeof iat === "number" ? iat : parseInt(iat, 10);
+          const nowSeconds = Math.floor(Date.now() / 1000);
+          if (!Number.isFinite(iatSeconds)) {
+            throw new Error(
+              "DPoP proof iat claim is not a valid number of seconds since epoch"
+            );
+          }
+          if (
+            iatSeconds < nowSeconds - DPOP_MAX_IAT_SKEW_SECONDS ||
+            iatSeconds > nowSeconds + DPOP_MAX_FUTURE_IAT_SKEW_SECONDS
+          ) {
+            throw new Error(
+              "DPoP proof iat claim is outside the accepted time window"
+            );
+          }
+
+          // DPOP-06 — replay detection via jti
+          if (isDpopJtiReplay(jti, iatSeconds)) {
+            throw new Error(
+              "DPoP proof jti has already been used within the replay window"
+            );
+          }
+
+          // Optional DPoP nonce challenge/validation for token endpoint
+          const requireDpopNonce =
+            process.env.REQUIRE_DPOP_NONCE_FOR_TOKEN === "true";
+          if (requireDpopNonce) {
+            const endpoint = "/token_endpoint";
+
+            // NONCE-01 / NONCE-03 — missing or wrong nonce -> issue (or re-issue) challenge
+            if (!dpopNonce) {
+              const newNonce = generateNonce();
+              dpopNonces.set(newNonce, { endpoint, used: false });
+              if (slog) {
+                try {
+                  slog("[TOKEN] DPoP nonce required but missing, issuing challenge", {
+                    endpoint,
+                  });
+                } catch {}
+              }
+              res.set("DPoP-Nonce", newNonce);
+              return res.status(400).json({
+                error: "use_dpop_nonce",
+                error_description:
+                  "DPoP nonce required for token endpoint. Retry the request with the DPoP-Nonce value in the DPoP proof.",
+              });
+            }
+
+            const existing = dpopNonces.get(dpopNonce);
+            if (
+              !existing ||
+              existing.endpoint !== endpoint ||
+              existing.used
+            ) {
+              const newNonce = generateNonce();
+              dpopNonces.set(newNonce, { endpoint, used: false });
+              if (slog) {
+                try {
+                  slog(
+                    "[TOKEN] DPoP nonce invalid, expired, or already used, issuing new challenge",
+                    { endpoint }
+                  );
+                } catch {}
+              }
+              res.set("DPoP-Nonce", newNonce);
+              return res.status(400).json({
+                error: "use_dpop_nonce",
+                error_description:
+                  "DPoP nonce is invalid, expired, or already used. Retry with the new DPoP-Nonce value.",
+              });
+            }
+
+            // NONCE-04 — mark nonce as used (single-use per policy)
+            existing.used = true;
+          }
+
+          // DPOP-07 — Signature and JWK binding are enforced by jwtVerify above.
+          // If verification fails or the JWK does not match the signing key,
+          // jwtVerify will throw and be mapped to invalid_dpop_proof below.
+
+          // If all checks pass, compute cnf.jkt for sender-constrained access token
           const jkt = await jose.calculateJwkThumbprint(
             protectedHeader.jwk,
             "sha256"
           );
           dpopCnf = { jkt };
           if (slog) {
-            try { slog("[TOKEN] DPoP header validated, issuing DPoP-bound token", { hasJkt: true }); } catch {}
+            try {
+              slog(
+                "[TOKEN] DPoP header validated, issuing DPoP-bound token",
+                {
+                  hasJkt: true,
+                  htm,
+                  htu,
+                  iat,
+                  jti,
+                }
+              );
+            } catch {}
           }
         } else if (slog) {
           // Header present but missing jwk -> will fall back to Bearer
-          try { slog("[TOKEN] [WARN] DPoP header present but missing 'jwk'; issuing Bearer access token", { hasDpopHeader: true, hasJwkInHeader: false }); } catch {}
+          try {
+            slog(
+              "[TOKEN] [WARN] DPoP header present but missing 'jwk'; issuing Bearer access token",
+              { hasDpopHeader: true, hasJwkInHeader: false }
+            );
+          } catch {}
         }
       } catch (e) {
         if (slog) {
@@ -816,9 +995,32 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
           error_description: `Invalid DPoP proof: ${e.message}`,
         });
       }
-    } else if (slog) {
-      // No DPoP header at all -> behavior falls back to Bearer-style token
-      try { slog("[TOKEN] DPoP header not present; issuing Bearer access token"); } catch {}
+    } else {
+      const requireDpopForToken =
+        process.env.HAIP_PROFILE_REQUIRE_DPOP_FOR_TOKEN === "true";
+
+      // INT-01 — When HAIP profile demands DPoP for the token endpoint,
+      // authorization_code exchanges without DPoP MUST be rejected.
+      if (requireDpopForToken && grant_type === "authorization_code") {
+        if (slog) {
+          try {
+            slog(
+              "[TOKEN] [ERROR] HAIP profile requires DPoP for authorization_code but DPoP header is missing",
+              { grant_type }
+            );
+          } catch {}
+        }
+        return res.status(400).json({
+          error: "invalid_dpop_proof",
+          error_description:
+            "DPoP proof is required for authorization_code token requests under HAIP profile.",
+        });
+      }
+
+      if (slog) {
+        // No DPoP header at all -> behavior falls back to Bearer-style token
+        try { slog("[TOKEN] DPoP header not present; issuing Bearer access token"); } catch {}
+      }
     }
 
     let tokenResponse;
@@ -881,6 +1083,14 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
     if (error.errorCode === "slow_down") {
       return res.status(400).json({
         error: "slow_down",
+        error_description: error.message,
+      });
+    }
+
+    // HAIP / DPoP-specific failures (e.g., key binding mismatch)
+    if (error.errorCode === "invalid_dpop_proof") {
+      return res.status(400).json({
+        error: "invalid_dpop_proof",
         error_description: error.message,
       });
     }

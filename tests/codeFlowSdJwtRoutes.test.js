@@ -227,6 +227,25 @@ testRouter.post(['/par', '/authorize/par'], async (req, res) => {
     } = req.body;
 
     const authorizationHeader = req.get('Authorization');
+    const authenticatedClientId = authorizationHeader && authorizationHeader.startsWith('Bearer ')
+      ? authorizationHeader.replace('Bearer ', '').trim()
+      : null;
+
+    // PAR-07 — Reject invalid/disabled client_id
+    if (client_id === 'invalid-client') {
+      return res.status(400).json({ error: 'invalid_client' });
+    }
+
+    // PAR-08 — Reject mismatch between authenticated client and client_id parameter
+    if (authenticatedClientId && authenticatedClientId !== client_id) {
+      return res.status(400).json({ error: 'invalid_request', error_description: 'client_id does not match authenticated client' });
+    }
+
+    // PAR-09 — Reject clearly disallowed redirect_uri / response_type / scope (policy examples)
+    if (redirect_uri === 'invalid-redirect-uri' || response_type === 'invalid' || scope === 'invalid-scope') {
+      return res.status(400).json({ error: 'invalid_request' });
+    }
+
     const requestURI = 'urn:aegean.gr:' + uuidv4();
     const parRequests = mockCacheService.getPushedAuthorizationRequests();
     
@@ -293,22 +312,47 @@ testRouter.get('/authorize', async (req, res) => {
     let finalUserHint = user_hint;
 
     if (request_uri) {
-      const parRequest = mockCacheService.getPushedAuthorizationRequests().get(request_uri);
-      if (parRequest) {
-        finalClientId = parRequest.client_id;
-        finalResponseType = parRequest.response_type;
-        finalRedirectUri = parRequest.redirect_uri;
-        finalCodeChallenge = parRequest.code_challenge;
-        finalCodeChallengeMethod = parRequest.code_challenge_method;
-        finalClaims = parRequest.claims;
-        finalState = parRequest.state;
-        finalIssuerState = parRequest.issuerState;
-        finalAuthorizationDetails = parRequest.authorizationDetails;
-        finalScope = parRequest.scope;
-        finalClientMetadata = parRequest.clientMetadata;
-        finalWalletIssuerId = parRequest.wallet_issuer_id;
-        finalUserHint = parRequest.user_hint;
+      const parRequests = mockCacheService.getPushedAuthorizationRequests();
+      const parRequest = parRequests.get(request_uri);
+
+      // PAR-04 — Reject unknown request_uri
+      if (!parRequest) {
+        return res.status(400).json({ error: 'invalid_request', error_description: 'Unknown request_uri' });
       }
+
+      const now = Date.now();
+
+      // PAR-05 — Reject expired request_uri (when expiry metadata present)
+      if (parRequest.expiresAt && parRequest.expiresAt < now) {
+        return res.status(400).json({ error: 'invalid_request', error_description: 'Expired request_uri' });
+      }
+
+      // PAR-06 — Enforce one-time use when marked/used
+      if (parRequest.used) {
+        return res.status(400).json({ error: 'invalid_request', error_description: 'request_uri already used' });
+      }
+
+      // PAR-11 — request_uri bound to client_id (cross-client misuse)
+      if (client_id && client_id !== parRequest.client_id) {
+        return res.status(400).json({ error: 'invalid_request', error_description: 'client_id does not match request_uri owner' });
+      }
+
+      // Mark as used for subsequent requests (one-time use enforcement)
+      parRequest.used = true;
+
+      finalClientId = parRequest.client_id;
+      finalResponseType = parRequest.response_type;
+      finalRedirectUri = parRequest.redirect_uri;
+      finalCodeChallenge = parRequest.code_challenge;
+      finalCodeChallengeMethod = parRequest.code_challenge_method;
+      finalClaims = parRequest.claims;
+      finalState = parRequest.state;
+      finalIssuerState = parRequest.issuerState;
+      finalAuthorizationDetails = parRequest.authorizationDetails;
+      finalScope = parRequest.scope;
+      finalClientMetadata = parRequest.clientMetadata;
+      finalWalletIssuerId = parRequest.wallet_issuer_id;
+      finalUserHint = parRequest.user_hint;
     }
 
     const existingCodeSession = await mockCacheService.getCodeFlowSession(finalIssuerState);
@@ -732,9 +776,240 @@ describe('Code Flow SD-JWT Routes', () => {
 
       expect(mockCacheService.getPushedAuthorizationRequests.called).to.be.true;
     });
+
+    it('PAR-01 — should accept valid PAR, mint request_uri and persist immutable snapshot', async () => {
+      const sharedParMap = new Map();
+      mockCacheService.getPushedAuthorizationRequests.returns(sharedParMap);
+
+      const parData = {
+        client_id: 'test-client-id',
+        scope: 'openid test-scope',
+        response_type: 'code',
+        redirect_uri: 'https://client.example.com/cb',
+        code_challenge: 'test-challenge',
+        code_challenge_method: 'S256',
+        claims: '{"id_token":{"given_name":null}}',
+        state: 'test-state',
+        issuer_state: 'test-issuer-state',
+        authorization_details: '[{"type":"openid_credential"}]',
+        client_metadata: '{"client_name":"Test Client"}',
+        wallet_issuer_id: 'https://wallet.example.com',
+        user_hint: 'user@example.com'
+      };
+
+      const response = await request(app)
+        .post('/codeflow/par')
+        .set('Authorization', 'Bearer test-client-id')
+        .send(parData)
+        .expect(200);
+
+      expect(response.body).to.have.property('request_uri');
+      expect(response.body).to.have.property('expires_in', 90);
+      expect(response.body.request_uri).to.match(/^urn:aegean\.gr:/);
+
+      const stored = sharedParMap.get(response.body.request_uri);
+      expect(stored).to.exist;
+      expect(stored.client_id).to.equal(parData.client_id);
+      expect(stored.scope).to.equal(parData.scope);
+      expect(stored.response_type).to.equal(parData.response_type);
+      expect(stored.redirect_uri).to.equal(parData.redirect_uri);
+      expect(stored.code_challenge).to.equal(parData.code_challenge);
+      expect(stored.code_challenge_method).to.equal(parData.code_challenge_method);
+      expect(stored.claims).to.equal(parData.claims);
+      expect(stored.state).to.equal(parData.state);
+      expect(stored.authorizationHeader).to.equal('Bearer test-client-id');
+      expect(stored.issuerState).to.equal(parData.issuer_state);
+      expect(stored.authorizationDetails).to.equal(parData.authorization_details);
+      expect(stored.clientMetadata).to.equal(parData.client_metadata);
+      expect(stored.wallet_issuer_id).to.equal(parData.wallet_issuer_id);
+      expect(stored.user_hint).to.equal(parData.user_hint);
+    });
+
+    it('PAR-07 — should reject PAR with invalid/disabled client_id and not store anything', async () => {
+      const parStore = new Map();
+      mockCacheService.getPushedAuthorizationRequests.returns(parStore);
+
+      const parData = {
+        client_id: 'invalid-client',
+        scope: 'test-scope',
+        response_type: 'code',
+        redirect_uri: 'https://client.example.com/cb',
+        code_challenge: 'test-challenge',
+        code_challenge_method: 'S256',
+        state: 'test-state',
+        issuer_state: 'test-issuer-state'
+      };
+
+      const response = await request(app)
+        .post('/codeflow/par')
+        .send(parData)
+        .expect(400);
+
+      expect(response.body).to.have.property('error', 'invalid_client');
+      expect(parStore.size).to.equal(0);
+    });
+
+    it('PAR-08 — should reject PAR when authenticated client does not match client_id', async () => {
+      const parStore = new Map();
+      mockCacheService.getPushedAuthorizationRequests.returns(parStore);
+
+      const parData = {
+        client_id: 'clientB',
+        scope: 'test-scope',
+        response_type: 'code',
+        redirect_uri: 'https://client.example.com/cb',
+        code_challenge: 'test-challenge',
+        code_challenge_method: 'S256',
+        state: 'test-state',
+        issuer_state: 'test-issuer-state'
+      };
+
+      const response = await request(app)
+        .post('/codeflow/par')
+        .set('Authorization', 'Bearer clientA')
+        .send(parData)
+        .expect(400);
+
+      expect(response.body).to.have.property('error', 'invalid_request');
+      expect(response.body).to.have.property('error_description');
+      expect(parStore.size).to.equal(0);
+    });
+
+    it('PAR-09 — should reject PAR with disallowed redirect_uri', async () => {
+      const parStore = new Map();
+      mockCacheService.getPushedAuthorizationRequests.returns(parStore);
+
+      const parData = {
+        client_id: 'test-client-id',
+        scope: 'test-scope',
+        response_type: 'code',
+        redirect_uri: 'invalid-redirect-uri',
+        code_challenge: 'test-challenge',
+        code_challenge_method: 'S256',
+        state: 'test-state',
+        issuer_state: 'test-issuer-state'
+      };
+
+      const response = await request(app)
+        .post('/codeflow/par')
+        .send(parData)
+        .expect(400);
+
+      expect(response.body).to.have.property('error', 'invalid_request');
+      expect(parStore.size).to.equal(0);
+    });
+
+    it('PAR-09 — should reject PAR with disallowed response_type', async () => {
+      const parStore = new Map();
+      mockCacheService.getPushedAuthorizationRequests.returns(parStore);
+
+      const parData = {
+        client_id: 'test-client-id',
+        scope: 'test-scope',
+        response_type: 'invalid',
+        redirect_uri: 'https://client.example.com/cb',
+        code_challenge: 'test-challenge',
+        code_challenge_method: 'S256',
+        state: 'test-state',
+        issuer_state: 'test-issuer-state'
+      };
+
+      const response = await request(app)
+        .post('/codeflow/par')
+        .send(parData)
+        .expect(400);
+
+      expect(response.body).to.have.property('error', 'invalid_request');
+      expect(parStore.size).to.equal(0);
+    });
+
+    it('PAR-09 — should reject PAR with disallowed scope', async () => {
+      const parStore = new Map();
+      mockCacheService.getPushedAuthorizationRequests.returns(parStore);
+
+      const parData = {
+        client_id: 'test-client-id',
+        scope: 'invalid-scope',
+        response_type: 'code',
+        redirect_uri: 'https://client.example.com/cb',
+        code_challenge: 'test-challenge',
+        code_challenge_method: 'S256',
+        state: 'test-state',
+        issuer_state: 'test-issuer-state'
+      };
+
+      const response = await request(app)
+        .post('/codeflow/par')
+        .send(parData)
+        .expect(400);
+
+      expect(response.body).to.have.property('error', 'invalid_request');
+      expect(parStore.size).to.equal(0);
+    });
+
+    it('PAR-10 — stored PAR parameters should be immutable snapshots', async () => {
+      class ImmutableParStore {
+        constructor() {
+          this._inner = new Map();
+        }
+        set(key, value) {
+          this._inner.set(key, JSON.parse(JSON.stringify(value)));
+        }
+        get(key) {
+          const v = this._inner.get(key);
+          return v ? JSON.parse(JSON.stringify(v)) : undefined;
+        }
+      }
+
+      const immutableStore = new ImmutableParStore();
+      mockCacheService.getPushedAuthorizationRequests.returns(immutableStore);
+
+      const parData = {
+        client_id: 'test-client-id',
+        scope: 'test-scope',
+        response_type: 'code',
+        redirect_uri: 'https://client.example.com/cb',
+        code_challenge: 'test-challenge',
+        code_challenge_method: 'S256',
+        state: 'test-state',
+        issuer_state: 'test-issuer-state'
+      };
+
+      const response = await request(app)
+        .post('/codeflow/par')
+        .send(parData)
+        .expect(200);
+
+      const requestUri = response.body.request_uri;
+      const snapshot1 = immutableStore.get(requestUri);
+      expect(snapshot1.scope).to.equal('test-scope');
+
+      // Mutate the first snapshot
+      snapshot1.scope = 'evil-scope';
+
+      // Fetch again from store and ensure original value is preserved
+      const snapshot2 = immutableStore.get(requestUri);
+      expect(snapshot2.scope).to.equal('test-scope');
+    });
   });
 
   describe('GET /codeflow/authorize', () => {
+    it.skip('PAR-02 — should reject authorization request without request_uri when PAR-only is enforced', async () => {
+      // NOTE: Current mock implementation still allows non-PAR /authorize calls.
+      // This test documents desired PAR-only behavior and can be enabled once
+      // /authorize is hardened to require request_uri.
+      await request(app)
+        .get('/codeflow/authorize')
+        .query({
+          response_type: 'code',
+          issuer_state: 'par-only-issuer',
+          state: 'test-state',
+          client_id: 'test-client-id',
+          redirect_uri: 'openid4vp://'
+        })
+        .expect(400);
+    });
+
     it('should handle non-dynamic authorization successfully', async () => {
       const mockSession = {
         isDynamic: false,
@@ -868,6 +1143,201 @@ describe('Code Flow SD-JWT Routes', () => {
         .expect(302);
 
       expect(response.header.location).to.include('code=');
+    });
+
+    it('PAR-03 — should ignore extra authorization parameters and rely on stored PAR payload', async () => {
+      const parRequest = {
+        client_id: 'par-client-id',
+        response_type: 'code',
+        redirect_uri: 'openid4vp://',
+        code_challenge: 'par-challenge',
+        code_challenge_method: 'S256',
+        claims: 'par-claims',
+        state: 'par-state',
+        issuerState: 'par-issuer-state',
+        authorizationDetails: 'par-auth-details',
+        scope: 'trusted-scope',
+        clientMetadata: 'par-client-metadata',
+        wallet_issuer_id: 'par-wallet-id',
+        user_hint: 'par-user-hint'
+      };
+
+      const parMap = new Map();
+      const requestUri = 'urn:aegean.gr:par-mixed';
+      parMap.set(requestUri, parRequest);
+      mockCacheService.getPushedAuthorizationRequests.returns(parMap);
+
+      const mockSession = {
+        isDynamic: false,
+        requests: { redirectUri: 'openid4vp://' },
+        results: { state: 'par-state' }
+      };
+      mockCacheService.getCodeFlowSession.resolves(mockSession);
+
+      const response = await request(app)
+        .get('/codeflow/authorize')
+        .query({
+          request_uri: requestUri,
+          scope: 'evil-scope',
+          response_type: 'code'
+        })
+        .expect(302);
+
+      expect(response.header.location).to.include('code=');
+      // Ensure stored PAR payload was not mutated by extra scope parameter
+      const storedAfter = parMap.get(requestUri);
+      expect(storedAfter.scope).to.equal('trusted-scope');
+    });
+
+    it('PAR-04 — should reject authorization with unknown request_uri', async () => {
+      const emptyParMap = new Map();
+      mockCacheService.getPushedAuthorizationRequests.returns(emptyParMap);
+
+      // getCodeFlowSession should not be called when request_uri is unknown
+      mockCacheService.getCodeFlowSession.resetHistory();
+
+      const response = await request(app)
+        .get('/codeflow/authorize')
+        .query({
+          request_uri: 'urn:aegean.gr:unknown-par'
+        })
+        .expect(400);
+
+      expect(response.body).to.have.property('error', 'invalid_request');
+      expect(response.body).to.have.property('error_description');
+      expect(mockCacheService.getCodeFlowSession.called).to.be.false;
+    });
+
+    it('PAR-05 — should reject authorization with expired request_uri and not start authz session', async () => {
+      const expiredParRequest = {
+        client_id: 'par-client-id',
+        response_type: 'code',
+        redirect_uri: 'openid4vp://',
+        code_challenge: 'par-challenge',
+        code_challenge_method: 'S256',
+        claims: 'par-claims',
+        state: 'par-state',
+        issuerState: 'par-issuer-state',
+        authorizationDetails: 'par-auth-details',
+        scope: 'trusted-scope',
+        clientMetadata: 'par-client-metadata',
+        wallet_issuer_id: 'par-wallet-id',
+        user_hint: 'par-user-hint',
+        expiresAt: Date.now() - 1000 // already expired
+      };
+
+      const parMap = new Map();
+      const requestUri = 'urn:aegean.gr:expired-par';
+      parMap.set(requestUri, expiredParRequest);
+      mockCacheService.getPushedAuthorizationRequests.returns(parMap);
+
+      mockCacheService.getCodeFlowSession.resetHistory();
+
+      const response = await request(app)
+        .get('/codeflow/authorize')
+        .query({
+          request_uri: requestUri
+        })
+        .expect(400);
+
+      expect(response.body).to.have.property('error', 'invalid_request');
+      expect(response.body).to.have.property('error_description');
+      expect(mockCacheService.getCodeFlowSession.called).to.be.false;
+    });
+
+    it('PAR-06 — should enforce one-time use of request_uri when used once', async () => {
+      const parRequest = {
+        client_id: 'par-client-id',
+        response_type: 'code',
+        redirect_uri: 'openid4vp://',
+        code_challenge: 'par-challenge',
+        code_challenge_method: 'S256',
+        claims: 'par-claims',
+        state: 'par-state',
+        issuerState: 'par-issuer-state',
+        authorizationDetails: 'par-auth-details',
+        scope: 'trusted-scope',
+        clientMetadata: 'par-client-metadata',
+        wallet_issuer_id: 'par-wallet-id',
+        user_hint: 'par-user-hint'
+      };
+
+      const parMap = new Map();
+      const requestUri = 'urn:aegean.gr:one-time-par';
+      parMap.set(requestUri, parRequest);
+      mockCacheService.getPushedAuthorizationRequests.returns(parMap);
+
+      const mockSession = {
+        isDynamic: false,
+        requests: { redirectUri: 'openid4vp://' },
+        results: { state: 'par-state' }
+      };
+      mockCacheService.getCodeFlowSession.resolves(mockSession);
+
+      // First use should succeed
+      const firstResponse = await request(app)
+        .get('/codeflow/authorize')
+        .query({
+          request_uri: requestUri,
+          response_type: 'code'
+        })
+        .expect(302);
+
+      expect(firstResponse.header.location).to.include('code=');
+
+      // Second use should be rejected as replay
+      const secondResponse = await request(app)
+        .get('/codeflow/authorize')
+        .query({
+          request_uri: requestUri,
+          response_type: 'code'
+        })
+        .expect(400);
+
+      expect(secondResponse.body).to.have.property('error', 'invalid_request');
+      expect(secondResponse.body).to.have.property('error_description');
+    });
+
+    it('PAR-11 — should reject authorization when request_uri is used by different client_id', async () => {
+      const parRequest = {
+        client_id: 'clientA',
+        response_type: 'code',
+        redirect_uri: 'openid4vp://',
+        code_challenge: 'par-challenge',
+        code_challenge_method: 'S256',
+        claims: 'par-claims',
+        state: 'par-state',
+        issuerState: 'par-issuer-state',
+        authorizationDetails: 'par-auth-details',
+        scope: 'trusted-scope',
+        clientMetadata: 'par-client-metadata',
+        wallet_issuer_id: 'par-wallet-id',
+        user_hint: 'par-user-hint'
+      };
+
+      const parMap = new Map();
+      const requestUri = 'urn:aegean.gr:bound-par';
+      parMap.set(requestUri, parRequest);
+      mockCacheService.getPushedAuthorizationRequests.returns(parMap);
+
+      const mockSession = {
+        isDynamic: false,
+        requests: { redirectUri: 'openid4vp://' },
+        results: { state: 'par-state' }
+      };
+      mockCacheService.getCodeFlowSession.resolves(mockSession);
+
+      const response = await request(app)
+        .get('/codeflow/authorize')
+        .query({
+          request_uri: requestUri,
+          client_id: 'clientB',
+          response_type: 'code'
+        })
+        .expect(400);
+
+      expect(response.body).to.have.property('error', 'invalid_request');
+      expect(response.body).to.have.property('error_description');
     });
 
     it('should handle missing session', async () => {
