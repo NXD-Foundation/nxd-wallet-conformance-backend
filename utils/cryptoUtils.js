@@ -302,12 +302,9 @@ export async function buildVpRequestJWT(
     jwtPayload.response_uri = redirect_uri;
   }
 
-  // Set appropriate audience based on response mode
-  if (response_mode === "dc_api.jwt" || response_mode === "dc_api") {
+  
     jwtPayload.aud = "https://self-issued.me/v2"; // Digital Credentials API audience
-  } else {
-    jwtPayload.aud = client_id; // For direct_post, audience should be the client_id
-  }
+  
 
   // Add required timestamp claims for Digital Credentials API
   if (response_mode === "dc_api.jwt" || response_mode === "dc_api") {

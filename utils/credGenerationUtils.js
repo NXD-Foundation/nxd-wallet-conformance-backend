@@ -10,6 +10,13 @@ import { pemToJWK, generateNonce, didKeyToJwks } from "../utils/cryptoUtils.js";
 import fs from "fs";
 import { SDJwtVcInstance } from "@sd-jwt/sd-jwt-vc";
 
+/** JWT typ header for SD-JWT credentials 
+ * https://www.w3.org/TR/vc-jose-cose/?utm_source=chatgpt.com#securing-with-sd-jwt 
+ * The typ header parameter SHOULD be vc+sd-jwt. When present, the cty header parameter SHOULD be vc.*/
+const VCDM_2_0_SD_JWT_CREDENTIAL_TYP_HEADER = "vc+sd-jwt";
+
+const SDJWT_CREDENTIAL_TYP_HEADER = "dc+sd-jwt";
+
 // Standardize on 'cbor' library for EUDI Wallet compliance (matches ISO 18013-5 spec)
 // Note: cbor-x is faster but cbor library matches the spec and reference implementations
 import cbor from 'cbor';
@@ -50,6 +57,21 @@ const certificatePemX509 = fs.readFileSync(
   "./x509EC/client_certificate.crt",
   "utf8"
 );
+// DID Web key pair - must match the keys published in the DID document
+let privateKeyPemDidWeb = null;
+let publicKeyPemDidWeb = null;
+try {
+  privateKeyPemDidWeb = fs.readFileSync(
+    "./didjwks/did_private_pkcs8.key",
+    "utf8",
+  );
+  publicKeyPemDidWeb = fs.readFileSync("./didjwks/did_public.pem", "utf8");
+} catch (e) {
+  console.warn(
+    "DID Web key files not found. did:web signature type may not work correctly.",
+    e.message,
+  );
+}
 
 /**
  * Normalize COSE_Sign1 issuerAuth headers produced by @auth0/mdl.
@@ -138,9 +160,35 @@ try {
   const issuerConfigRaw = fs.readFileSync("./data/issuer-config.json", "utf-8");
   issuerConfigValues = JSON.parse(issuerConfigRaw);
 } catch (err) {
-  console.warn("Could not load ./data/issuer-config.json for KID, using defaults.", err);
+  console.warn(
+    "Could not load ./data/issuer-config.json for KID, using defaults.",
+    err,
+  );
 }
-const defaultSigningKid = issuerConfigValues.default_signing_kid || "aegean#authentication-key";
+const defaultSigningKid =
+  issuerConfigValues.default_signing_kid || "aegean#authentication-key";
+
+// Helper function to compute did:web identifier from serverURL
+function computeDidWebFromServerURL(serverURL) {
+  const proxyPath = process.env.PROXY_PATH || null;
+  let controller = serverURL;
+  if (proxyPath) {
+    controller = serverURL.replace("/" + proxyPath, "") + ":" + proxyPath;
+  }
+  controller = controller.replace("https://", "").replace("http://", "");
+  const did = `did:web:${controller}`;
+  return did;
+}
+
+// Helper function to compute did:jwk identifier from public key
+async function computeDidJwkFromPublic() {
+  const publicJwkForSigning = pemToJWK(publicKeyPem, "public");
+  const jwkStr = Buffer.from(JSON.stringify(publicJwkForSigning)).toString(
+    "base64url",
+  );
+  const did = `did:jwk:${jwkStr}`;
+  return did;
+}
 
 // const issuerConfig = require("../data/issuer-config.json");
 
@@ -247,70 +295,99 @@ export async function handleCredentialGenerationBasedOnFormat(
   requestBody,
   sessionObject,
   serverURL,
-  format="vc+sd-jwt"
+  format = "vc+sd-jwt",
 ) {
   const vct = requestBody.vct;
 
   let signer, verifier;
   let headerOptions; // Define headerOptions here to be populated based on sig type
 
-  const effectiveSignatureType = sessionObject.isHaip && process.env.ISSUER_SIGNATURE_TYPE === "x509"
-    ? "x509"
-    : sessionObject.signatureType;
+  const effectiveSignatureType =
+    sessionObject.isHaip && process.env.ISSUER_SIGNATURE_TYPE === "x509"
+      ? "x509"
+      : sessionObject.signatureType;
 
   if (effectiveSignatureType === "x509") {
     console.log("x509 signature type selected.");
     ({ signer, verifier } = await createSignerVerifierX509(
       privateKeyPemX509,
-      certificatePemX509
+      certificatePemX509,
     ));
     headerOptions = {
       header: {
         x5c: [pemToBase64Der(certificatePemX509)],
       },
     };
-  } else { // Covers "jwk" and "kid-jwk"
-    const publicJwkForSigning = pemToJWK(publicKeyPem, "public");
+  } else {
+    // Covers "jwk", "kid-jwk", and "did:web"
+    let publicJwkForSigning;
+    let privateJwkForSigning;
+
+    // For did:web, use the DID Web key pair that matches the DID document
+    if (effectiveSignatureType === "did:web") {
+      if (!privateKeyPemDidWeb || !publicKeyPemDidWeb) {
+        throw new Error(
+          "DID Web key files not found. Cannot sign credentials with did:web signature type. Ensure ./didjwks/did_private_pkcs8.key and ./didjwks/did_public.pem exist.",
+        );
+      }
+      console.log(
+        "did:web signature type selected. Using DID Web key pair from ./didjwks/",
+      );
+      publicJwkForSigning = pemToJWK(publicKeyPemDidWeb, "public");
+      privateJwkForSigning = pemToJWK(privateKeyPemDidWeb, "private");
+    } else {
+      // For other signature types, use the default key pair
+      publicJwkForSigning = pemToJWK(publicKeyPem, "public");
+      privateJwkForSigning = pemToJWK(privateKey, "private");
+    }
+
     ({ signer, verifier } = await createSignerVerifier(
-      pemToJWK(privateKey, "private"),
-      publicJwkForSigning
+      privateJwkForSigning,
+      publicJwkForSigning,
     ));
 
     let joseHeader = {};
     if (effectiveSignatureType === "jwk") {
       console.log("jwk signature type selected: Using embedded JWK in header.");
-      joseHeader = { 
+      joseHeader = {
         jwk: publicJwkForSigning,
-        alg: "ES256" // Algorithm must be specified when jwk is used in header
+        alg: "ES256", // Algorithm must be specified when jwk is used in header
       };
-    } else if (effectiveSignatureType === "kid-jwk") { // Assuming "kid-jwk" as the type for kid-based JWK signing
-      console.log(`kid-jwk signature type selected: Using KID: ${defaultSigningKid} in header.`);
-      joseHeader = { 
+    } else if (effectiveSignatureType === "kid-jwk") {
+      // Assuming "kid-jwk" as the type for kid-based JWK signing
+      console.log(
+        `kid-jwk signature type selected: Using KID: ${defaultSigningKid} in header.`,
+      );
+      joseHeader = {
         kid: defaultSigningKid,
-        alg: "ES256" // alg is also typically included with kid for clarity, though not strictly required by RFC7515 if kid is enough for resolution
+        alg: "ES256", // alg is also typically included with kid for clarity, though not strictly required by RFC7515 if kid is enough for resolution
       };
     } else if (effectiveSignatureType === "did:web") {
       console.log("did:web signature type selected.");
       const proxyPath = process.env.PROXY_PATH || null;
       let controller = serverURL;
       if (proxyPath) {
-        controller = serverURL.replace("/"+proxyPath,"") + ":" + proxyPath;
+        controller = serverURL.replace("/" + proxyPath, "") + ":" + proxyPath;
       }
-      controller = controller.replace("https://","").replace("http://","");
+      controller = controller.replace("https://", "").replace("http://", "");
       const kid = `did:web:${controller}#keys-1`;
-      console.log(`Using KID: ${kid} for did:web signing.`);
-      joseHeader = { 
+      console.log(
+        `Using KID: ${kid} for did:web signing with DID Web key pair.`,
+      );
+      joseHeader = {
         kid: kid,
-        alg: "ES256"
+        alg: "ES256",
       };
     } else {
       // Fallback or default if signatureType is something else (e.g., a generic 'jwk' without specific instruction)
       // For now, defaulting to KID if not explicitly 'jwk' for direct embedding.
       // This matches the previous default behavior when jwkHeaderPreference was 'kid'.
-      console.warn(`Unspecified or unrecognized JWK signature type '${effectiveSignatureType}', defaulting to KID: ${defaultSigningKid}.`);
-      joseHeader = { 
+      console.warn(
+        `Unspecified or unrecognized JWK signature type '${effectiveSignatureType}', defaulting to KID: ${defaultSigningKid}.`,
+      );
+      joseHeader = {
         kid: defaultSigningKid,
-        alg: "ES256"
+        alg: "ES256",
       };
     }
     headerOptions = { header: joseHeader };
@@ -334,12 +411,22 @@ export async function handleCredentialGenerationBasedOnFormat(
   const credType = vct;
   let credPayload = {};
 
+  // Determine issuer identifier based on signature type
+  // For did:web signature type, use did:web identifier
+  // For did:jwk signature type, use did:jwk identifier
+  // Otherwise use serverURL
+  let issuerIdentifier = serverURL;
+  if (effectiveSignatureType === "did:web") {
+    issuerIdentifier = computeDidWebFromServerURL(serverURL);
+  } else if (effectiveSignatureType === "did:jwk") {
+    issuerIdentifier = await computeDidJwkFromPublic();
+  }
+
   let issuerName = serverURL;
   const match = serverURL.match(/^(?:https?:\/\/)?([^/]+)/);
   if (match) {
     issuerName = match[1];
   }
- 
 
   // Determine credential payload based on type
   switch (credType) {
@@ -388,37 +475,156 @@ export async function handleCredentialGenerationBasedOnFormat(
       break;
     case "LoyaltyCard":
       credPayload = getLoyaltyCardSDJWTDataWithPayload(
-        sessionObject.credentialPayload
+        sessionObject.credentialPayload,
       );
       break;
     default:
       throw new Error(`Unsupported credential type: ${credType}`);
   }
 
-  // Handle holder binding
-  let cnf = { jwk: holderJWKS.jwk };
-  if (!cnf.jwk) {
+  // Handle holder binding (RFC 7800 cnf claim)
+  // For DID-based binding: use cnf.kid (DID) so verifiers resolve the DID to the key
+  // For JWK in header: use cnf.jwk directly
+  // For mDL: deviceKeyInfo requires JWK per ISO 18013-5, so we resolve DID→JWK when needed
+  const isDidKid = (kid) =>
+    kid &&
+    (kid.startsWith("did:key:") ||
+      kid.startsWith("did:web:") ||
+      kid.startsWith("did:jwk:"));
+
+  let cnf;
+  if (holderJWKS.jwk) {
+    cnf = { jwk: holderJWKS.jwk };
+  } else if (holderJWKS.kid && isDidKid(holderJWKS.kid)) {
+    // DID binding: put the DID in cnf.kid per RFC 7800 (key identified by reference)
+    cnf = { kid: holderJWKS.kid };
+  } else if (holderJWKS.kid) {
+    // Fallback: resolve kid to JWK (e.g. did:web, did:jwk when not matched above)
     const keys = await didKeyToJwks(holderJWKS.kid);
-    cnf = {jwk: keys.keys[0]};
+    cnf = keys?.keys?.[0] ? { jwk: keys.keys[0] } : null;
+  }
+  if (!cnf) {
+    throw new Error(
+      "Could not determine holder binding from proof JWT header (missing jwk or resolvable kid)"
+    );
   }
 
   const now = new Date();
   const expiryDate = new Date(now);
   expiryDate.setMonth(now.getMonth() + 6);
 
-  if (format === "jwt_vc_json") {
-    console.log("Issuing a jwt_vc format credential");
+  if (format === "vc+sd-jwt") {
+    // W3C VCDM 2.0 secured with SD-JWT (VC-JOSE-COSE) — DIIP v5 compliant
+    console.log(
+      "Issuing a vc+sd-jwt format credential (W3C VCDM 2.0 + SD-JWT per VC-JOSE-COSE)",
+    );
+    const sdjwt = new SDJwtVcInstance({
+      signer,
+      verifier,
+      signAlg: "ES256",
+      hasher: digest,
+      hashAlg: "sha-256",
+      saltGenerator: generateSalt,
+    });
+
+    // Build W3C VCDM 2.0 payload structure secured with SD-JWT
+    const sdPayload = {
+      iss: issuerIdentifier,
+      iat: Math.floor(Date.now() / 1000),
+      nbf: Math.floor(Date.now() / 1000),
+      exp: Math.floor(expiryDate.getTime() / 1000),
+      vct: credType,
+      "@context": ["https://www.w3.org/ns/credentials/v2"],
+      type: ["VerifiableCredential", credType],
+      issuer: issuerIdentifier,
+      validFrom: now.toISOString(),
+      validUntil: expiryDate.toISOString(),
+      credentialSubject: credPayload.claims,
+      cnf,
+    };
+
+    // If a status list reference was attached upstream, embed it in the payload
+    if (requestBody.status_reference) {
+      sdPayload.status = requestBody.status_reference;
+    }
+
+    // For VCDM 2.0 + SD-JWT, selective disclosure applies to claims within credentialSubject
+    const vcdmDisclosureFrame = {
+      credentialSubject: credPayload.disclosureFrame,
+    };
+
+    const vcSdJwtHeader = {
+      header: {
+        ...headerOptions.header,
+        typ: VCDM_2_0_SD_JWT_CREDENTIAL_TYP_HEADER,
+        cty: "vc",
+      },
+    };
+    const credential = await sdjwt.issue(
+      sdPayload,
+      vcdmDisclosureFrame,
+      vcSdJwtHeader,
+    );
+    console.log(
+      "Credential issued (vc+sd-jwt VCDM 2.0, typ=vc+sd-jwt): ",
+      credential,
+    );
+    return credential;
+  } else if (format === "dc+sd-jwt") {
+    // SD-JWT VC (flat claims) — DIIP v5 compliant
+    console.log("Issuing a dc+sd-jwt format credential (SD-JWT VC)");
+    const sdjwt = new SDJwtVcInstance({
+      signer,
+      verifier,
+      signAlg: "ES256",
+      hasher: digest,
+      hashAlg: "sha-256",
+      saltGenerator: generateSalt,
+    });
+
+    const sdPayload = {
+      iss: issuerIdentifier,
+      iat: Math.floor(Date.now() / 1000),
+      nbf: Math.floor(Date.now() / 1000),
+      exp: Math.floor(expiryDate.getTime() / 1000),
+      vct: credType,
+      ...credPayload.claims,
+      cnf,
+    };
+
+    // If a status list reference was attached upstream, embed it in the payload
+    if (requestBody.status_reference) {
+      sdPayload.status = requestBody.status_reference;
+    }
+
+    const dcSdJwtHeader = {
+      header: { ...headerOptions.header, typ: SDJWT_CREDENTIAL_TYP_HEADER },
+    };
+    const credential = await sdjwt.issue(
+      sdPayload,
+      credPayload.disclosureFrame,
+      dcSdJwtHeader,
+    );
+    console.log("Credential issued (dc+sd-jwt): ", credential);
+    return credential;
+  } else if (format === "jwt_vc_json") {
+    // Legacy jwt_vc_json format — kept for backward compatibility but NOT DIIP v5 compliant
+    // DIIP v5 requires SD-JWT for securing W3C VCDM credentials (use vc+sd-jwt instead)
+    console.warn(
+      "WARNING: jwt_vc_json format is not DIIP v5 compliant. Use vc+sd-jwt for W3C VCDM credentials.",
+    );
+    console.log("Issuing a jwt_vc_json format credential (legacy)");
     const vcPayload = {
-      "@context": ["https://www.w3.org/2018/credentials/v1"],
+      "@context": ["https://www.w3.org/ns/credentials/v2"],
       type: ["VerifiableCredential", vct],
       credentialSubject: credPayload.claims,
-      issuer: serverURL,
-      issuanceDate: now.toISOString(),
-      expirationDate: expiryDate.toISOString(),
+      issuer: issuerIdentifier,
+      validFrom: now.toISOString(),
+      validUntil: expiryDate.toISOString(),
     };
 
     const jwtPayload = {
-      iss: serverURL,
+      iss: issuerIdentifier,
       iat: Math.floor(now.getTime() / 1000),
       nbf: Math.floor(now.getTime() / 1000),
       exp: Math.floor(expiryDate.getTime() / 1000),
@@ -436,33 +642,18 @@ export async function handleCredentialGenerationBasedOnFormat(
 
     const credential = jwt.sign(jwtPayload, privateKeyForSigning, signOptions);
     return credential;
-  } else if (format === "dc+sd-jwt") {
-    console.log("Issuing a dc+sd-jwt format credential");
-    const sdjwt = new SDJwtVcInstance({
-      signer,
-      verifier,
-      signAlg: "ES256",
-      hasher: digest,
-      hashAlg: "sha-256",
-      saltGenerator: generateSalt,
-    });
-    // Issue credential
-    const credential = await sdjwt.issue(
-      {
-        iss: serverURL,
-        iat: Math.floor(Date.now() / 1000),
-        nbf: Math.floor(Date.now() / 1000),
-        exp: Math.floor(expiryDate.getTime() / 1000),
-        vct: credType,
-        ...credPayload.claims,
-        cnf,
-      },
-      credPayload.disclosureFrame,
-      headerOptions
-    );
-    console.log("Credential issued: ", credential);
-    return credential;
   } else if (format === "mDL" || format === "mdl") {
+    // mDL deviceKeyInfo requires JWK per ISO 18013-5; resolve DID to JWK if cnf has kid
+    let cnfForMdl = cnf;
+    if (cnf.kid && !cnf.jwk && isDidKid(cnf.kid)) {
+      const keys = await didKeyToJwks(cnf.kid);
+      if (!keys?.keys?.[0]) {
+        throw new Error(
+          `mDL requires device key as JWK; could not resolve DID: ${cnf.kid}`
+        );
+      }
+      cnfForMdl = { jwk: keys.keys[0] };
+    }
     console.log("Generating mDL credential using @auth0/mdl library...");
     try {
       return await generateMdlCredentialWithAuth0Library(
@@ -471,8 +662,8 @@ export async function handleCredentialGenerationBasedOnFormat(
         serverURL,
         vct,
         credPayload,
-        cnf,
-        issuerConfigValues
+        cnfForMdl,
+        issuerConfigValues,
       );
     } catch (error) {
       console.error("Error generating mDL with @auth0/mdl:", error);
@@ -975,12 +1166,15 @@ async function generateMdlCredentialWithAuth0Library(
   }
 }
 
-export async function handleCredentialGenerationBasedOnFormatDeferred(sessionObject, serverURL) {
+export async function handleCredentialGenerationBasedOnFormatDeferred(
+  sessionObject,
+  serverURL,
+) {
   const requestBody = sessionObject.requestBody;
   const vct = requestBody.vct;
   let { signer, verifier } = await createSignerVerifierX509(
     privateKeyPemX509,
-    certificatePemX509
+    certificatePemX509,
   );
   console.log("vc+sd-jwt ", vct);
 
@@ -996,10 +1190,37 @@ export async function handleCredentialGenerationBasedOnFormatDeferred(sessionObj
   const holderJWKS = decodedWithHeader.header;
 
   const isHaip = sessionObject ? sessionObject.isHaip : false;
+  // Determine effective signature type (same logic as main function)
+  const effectiveSignatureType =
+    sessionObject.isHaip && process.env.ISSUER_SIGNATURE_TYPE === "x509"
+      ? "x509"
+      : sessionObject.signatureType || "kid-jwk";
   if (!isHaip) {
+    // Determine which key pair to use based on signature type
+    let privateJwkForSigning;
+    let publicJwkForSigning;
+
+    // For did:web, use the DID Web key pair that matches the DID document
+    if (effectiveSignatureType === "did:web") {
+      if (!privateKeyPemDidWeb || !publicKeyPemDidWeb) {
+        throw new Error(
+          "DID Web key files not found. Cannot sign credentials with did:web signature type. Ensure ./didjwks/did_private_pkcs8.key and ./didjwks/did_public.pem exist.",
+        );
+      }
+      console.log(
+        "did:web signature type selected for deferred issuance. Using DID Web key pair from ./didjwks/",
+      );
+      privateJwkForSigning = pemToJWK(privateKeyPemDidWeb, "private");
+      publicJwkForSigning = pemToJWK(publicKeyPemDidWeb, "public");
+    } else {
+      // For other signature types, use the default key pair
+      privateJwkForSigning = pemToJWK(privateKey, "private");
+      publicJwkForSigning = pemToJWK(publicKeyPem, "public");
+    }
+
     ({ signer, verifier } = await createSignerVerifier(
-      pemToJWK(privateKey, "private"),
-      pemToJWK(publicKeyPem, "public")
+      privateJwkForSigning,
+      publicJwkForSigning,
     ));
   }
 
@@ -1015,12 +1236,22 @@ export async function handleCredentialGenerationBasedOnFormatDeferred(sessionObj
   const credType = vct;
   let credPayload = {};
 
+  // Determine issuer identifier based on signature type
+  // For did:web signature type, use did:web identifier
+  // For did:jwk signature type, use did:jwk identifier
+  // Otherwise use serverURL
+  let issuerIdentifier = serverURL;
+  if (effectiveSignatureType === "did:web") {
+    issuerIdentifier = computeDidWebFromServerURL(serverURL);
+  } else if (effectiveSignatureType === "did:jwk") {
+    issuerIdentifier = await computeDidJwkFromPublic();
+  }
+
   let issuerName = serverURL;
   const match = serverURL.match(/^(?:https?:\/\/)?([^/]+)/);
   if (match) {
     issuerName = match[1];
   }
-
 
   // Determine credential payload based on type
   switch (credType) {
@@ -1064,21 +1295,41 @@ export async function handleCredentialGenerationBasedOnFormatDeferred(sessionObj
       throw new Error(`Unsupported credential type: ${credType}`);
   }
 
-  // Handle holder binding
-  let cnf = { jwk: holderJWKS.jwk };
-  if (!cnf.jwk) {
-    cnf = { jwk: await didKeyToJwks(holderJWKS.kid) };
+  // Handle holder binding (RFC 7800 cnf claim)
+  // For DID-based binding: use cnf.kid (DID) so verifiers resolve the DID to the key
+  const isDidKid = (kid) =>
+    kid &&
+    (kid.startsWith("did:key:") ||
+      kid.startsWith("did:web:") ||
+      kid.startsWith("did:jwk:"));
+
+  let cnf;
+  if (holderJWKS.jwk) {
+    cnf = { jwk: holderJWKS.jwk };
+  } else if (holderJWKS.kid && isDidKid(holderJWKS.kid)) {
+    cnf = { kid: holderJWKS.kid };
+  } else if (holderJWKS.kid) {
+    const keys = await didKeyToJwks(holderJWKS.kid);
+    cnf = keys?.keys?.[0] ? { jwk: keys.keys[0] } : null;
+  }
+  if (!cnf) {
+    throw new Error(
+      "Could not determine holder binding from proof JWT header (missing jwk or resolvable kid)"
+    );
   }
 
-  // Prepare issuance headers
+  //TODO this should be update to check format before deciding on the typ of the header
+  // Prepare issuance headers (DIIP v5: typ MUST be dc+sd-jwt for SD-JWT credentials)
   const headerOptions = isHaip
     ? {
         header: {
+          typ: SDJWT_CREDENTIAL_TYP_HEADER,
           x5c: [pemToBase64Der(certificatePemX509)],
         },
       }
     : {
         header: {
+          typ: SDJWT_CREDENTIAL_TYP_HEADER,
           kid: "aegean#authentication-key",
         },
       };
@@ -1089,7 +1340,7 @@ export async function handleCredentialGenerationBasedOnFormatDeferred(sessionObj
   // Issue credential
   const credential = await sdjwt.issue(
     {
-      iss: serverURL,
+      iss: issuerIdentifier,
       iat: Math.floor(Date.now() / 1000),
       nbf: Math.floor(Date.now() / 1000),
       exp: Math.floor(expiryDate.getTime() / 1000),
@@ -1098,7 +1349,7 @@ export async function handleCredentialGenerationBasedOnFormatDeferred(sessionObj
       cnf,
     },
     credPayload.disclosureFrame,
-    headerOptions
+    headerOptions,
   );
 
   return credential;

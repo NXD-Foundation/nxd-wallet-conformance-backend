@@ -136,8 +136,8 @@ describe('Direct Post JWT Fixes', () => {
 
       const decoded = jwt.decode(result, { complete: true });
       
-      // For direct_post.jwt, audience should be client_id
-      expect(decoded.payload.aud).to.equal(client_id);
+      // For direct_post.jwt, audience should be https://self-issued.me/v2
+      expect(decoded.payload.aud).to.equal("https://self-issued.me/v2");
     });
 
     it('should set correct audience for dc_api.jwt', async () => {
