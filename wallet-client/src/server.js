@@ -1,6 +1,6 @@
 import express from "express";
 import fetch from "node-fetch";
-import { createProofJwt, generateDidJwkFromPrivateJwk, ensureOrCreateEcKeyPair, createPkcePair, createWIA, createWUA, createDPoP } from "./lib/crypto.js";
+import { createProofJwt, generateDidJwkFromPrivateJwk, ensureOrCreateEcKeyPair, createPkcePair, createWIA, createWUA, createDPoP, createOAuthClientAttestationJwt, createOAuthClientAttestationPopJwt } from "./lib/crypto.js";
 import { performPresentation, resolveDeepLinkFromEndpoint } from "./lib/presentation.js";
 import { storeWalletCredentialByType, walletRedisClient, appendWalletLog, getWalletLogs } from "./lib/cache.js";
 import { jwtVerify, decodeJwt, decodeProtectedHeader, createLocalJWKSet, importJWK, importX509 } from "jose";
@@ -776,7 +776,7 @@ async function httpPostJson(url, body, logSessionId) {
   return res;
 }
 
-async function httpPostForm(url, params, logSessionId, dpopHeader = null) {
+async function httpPostForm(url, params, logSessionId, dpopHeader = null, extraHeaders = null) {
   const slog = logSessionId ? makeSessionLogger(logSessionId) : (() => {});
   const form = new URLSearchParams();
   Object.entries(params || {}).forEach(([k, v]) => { if (typeof v !== 'undefined' && v !== null) form.set(k, String(v)); });
@@ -793,13 +793,21 @@ async function httpPostForm(url, params, logSessionId, dpopHeader = null) {
   if (dpopHeader) {
     headers["DPoP"] = dpopHeader;
   }
+  if (extraHeaders && typeof extraHeaders === "object") {
+    Object.assign(headers, extraHeaders);
+  }
   
   try { 
     slog("[HTTP] [REQUEST] POST FORM", { 
       requestId,
       method: "POST",
       url, 
-      headers: { ...headers, DPoP: dpopHeader ? "<redacted>" : undefined },
+      headers: {
+        ...headers,
+        DPoP: dpopHeader ? "<redacted>" : undefined,
+        "OAuth-Client-Attestation": headers["OAuth-Client-Attestation"] ? "<redacted>" : undefined,
+        "OAuth-Client-Attestation-PoP": headers["OAuth-Client-Attestation-PoP"] ? "<redacted>" : undefined,
+      },
       params: logParams,
       hasDPoP: !!dpopHeader
     }); 
@@ -843,6 +851,57 @@ function safeParseJson(str) {
   try { return JSON.parse(str); } catch { return null; }
 }
 
+function deriveAuthorizationServerIssuer(endpoint, fallback) {
+  if (fallback) return fallback;
+  if (!endpoint) return undefined;
+  try {
+    return new URL(endpoint).origin;
+  } catch {
+    return endpoint;
+  }
+}
+
+async function buildOAuthClientAttestationHeaders({
+  keyPath,
+  endpointAudience,
+  authorizationServerIssuer,
+  clientId = "wallet-client",
+  alg = "ES256",
+  logSessionId,
+}) {
+  const slog = logSessionId ? makeSessionLogger(logSessionId) : (() => {});
+  const { privateJwk, publicJwk } = await ensureOrCreateEcKeyPair(keyPath, alg);
+  const attestationJwt = await createOAuthClientAttestationJwt({
+    privateJwk,
+    publicJwk,
+    issuer: clientId,
+    subject: clientId,
+    audience: endpointAudience,
+    cnfJwk: publicJwk,
+    alg,
+  });
+  const popJwt = await createOAuthClientAttestationPopJwt({
+    privateJwk,
+    publicJwk,
+    issuer: clientId,
+    audience: authorizationServerIssuer,
+    alg,
+  });
+  try {
+    slog("[oauth-client-attestation] generated", {
+      endpointAudience,
+      authorizationServerIssuer,
+      clientId,
+      hasAttestation: !!attestationJwt,
+      hasPop: !!popJwt,
+    });
+  } catch {}
+  return {
+    "OAuth-Client-Attestation": attestationJwt,
+    "OAuth-Client-Attestation-PoP": popJwt,
+  };
+}
+
 async function runPreAuthorizedIssuance({ apiBase, issuerMeta, configurationId, preAuthorizedCode, txCodeConfig, authorizationServer, keyPath, pollTimeoutMs, pollIntervalMs, userPin }, logSessionId) {
   const slog = logSessionId ? makeSessionLogger(logSessionId) : (() => {});
   try { slog("[ISSUANCE] [START] Pre-authorized issuance flow", { configurationId, apiBase, hasTxCodeCfg: !!txCodeConfig }); } catch {}
@@ -856,6 +915,7 @@ async function runPreAuthorizedIssuance({ apiBase, issuerMeta, configurationId, 
     throw new Error("tx_code_required: offer indicates tx_code; provide 'pin' in request body");
   }
   let tokenEndpoint = issuerMeta.token_endpoint || null;
+  let authorizationServerIssuer = deriveAuthorizationServerIssuer(tokenEndpoint, issuerMeta.credential_issuer || apiBase);
   // If token_endpoint is not in issuer metadata, try authorization server metadata per RFC 8414
   if (!tokenEndpoint) {
     // Check for authorization_servers array in issuer metadata
@@ -903,6 +963,7 @@ async function runPreAuthorizedIssuance({ apiBase, issuerMeta, configurationId, 
     try {
       const asMeta = await discoverAuthorizationServerMetadata(asBase, logSessionId);
       tokenEndpoint = asMeta.token_endpoint;
+      authorizationServerIssuer = deriveAuthorizationServerIssuer(tokenEndpoint, asMeta.issuer || asBase);
       if (!tokenEndpoint) {
         console.error("[preauth] authorization server metadata does not contain token_endpoint");
         try { slog("[preauth] AS metadata missing token_endpoint", { asBase }); } catch {}
@@ -962,6 +1023,12 @@ async function runPreAuthorizedIssuance({ apiBase, issuerMeta, configurationId, 
   } catch (wiaError) {
     console.warn("[preauth] Failed to generate WIA:", wiaError?.message); try { slog("[preauth] WIA generation failed", { error: wiaError?.message }); } catch {}
   }
+  const oauthClientAttestationHeaders = await buildOAuthClientAttestationHeaders({
+    keyPath,
+    endpointAudience: tokenEndpoint,
+    authorizationServerIssuer,
+    logSessionId,
+  });
   
   const tokenAuthzDetails = [
     {
@@ -977,7 +1044,7 @@ async function runPreAuthorizedIssuance({ apiBase, issuerMeta, configurationId, 
     authorization_details: JSON.stringify(tokenAuthzDetails),
     ...(wiaJwt ? { client_assertion: wiaJwt, client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer" } : {}),
   };
-  const tokenRes = await httpPostForm(tokenEndpoint, tokenPayload, logSessionId, dpopJwt);
+  const tokenRes = await httpPostForm(tokenEndpoint, tokenPayload, logSessionId, dpopJwt, oauthClientAttestationHeaders);
   console.log("[preauth] tokenRes.status=", tokenRes.status); 
   try { slog("[preauth] tokenRes.status", { status: tokenRes.status }); } catch {}
   console.log("[preauth] tokenRes.headers:", Object.fromEntries(tokenRes.headers.entries())); 
@@ -1027,7 +1094,7 @@ async function runPreAuthorizedIssuance({ apiBase, issuerMeta, configurationId, 
     c_nonce_expires_in = nonceJson.c_nonce_expires_in;
     console.log("[preauth] obtained c_nonce from nonce endpoint"); try { slog("[preauth] obtained c_nonce from nonce endpoint", { hasExpiresIn: !!c_nonce_expires_in }); } catch {}
   } else if (!c_nonce) {
-    console.warn("[preauth] no nonce endpoint and no c_nonce from token; proceeding without nonce (may be rejected)"); try { slog("[preauth] no c_nonce available"); } catch {}
+    throw new Error("nonce_error: issuer did not provide c_nonce and no nonce_endpoint is available");
   }
 
   // Algorithm negotiation
@@ -1245,6 +1312,8 @@ async function runAuthorizationCodeIssuance({ apiBase, issuerMeta, configuration
   let authorizeEndpoint = issuerMeta.authorization_endpoint || null;
   let tokenEndpointFromAS = null;
   let parEndpoint = null;
+  let requirePushedAuthorizationRequests = false;
+  let authorizationServerIssuer = issuerMeta.credential_issuer || apiBase;
   
   // Check for authorization_servers array in issuer metadata
   // Per OIDC4VCI v1.0: "If this parameter is omitted, the entity providing the Credential Issuer 
@@ -1293,6 +1362,8 @@ async function runAuthorizationCodeIssuance({ apiBase, issuerMeta, configuration
     authorizeEndpoint = authorizeEndpoint || asMeta.authorization_endpoint;
     tokenEndpointFromAS = asMeta.token_endpoint || null;
     parEndpoint = asMeta.pushed_authorization_request_endpoint || null;
+    requirePushedAuthorizationRequests = asMeta.require_pushed_authorization_requests === true;
+    authorizationServerIssuer = asMeta.issuer || asBase || authorizationServerIssuer;
     if (!tokenEndpointFromAS) {
       console.error("[codeflow] authorization server metadata does not contain token_endpoint");
       try { slog("[codeflow] AS metadata missing token_endpoint", { asBase }); } catch {}
@@ -1352,12 +1423,19 @@ async function runAuthorizationCodeIssuance({ apiBase, issuerMeta, configuration
       } catch (parWiaError) {
         console.warn("[codeflow][par] Failed to generate WIA:", parWiaError?.message); try { slog("[codeflow][par] WIA generation failed", { error: parWiaError?.message }); } catch {}
       }
+      const oauthClientAttestationHeaders = await buildOAuthClientAttestationHeaders({
+        keyPath,
+        endpointAudience: parEndpoint,
+        authorizationServerIssuer,
+        clientId: authzParams.client_id,
+        logSessionId,
+      });
       
       const parParams = {
         ...authzParams,
         ...(parWiaJwt ? { client_assertion: parWiaJwt, client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer" } : {})
       };
-      const parRes = await httpPostForm(parEndpoint, parParams, logSessionId);
+      const parRes = await httpPostForm(parEndpoint, parParams, logSessionId, null, oauthClientAttestationHeaders);
       console.log("[codeflow][par] endpoint=", parEndpoint, "status=", parRes.status); try { slog("[codeflow][par] endpoint", { endpoint: parEndpoint, status: parRes.status }); } catch {}
       if (parRes.ok) {
         const parBody = await parRes.json().catch(() => ({}));
@@ -1372,10 +1450,18 @@ async function runAuthorizationCodeIssuance({ apiBase, issuerMeta, configuration
       } else {
         const text = await parRes.text().catch(() => "");
         console.warn("[codeflow][par] failed status=", parRes.status, "body:", text); try { slog("[codeflow][par] failed", { status: parRes.status, body: text }); } catch {}
+        if (requirePushedAuthorizationRequests) {
+          throw new Error(`par_error ${parRes.status}: PAR is required by authorization server metadata`);
+        }
       }
     } catch (e) {
       console.warn("[codeflow][par] error:", e?.message || e); try { slog("[codeflow][par] error", { error: e?.message || String(e) }); } catch {}
+      if (requirePushedAuthorizationRequests) {
+        throw e;
+      }
     }
+  } else if (requirePushedAuthorizationRequests) {
+    throw new Error("par_error: authorization server metadata requires PAR but no PAR endpoint was advertised");
   }
 
   if (finalAuthorizeUrl === authorizeUrl.toString()) {
@@ -1456,6 +1542,13 @@ async function runAuthorizationCodeIssuance({ apiBase, issuerMeta, configuration
   } catch (wiaError) {
     console.warn("[codeflow] Failed to generate WIA:", wiaError?.message); try { slog("[codeflow] WIA generation failed", { error: wiaError?.message }); } catch {}
   }
+  const oauthClientAttestationHeaders = await buildOAuthClientAttestationHeaders({
+    keyPath,
+    endpointAudience: tokenEndpoint,
+    authorizationServerIssuer: deriveAuthorizationServerIssuer(tokenEndpoint, authorizationServerIssuer),
+    clientId: "wallet-client",
+    logSessionId,
+  });
   
   // Mirror authorization_details in token request (many issuers expect it)
   const tokenAuthzDetails = [
@@ -1473,7 +1566,7 @@ async function runAuthorizationCodeIssuance({ apiBase, issuerMeta, configuration
     redirect_uri: redirectUri,
     authorization_details: JSON.stringify(tokenAuthzDetails),
     ...(wiaJwt ? { client_assertion: wiaJwt, client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer" } : {}),
-  }, logSessionId, dpopJwt);
+  }, logSessionId, dpopJwt, oauthClientAttestationHeaders);
   console.log("[codeflow] tokenRes.status=", tokenRes.status); try { slog("[codeflow] tokenRes.status", { status: tokenRes.status }); } catch {}
   if (!tokenRes.ok) {
     const text = await tokenRes.text().catch(() => "");
@@ -1505,7 +1598,7 @@ async function runAuthorizationCodeIssuance({ apiBase, issuerMeta, configuration
     c_nonce = nonceJson.c_nonce;
     c_nonce_expires_in = nonceJson.c_nonce_expires_in;
   } else {
-    console.log("[codeflow] no c_nonce in token and no nonce_endpoint; proceeding without nonce"); try { slog("[codeflow] no c_nonce available"); } catch {}
+    throw new Error("nonce_error: issuer did not provide c_nonce and no nonce_endpoint is available");
   }
 
   // Algorithm negotiation
@@ -2249,7 +2342,6 @@ async function verifyJwsWithDid(jws, header, didOrIss) {
   }
   throw lastErr || new Error('DID verification failed');
 }
-
 
 
 

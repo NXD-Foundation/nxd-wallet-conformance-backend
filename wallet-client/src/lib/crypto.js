@@ -175,6 +175,60 @@ export async function createWIA({ privateJwk, publicJwk, issuer, audience, alg =
   return jwt;
 }
 
+export async function createOAuthClientAttestationJwt({
+  privateJwk,
+  publicJwk,
+  issuer,
+  subject,
+  audience,
+  cnfJwk,
+  alg = "ES256",
+  ttlSeconds = 300,
+}) {
+  const now = Math.floor(Date.now() / 1000);
+  const header = { alg, typ: "oauth-client-attestation+jwt", jwk: publicJwk };
+  const payload = {
+    iss: issuer,
+    sub: subject,
+    aud: audience,
+    iat: now,
+    nbf: now,
+    exp: now + ttlSeconds,
+    jti: base64url(crypto.randomBytes(16)),
+    cnf: {
+      jwk: publicJwkWithoutPrivateMaterial(cnfJwk || publicJwk),
+    },
+  };
+
+  const key = await importJWK(privateJwk, alg);
+  const jwt = await new SignJWT(payload).setProtectedHeader(header).sign(key);
+  return jwt;
+}
+
+export async function createOAuthClientAttestationPopJwt({
+  privateJwk,
+  publicJwk,
+  issuer,
+  audience,
+  alg = "ES256",
+  ttlSeconds = 300,
+}) {
+  const now = Math.floor(Date.now() / 1000);
+  const header = { alg, typ: "oauth-client-attestation-pop+jwt", jwk: publicJwk };
+  const payload = {
+    iss: issuer,
+    aud: audience,
+    iat: now,
+    nbf: now,
+    exp: now + ttlSeconds,
+    jti: base64url(crypto.randomBytes(16)),
+  };
+
+  const key = await importJWK(privateJwk, alg);
+  const jwt = await new SignJWT(payload).setProtectedHeader(header).sign(key);
+  return jwt;
+}
+
 /**
  * Creates a Wallet Unit Attestation (WUA) JWT
  * Based on TS3 Wallet Unit Attestation spec:
@@ -223,4 +277,15 @@ export async function createWUA({
   return jwt;
 }
 
+function publicJwkWithoutPrivateMaterial(jwk) {
+  const publicJwk = { ...(jwk || {}) };
+  delete publicJwk.d;
+  delete publicJwk.p;
+  delete publicJwk.q;
+  delete publicJwk.dp;
+  delete publicJwk.dq;
+  delete publicJwk.qi;
+  delete publicJwk.oth;
+  return publicJwk;
+}
 

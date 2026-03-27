@@ -4,6 +4,8 @@ import {
   createDPoP,
   createWUA,
   createProofJwt,
+  createOAuthClientAttestationJwt,
+  createOAuthClientAttestationPopJwt,
 } from "../src/lib/crypto.js";
 import { decodeProtectedHeader, decodeJwt } from "jose";
 
@@ -107,5 +109,42 @@ describe("wallet-client crypto building blocks", () => {
     expect(payload).to.have.property("aud", aud);
     expect(payload).to.have.property("nonce", nonce);
   });
-});
 
+  it("createOAuthClientAttestationJwt MUST use oauth-client-attestation+jwt typ and public cnf.jwk", async () => {
+    const { privateJwk, publicJwk } = await ensureOrCreateEcKeyPair(undefined, "ES256");
+    const jwt = await createOAuthClientAttestationJwt({
+      privateJwk,
+      publicJwk,
+      issuer: "wallet-client",
+      subject: "wallet-client",
+      audience: "https://issuer.example.com/token",
+      cnfJwk: publicJwk,
+    });
+
+    const header = decodeProtectedHeader(jwt);
+    const payload = decodeJwt(jwt);
+
+    expect(header).to.have.property("typ", "oauth-client-attestation+jwt");
+    expect(payload).to.have.property("sub", "wallet-client");
+    expect(payload).to.have.nested.property("cnf.jwk.kty", publicJwk.kty);
+    expect(payload.cnf.jwk).to.not.have.property("d");
+  });
+
+  it("createOAuthClientAttestationPopJwt MUST use oauth-client-attestation-pop+jwt typ", async () => {
+    const { privateJwk, publicJwk } = await ensureOrCreateEcKeyPair(undefined, "ES256");
+    const jwt = await createOAuthClientAttestationPopJwt({
+      privateJwk,
+      publicJwk,
+      issuer: "wallet-client",
+      audience: "https://issuer.example.com",
+    });
+
+    const header = decodeProtectedHeader(jwt);
+    const payload = decodeJwt(jwt);
+
+    expect(header).to.have.property("typ", "oauth-client-attestation-pop+jwt");
+    expect(payload).to.have.property("iss", "wallet-client");
+    expect(payload).to.have.property("aud", "https://issuer.example.com");
+    expect(payload).to.have.property("jti");
+  });
+});

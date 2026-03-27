@@ -1,4 +1,5 @@
 import fetch from "node-fetch";
+import { jwtVerify, createLocalJWKSet, importJWK, importX509 } from "jose";
 import {
   createProofJwt,
   generateDidJwkFromPrivateJwk,
@@ -13,6 +14,7 @@ import {
   buildMdocPresentation,
   isMdocCredential,
 } from "../../utils/mdlVerification.js";
+import { didKeyToJwks } from "../../utils/cryptoUtils.js";
 
 function makeSessionLogger(sessionId) {
   return function sessionLog(...args) {
@@ -142,6 +144,146 @@ function decodeJwt(token) {
     Object.keys(payload),
   );
   return { header, payload };
+}
+
+async function fetchJson(url, description) {
+  const res = await fetch(url);
+  if (!res.ok) {
+    throw new Error(`${description} fetch error ${res.status}`);
+  }
+  return res.json();
+}
+
+async function resolveDidDocument(did) {
+  if (did.startsWith("did:web:")) {
+    const withoutPrefix = did.replace(/^did:web:/, "");
+    const parts = withoutPrefix.split(":");
+    const host = parts.shift();
+    const path = parts.length ? "/" + parts.join("/") : "";
+    const urls = [
+      `https://${host}/.well-known/did.json`,
+      `https://${host}${path}/did.json`,
+    ];
+    for (const url of urls) {
+      try {
+        const res = await fetch(url);
+        if (res.ok) return res.json();
+      } catch {}
+    }
+    throw new Error("did:web resolution failed");
+  }
+  if (did.startsWith("did:jwk:")) {
+    try {
+      const json = JSON.parse(Buffer.from(did.substring("did:jwk:".length), "base64url").toString("utf8"));
+      return { verificationMethod: [{ id: did + "#0", type: "JsonWebKey2020", publicKeyJwk: json }] };
+    } catch {
+      throw new Error("did:jwk decode failed");
+    }
+  }
+  if (did.startsWith("did:key:")) {
+    const jwks = await didKeyToJwks(did);
+    const first = Array.isArray(jwks?.keys) && jwks.keys.length ? jwks.keys[0] : null;
+    if (!first) throw new Error("did:key resolution returned no keys");
+    return { verificationMethod: [{ id: did + "#0", type: "JsonWebKey2020", publicKeyJwk: first }] };
+  }
+  throw new Error("Unsupported DID method");
+}
+
+async function verifyJwtWithDid(jwt, header, didOrIss) {
+  const did = (header?.kid && header.kid.startsWith("did:")) ? header.kid.split("#")[0] : didOrIss;
+  if (!did || !String(did).startsWith("did:")) {
+    throw new Error("No DID available for verification");
+  }
+  const doc = await resolveDidDocument(String(did));
+  const vms = doc.verificationMethod || [];
+  let lastErr = null;
+  for (const vm of vms) {
+    if (!vm?.publicKeyJwk) continue;
+    try {
+      const key = await importJWK(vm.publicKeyJwk, header?.alg || "ES256");
+      return await jwtVerify(jwt, key, { clockTolerance: 300 });
+    } catch (error) {
+      lastErr = error;
+    }
+  }
+  throw lastErr || new Error("DID verification failed");
+}
+
+async function verifyAuthorizationRequestJwt(requestJwt, { expectedClientId }) {
+  const { header, payload } = decodeJwt(requestJwt);
+  if (!header?.alg || header.alg === "none") {
+    throw new Error("Authorization request JWT must be signed");
+  }
+  if (expectedClientId && payload?.client_id && payload.client_id !== expectedClientId) {
+    throw new Error("Authorization request client_id does not match deep link client_id");
+  }
+
+  const metadataCandidates = [];
+  const inlineClientMetadata = payload.client_metadata || payload.clientMetadata;
+  if (inlineClientMetadata && typeof inlineClientMetadata === "object") {
+    metadataCandidates.push(inlineClientMetadata);
+  }
+  if (payload.client_metadata_uri) {
+    const remoteMetadata = await fetchJson(payload.client_metadata_uri, "client_metadata_uri");
+    if (remoteMetadata && typeof remoteMetadata === "object") {
+      metadataCandidates.push(remoteMetadata);
+    }
+  }
+
+  const verificationAttempts = [];
+
+  if (Array.isArray(header?.x5c) && header.x5c.length > 0) {
+    verificationAttempts.push(async () => {
+      const pem = `-----BEGIN CERTIFICATE-----\n${header.x5c[0].match(/.{1,64}/g).join("\n")}\n-----END CERTIFICATE-----\n`;
+      const certKey = await importX509(pem, header.alg || "ES256");
+      return jwtVerify(requestJwt, certKey, { clockTolerance: 300 });
+    });
+  }
+
+  for (const metadata of metadataCandidates) {
+    if (metadata?.jwks?.keys?.length) {
+      verificationAttempts.push(async () => jwtVerify(requestJwt, createLocalJWKSet(metadata.jwks), { clockTolerance: 300 }));
+    }
+    if (metadata?.jwks_uri) {
+      verificationAttempts.push(async () => {
+        const jwks = await fetchJson(metadata.jwks_uri, "jwks_uri");
+        return jwtVerify(requestJwt, createLocalJWKSet(jwks), { clockTolerance: 300 });
+      });
+    }
+    if (Array.isArray(metadata?.x5c) && metadata.x5c.length > 0) {
+      verificationAttempts.push(async () => {
+        const pem = `-----BEGIN CERTIFICATE-----\n${metadata.x5c[0].match(/.{1,64}/g).join("\n")}\n-----END CERTIFICATE-----\n`;
+        const certKey = await importX509(pem, header.alg || "ES256");
+        return jwtVerify(requestJwt, certKey, { clockTolerance: 300 });
+      });
+    }
+  }
+
+  const didCandidate =
+    (header?.kid && String(header.kid).startsWith("did:") && String(header.kid).split("#")[0]) ||
+    (payload?.client_id && String(payload.client_id).startsWith("did:") && String(payload.client_id)) ||
+    (expectedClientId && String(expectedClientId).startsWith("did:") && String(expectedClientId));
+  if (didCandidate) {
+    verificationAttempts.push(async () => verifyJwtWithDid(requestJwt, header, didCandidate));
+  }
+
+  if (verificationAttempts.length === 0) {
+    throw new Error("Authorization request JWT verification failed: no verifier trust material available");
+  }
+
+  let lastError = null;
+  for (const attempt of verificationAttempts) {
+    try {
+      const verified = await attempt();
+      return {
+        header: verified.protectedHeader || header,
+        payload: verified.payload,
+      };
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error("Authorization request JWT verification failed");
 }
 
 function buildPresentationSubmission(presentationDefinition, credentialFormat) {
@@ -286,8 +428,8 @@ export async function performPresentation(
   { deepLink, verifierBase, credentialType, keyPath },
   logSessionId,
 ) {
+  const slog = logSessionId ? makeSessionLogger(logSessionId) : () => {};
   try {
-    const slog = logSessionId ? makeSessionLogger(logSessionId) : () => {};
     try {
       slog("[PRESENTATION] [START] Presentation flow", {
         deepLink,
@@ -300,7 +442,9 @@ export async function performPresentation(
       slog("[PRESENTATION] Parsed deep link", { requestUri, clientId, method });
     } catch {}
     const requestJwt = await fetchAuthorizationRequestJwt(requestUri, method);
-    const { payload } = decodeJwt(requestJwt);
+    const { payload } = await verifyAuthorizationRequestJwt(requestJwt, {
+      expectedClientId: clientId,
+    });
 
     let responseMode = payload.response_mode || "direct_post";
     const responseUri = payload.response_uri; // our routes embed this
@@ -1059,7 +1203,7 @@ export async function performPresentation(
     try {
       slog("[PRESENTATION] [ERROR] ", { status: 500, error: e.message });
     } catch(e2) {console.log("[present] Error:", e2);}
-    // console.log("[present] Error:", e);
+    throw e;
   }
 }
 
