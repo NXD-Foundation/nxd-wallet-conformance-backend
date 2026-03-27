@@ -2,6 +2,7 @@ import { strict as assert } from 'assert';
 import { expect } from 'chai';
 import request from 'supertest';
 import express from 'express';
+import bodyParser from 'body-parser';
 import sinon from 'sinon';
 import fs from 'fs';
 import jwt from 'jsonwebtoken';
@@ -47,7 +48,17 @@ describe('Shared Issuance Flows', () => {
     const validPublicKeyPem = testPublicKey.export({ type: 'spki', format: 'pem' });
     
     globalSandbox.stub(fs, 'readFileSync')
-      .withArgs(sinon.match(/issuer-config\.json/)).returns(JSON.stringify({ credential_configurations_supported: { 'test-cred-config': { format: 'dc+sd-jwt', proof_types_supported: { jwt: { proof_signing_alg_values_supported: ['ES256'] } } }, default_signing_kid: 'test-kid' } }))
+      .withArgs(sinon.match(/issuer-config\.json/)).returns(JSON.stringify({
+        credential_configurations_supported: {
+          'test-cred-config': { format: 'dc+sd-jwt', proof_types_supported: { jwt: { proof_signing_alg_values_supported: ['ES256'] } } },
+        },
+        default_signing_kid: 'test-kid',
+        credential_response_encryption: {
+          alg_values_supported: ['ECDH-ES', 'RSA-OAEP-256'],
+          enc_values_supported: ['A256GCM'],
+          encryption_required: false,
+        },
+      }))
       .withArgs(sinon.match(/private-key\.pem/)).returns(validPrivateKeyPem)
       .withArgs(sinon.match(/public-key\.pem/)).returns(validPublicKeyPem)
       .withArgs(sinon.match(/x509EC.*ec_private_pkcs8\.key/)).returns(validPrivateKeyPem)
@@ -99,7 +110,8 @@ describe('Shared Issuance Flows', () => {
 
     // Create Express app and mount router at root (matches production server)
     app = express();
-    app.use(express.json());
+    app.use(bodyParser.text({ type: (req) => req.is('application/jwt'), limit: '10mb' }));
+    app.use(bodyParser.json({ limit: '10mb' }));
     app.use(express.urlencoded({ extended: true }));
     app.use('/', sharedModule.default);
   });
@@ -1273,7 +1285,7 @@ describe('Shared Issuance Flows', () => {
       expect(response.body).to.have.property('error', 'invalid_credential_request');
     });
 
-    it('should reject invalid nonce', async () => {
+    it('should reject invalid nonce with OID4VCI invalid_nonce (not invalid_proof)', async () => {
       const sessionKey = 'test-session-key-' + uuidv4();
       const accessToken = 'test-access-token-' + uuidv4();
       const sessionObject = { 
@@ -1283,7 +1295,7 @@ describe('Shared Issuance Flows', () => {
       };
       
       await cacheServiceRedis.storePreAuthSession(sessionKey, sessionObject);
-      // Don't store the nonce - this should result in invalid proof
+      // Don't store the nonce — checkNonce fails → invalid_nonce per §8.3.1
 
       const testProofJwt = signProofJwt({ nonce: 'invalid-nonce', iss: 'test-issuer', aud: process.env.SERVER_URL });
 
@@ -1298,7 +1310,79 @@ describe('Shared Issuance Flows', () => {
         })
         .expect(400);
 
-      expect(response.body).to.have.property('error', 'invalid_proof');
+      expect(response.body).to.have.property('error', 'invalid_nonce');
+      if (cacheServiceRedis.client?.isReady) {
+        expect(response.body).to.have.property('c_nonce');
+        expect(response.body).to.have.property('c_nonce_expires_in');
+      }
+    });
+
+    it('should reject replayed nonce with invalid_nonce after successful issuance', async function () {
+      if (!cacheServiceRedis.client?.isReady) {
+        this.skip();
+      }
+      const sessionKey = 'test-session-key-replay-' + uuidv4();
+      const accessToken = 'test-access-token-replay-' + uuidv4();
+      const cnonce = cryptoUtils.generateNonce();
+      const sessionObject = {
+        status: 'success',
+        isDeferred: false,
+        accessToken: accessToken
+      };
+      await cacheServiceRedis.storePreAuthSession(sessionKey, sessionObject);
+      await cacheServiceRedis.storeNonce(cnonce, 300);
+
+      const testProofJwt = signProofJwt({
+        nonce: cnonce,
+        iss: 'test-issuer',
+        aud: process.env.SERVER_URL
+      });
+
+      const body = {
+        credential_configuration_id: 'test-cred-config',
+        proofs: { jwt: testProofJwt }
+      };
+
+      const first = await request(app)
+        .post('/credential')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send(body);
+
+      if (first.status !== 200) {
+        this.skip();
+      }
+
+      const second = await request(app)
+        .post('/credential')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send(body)
+        .expect(400);
+
+      expect(second.body).to.have.property('error', 'invalid_nonce');
+    });
+
+    it('should return unknown_credential_configuration for unsupported credential_configuration_id', async () => {
+      const response = await request(app)
+        .post('/credential')
+        .set('Authorization', 'Bearer irrelevant')
+        .send({
+          credential_configuration_id: 'not-defined-in-issuer-metadata'
+        })
+        .expect(400);
+
+      expect(response.body).to.have.property('error', 'unknown_credential_configuration');
+    });
+
+    it('should return unknown_credential_identifier for unsupported credential_identifier', async () => {
+      const response = await request(app)
+        .post('/credential')
+        .set('Authorization', 'Bearer irrelevant')
+        .send({
+          credential_identifier: 'not-defined-in-issuer-metadata'
+        })
+        .expect(400);
+
+      expect(response.body).to.have.property('error', 'unknown_credential_identifier');
     });
 
     it('should handle credential generation errors', async () => {
@@ -1475,7 +1559,7 @@ describe('Shared Issuance Flows', () => {
           isDeferred: false,
           accessToken: accessToken
         });
-        // Don't store nonce - should result in invalid proof
+        // Don't store nonce — unknown/stale nonce → invalid_nonce (OID4VCI §8.3.1)
 
         const stale = signProofJwt({ nonce: 'stale-nonce', aud: process.env.SERVER_URL, iss: 'wallet' });
         const res = await request(app)
@@ -1486,7 +1570,7 @@ describe('Shared Issuance Flows', () => {
             proofs: { jwt: stale }
           });
         expect(res.status).to.equal(400);
-        expect(res.body).to.have.property('error', 'invalid_proof');
+        expect(res.body).to.have.property('error', 'invalid_nonce');
       });
     });
 
@@ -1510,7 +1594,7 @@ describe('Shared Issuance Flows', () => {
           })
           .expect(400);
 
-        expect(res.body).to.have.property('error', 'invalid_proof');
+        expect(res.body).to.have.property('error', 'invalid_nonce');
         expect(res.body).to.have.property('c_nonce');
         expect(res.body).to.have.property('c_nonce_expires_in');
       });
@@ -1523,7 +1607,7 @@ describe('Shared Issuance Flows', () => {
           isDeferred: false,
           accessToken: accessToken
         });
-        // Don't store nonce - should result in expired/invalid nonce
+        // Don't store nonce — treated as invalid/expired nonce → invalid_nonce
 
         const expiredNonceJwt = jwt.sign({ nonce: 'expired-nonce', aud: process.env.SERVER_URL, iss: 'wallet' }, 'test', { algorithm: 'HS256' });
         const res = await request(app)
@@ -1535,7 +1619,7 @@ describe('Shared Issuance Flows', () => {
           })
           .expect(400);
 
-        expect(res.body).to.have.property('error', 'invalid_proof');
+        expect(res.body).to.have.property('error', 'invalid_nonce');
         expect(res.body).to.have.property('c_nonce');
         expect(res.body).to.have.property('c_nonce_expires_in');
       });
@@ -1681,10 +1765,11 @@ describe('Shared Issuance Flows', () => {
           .set('Authorization', `Bearer ${accessToken}`)
           .send({
             credential_configuration_id: 'test-cred-config',
-            proof: { jwt: jwtWithNonce },
+            proofs: { jwt: [jwtWithNonce] },
             credential_response_encryption: { enc: 'A256GCM' }
           });
-        expect([400, 500]).to.include(res.status);
+        expect(res.status).to.equal(400);
+        expect(res.body.error).to.equal('invalid_encryption_parameters');
 
         // Missing enc
         res = await request(app)
@@ -1692,21 +1777,81 @@ describe('Shared Issuance Flows', () => {
           .set('Authorization', `Bearer ${accessToken}`)
           .send({
             credential_configuration_id: 'test-cred-config',
-            proof: { jwt: jwtWithNonce },
-            credential_response_encryption: { jwk: { kty: 'EC', crv: 'P-256', x: 'AQ', y: 'AQ' } }
+            proofs: { jwt: [jwtWithNonce] },
+            credential_response_encryption: { jwk: { kty: 'EC', crv: 'P-256', x: 'AQ', y: 'AQ', alg: 'ECDH-ES' } }
           });
-        expect([400, 500]).to.include(res.status);
+        expect(res.status).to.equal(400);
+        expect(res.body.error).to.equal('invalid_encryption_parameters');
 
-        // Valid object accepted
+        // Unsupported alg (conformance: VCIIssuerFailOnUnsupportedEncryptionAlgorithm)
         res = await request(app)
           .post('/credential')
           .set('Authorization', `Bearer ${accessToken}`)
           .send({
             credential_configuration_id: 'test-cred-config',
-            proof: { jwt: jwtWithNonce },
-            credential_response_encryption: { jwk: { kty: 'EC', crv: 'P-256', x: 'AQ', y: 'AQ' }, enc: 'A256GCM' }
+            proofs: { jwt: [jwtWithNonce] },
+            credential_response_encryption: {
+              jwk: { kty: 'EC', crv: 'P-256', x: 'AQ', y: 'AQ', alg: 'UNSUPPORTED_ALG' },
+              enc: 'A256GCM'
+            }
           });
-        expect([200, 202, 400, 500]).to.include(res.status);
+        expect(res.status).to.equal(400);
+        expect(res.body.error).to.equal('invalid_encryption_parameters');
+
+        const { publicKey: wPub, privateKey: wPriv } = await jose.generateKeyPair('ECDH-ES', { crv: 'P-256' });
+        const wJwk = await jose.exportJWK(wPub);
+        wJwk.alg = 'ECDH-ES';
+        wJwk.kid = 'wallet-enc';
+
+        res = await request(app)
+          .post('/credential')
+          .set('Authorization', `Bearer ${accessToken}`)
+          .send({
+            credential_configuration_id: 'test-cred-config',
+            proofs: { jwt: [jwtWithNonce] },
+            credential_response_encryption: { jwk: wJwk, enc: 'A256GCM' }
+          });
+        expect(res.status).to.equal(200);
+        expect(res.headers['content-type']).to.match(/application\/jwt/);
+        const jwe = res.text;
+        const { plaintext } = await jose.compactDecrypt(jwe, wPriv);
+        const inner = JSON.parse(new TextDecoder().decode(plaintext));
+        expect(inner).to.have.property('credentials');
+        expect(inner.credentials[0]).to.have.property('credential');
+      });
+
+      it('accepts credential request as application/jwt JWE (encrypted to issuer)', async () => {
+        const sessionKey = 'test-session-key-' + uuidv4();
+        const accessToken = 'test-access-token-' + uuidv4();
+        const nonce = cryptoUtils.generateNonce();
+        const sessionObject = { status: 'success', isDeferred: false, accessToken };
+        await cacheServiceRedis.storePreAuthSession(sessionKey, sessionObject);
+        await cacheServiceRedis.storeNonce(nonce, 300);
+
+        const jwtWithNonce = signProofJwt({ nonce, iss: 'wallet', aud: process.env.SERVER_URL });
+        const cryptoMod = await import('crypto');
+        const stubbedIssuerPrivPem = fs.readFileSync('./private-key.pem', 'utf8');
+        const issuerSpkiPem = cryptoMod.createPublicKey(stubbedIssuerPrivPem).export({
+          type: 'spki',
+          format: 'pem',
+        });
+        const issuerPub = await jose.importSPKI(issuerSpkiPem, 'ECDH-ES');
+        const inner = {
+          credential_configuration_id: 'test-cred-config',
+          proofs: { jwt: [jwtWithNonce] }
+        };
+        const jweReq = await new jose.CompactEncrypt(new TextEncoder().encode(JSON.stringify(inner)))
+          .setProtectedHeader({ alg: 'ECDH-ES', enc: 'A256GCM' })
+          .encrypt(issuerPub);
+
+        const res = await request(app)
+          .post('/credential')
+          .set('Authorization', `Bearer ${accessToken}`)
+          .set('Content-Type', 'application/jwt')
+          .send(jweReq);
+
+        expect(res.status).to.equal(200);
+        expect(res.body).to.have.property('credentials');
       });
 
       it('MUST allow override of credential_response_encryption in deferred polling', async () => {

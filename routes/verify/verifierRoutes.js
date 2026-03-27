@@ -56,7 +56,16 @@ const SPEC_REFS = {
   VP_NONCE: "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#name-nonce",
   VP_STATE: "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#name-state",
   SD_JWT_KEY_BINDING: "https://datatracker.ietf.org/doc/html/draft-ietf-oauth-selective-disclosure-jwt-20#name-key-binding-jwt",
+  VP_RESPONSE_PARAMS: "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#name-response-parameters",
+  VP_RESPONSE_MODE_DIRECT_POST_JWT: "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#name-response-mode-direct_postjwt",
+  VP_DC_API_JWT: "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#name-response-mode-dc_apijwt",
 };
+
+function withSpecRef(message, ...refs) {
+  const present = refs.filter(Boolean);
+  if (present.length === 0) return message;
+  return `${message}. See ${present.join(" and ")}.`;
+}
 
 /**
  * Compute sd_hash over the SD-JWT string as defined in
@@ -418,7 +427,10 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
           try {
             vpSession.status = "failed";
             vpSession.error = "invalid_request";
-            vpSession.error_description = `No vp_token found in the request body. Received: ${received}, expected: vp_token string`;
+            vpSession.error_description = withSpecRef(
+              `No vp_token found in the request body. Received: ${received}, expected: vp_token string`,
+              SPEC_REFS.VP_CREDENTIAL_RESPONSE
+            );
             await storeVPSession(sessionId, vpSession);
           } catch (storageError) {
             await logError(sessionId, "Failed to update session status after vp_token missing error", {
@@ -426,7 +438,12 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
               stack: storageError.stack
             }).catch(() => {});
           }
-          return res.status(400).json({ error: `No vp_token found in the request body. Received: ${received}, expected: vp_token string` });
+          return res.status(400).json({
+            error: withSpecRef(
+              `No vp_token found in the request body. Received: ${received}, expected: vp_token string`,
+              SPEC_REFS.VP_CREDENTIAL_RESPONSE
+            ),
+          });
         }
         
         // Handle DCQL object format: vp_token is object e.g. {"example_credential_id": ["eyJ..."]}
@@ -611,7 +628,11 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
             expected: "encrypted JWT string in response parameter"
           });
           return res.status(400).json({ 
-            error: `No encrypted JWT found in HAIP dc_api.jwt response. Received: ${received}, expected: encrypted JWT string in response parameter`, 
+            error: withSpecRef(
+              `No encrypted JWT found in HAIP dc_api.jwt response. Received: ${received}, expected: encrypted JWT string in response parameter`,
+              SPEC_REFS.VP_DC_API_JWT,
+              SPEC_REFS.VP_RESPONSE_PARAMS
+            ), 
             note: "In HAIP dc_api.jwt, the response parameter should contain an encrypted JWT"
           });
         }
@@ -635,7 +656,10 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
             stack: decryptError.stack
           });
           return res.status(400).json({ 
-            error: "Failed to decrypt HAIP dc_api.jwt response", 
+            error: withSpecRef(
+              "Failed to decrypt HAIP dc_api.jwt response",
+              SPEC_REFS.VP_DC_API_JWT
+            ), 
             details: decryptError.message 
           });
         }
@@ -662,7 +686,11 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
             decryptedResponse: decryptedResponse
           });
           return res.status(400).json({ 
-            error: `No VP token found in decrypted HAIP dc_api.jwt response. Received: ${received}, expected: object/string with vp_token or response property`, 
+            error: withSpecRef(
+              `No VP token found in decrypted HAIP dc_api.jwt response. Received: ${received}, expected: object/string with vp_token or response property`,
+              SPEC_REFS.VP_DC_API_JWT,
+              SPEC_REFS.VP_CREDENTIAL_RESPONSE
+            ), 
             decryptedResponse: decryptedResponse
           });
         }
@@ -693,7 +721,11 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
             });
           } else {
             return res.status(400).json({ 
-              error: "No credentials found in HAIP dc_api.jwt mdoc response" 
+              error: withSpecRef(
+                "No credentials found in HAIP dc_api.jwt mdoc response",
+                SPEC_REFS.VP_DC_API_JWT,
+                SPEC_REFS.VP_CREDENTIAL_RESPONSE
+              ) 
             });
           }
         } else {
@@ -704,7 +736,11 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
         if (!mdocData || typeof mdocData !== 'string') {
           const received = !mdocData ? "null/undefined" : typeof mdocData;
           return res.status(400).json({ 
-            error: `Invalid mdoc data in HAIP dc_api.jwt response. Received: ${received}, expected: non-empty string`,
+            error: withSpecRef(
+              `Invalid mdoc data in HAIP dc_api.jwt response. Received: ${received}, expected: non-empty string`,
+              SPEC_REFS.VP_DC_API_JWT,
+              SPEC_REFS.VP_CREDENTIAL_RESPONSE
+            ),
             receivedType: typeof mdocData,
             vpTokenType: typeof vpToken
           });
@@ -776,7 +812,12 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
           error: error.message,
           stack: error.stack
         });
-        return res.status(400).json({ error: `HAIP dc_api.jwt processing failed: ${error.message}` });
+        return res.status(400).json({
+          error: withSpecRef(
+            `HAIP dc_api.jwt processing failed: ${error.message}`,
+            SPEC_REFS.VP_DC_API_JWT
+          ),
+        });
       }
     }
     // Handle direct_post.jwt response mode
@@ -811,7 +852,13 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
           received,
           expected: "response parameter with JWT string"
         });
-        return res.status(400).json({ error: `No 'response' parameter in direct_post.jwt response. Received: ${received}, expected: response parameter with JWT string` });
+        return res.status(400).json({
+          error: withSpecRef(
+            `No 'response' parameter in direct_post.jwt response. Received: ${received}, expected: response parameter with JWT string`,
+            SPEC_REFS.VP_RESPONSE_MODE_DIRECT_POST_JWT,
+            SPEC_REFS.VP_RESPONSE_PARAMS
+          ),
+        });
       }
       
       await logDebug(sessionId, "JWT response received", {
@@ -853,7 +900,13 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
             if (!vpToken) {
               const received = decodedPayload?.vp_token === undefined ? "vp_token missing in payload" : `vp_token is ${typeof decodedPayload?.vp_token}`;
               console.log(`No VP token in decrypted JWT response. Received: ${received}, expected: vp_token string in JWT payload`);
-              return res.status(400).json({ error: `No VP token in decrypted JWT response. Received: ${received}, expected: vp_token string in JWT payload` });
+              return res.status(400).json({
+                error: withSpecRef(
+                  `No VP token in decrypted JWT response. Received: ${received}, expected: vp_token string in JWT payload`,
+                  SPEC_REFS.VP_RESPONSE_MODE_DIRECT_POST_JWT,
+                  SPEC_REFS.VP_CREDENTIAL_RESPONSE
+                ),
+              });
             }
             
             // Validate vp_token format when DCQL is used (for direct_post.jwt with JWE)
@@ -862,7 +915,7 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
                                  vpSession.dcql_query.credentials.length > 0;
             if (hasDcqlQuery) {
               if (typeof vpToken !== 'object' || vpToken === null || Array.isArray(vpToken)) {
-                const specRef = "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#name-response-parameters";
+                const specRef = SPEC_REFS.VP_RESPONSE_PARAMS;
                 const received = typeof vpToken === 'object' && Array.isArray(vpToken) 
                   ? "vp_token is an array" 
                   : typeof vpToken === 'object' && vpToken === null
@@ -921,7 +974,7 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
                                  vpSession.dcql_query.credentials.length > 0;
             if (hasDcqlQuery) {
               if (typeof vpToken !== 'object' || vpToken === null || Array.isArray(vpToken)) {
-                const specRef = "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#name-response-parameters";
+                const specRef = SPEC_REFS.VP_RESPONSE_PARAMS;
                 const received = typeof vpToken === 'object' && Array.isArray(vpToken) 
                   ? "vp_token is an array" 
                   : typeof vpToken === 'object' && vpToken === null
@@ -969,12 +1022,24 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
                   received: decrypted.state,
                   expected: vpSession.state
                 });
-                return res.status(400).json({ error: `State mismatch in encrypted response. Received: '${decrypted.state}', expected: '${vpSession.state}'` });
+                return res.status(400).json({
+                  error: withSpecRef(
+                    `State mismatch in encrypted response. Received: '${decrypted.state}', expected: '${vpSession.state}'`,
+                    SPEC_REFS.VP_STATE,
+                    SPEC_REFS.VP_RESPONSE_MODE_DIRECT_POST_JWT
+                  ),
+                });
               }
             }
           } else {
             const received = decrypted ? `decrypted object without vp_token (keys: ${Object.keys(decrypted).join(', ')})` : "decryption failed";
-            return res.status(400).json({ error: `Failed to decrypt JWE response or no vp_token found. Received: ${received}, expected: decrypted object with vp_token property` });
+            return res.status(400).json({
+              error: withSpecRef(
+                `Failed to decrypt JWE response or no vp_token found. Received: ${received}, expected: decrypted object with vp_token property`,
+                SPEC_REFS.VP_RESPONSE_MODE_DIRECT_POST_JWT,
+                SPEC_REFS.VP_CREDENTIAL_RESPONSE
+              ),
+            });
           }
 
           await logInfo(sessionId, "Extracted vp_token for processing");
@@ -1085,7 +1150,13 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
               received,
               expected: "vp_token string in JWT payload"
             });
-            return res.status(400).json({ error: `No VP token in JWT response. Received: ${received}, expected: vp_token string in JWT payload` });
+            return res.status(400).json({
+              error: withSpecRef(
+                `No VP token in JWT response. Received: ${received}, expected: vp_token string in JWT payload`,
+                SPEC_REFS.VP_RESPONSE_MODE_DIRECT_POST_JWT,
+                SPEC_REFS.VP_CREDENTIAL_RESPONSE
+              ),
+            });
           }
           if (typeof vpToken === 'string') {
             primaryVpJwt = vpToken;
@@ -1349,7 +1420,9 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
           error: error.message,
           stack: error.stack
         });
-        return res.status(400).json({ error: "Invalid JWT response" });
+        return res.status(400).json({
+          error: withSpecRef("Invalid JWT response", SPEC_REFS.VP_RESPONSE_MODE_DIRECT_POST_JWT),
+        });
       }
     } 
     // Handle regular direct_post response mode

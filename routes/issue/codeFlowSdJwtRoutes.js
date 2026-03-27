@@ -72,6 +72,10 @@ import {
   validateWIA,
   extractWIAFromTokenRequest,
 } from "../../utils/routeUtils.js";
+import {
+  validateOAuthClientAttestationFromRequest,
+  getTrustedClientAttesterJwks,
+} from "../../utils/oauthClientAttestation.js";
 
 const codeFlowRouterSDJWT = express.Router();
 
@@ -582,6 +586,38 @@ codeFlowRouterSDJWT.post(["/par", "/authorize/par"], async (req, res) => {
       if (bodyForLog.code_challenge) bodyForLog.code_challenge = "[REDACTED]";
       requestId = logHttpRequest(slog, "POST", "/par", req.headers, bodyForLog);
       try { slog("[ISSUER] [PAR] [START] Processing PAR request", { hasIssuerState: !!issuerState, hasState: !!requestData.state }); } catch {}
+    }
+
+    const attestationResult = await validateOAuthClientAttestationFromRequest({
+      headers: req.headers,
+      clientId: requestData.client_id,
+      authorizationServerIssuer: SERVER_URL,
+      trustedJwks: getTrustedClientAttesterJwks(),
+    });
+    if (!attestationResult.skip && !attestationResult.ok) {
+      if (slog) {
+        try {
+          slog("[ISSUER] [PAR] Client attestation rejected", {
+            error: attestationResult.errorDescription,
+          });
+        } catch {}
+        logHttpResponse(
+          slog,
+          requestId,
+          "/par",
+          attestationResult.statusCode || 401,
+          "Unauthorized",
+          res.getHeaders(),
+          {
+            error: attestationResult.oauthError,
+            error_description: attestationResult.errorDescription,
+          }
+        );
+      }
+      return res.status(attestationResult.statusCode || 401).json({
+        error: attestationResult.oauthError || "invalid_client",
+        error_description: attestationResult.errorDescription,
+      });
     }
 
     // Extract and validate Wallet Instance Attestation (WIA) if present

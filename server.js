@@ -43,10 +43,14 @@ enableConsoleInterception();
 
 // Middleware to parse URL-encoded bodies
 app.use(express.urlencoded({ limit: "10mb", extended: true }));
-// Middleware for post bodies
+// application/jwt before JSON so JWE credential requests are not mis-handled
+app.use(
+  bodyParser.text({
+    limit: "10mb",
+    type: (req) => req.is("application/jwt"),
+  })
+);
 app.use(bodyParser.json({ limit: "10mb" }));
-// Middleware for raw text bodies (needed for HAIP dc_api.jwt)
-app.use(bodyParser.text({ limit: "10mb", type: "application/jwt" }));
 
 // Global middleware to set session context for console log interception
 // Extracts sessionId from multiple sources

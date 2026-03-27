@@ -277,7 +277,9 @@ function mapClaimsToMsoMdoc(claims, vct) {
 
   if (
     claims.unique_id &&
-    (vct === "VerifiablePIDSDJWT" || vct === "urn:eu.europa.ec.eudi:pid:1")
+    (vct === "VerifiablePIDSDJWT" ||
+      vct === "VerifiablePIDSDJWTAttestation" ||
+      vct === "urn:eu.europa.ec.eudi:pid:1")
   ) {
     msoMdocClaims.unique_identifier = claims.unique_id; // Example mapping for PID
     delete msoMdocClaims.unique_id;
@@ -395,18 +397,53 @@ export async function handleCredentialGenerationBasedOnFormat(
 
   console.log("vc+sd-jwt ", vct);
 
-  if (!requestBody.proofs || !requestBody.proofs.jwt) {
-    const error = new Error("proof not found");
-    error.status = 400;
-    throw error;
-  }
+  // Holder binding: jwt proof uses PoP header/kid; attestation proof uses attested_keys from key-attestation JWT (see sharedIssuanceFlows proof comments).
+  const credentialProofKind = requestBody.credentialRequestProofKind || "jwt";
 
-  console.log("requestBody.proofs.jwt", requestBody.proofs.jwt);
-  console.log("decoding jwt");
-  const decodedWithHeader = jwt.decode(requestBody.proofs.jwt[0], {
-    complete: true,
-  });
-  const holderJWKS = decodedWithHeader.header;
+  let cnf;
+  if (credentialProofKind === "attestation") {
+    if (!requestBody._credentialBindingCnf) {
+      throw new Error(
+        "Credential binding missing for attestation proof (internal error)."
+      );
+    }
+    cnf = requestBody._credentialBindingCnf;
+  } else {
+    if (!requestBody.proofs || !requestBody.proofs.jwt) {
+      const error = new Error("proof not found");
+      error.status = 400;
+      throw error;
+    }
+
+    const rawJwtProof = requestBody.proofs.jwt;
+    const holderProofJwt = Array.isArray(rawJwtProof) ? rawJwtProof[0] : rawJwtProof;
+    console.log("requestBody.proofs.jwt", requestBody.proofs.jwt);
+    console.log("decoding jwt");
+    const decodedWithHeader = jwt.decode(holderProofJwt, {
+      complete: true,
+    });
+    const holderJWKS = decodedWithHeader.header;
+
+    const isDidKid = (kid) =>
+      kid &&
+      (kid.startsWith("did:key:") ||
+        kid.startsWith("did:web:") ||
+        kid.startsWith("did:jwk:"));
+
+    if (holderJWKS.jwk) {
+      cnf = { jwk: holderJWKS.jwk };
+    } else if (holderJWKS.kid && isDidKid(holderJWKS.kid)) {
+      cnf = { kid: holderJWKS.kid };
+    } else if (holderJWKS.kid) {
+      const keys = await didKeyToJwks(holderJWKS.kid);
+      cnf = keys?.keys?.[0] ? { jwk: keys.keys[0] } : null;
+    }
+    if (!cnf) {
+      throw new Error(
+        "Could not determine holder binding from proof JWT header (missing jwk or resolvable kid)"
+      );
+    }
+  }
 
   const credType = vct;
   let credPayload = {};
@@ -432,6 +469,7 @@ export async function handleCredentialGenerationBasedOnFormat(
   switch (credType) {
     case "VerifiableIdCardJwtVc":
     case "VerifiablePIDSDJWT":
+    case "VerifiablePIDSDJWTAttestation":
     case "urn:eu.europa.ec.eudi:pid:1":
     case "test-cred-config": // For testing purposes
       credPayload = getPIDSDJWTData();
@@ -480,33 +518,6 @@ export async function handleCredentialGenerationBasedOnFormat(
       break;
     default:
       throw new Error(`Unsupported credential type: ${credType}`);
-  }
-
-  // Handle holder binding (RFC 7800 cnf claim)
-  // For DID-based binding: use cnf.kid (DID) so verifiers resolve the DID to the key
-  // For JWK in header: use cnf.jwk directly
-  // For mDL: deviceKeyInfo requires JWK per ISO 18013-5, so we resolve DID→JWK when needed
-  const isDidKid = (kid) =>
-    kid &&
-    (kid.startsWith("did:key:") ||
-      kid.startsWith("did:web:") ||
-      kid.startsWith("did:jwk:"));
-
-  let cnf;
-  if (holderJWKS.jwk) {
-    cnf = { jwk: holderJWKS.jwk };
-  } else if (holderJWKS.kid && isDidKid(holderJWKS.kid)) {
-    // DID binding: put the DID in cnf.kid per RFC 7800 (key identified by reference)
-    cnf = { kid: holderJWKS.kid };
-  } else if (holderJWKS.kid) {
-    // Fallback: resolve kid to JWK (e.g. did:web, did:jwk when not matched above)
-    const keys = await didKeyToJwks(holderJWKS.kid);
-    cnf = keys?.keys?.[0] ? { jwk: keys.keys[0] } : null;
-  }
-  if (!cnf) {
-    throw new Error(
-      "Could not determine holder binding from proof JWT header (missing jwk or resolvable kid)"
-    );
   }
 
   const now = new Date();
@@ -1178,16 +1189,52 @@ export async function handleCredentialGenerationBasedOnFormatDeferred(
   );
   console.log("vc+sd-jwt ", vct);
 
-  if (!requestBody.proofs || !requestBody.proofs.jwt) {
-    const error = new Error("proof not found");
-    error.status = 400;
-    throw error;
-  }
+  // Same cnf semantics as handleCredentialGenerationBasedOnFormat (jwt PoP vs attestation attested_keys).
+  const credentialProofKindDeferred = requestBody.credentialRequestProofKind || "jwt";
+  let cnf;
+  if (credentialProofKindDeferred === "attestation") {
+    if (!requestBody._credentialBindingCnf) {
+      throw new Error(
+        "Credential binding missing for attestation proof (internal error)."
+      );
+    }
+    cnf = requestBody._credentialBindingCnf;
+  } else {
+    if (!requestBody.proofs || !requestBody.proofs.jwt) {
+      const error = new Error("proof not found");
+      error.status = 400;
+      throw error;
+    }
 
-  const decodedWithHeader = jwt.decode(requestBody.proofs.jwt, {
-    complete: true,
-  });
-  const holderJWKS = decodedWithHeader.header;
+    const rawJwtProofDef = requestBody.proofs.jwt;
+    const holderProofJwtDef = Array.isArray(rawJwtProofDef)
+      ? rawJwtProofDef[0]
+      : rawJwtProofDef;
+    const decodedWithHeader = jwt.decode(holderProofJwtDef, {
+      complete: true,
+    });
+    const holderJWKS = decodedWithHeader.header;
+
+    const isDidKidDef = (kid) =>
+      kid &&
+      (kid.startsWith("did:key:") ||
+        kid.startsWith("did:web:") ||
+        kid.startsWith("did:jwk:"));
+
+    if (holderJWKS.jwk) {
+      cnf = { jwk: holderJWKS.jwk };
+    } else if (holderJWKS.kid && isDidKidDef(holderJWKS.kid)) {
+      cnf = { kid: holderJWKS.kid };
+    } else if (holderJWKS.kid) {
+      const keys = await didKeyToJwks(holderJWKS.kid);
+      cnf = keys?.keys?.[0] ? { jwk: keys.keys[0] } : null;
+    }
+    if (!cnf) {
+      throw new Error(
+        "Could not determine holder binding from proof JWT header (missing jwk or resolvable kid)"
+      );
+    }
+  }
 
   const isHaip = sessionObject ? sessionObject.isHaip : false;
   // Determine effective signature type (same logic as main function)
@@ -1257,6 +1304,7 @@ export async function handleCredentialGenerationBasedOnFormatDeferred(
   switch (credType) {
     case "VerifiableIdCardJwtVc":
     case "VerifiablePIDSDJWT":
+    case "VerifiablePIDSDJWTAttestation":
     case "urn:eu.europa.ec.eudi:pid:1":
     case "test-cred-config": // For testing purposes
       credPayload = getPIDSDJWTData();
@@ -1293,29 +1341,6 @@ export async function handleCredentialGenerationBasedOnFormatDeferred(
       break;
     default:
       throw new Error(`Unsupported credential type: ${credType}`);
-  }
-
-  // Handle holder binding (RFC 7800 cnf claim)
-  // For DID-based binding: use cnf.kid (DID) so verifiers resolve the DID to the key
-  const isDidKid = (kid) =>
-    kid &&
-    (kid.startsWith("did:key:") ||
-      kid.startsWith("did:web:") ||
-      kid.startsWith("did:jwk:"));
-
-  let cnf;
-  if (holderJWKS.jwk) {
-    cnf = { jwk: holderJWKS.jwk };
-  } else if (holderJWKS.kid && isDidKid(holderJWKS.kid)) {
-    cnf = { kid: holderJWKS.kid };
-  } else if (holderJWKS.kid) {
-    const keys = await didKeyToJwks(holderJWKS.kid);
-    cnf = keys?.keys?.[0] ? { jwk: keys.keys[0] } : null;
-  }
-  if (!cnf) {
-    throw new Error(
-      "Could not determine holder binding from proof JWT header (missing jwk or resolvable kid)"
-    );
   }
 
   //TODO this should be update to check format before deciding on the typ of the header

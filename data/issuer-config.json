@@ -4,7 +4,13 @@
   "credential_endpoint": "https://server.example.com/credential",
   "deferred_credential_endpoint": "https://server.example.com/credential_deferred",
   "notification_endpoint": "https://server.example.com/notification",
- 
+
+  "credential_response_encryption": {
+    "alg_values_supported": ["ECDH-ES", "RSA-OAEP-256"],
+    "enc_values_supported": ["A256GCM"],
+    "encryption_required": false
+  },
+
   "display": [
     {
       "name": "WE BUILD Issuer",
@@ -322,6 +328,111 @@
       "proof_types_supported": {
         "jwt": {
           "proof_signing_alg_values_supported": ["ES256"]
+        }
+      }
+    },
+
+    "VerifiablePIDSDJWTAttestation": {
+      "scope": "VerifiablePIDSDJWTAttestation",
+      "cryptographic_binding_methods_supported": ["jwk"],
+      "credential_metadata": {
+        "display": [
+          {
+            "name": "PID (attestation proof supported)",
+            "locale": "en-GB",
+            "background_color": "#12107c",
+            "text_color": "#FFFFFF",
+            "logo": {
+              "uri": "https://avatars.githubusercontent.com/u/140810559?s=400&u=ee2a7f495f540fd5f23ca59d38b7411ea56c0d6d&v=4",
+              "alt_text": "UAegean"
+            }
+          }
+        ],
+        "claims": [
+          {
+            "path": ["given_name"],
+            "display": [
+              {
+                "name": "Given Name",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": ["family_name"],
+            "display": [
+              {
+                "name": "Surname",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": ["birth_date"],
+            "display": [
+              {
+                "name": "Birth Date",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": ["age_over_18"],
+            "display": [
+              {
+                "name": "Age Over 18",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": ["issuance_date"],
+            "display": [
+              {
+                "name": "Issuance Date",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": ["expiry_date"],
+            "display": [
+              {
+                "name": "Expiry Date",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": ["issuing_authority"],
+            "display": [
+              {
+                "name": "Issuing Authority",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": ["issuing_country"],
+            "display": [
+              {
+                "name": "Issuing Country",
+                "locale": "en-GB"
+              }
+            ]
+          }
+        ]
+      },
+      "credential_signing_alg_values_supported": ["ES256"],
+      "format": "dc+sd-jwt",
+      "vct": "VerifiablePIDSDJWTAttestation",
+      "proof_types_supported": {
+        "jwt": {
+          "proof_signing_alg_values_supported": ["ES256"]
+        },
+        "attestation": {
+          "proof_signing_alg_values_supported": ["ES256"],
+          "key_attestations_required": {}
         }
       }
     },

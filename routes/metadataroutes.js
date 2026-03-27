@@ -53,6 +53,17 @@ metadataRouter.get(
     issuerConfig.nonce_endpoint = issuerBase + "/nonce";
     issuerConfig.notification_endpoint = issuerBase + "/notification";
 
+    // OID4VCI §11.2: if credential_response_encryption is advertised,
+    // credential_request_encryption MUST also be present (EUDI wallet library enforces this).
+    if (issuerConfig.credential_response_encryption && !issuerConfig.credential_request_encryption) {
+      const encJwk = { ...jwks, kid: `${defaultSigningKid}-agreement`, use: "enc", alg: "ECDH-ES" };
+      issuerConfig.credential_request_encryption = {
+        jwks: { keys: [encJwk] },
+        enc_values_supported: issuerConfig.credential_response_encryption.enc_values_supported || ["A256GCM"],
+        encryption_required: false,
+      };
+    }
+
     if (issuerConfig.batch_credential_endpoint) {
       console.warn("Warning: batch_credential_endpoint is part of issuerConfig but removed from spec draft -14. Consider removing from data/issuer-config.json");
     }

@@ -64,6 +64,22 @@ import {
   extractWUAFromCredentialRequest,
   proofKeyMatchesWUAAttestedKeys,
 } from "../../utils/routeUtils.js";
+import {
+  decryptCredentialRequestJwe,
+  encryptCredentialResponseToJwe,
+  validateCredentialResponseEncryptionForRequest,
+  validateCredentialResponseEncryptionParams,
+  getCredentialResponseEncryptionMetadata,
+  INVALID_ENCRYPTION_PARAMETERS,
+} from "../../utils/credentialResponseEncryption.js";
+import {
+  validateOAuthClientAttestationFromRequest,
+  getTrustedClientAttesterJwks,
+} from "../../utils/oauthClientAttestation.js";
+import {
+  parseProofAttestationJwtFromCredentialProofs,
+  verifyKeyAttestationProofChain,
+} from "../../utils/keyAttestationProof.js";
 
 const sharedRouter = express.Router();
 
@@ -115,6 +131,8 @@ const ERROR_MESSAGES = {
   PKCE_FAILED: "PKCE verification failed.",
   UNSUPPORTED_GRANT: "Grant type is not supported.",
   INVALID_CREDENTIAL_REQUEST: "Must provide exactly one of credential_identifier or credential_configuration_id",
+  INVALID_CREDENTIAL_IDENTIFIER: "Credential identifier is not supported",
+  INVALID_CREDENTIAL_CONFIGURATION_ID: "Credential configuration ID is not supported",
   INVALID_PROOF: "No proof information found",
   INVALID_PROOF_MALFORMED: "Proof JWT is malformed or missing algorithm.",
   INVALID_PROOF_ALGORITHM: "Proof JWT uses an unsupported algorithm",
@@ -132,6 +150,53 @@ const ERROR_MESSAGES = {
   AUTHORIZATION_PENDING: "Authorization pending",
   SLOW_DOWN: "Slow down"
 };
+
+
+/** OAuth/OID4VCI error names attached as `errorCode` on Errors from validateCredentialRequest */
+const CREDENTIAL_REQUEST_ERROR_CODES = {
+  INVALID_CREDENTIAL_REQUEST: "invalid_credential_request",
+  UNKNOWN_CREDENTIAL_CONFIGURATION: "unknown_credential_configuration",
+  UNKNOWN_CREDENTIAL_IDENTIFIER: "unknown_credential_identifier",
+};
+
+
+/** OID4VCI 1.0 §8.3.1 — error code invalid_nonce + optional fresh c_nonce for retry */
+async function respondInvalidNonceCredentialError(res, error, ctx) {
+  const { sessionObject, sessionKey, flowType, sessionId } = ctx;
+  const errorResponse = {
+    error: "invalid_nonce",
+    error_description: error.message,
+  };
+  try {
+    const refreshedNonce = generateNonce();
+    await storeNonce(refreshedNonce, NONCE_EXPIRES_IN);
+    if (sessionObject && sessionKey) {
+      sessionObject.c_nonce = refreshedNonce;
+      if (flowType === "code") {
+        await storeCodeFlowSession(sessionKey, sessionObject);
+      } else {
+        await storePreAuthSession(sessionKey, sessionObject);
+      }
+    }
+    errorResponse.c_nonce = refreshedNonce;
+    errorResponse.c_nonce_expires_in = NONCE_EXPIRES_IN;
+  } catch (nonceError) {
+    console.error("Failed to issue refreshed c_nonce after invalid_nonce:", nonceError);
+    if (sessionId) {
+      await logError(sessionId, "Failed to issue refreshed c_nonce after invalid_nonce", {
+        error: nonceError.message,
+      }).catch(() => {});
+    }
+  }
+  return res.status(400).json(errorResponse);
+}
+
+
+function credentialValidationError(message, errorCode) {
+  const err = new Error(message);
+  err.errorCode = errorCode;
+  return err;
+}
 
 // Helper function to extract sessionId from sessionKey
 // sessionKey can be in format "code-flow-sessions:uuid" or just "uuid"
@@ -229,8 +294,36 @@ const validateCredentialRequest = (requestBody, sessionId = null) => {
     const received = credential_identifier && credential_configuration_id
       ? "both credential_identifier and credential_configuration_id"
       : "neither credential_identifier nor credential_configuration_id";
-    throw new Error(`${ERROR_MESSAGES.INVALID_CREDENTIAL_REQUEST}. Received: ${received}, expected: exactly one`);
+    throw credentialValidationError(
+      `${ERROR_MESSAGES.INVALID_CREDENTIAL_REQUEST}. Received: ${received}, expected: exactly one`,
+      CREDENTIAL_REQUEST_ERROR_CODES.INVALID_CREDENTIAL_REQUEST
+    );
   }
+
+  const issuerConfigForCredentialId = loadIssuerConfig();
+  const credConfig =
+    issuerConfigForCredentialId.credential_configurations_supported[
+      credential_configuration_id
+    ] ||
+    issuerConfigForCredentialId.credential_configurations_supported[
+      credential_identifier
+    ];
+  if (!credConfig) {
+    if (credential_configuration_id) {
+      throw credentialValidationError(
+        `${ERROR_MESSAGES.INVALID_CREDENTIAL_CONFIGURATION_ID}. Received: credential_configuration_id '${credential_configuration_id}' not found in issuer metadata`,
+        CREDENTIAL_REQUEST_ERROR_CODES.UNKNOWN_CREDENTIAL_CONFIGURATION
+      );
+    }
+    throw credentialValidationError(
+      `${ERROR_MESSAGES.INVALID_CREDENTIAL_IDENTIFIER}. Received: credential_identifier '${credential_identifier}' not found in issuer metadata`,
+      CREDENTIAL_REQUEST_ERROR_CODES.UNKNOWN_CREDENTIAL_IDENTIFIER
+    );
+  }
+
+ 
+
+
 
   // Log credential request validation details
   if (sessionId) {
@@ -280,26 +373,72 @@ const validateCredentialRequest = (requestBody, sessionId = null) => {
     throw new Error(`${ERROR_MESSAGES.INVALID_PROOF}: proof value is missing or empty. Received: ${received}, expected: non-empty string or array`);
   }
 
+  // Proof kind routing (see /credential handler for intuition: jwt PoP vs jwt+attestation vs proofs.attestation).
   // Handle jwt proof type - can be string or array
-  if (proofType === 'jwt') {
+  if (proofType === "jwt") {
+    requestBody.credentialRequestProofKind = "jwt";
     if (Array.isArray(proofValue)) {
       if (proofValue.length === 0) {
         throw new Error(`${ERROR_MESSAGES.INVALID_PROOF}: proofs.jwt array must not be empty. Received: array with ${proofValue.length} elements, expected: array with at least 1 element`);
       }
       // Use first JWT if array
       requestBody.proofJwt = proofValue[0];
-    } else if (typeof proofValue === 'string') {
+    } else if (typeof proofValue === "string") {
       requestBody.proofJwt = proofValue;
     } else {
       throw new Error(`${ERROR_MESSAGES.INVALID_PROOF}: proofs.jwt must be a string or array. Received: ${typeof proofValue}, expected: string or array`);
     }
+  } else if (proofType === "attestation") {
+    // Key attestation as its own proof type (not holder PoP in proofs.jwt); credential must advertise attestation support.
+    if (!credConfig?.proof_types_supported?.attestation) {
+      const id = credential_configuration_id || credential_identifier;
+      throw new Error(
+        `${ERROR_MESSAGES.INVALID_PROOF}: Credential configuration '${id}' does not support proof type 'attestation'. See ${SPEC_REFS.VCI_PROOF}`
+      );
+    }
+    requestBody.credentialRequestProofKind = "attestation";
+    requestBody.proofAttestationJwt = parseProofAttestationJwtFromCredentialProofs(
+      proofValue,
+      SPEC_REFS.VCI_PROOF
+    );
   } else {
     // For other proof types, store as-is for now
     requestBody.proofJwt = proofValue;
   }
 
+  validateCredentialResponseEncryptionForRequest(requestBody, loadIssuerConfig());
+
   return credential_configuration_id || credential_identifier;
 };
+
+/** OID4VCI 1.0: JWE credential request (application/jwt) or JSON (application/json). */
+async function parseCredentialEndpointBody(req) {
+  const raw = req.body;
+  if (typeof raw === "string" && raw.trim().length > 0) {
+    const pem = loadCryptographicKeys().privateKey;
+    return await decryptCredentialRequestJwe(raw.trim(), pem);
+  }
+  if (typeof raw === "object" && raw !== null) {
+    return raw;
+  }
+  throw credentialValidationError(
+    "Invalid credential request body",
+    CREDENTIAL_REQUEST_ERROR_CODES.INVALID_CREDENTIAL_REQUEST
+  );
+}
+
+/** Success responses: JSON, or compact JWE with Content-Type application/jwt when encryption requested. */
+async function sendCredentialSuccessResponse(res, statusCode, payload, requestBody) {
+  const cre = requestBody?.credential_response_encryption;
+  res.set("Cache-Control", "no-store");
+  if (cre) {
+    const issuerConfig = loadIssuerConfig();
+    const jwe = await encryptCredentialResponseToJwe(payload, cre, issuerConfig);
+    res.type("application/jwt");
+    return res.status(statusCode).send(jwe);
+  }
+  return res.status(statusCode).json(payload);
+}
 
 // Validate proof JWT
 const validateProofJWT = (proofJwt, effectiveConfigurationId, sessionId = null) => {
@@ -682,9 +821,6 @@ const handleAuthorizationCodeFlow = async (
 
 // Handle immediate credential issuance
 const handleImmediateCredentialIssuance = async (requestBody, sessionObject, effectiveConfigurationId, sessionId = null) => {
-  const requestedCredentialType = [effectiveConfigurationId];
-  requestBody.vct = requestedCredentialType[0];
-
   // Determine format from credential configuration (VCI v1.0 requirement)
   const issuerConfig = loadIssuerConfig();
   const credConfig = issuerConfig.credential_configurations_supported[effectiveConfigurationId];
@@ -692,6 +828,8 @@ const handleImmediateCredentialIssuance = async (requestBody, sessionObject, eff
     const availableConfigs = Object.keys(issuerConfig.credential_configurations_supported || {}).join(', ') || 'none';
     throw new Error(`Credential configuration not found. Received: '${effectiveConfigurationId}', expected: one of [${availableConfigs}]`);
   }
+
+  requestBody.vct = effectiveConfigurationId;
 
   // Determine format - default to 'dc+sd-jwt' for backward compatibility
   let format = credConfig.format || 'dc+sd-jwt';
@@ -729,6 +867,11 @@ const handleImmediateCredentialIssuance = async (requestBody, sessionObject, eff
 const handleDeferredCredentialIssuance = async (requestBody, sessionObject, sessionKey, flowType) => {
   const transaction_id = generateNonce();
   const notification_id = uuidv4();
+
+  if (!requestBody.vct) {
+    requestBody.vct =
+      requestBody.credential_configuration_id || requestBody.credential_identifier;
+  }
 
   sessionObject.transaction_id = transaction_id;
   sessionObject.notification_id = notification_id;
@@ -815,6 +958,26 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
       if (slog) {
         try { slog("[TOKEN] WIA not found in token request (continuing without WIA)"); } catch {}
       }
+    }
+
+    const attestationResult = await validateOAuthClientAttestationFromRequest({
+      headers: req.headers,
+      clientId: req.body?.client_id,
+      authorizationServerIssuer: getServerUrl(),
+      trustedJwks: getTrustedClientAttesterJwks(),
+    });
+    if (!attestationResult.skip && !attestationResult.ok) {
+      if (slog) {
+        try {
+          slog("[TOKEN] Client attestation rejected", {
+            error: attestationResult.errorDescription,
+          });
+        } catch {}
+      }
+      return res.status(attestationResult.statusCode || 401).json({
+        error: attestationResult.oauthError || "invalid_client",
+        error_description: attestationResult.errorDescription,
+      });
     }
 
     // TODO: Implement Wallet Unit Attestation (WUA) based client authentication for token endpoint requests
@@ -1087,6 +1250,22 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
       });
     }
 
+
+    if (error.errorCode === "unknown_credential_configuration") {
+      return res.status(400).json({
+        error: "unknown_credential_configuration",
+        error_description: error.message,
+      });
+    }
+
+    if (error.errorCode === "unknown_credential_identifier") {
+      return res.status(400).json({
+        error: "unknown_credential_identifier",
+        error_description: error.message,
+      });
+    }
+
+
     // HAIP / DPoP-specific failures (e.g., key binding mismatch)
     if (error.errorCode === "invalid_dpop_proof") {
       return res.status(400).json({
@@ -1126,7 +1305,7 @@ sharedRouter.post("/credential", async (req, res) => {
   let requestId = null;
   
   try {
-    const requestBody = req.body;
+    const requestBody = await parseCredentialEndpointBody(req);
     const authHeader = req.headers["authorization"];
     const token = authHeader && authHeader.split(" ")[1];
 
@@ -1154,6 +1333,7 @@ sharedRouter.post("/credential", async (req, res) => {
       if (logBody.proof) logBody.proof = "<redacted>";
       if (logBody.proofs) logBody.proofs = "<redacted>";
       if (logBody.proofJwt) logBody.proofJwt = "<redacted>";
+      if (logBody.proofAttestationJwt) logBody.proofAttestationJwt = "<redacted>";
       
       requestId = logHttpRequest(slog, "POST", "/credential", req.headers, logBody);
       try { slog("[CREDENTIAL] [START] Credential request", { credential_configuration_id: requestBody.credential_configuration_id, credential_identifier: requestBody.credential_identifier }); } catch {}
@@ -1169,8 +1349,10 @@ sharedRouter.post("/credential", async (req, res) => {
       });
     }
 
-    // Extract and validate Wallet Unit Attestation (WUA) if present
-    // Based on TS3 spec: https://github.com/eu-digital-identity-wallet/eudi-doc-standards-and-technical-specifications/blob/main/docs/technical-specifications/ts3-wallet-unit-attestation.md
+    // Optional key-attestation alongside JWT proof (mode 2): in EUDI this object is the WUA (Wallet
+    // Provider–signed). Issuer trust for the WP (e.g. Trusted List) is not enforced yet — see
+    // routeUtils.isWuaWalletProviderTrustedByPolicy (stub true). Combined with proofs.jwt PoP → possession + assurance.
+    // TS3: https://github.com/eu-digital-identity-wallet/eudi-doc-standards-and-technical-specifications/blob/main/docs/technical-specifications/ts3-wallet-unit-attestation.md
     const wuaJwt = extractWUAFromCredentialRequest(requestBody);
     let wuaValidationResult = null;
     if (wuaJwt) {
@@ -1181,7 +1363,7 @@ sharedRouter.post("/credential", async (req, res) => {
           slog("[CREDENTIAL] WUA received", { length: wuaJwt.length, iss: p?.iss, aud: p?.aud, iat: p?.iat, exp: p?.exp, jti: p?.jti, hasAttestedKeys: Array.isArray(p?.attested_keys) && p.attested_keys.length > 0 });
         } catch {}
       }
-      wuaValidationResult = await validateWUA(wuaJwt, sessionId);
+      wuaValidationResult = await validateWUA(wuaJwt, sessionId, loadIssuerConfig());
       if (wuaValidationResult.valid) {
         if (slog) {
           try { slog("[CREDENTIAL] WUA validated successfully", { wuaIssuer: wuaValidationResult.payload?.iss, wuaExp: wuaValidationResult.payload?.exp, hasAttestedKeys: Array.isArray(wuaValidationResult.payload?.attested_keys) && wuaValidationResult.payload.attested_keys.length > 0 }); } catch {}
@@ -1198,89 +1380,145 @@ sharedRouter.post("/credential", async (req, res) => {
     }
 
     // Validate proof if configuration ID is available
+    //
+    // Intuition for OID4VCI proof shapes (what the wallet is asserting):
+    //
+    // 1) JWT proof without key attestation (proofs.jwt only, no separate attestation object):
+    //    "I control this key right now." — issuer gets holder binding via PoP; enough when only
+    //    possession matters.
+    //
+    // 2) JWT proof with key attestation (e.g. key material in header, or WUA / attested_keys
+    //    validated alongside proofs.jwt):
+    //    "I control this key right now, and here is trusted evidence that this key has certain
+    //    security properties." — present possession plus assurance about the nature of the key.
+    //
+    // 3) Attestation proof type (proofs.attestation — key attestation JWT, not a holder PoP JWT):
+    //    "Here is trusted evidence about the key; I am not doing a proof-of-possession step for
+    //    that key in this proof format." — OID4VCI defines this as key attestation without using
+    //    PoP of the attested key in this request; issuance binds from attested_keys instead.
     if (effectiveConfigurationId) {
       try {
-        // Ensure proofJwt is set (should be set by validateCredentialRequest)
-        if (!requestBody.proofJwt) {
-          throw new Error(`${ERROR_MESSAGES.INVALID_PROOF}. Received: proofJwt is ${typeof requestBody.proofJwt}, expected: proofJwt string or array`);
+        const issuerConfigForProof = loadIssuerConfig();
+        const credConfigForProof =
+          issuerConfigForProof.credential_configurations_supported[effectiveConfigurationId];
+
+        const isAttestationProof = requestBody.credentialRequestProofKind === "attestation";
+        const jwtForNonce = isAttestationProof
+          ? requestBody.proofAttestationJwt
+          : requestBody.proofJwt;
+
+        if (isAttestationProof) {
+          if (!requestBody.proofAttestationJwt) {
+            throw new Error(
+              `${ERROR_MESSAGES.INVALID_PROOF}. Received: proofAttestationJwt is missing, expected: compact JWT from proofs.attestation`
+            );
+          }
+        } else {
+          if (!requestBody.proofJwt) {
+            throw new Error(`${ERROR_MESSAGES.INVALID_PROOF}. Received: proofJwt is ${typeof requestBody.proofJwt}, expected: proofJwt string or array`);
+          }
         }
-        
+
         // First, check nonce validity BEFORE any other validation
-        // This is critical for PoP failure recovery - we need to catch nonce errors
-        // even if public key resolution or signature verification fails
-        const decodedPayloadForNonce = jwt.decode(requestBody.proofJwt, { complete: false });
-        
-        // Check if nonce is missing
+        const decodedPayloadForNonce = jwt.decode(jwtForNonce, { complete: false });
+
         if (!decodedPayloadForNonce || !decodedPayloadForNonce.nonce) {
-          const received = !decodedPayloadForNonce ? 'unable to decode JWT payload' : 'payload without nonce claim';
-          throw new Error(`${ERROR_MESSAGES.INVALID_PROOF_NONCE}. Received: ${received}, expected: JWT payload with nonce claim. See ${SPEC_REFS.VCI_PROOF}`);
+          const received = !decodedPayloadForNonce ? "unable to decode JWT payload" : "payload without nonce claim";
+          throw new Error(
+            `${ERROR_MESSAGES.INVALID_PROOF_NONCE}. Received: ${received}, expected: JWT payload with nonce claim. See ${SPEC_REFS.VCI_PROOF}`
+          );
         }
-        
-        // Check if nonce is valid/expired
+
         const nonceExists = await checkNonce(decodedPayloadForNonce.nonce);
         if (!nonceExists) {
-          // Nonce exists but is invalid/expired - throw error for PoP failure recovery
-          throw new Error(`${ERROR_MESSAGES.INVALID_PROOF_NONCE}. Received: nonce '${decodedPayloadForNonce.nonce}' (invalid, expired, or already used), expected: valid, unexpired, unused nonce. See ${SPEC_REFS.VCI_PROOF}`);
+          throw new Error(
+            `${ERROR_MESSAGES.INVALID_PROOF_NONCE}. Received: nonce '${decodedPayloadForNonce.nonce}' (invalid, expired, or already used), expected: valid, unexpired, unused nonce. See ${SPEC_REFS.VCI_PROOF}`
+          );
         }
-        
-        // Store nonce value for deletion after successful signature verification
+
         const nonceValue = decodedPayloadForNonce.nonce;
-        
-        const decodedProofHeader = validateProofJWT(requestBody.proofJwt, effectiveConfigurationId, sessionId);
-        
-        // Always verify proof JWT, even if algorithm validation was skipped
-        // If header validation was skipped, decode the header to get public key info
-        const headerForVerification = decodedProofHeader || jwt.decode(requestBody.proofJwt, { complete: true })?.header;
-        
-        if (!headerForVerification) {
-          throw new Error(`${ERROR_MESSAGES.INVALID_PROOF_MALFORMED}. Received: unable to decode JWT header, expected: valid JWT with header`);
-        }
-        
-        const publicKeyForProof = await resolvePublicKeyForProof(headerForVerification, sessionId);
-        await verifyProofJWT(requestBody.proofJwt, publicKeyForProof, flowType, sessionId);
-        
-        // EUDI Wallet ARF: when WUA is present, the proof key (bound in credential cnf) MUST be one of attested_keys
-        if (wuaJwt && wuaValidationResult?.valid && wuaValidationResult?.payload) {
-          if (slog) {
-            try {
-              const attestedKeysCount = Array.isArray(wuaValidationResult.payload.attested_keys) ? wuaValidationResult.payload.attested_keys.length : 0;
-              slog("[CREDENTIAL] Checking proof key against WUA attested_keys", {
-                proofKeyKty: publicKeyForProof?.kty,
-                proofKeyCrv: publicKeyForProof?.crv,
-                attestedKeysCount,
-                wuaIssuer: wuaValidationResult.payload?.iss
-              });
-            } catch {}
+
+        // Mode (3): attestation proof — verify key-attestation JWT and bind credential to attested_keys (no holder PoP JWT).
+        if (isAttestationProof) {
+          const { cnf, attestedKeys } = await verifyKeyAttestationProofChain(
+            requestBody.proofAttestationJwt,
+            credConfigForProof,
+            issuerConfigForProof,
+            SPEC_REFS.VCI_PROOF
+          );
+          requestBody._credentialBindingCnf = cnf;
+          requestBody._attestedKeys = attestedKeys;
+          if (sessionId) {
+            await logInfo(sessionId, "Key attestation proof validated", {
+              effectiveConfigurationId,
+              attestedKeysCount: attestedKeys.length,
+            }).catch(() => {});
           }
-          if (!proofKeyMatchesWUAAttestedKeys(publicKeyForProof, wuaValidationResult.payload)) {
-            const attestedKeysCount = Array.isArray(wuaValidationResult.payload.attested_keys) ? wuaValidationResult.payload.attested_keys.length : 0;
-            const errorMsg = `invalid_proof: The key used in the proof (credential binding/cnf) must be one of the keys attested in the Wallet Unit Attestation (attested_keys). Per EUDI Wallet ARF, the credential is bound only to attested keys.`;
+        } else {
+          // Mode (1) baseline: JWT proof — verify holder PoP ("I control this key right now") for cnf binding.
+          const decodedProofHeader = validateProofJWT(requestBody.proofJwt, effectiveConfigurationId, sessionId);
+
+          const headerForVerification =
+            decodedProofHeader || jwt.decode(requestBody.proofJwt, { complete: true })?.header;
+
+          if (!headerForVerification) {
+            throw new Error(
+              `${ERROR_MESSAGES.INVALID_PROOF_MALFORMED}. Received: unable to decode JWT header, expected: valid JWT with header`
+            );
+          }
+
+          const publicKeyForProof = await resolvePublicKeyForProof(headerForVerification, sessionId);
+          await verifyProofJWT(requestBody.proofJwt, publicKeyForProof, flowType, sessionId);
+
+          // Mode (2): JWT proof + validated WUA — PoP key must match the first attested key ("possession + assurance").
+          // EUDI Wallet ARF / ETSI-style binding: credential cnf aligns with the primary attested key.
+          if (wuaJwt && wuaValidationResult?.valid && wuaValidationResult?.payload) {
             if (slog) {
               try {
-                slog("[CREDENTIAL] [ERROR] Proof key not found in WUA attested_keys", {
+                const attestedKeysCount = Array.isArray(wuaValidationResult.payload.attested_keys)
+                  ? wuaValidationResult.payload.attested_keys.length
+                  : 0;
+                slog("[CREDENTIAL] Checking proof key against WUA first attested key", {
                   proofKeyKty: publicKeyForProof?.kty,
                   proofKeyCrv: publicKeyForProof?.crv,
-                  proofKeyX: publicKeyForProof?.x?.substring(0, 16) + "...",
                   attestedKeysCount,
                   wuaIssuer: wuaValidationResult.payload?.iss,
-                  error: errorMsg
                 });
               } catch {}
             }
-            throw new Error(errorMsg);
-          }
-          if (slog) {
-            try {
-              slog("[CREDENTIAL] Proof key validated against WUA attested_keys", {
-                proofKeyKty: publicKeyForProof?.kty,
-                proofKeyCrv: publicKeyForProof?.crv,
-                attestedKeysCount: Array.isArray(wuaValidationResult.payload.attested_keys) ? wuaValidationResult.payload.attested_keys.length : 0
-              });
-            } catch {}
+            if (!proofKeyMatchesWUAAttestedKeys(publicKeyForProof, wuaValidationResult.payload)) {
+              const attestedKeysCount = Array.isArray(wuaValidationResult.payload.attested_keys)
+                ? wuaValidationResult.payload.attested_keys.length
+                : 0;
+              const errorMsg = `invalid_proof: The key used in the proof (credential binding/cnf) must match the first key in the Wallet Unit Attestation attested_keys array (primary attested key).`;
+              if (slog) {
+                try {
+                  slog("[CREDENTIAL] [ERROR] Proof key does not match WUA first attested key", {
+                    proofKeyKty: publicKeyForProof?.kty,
+                    proofKeyCrv: publicKeyForProof?.crv,
+                    proofKeyX: publicKeyForProof?.x?.substring(0, 16) + "...",
+                    attestedKeysCount,
+                    wuaIssuer: wuaValidationResult.payload?.iss,
+                    error: errorMsg,
+                  });
+                } catch {}
+              }
+              throw new Error(errorMsg);
+            }
+            if (slog) {
+              try {
+                slog("[CREDENTIAL] Proof key validated against WUA first attested key", {
+                  proofKeyKty: publicKeyForProof?.kty,
+                  proofKeyCrv: publicKeyForProof?.crv,
+                  attestedKeysCount: Array.isArray(wuaValidationResult.payload.attested_keys)
+                    ? wuaValidationResult.payload.attested_keys.length
+                    : 0,
+                });
+              } catch {}
+            }
           }
         }
-        
-        // Delete the nonce after successful signature verification
+
         await deleteNonce(nonceValue);
         
         // Log successful proof validation
@@ -1298,7 +1536,16 @@ sharedRouter.post("/credential", async (req, res) => {
             proofValidationError: true
           }).catch(err => console.error("Failed to log proof validation error:", err));
         }
-        
+
+        if (error.message.includes(ERROR_MESSAGES.INVALID_PROOF_NONCE)) {
+          return respondInvalidNonceCredentialError(res, error, {
+            sessionObject,
+            sessionKey,
+            flowType,
+            sessionId,
+          });
+        }
+
         if (error.message.includes(ERROR_MESSAGES.INVALID_PROOF)) {
           return res.status(400).json({
             error: "invalid_proof",
@@ -1306,9 +1553,22 @@ sharedRouter.post("/credential", async (req, res) => {
           });
         }
         
-        if (error.message.includes(ERROR_MESSAGES.INVALID_CREDENTIAL_REQUEST)) {
+        if (error.errorCode === CREDENTIAL_REQUEST_ERROR_CODES.INVALID_CREDENTIAL_REQUEST) {
           return res.status(400).json({
-            error: "invalid_credential_request",
+            error: CREDENTIAL_REQUEST_ERROR_CODES.INVALID_CREDENTIAL_REQUEST,
+            error_description: error.message,
+          });
+        }
+
+        if (error.errorCode === CREDENTIAL_REQUEST_ERROR_CODES.UNKNOWN_CREDENTIAL_CONFIGURATION) {
+          return res.status(400).json({
+            error: CREDENTIAL_REQUEST_ERROR_CODES.UNKNOWN_CREDENTIAL_CONFIGURATION,
+            error_description: error.message,
+          });
+        }
+        if (error.errorCode === CREDENTIAL_REQUEST_ERROR_CODES.UNKNOWN_CREDENTIAL_IDENTIFIER) {
+          return res.status(400).json({
+            error: CREDENTIAL_REQUEST_ERROR_CODES.UNKNOWN_CREDENTIAL_IDENTIFIER,
             error_description: error.message,
           });
         }
@@ -1326,7 +1586,7 @@ sharedRouter.post("/credential", async (req, res) => {
         logHttpResponse(slog, requestId, "/credential", 202, "Accepted", res.getHeaders(), response);
         try { slog("[CREDENTIAL] [COMPLETE] Credential request (deferred)", { success: true }); } catch {}
       }
-      return res.status(202).json(response);
+      return sendCredentialSuccessResponse(res, 202, response, requestBody);
     } else {
       try {
         const response = await handleImmediateCredentialIssuance(requestBody, sessionObject, effectiveConfigurationId, sessionId);
@@ -1357,7 +1617,7 @@ sharedRouter.post("/credential", async (req, res) => {
           }
         }
 
-        return res.json(response);
+        return sendCredentialSuccessResponse(res, 200, response, requestBody);
       } catch (credError) {
         console.error("Credential generation error:", credError);
         if (slog) {
@@ -1402,6 +1662,22 @@ sharedRouter.post("/credential", async (req, res) => {
       try { slog("[CREDENTIAL] [ERROR] Credential endpoint error", { error: error.message, errorCode: error.errorCode }); } catch {}
     }
 
+    if (error.errorCode === INVALID_ENCRYPTION_PARAMETERS) {
+      return res.status(400).json({
+        error: INVALID_ENCRYPTION_PARAMETERS,
+        error_description: error.message,
+      });
+    }
+
+    if (error.message.includes(ERROR_MESSAGES.INVALID_PROOF_NONCE)) {
+      return respondInvalidNonceCredentialError(res, error, {
+        sessionObject,
+        sessionKey,
+        flowType,
+        sessionId,
+      });
+    }
+
     const proofRelatedErrors = [
       ERROR_MESSAGES.INVALID_PROOF,
       ERROR_MESSAGES.INVALID_PROOF_MALFORMED,
@@ -1410,7 +1686,6 @@ sharedRouter.post("/credential", async (req, res) => {
       ERROR_MESSAGES.INVALID_PROOF_UNABLE,
       ERROR_MESSAGES.INVALID_PROOF_SIGNATURE,
       ERROR_MESSAGES.INVALID_PROOF_ISS,
-      ERROR_MESSAGES.INVALID_PROOF_NONCE,
     ];
 
     if (
@@ -1422,51 +1697,23 @@ sharedRouter.post("/credential", async (req, res) => {
         error_description: error.message,
       };
 
-      if (error.message.includes(ERROR_MESSAGES.INVALID_PROOF_NONCE)) {
+      if (sessionObject && sessionKey) {
         try {
-          const refreshedNonce = generateNonce();
-          await storeNonce(refreshedNonce, NONCE_EXPIRES_IN);
+          sessionObject.status = "failed";
+          sessionObject.error = "invalid_proof";
+          sessionObject.error_description = error.message;
 
-          if (sessionObject && sessionKey) {
-            sessionObject.c_nonce = refreshedNonce;
-
-            if (flowType === "code") {
-              await storeCodeFlowSession(sessionKey, sessionObject);
-            } else {
-              await storePreAuthSession(sessionKey, sessionObject);
-            }
+          if (flowType === "code") {
+            await storeCodeFlowSession(sessionKey, sessionObject);
+          } else {
+            await storePreAuthSession(sessionKey, sessionObject);
           }
-
-          errorResponse.c_nonce = refreshedNonce;
-          errorResponse.c_nonce_expires_in = NONCE_EXPIRES_IN;
-        } catch (nonceError) {
-          console.error("Failed to issue refreshed c_nonce after proof failure:", nonceError);
+        } catch (storageError) {
+          console.error("Failed to update session status after proof validation failure:", storageError);
           if (sessionId) {
-            await logError(sessionId, "Failed to issue refreshed c_nonce after proof failure", {
-              error: nonceError.message
+            await logError(sessionId, "Failed to update session status after proof validation failure", {
+              error: storageError.message
             }).catch(() => {});
-          }
-        }
-      } else {
-        // Mark session as failed for other proof validation errors (non-nonce errors)
-        if (sessionObject && sessionKey) {
-          try {
-            sessionObject.status = "failed";
-            sessionObject.error = "invalid_proof";
-            sessionObject.error_description = error.message;
-
-            if (flowType === "code") {
-              await storeCodeFlowSession(sessionKey, sessionObject);
-            } else {
-              await storePreAuthSession(sessionKey, sessionObject);
-            }
-          } catch (storageError) {
-            console.error("Failed to update session status after proof validation failure:", storageError);
-            if (sessionId) {
-              await logError(sessionId, "Failed to update session status after proof validation failure", {
-                error: storageError.message
-              }).catch(() => {});
-            }
           }
         }
       }
@@ -1474,12 +1721,12 @@ sharedRouter.post("/credential", async (req, res) => {
       return res.status(400).json(errorResponse);
     }
 
-    if (error.message.includes(ERROR_MESSAGES.INVALID_CREDENTIAL_REQUEST)) {
+    if (error.errorCode === CREDENTIAL_REQUEST_ERROR_CODES.INVALID_CREDENTIAL_REQUEST) {
       // Mark session as failed when credential request validation fails
       if (sessionObject && sessionKey) {
         try {
           sessionObject.status = "failed";
-          sessionObject.error = "invalid_credential_request";
+          sessionObject.error = CREDENTIAL_REQUEST_ERROR_CODES.INVALID_CREDENTIAL_REQUEST;
           sessionObject.error_description = error.message;
 
           if (flowType === "code") {
@@ -1498,7 +1745,21 @@ sharedRouter.post("/credential", async (req, res) => {
       }
 
       return res.status(400).json({
-        error: "invalid_credential_request",
+        error: CREDENTIAL_REQUEST_ERROR_CODES.INVALID_CREDENTIAL_REQUEST,
+        error_description: error.message,
+      });
+    }
+
+    if (error.errorCode === CREDENTIAL_REQUEST_ERROR_CODES.UNKNOWN_CREDENTIAL_CONFIGURATION) {
+      return res.status(400).json({
+        error: CREDENTIAL_REQUEST_ERROR_CODES.UNKNOWN_CREDENTIAL_CONFIGURATION,
+        error_description: error.message,
+      });
+    }
+
+    if (error.errorCode === CREDENTIAL_REQUEST_ERROR_CODES.UNKNOWN_CREDENTIAL_IDENTIFIER) {
+      return res.status(400).json({
+        error: CREDENTIAL_REQUEST_ERROR_CODES.UNKNOWN_CREDENTIAL_IDENTIFIER,
         error_description: error.message,
       });
     }
@@ -1537,9 +1798,10 @@ sharedRouter.post("/credential", async (req, res) => {
 // *****************************************************************
 
 sharedRouter.post("/credential_deferred", async (req, res) => {
+  let sessionId = null;
   try {
     const { transaction_id } = req.body;
-    
+
     if (!transaction_id) {
       return res.status(400).json({
         error: "invalid_request",
@@ -1547,22 +1809,20 @@ sharedRouter.post("/credential_deferred", async (req, res) => {
       });
     }
 
-    const sessionId = await getDeferredSessionTransactionId(transaction_id);
-    
-    // Set session context for console interception to capture all logs
+    sessionId = await getDeferredSessionTransactionId(transaction_id);
+
     if (sessionId) {
       setSessionContext(sessionId);
-      // Clear context when response finishes
-      res.on('finish', () => {
+      res.on("finish", () => {
         clearSessionContext();
       });
-      res.on('close', () => {
+      res.on("close", () => {
         clearSessionContext();
       });
     }
-    
+
     const sessionObject = await getCodeFlowSession(sessionId);
-    
+
     if (!sessionObject) {
       return res.status(400).json({
         error: "invalid_transaction_id",
@@ -1570,24 +1830,44 @@ sharedRouter.post("/credential_deferred", async (req, res) => {
       });
     }
 
+    const issuerConfig = loadIssuerConfig();
+    const encParams =
+      req.body.credential_response_encryption !== undefined
+        ? req.body.credential_response_encryption
+        : sessionObject.requestBody?.credential_response_encryption;
+    if (encParams) {
+      validateCredentialResponseEncryptionParams(
+        encParams,
+        getCredentialResponseEncryptionMetadata(issuerConfig)
+      );
+    }
+
     const credential = await handleCredentialGenerationBasedOnFormatDeferred(
       sessionObject,
       getServerUrl()
     );
 
-    // OID4VCI v1.0 Section 9.2: Deferred Credential Response uses 'credential' (singular),
-    // not 'credentials' (plural) like the immediate credential response.
-    // Format is specified in metadata, not in response.
-    return res.status(200).json({
-      credential,
-      // notification_id: sessionObject.notification_id,
-    });
+    const payload = { credential };
+    res.set("Cache-Control", "no-store");
+    if (encParams) {
+      const jwe = await encryptCredentialResponseToJwe(payload, encParams, issuerConfig);
+      res.type("application/jwt");
+      return res.status(200).send(jwe);
+    }
+
+    return res.status(200).json(payload);
   } catch (error) {
+    if (error.errorCode === INVALID_ENCRYPTION_PARAMETERS) {
+      return res.status(400).json({
+        error: INVALID_ENCRYPTION_PARAMETERS,
+        error_description: error.message,
+      });
+    }
     if (sessionId) {
       logError(sessionId, "Deferred credential endpoint error", {
         error: error.message,
         stack: error.stack,
-        transaction_id: req.body.transaction_id
+        transaction_id: req.body.transaction_id,
       }).catch(() => {});
     }
     return res.status(500).json({
