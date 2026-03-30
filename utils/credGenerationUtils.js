@@ -6,7 +6,12 @@ import {
   createSignerVerifierX509,
   pemToBase64Der,
 } from "../utils/sdjwtUtils.js";
-import { pemToJWK, generateNonce, didKeyToJwks } from "../utils/cryptoUtils.js";
+import {
+  pemToJWK,
+  generateNonce,
+  didKeyToJwks,
+  jwkFromX5cFirstCert,
+} from "../utils/cryptoUtils.js";
 import fs from "fs";
 import { SDJwtVcInstance } from "@sd-jwt/sd-jwt-vc";
 
@@ -293,6 +298,46 @@ function mapClaimsToMsoMdoc(claims, vct) {
 const DOC_TYPE_MDL = "org.iso.18013.5.1.mDL";
 const DEFAULT_MDL_NAMESPACE = "org.iso.18013.5.1";
 
+function isDidKidIdentifier(kid) {
+  return (
+    kid &&
+    (kid.startsWith("did:key:") ||
+      kid.startsWith("did:web:") ||
+      kid.startsWith("did:jwk:"))
+  );
+}
+
+/**
+ * Holder binding (cnf) from OID4VCI proof JWT protected header (jwk, x5c, kid).
+ * @param {object} holderJWKS - decoded JWT protected header
+ * @returns {Promise<{ jwk?: object, kid?: string } | null>}
+ */
+export async function buildHolderCnfFromProofJwtHeader(holderJWKS) {
+  if (holderJWKS.jwk) {
+    return { jwk: holderJWKS.jwk };
+  }
+  if (
+    Array.isArray(holderJWKS.x5c) &&
+    holderJWKS.x5c.length > 0 &&
+    !holderJWKS.kid
+  ) {
+    return {
+      jwk: await jwkFromX5cFirstCert(
+        holderJWKS.x5c,
+        holderJWKS.alg || "ES256"
+      ),
+    };
+  }
+  if (holderJWKS.kid && isDidKidIdentifier(holderJWKS.kid)) {
+    return { kid: holderJWKS.kid };
+  }
+  if (holderJWKS.kid) {
+    const keys = await didKeyToJwks(holderJWKS.kid);
+    return keys?.keys?.[0] ? { jwk: keys.keys[0] } : null;
+  }
+  return null;
+}
+
 export async function handleCredentialGenerationBasedOnFormat(
   requestBody,
   sessionObject,
@@ -300,6 +345,8 @@ export async function handleCredentialGenerationBasedOnFormat(
   format = "vc+sd-jwt",
 ) {
   const vct = requestBody.vct;
+  const resolvedServerURL =
+    serverURL ?? process.env.SERVER_URL ?? "http://localhost:3000";
 
   let signer, verifier;
   let headerOptions; // Define headerOptions here to be populated based on sig type
@@ -367,9 +414,10 @@ export async function handleCredentialGenerationBasedOnFormat(
     } else if (effectiveSignatureType === "did:web") {
       console.log("did:web signature type selected.");
       const proxyPath = process.env.PROXY_PATH || null;
-      let controller = serverURL;
+      let controller = resolvedServerURL;
       if (proxyPath) {
-        controller = serverURL.replace("/" + proxyPath, "") + ":" + proxyPath;
+        controller =
+          resolvedServerURL.replace("/" + proxyPath, "") + ":" + proxyPath;
       }
       controller = controller.replace("https://", "").replace("http://", "");
       const kid = `did:web:${controller}#keys-1`;
@@ -424,23 +472,10 @@ export async function handleCredentialGenerationBasedOnFormat(
     });
     const holderJWKS = decodedWithHeader.header;
 
-    const isDidKid = (kid) =>
-      kid &&
-      (kid.startsWith("did:key:") ||
-        kid.startsWith("did:web:") ||
-        kid.startsWith("did:jwk:"));
-
-    if (holderJWKS.jwk) {
-      cnf = { jwk: holderJWKS.jwk };
-    } else if (holderJWKS.kid && isDidKid(holderJWKS.kid)) {
-      cnf = { kid: holderJWKS.kid };
-    } else if (holderJWKS.kid) {
-      const keys = await didKeyToJwks(holderJWKS.kid);
-      cnf = keys?.keys?.[0] ? { jwk: keys.keys[0] } : null;
-    }
+    cnf = await buildHolderCnfFromProofJwtHeader(holderJWKS);
     if (!cnf) {
       throw new Error(
-        "Could not determine holder binding from proof JWT header (missing jwk or resolvable kid)"
+        "Could not determine holder binding from proof JWT header (missing jwk, resolvable kid, or x5c)"
       );
     }
   }
@@ -452,15 +487,15 @@ export async function handleCredentialGenerationBasedOnFormat(
   // For did:web signature type, use did:web identifier
   // For did:jwk signature type, use did:jwk identifier
   // Otherwise use serverURL
-  let issuerIdentifier = serverURL;
+  let issuerIdentifier = resolvedServerURL;
   if (effectiveSignatureType === "did:web") {
-    issuerIdentifier = computeDidWebFromServerURL(serverURL);
+    issuerIdentifier = computeDidWebFromServerURL(resolvedServerURL);
   } else if (effectiveSignatureType === "did:jwk") {
     issuerIdentifier = await computeDidJwkFromPublic();
   }
 
-  let issuerName = serverURL;
-  const match = serverURL.match(/^(?:https?:\/\/)?([^/]+)/);
+  let issuerName = resolvedServerURL;
+  const match = resolvedServerURL.match(/^(?:https?:\/\/)?([^/]+)/);
   if (match) {
     issuerName = match[1];
   }
@@ -656,7 +691,7 @@ export async function handleCredentialGenerationBasedOnFormat(
   } else if (format === "mDL" || format === "mdl") {
     // mDL deviceKeyInfo requires JWK per ISO 18013-5; resolve DID to JWK if cnf has kid
     let cnfForMdl = cnf;
-    if (cnf.kid && !cnf.jwk && isDidKid(cnf.kid)) {
+    if (cnf.kid && !cnf.jwk && isDidKidIdentifier(cnf.kid)) {
       const keys = await didKeyToJwks(cnf.kid);
       if (!keys?.keys?.[0]) {
         throw new Error(
@@ -670,7 +705,7 @@ export async function handleCredentialGenerationBasedOnFormat(
       return await generateMdlCredentialWithAuth0Library(
         requestBody,
         sessionObject,
-        serverURL,
+        resolvedServerURL,
         vct,
         credPayload,
         cnfForMdl,
@@ -1181,6 +1216,8 @@ export async function handleCredentialGenerationBasedOnFormatDeferred(
   sessionObject,
   serverURL,
 ) {
+  const resolvedServerURL =
+    serverURL ?? process.env.SERVER_URL ?? "http://localhost:3000";
   const requestBody = sessionObject.requestBody;
   const vct = requestBody.vct;
   let { signer, verifier } = await createSignerVerifierX509(
@@ -1215,23 +1252,10 @@ export async function handleCredentialGenerationBasedOnFormatDeferred(
     });
     const holderJWKS = decodedWithHeader.header;
 
-    const isDidKidDef = (kid) =>
-      kid &&
-      (kid.startsWith("did:key:") ||
-        kid.startsWith("did:web:") ||
-        kid.startsWith("did:jwk:"));
-
-    if (holderJWKS.jwk) {
-      cnf = { jwk: holderJWKS.jwk };
-    } else if (holderJWKS.kid && isDidKidDef(holderJWKS.kid)) {
-      cnf = { kid: holderJWKS.kid };
-    } else if (holderJWKS.kid) {
-      const keys = await didKeyToJwks(holderJWKS.kid);
-      cnf = keys?.keys?.[0] ? { jwk: keys.keys[0] } : null;
-    }
+    cnf = await buildHolderCnfFromProofJwtHeader(holderJWKS);
     if (!cnf) {
       throw new Error(
-        "Could not determine holder binding from proof JWT header (missing jwk or resolvable kid)"
+        "Could not determine holder binding from proof JWT header (missing jwk, resolvable kid, or x5c)"
       );
     }
   }
@@ -1287,15 +1311,15 @@ export async function handleCredentialGenerationBasedOnFormatDeferred(
   // For did:web signature type, use did:web identifier
   // For did:jwk signature type, use did:jwk identifier
   // Otherwise use serverURL
-  let issuerIdentifier = serverURL;
+  let issuerIdentifier = resolvedServerURL;
   if (effectiveSignatureType === "did:web") {
-    issuerIdentifier = computeDidWebFromServerURL(serverURL);
+    issuerIdentifier = computeDidWebFromServerURL(resolvedServerURL);
   } else if (effectiveSignatureType === "did:jwk") {
     issuerIdentifier = await computeDidJwkFromPublic();
   }
 
-  let issuerName = serverURL;
-  const match = serverURL.match(/^(?:https?:\/\/)?([^/]+)/);
+  let issuerName = resolvedServerURL;
+  const match = resolvedServerURL.match(/^(?:https?:\/\/)?([^/]+)/);
   if (match) {
     issuerName = match[1];
   }

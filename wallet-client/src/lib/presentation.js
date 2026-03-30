@@ -1,4 +1,5 @@
 import fetch from "node-fetch";
+import crypto from "node:crypto";
 import { jwtVerify, createLocalJWKSet, importJWK, importX509 } from "jose";
 import {
   createProofJwt,
@@ -343,6 +344,37 @@ function attachKbJwtToSdJwt(sdJwt, kbJwt) {
   const hasKbJwt = parts.slice(1).some((p) => p.includes("."));
   if (hasKbJwt) return token; // already present
   return `${token}~${kbJwt}`;
+}
+
+async function buildJwtVpToken({
+  credentialJwt,
+  privateJwk,
+  publicJwk,
+  issuer,
+  audience,
+  nonce,
+  alg = "ES256",
+}) {
+  const { SignJWT } = await import("jose");
+  const now = Math.floor(Date.now() / 1000);
+  const payload = {
+    iss: issuer,
+    aud: audience,
+    iat: now,
+    nbf: now - 5,
+    exp: now + 300,
+    jti: Buffer.from(crypto.randomBytes(16)).toString("base64url"),
+    nonce,
+    vp: {
+      "@context": ["https://www.w3.org/2018/credentials/v1"],
+      type: ["VerifiablePresentation"],
+      verifiableCredential: [credentialJwt],
+    },
+  };
+  const key = await importJWK(privateJwk, alg);
+  return new SignJWT(payload)
+    .setProtectedHeader({ alg, typ: "openid4vp+jwt", jwk: publicJwk })
+    .sign(key);
 }
 
 function extractCredentialString(credentialEnvelope) {
@@ -719,10 +751,19 @@ export async function performPresentation(
         } catch {}
       }
     } else {
-      // For JWT VC, use as-is
-      console.log("[present] JWT VC token, using as-is");
+      // For plain JWT credentials, present a signed JWT VP so the verifier
+      // receives the request nonce inside the submitted vp_token.
+      vpToken = await buildJwtVpToken({
+        credentialJwt: vpToken,
+        privateJwk,
+        publicJwk,
+        issuer: didJwk,
+        audience: kbAudience,
+        nonce,
+      });
+      console.log("[present] Wrapped JWT VC in JWT VP");
       try {
-        slog("[present] jwt-vc token");
+        slog("[present] jwt-vc wrapped as jwt_vp");
       } catch {}
     }
 
@@ -731,7 +772,7 @@ export async function performPresentation(
       ? "mso_mdoc"
       : vpToken.includes("~")
         ? "dc+sd-jwt"
-        : "jwt_vc_json";
+        : "jwt_vp";
     console.log(
       "[present] Credential format for submission:",
       credentialFormat,

@@ -97,6 +97,27 @@ export function pemToJWK(pem, keyType) {
   return jwk;
 }
 
+/** PEM-wrap a single DER certificate (base64 body, no headers). */
+export function derBase64ToPemCert(b64) {
+  const body = String(b64).replace(/\s+/g, "");
+  const lines = body.match(/.{1,64}/g) || [];
+  return `-----BEGIN CERTIFICATE-----\n${lines.join("\n")}\n-----END CERTIFICATE-----\n`;
+}
+
+/**
+ * Public JWK from the first certificate in an x5c chain (OID4VCI JWT proof header).
+ * @param {string[]} x5c - Array of base64-encoded DER certificates
+ * @param {string} [alg] - JWS alg hint for jose.importX509 (e.g. ES256)
+ */
+export async function jwkFromX5cFirstCert(x5c, alg = "ES256") {
+  if (!Array.isArray(x5c) || x5c.length === 0 || !x5c[0]) {
+    throw new Error("x5c must be a non-empty array of base64-encoded certificates");
+  }
+  const pem = derBase64ToPemCert(x5c[0]);
+  const key = await jose.importX509(pem, alg);
+  return jose.exportJWK(key);
+}
+
 export function generateNonce(length = 12) {
   return crypto.randomBytes(length).toString("hex");
 }

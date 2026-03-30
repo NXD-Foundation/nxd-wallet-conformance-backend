@@ -6,8 +6,8 @@ WORKDIR /usr/src/app
 # Copy package.json and package-lock.json into the working directory
 COPY package*.json ./
 
-# Install any dependencies
-RUN npm install
+# Install dependencies deterministically and faster in CI/container builds
+RUN npm ci --no-audit --no-fund
 
 # Copy the rest of your application's code into the working directory
 COPY . .
