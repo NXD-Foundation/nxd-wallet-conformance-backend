@@ -1332,10 +1332,12 @@ async function resolveDidDocument(did) {
   }
   if (did.startsWith('did:jwk:')) {
     // did:jwk encodes the JWK as base64url(JSON)
-    const b64 = did.substring('did:jwk:'.length);
+    const [didWithoutFragment] = did.split('#');
+    const b64 = didWithoutFragment.substring('did:jwk:'.length);
     try {
       const json = JSON.parse(Buffer.from(b64, 'base64url').toString('utf8'));
-      return { verificationMethod: [{ id: did + '#0', type: 'JsonWebKey2020', publicKeyJwk: json }] };
+      const vmId = did.includes('#') ? did : `${did}#0`;
+      return { verificationMethod: [{ id: vmId, type: 'JsonWebKey2020', publicKeyJwk: json }] };
     } catch (e) {
       throw new Error('did:jwk decode failed');
     }
@@ -1376,6 +1378,5 @@ async function verifyJwsWithDid(jws, header, didOrIss) {
   }
   throw lastErr || new Error('DID verification failed');
 }
-
 
 

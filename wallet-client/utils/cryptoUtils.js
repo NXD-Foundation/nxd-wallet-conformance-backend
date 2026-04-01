@@ -695,7 +695,8 @@ export async function didKeyToJwks(did) {
     }
   } else if (did.startsWith("did:jwk:")) {
     try {
-      const jwkPart = did.substring("did:jwk:".length);
+      const [didWithoutFragment] = did.split("#");
+      const jwkPart = didWithoutFragment.substring("did:jwk:".length);
       const jwk = JSON.parse(Buffer.from(jwkPart, "base64url").toString());
       return { keys: [jwk] };
     } catch (e) {
@@ -723,4 +724,3 @@ export async function fetchWalletMetadata(metadataUrl) {
     throw error;
   }
 }
-
