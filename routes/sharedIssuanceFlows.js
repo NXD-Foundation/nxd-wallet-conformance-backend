@@ -8,6 +8,8 @@ import {
   base64UrlEncodeSha256,
   jarOAutTokenResponse,
   didKeyToJwks,
+  getDidWebDocumentUrl,
+  parseDidJwk,
 } from "../utils/cryptoUtils.js";
 import {
   buildAccessToken,
@@ -652,16 +654,7 @@ sharedRouter.post("/credential", async (req, res) => {
             decodedProofHeader.kid.startsWith("did:jwk:")
           ) {
             try {
-              const didJwk = decodedProofHeader.kid;
-              let jwkPart = didJwk.substring("did:jwk:".length);
-              // Strip optional fragment (e.g., #0) per did:jwk convention
-              if (jwkPart.includes("#")) {
-                jwkPart = jwkPart.split("#")[0];
-              }
-              const jwkString = Buffer.from(jwkPart, "base64url").toString(
-                "utf8"
-              );
-              publicKeyForProof = JSON.parse(jwkString);
+              publicKeyForProof = parseDidJwk(decodedProofHeader.kid);
               console.log("Successfully resolved did:jwk to JWK.");
             } catch (error) {
               console.error("Error resolving did:jwk to JWK:", error);
@@ -685,19 +678,7 @@ sharedRouter.post("/credential", async (req, res) => {
                 );
               }
 
-              let didUrlPart = did.substring("did:web:".length);
-              didUrlPart = decodeURIComponent(didUrlPart);
-
-              const didParts = didUrlPart.split(":");
-              const domain = didParts.shift();
-              const path = didParts.join("/");
-
-              let didDocUrl;
-              if (path) {
-                didDocUrl = `https://${domain}/${path}/did.json`;
-              } else {
-                didDocUrl = `https://${domain}/.well-known/did.json`;
-              }
+              const didDocUrl = getDidWebDocumentUrl(did);
 
               console.log(
                 `Resolving did:web by fetching DID document from: ${didDocUrl}`

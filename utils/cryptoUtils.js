@@ -34,6 +34,38 @@ export function generateNonce(length = 12) {
   return crypto.randomBytes(length).toString("hex");
 }
 
+export function parseDidJwk(did) {
+  if (!did || !did.startsWith("did:jwk:")) {
+    throw new Error("Identifier is not a did:jwk");
+  }
+
+  const didWithoutFragment = did
+    .replace(/%23.*$/i, "")
+    .split("#")[0];
+  const jwkPart = didWithoutFragment.substring("did:jwk:".length);
+  return JSON.parse(Buffer.from(jwkPart, "base64url").toString("utf8"));
+}
+
+export function getDidWebDocumentUrl(did) {
+  if (!did || !did.startsWith("did:web:")) {
+    throw new Error("Identifier is not a did:web");
+  }
+
+  const [didPart] = did.split("#");
+  const methodSpecificId = didPart.substring("did:web:".length);
+  const didParts = methodSpecificId.split(":").map(decodeURIComponent);
+  const domain = didParts.shift();
+  const path = didParts.join("/");
+
+  if (!domain) {
+    throw new Error("did:web identifier is missing a domain");
+  }
+
+  return path
+    ? `https://${domain}/${path}/did.json`
+    : `https://${domain}/.well-known/did.json`;
+}
+
 export function buildVpRequestJSON(
   state,
   nonce,
@@ -645,21 +677,7 @@ export async function didKeyToJwks(did) {
   } else if (did.startsWith("did:web:")) {
     // Handling did:web
     try {
-      const [didPart] = did.split("#"); // we don't need the fragment for fetching did.json
-      
-      let didUrlPart = didPart.substring("did:web:".length);
-      didUrlPart = decodeURIComponent(didUrlPart);
-
-      const didParts = didUrlPart.split(":");
-      const domain = didParts.shift();
-      const path = didParts.join("/");
-
-      let didDocUrl;
-      if (path) {
-        didDocUrl = `https://${domain}/${path}/did.json`;
-      } else {
-        didDocUrl = `https://${domain}/.well-known/did.json`;
-      }
+      const didDocUrl = getDidWebDocumentUrl(did);
 
       const response = await fetch(didDocUrl);
       if (!response.ok) {
@@ -687,8 +705,7 @@ export async function didKeyToJwks(did) {
     }
   } else if (did.startsWith("did:jwk:")) {
     try {
-      const jwkPart = did.substring("did:jwk:".length);
-      const jwk = JSON.parse(Buffer.from(jwkPart, "base64url").toString());
+      const jwk = parseDidJwk(did);
       return { keys: [jwk] };
     } catch (e) {
       console.error("Error parsing did:jwk", e);
@@ -716,4 +733,3 @@ export async function fetchWalletMetadata(metadataUrl) {
     throw error;
   }
 }
-
