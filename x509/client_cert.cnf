@@ -11,7 +11,7 @@ ST = GREECE
 L  = GREECE
 O  = UAegean
 OU = IT Department
-CN = dev-i4mlab.aegean.gr
+CN = dss.aegean.gr
 
 [ req_ext ]
 subjectAltName = @alt_names
