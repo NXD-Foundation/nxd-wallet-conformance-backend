@@ -122,6 +122,18 @@ export function generateNonce(length = 12) {
   return crypto.randomBytes(length).toString("hex");
 }
 
+export function parseDidJwk(did) {
+  if (!did || !did.startsWith("did:jwk:")) {
+    throw new Error("Identifier is not a did:jwk");
+  }
+
+  const didWithoutFragment = did
+    .replace(/%23.*$/i, "")
+    .split("#")[0];
+  const jwkPart = didWithoutFragment.substring("did:jwk:".length);
+  return JSON.parse(Buffer.from(jwkPart, "base64url").toString("utf8"));
+}
+
 export function buildVpRequestJSON(
   state,
   nonce,
@@ -1018,8 +1030,7 @@ export async function didKeyToJwks(did) {
     }
   } else if (did.startsWith("did:jwk:")) {
     try {
-      const jwkPart = did.substring("did:jwk:".length);
-      const jwk = JSON.parse(Buffer.from(jwkPart, "base64url").toString());
+      const jwk = parseDidJwk(did);
       return { keys: [jwk] };
     } catch (e) {
       console.error("Error parsing did:jwk", e);

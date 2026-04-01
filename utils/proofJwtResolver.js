@@ -1,5 +1,5 @@
 import { Buffer } from "buffer";
-import { didKeyToJwks, jwkFromX5cFirstCert } from "./cryptoUtils.js";
+import { didKeyToJwks, jwkFromX5cFirstCert, parseDidJwk } from "./cryptoUtils.js";
 import { ProofJwtHeaderValidator } from "./proofJwtHeaderUtils.js";
 import { logInfo } from "../services/cacheServiceRedis.js";
 
@@ -141,10 +141,7 @@ export async function resolveProofJwtPublicJwk(decodedProofHeader, options = {})
 
   if (decodedProofHeader.kid?.startsWith("did:jwk:")) {
     try {
-      const didJwk = decodedProofHeader.kid;
-      const jwkPart = didJwk.substring("did:jwk:".length);
-      const jwkString = Buffer.from(jwkPart, "base64url").toString("utf8");
-      return JSON.parse(jwkString);
+      return parseDidJwk(decodedProofHeader.kid);
     } catch (error) {
       console.error(
         `Error resolving did:jwk to JWK. Received kid: ${decodedProofHeader.kid}, error:`,

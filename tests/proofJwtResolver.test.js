@@ -101,6 +101,21 @@ describe("resolveProofJwtPublicJwk", () => {
     expect(out.y).to.equal(jwk.y);
   });
 
+  it("resolves did:jwk kid with encoded fragment to embedded JWK", async () => {
+    const { publicKey } = await jose.generateKeyPair("ES256");
+    const jwk = await jose.exportJWK(publicKey);
+    const kid =
+      "did:jwk:" +
+      Buffer.from(JSON.stringify(jwk), "utf8").toString("base64url") +
+      "%230";
+    const out = await resolveProofJwtPublicJwk(
+      { alg: "ES256", kid },
+      { messages: ERR }
+    );
+    expect(out.x).to.equal(jwk.x);
+    expect(out.y).to.equal(jwk.y);
+  });
+
   it("throws when no jwk, x5c, or supported kid", async () => {
     try {
       await resolveProofJwtPublicJwk(
