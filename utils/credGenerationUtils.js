@@ -7,6 +7,10 @@ import {
   pemToBase64Der,
 } from "../utils/sdjwtUtils.js";
 import { pemToJWK, generateNonce, didKeyToJwks } from "../utils/cryptoUtils.js";
+import {
+  getIssuerJwkPairAlignedWithDidDocument,
+  computeDidJwkIssuerDidAndKidFromDidKeys,
+} from "../utils/issuerDidKeys.js";
 import fs from "fs";
 import { SDJwtVcInstance } from "@sd-jwt/sd-jwt-vc";
 
@@ -122,9 +126,7 @@ export async function handleVcSdJwtFormat(
   };
 
   const computeDidJwkFromPublic = () => {
-    const publicJwkForSigning = pemToJWK(publicKeyPem, "public");
-    const did = `did:jwk:${Buffer.from(JSON.stringify(publicJwkForSigning)).toString("base64url")}`;
-    const kid = `${did}#0`;
+    const { did, kid } = computeDidJwkIssuerDidAndKidFromDidKeys();
     return { did, kid };
   };
 
@@ -144,12 +146,9 @@ export async function handleVcSdJwtFormat(
         typ: format
       },
     };
-  } else { // Covers did:web and did:jwk (and legacy jwk/kid-jwk)
-    const publicJwkForSigning = pemToJWK(publicKeyPem, "public");
-    ({ signer, verifier } = await createSignerVerifier(
-      pemToJWK(privateKey, "private"),
-      publicJwkForSigning
-    ));
+  } else { // Covers did:web and did:jwk (and legacy jwk/kid-jwk); keys MUST match did.json / did:jwk
+    const { privateJwk, publicJwk } = getIssuerJwkPairAlignedWithDidDocument();
+    ({ signer, verifier } = await createSignerVerifier(privateJwk, publicJwk));
 
     let joseHeader = {};
     if (effectiveSignatureType === "did:web") {
@@ -542,11 +541,20 @@ export async function handleVcSdJwtFormatDeferred(sessionObject, serverURL) {
   const holderJWKS = decodedWithHeader.header;
 
   const isHaip = sessionObject ? sessionObject.isHaip : false;
+  const effectiveSignatureType =
+    sessionObject.isHaip && process.env.ISSUER_SIGNATURE_TYPE === "x509"
+      ? "x509"
+      : sessionObject.signatureType;
   if (!isHaip) {
-    ({ signer, verifier } = await createSignerVerifier(
-      pemToJWK(privateKey, "private"),
-      pemToJWK(publicKeyPem, "public")
-    ));
+    if (effectiveSignatureType === "x509") {
+      ({ signer, verifier } = await createSignerVerifierX509(
+        privateKeyPemX509,
+        certificatePemX509
+      ));
+    } else {
+      const { privateJwk, publicJwk } = getIssuerJwkPairAlignedWithDidDocument();
+      ({ signer, verifier } = await createSignerVerifier(privateJwk, publicJwk));
+    }
   }
 
   const sdjwt = new SDJwtVcInstance({
@@ -645,13 +653,11 @@ export async function handleVcSdJwtFormatDeferred(sessionObject, serverURL) {
     return { did, kid };
   };
   const computeDidJwkFromPublic = () => {
-    const publicJwkForSigning = pemToJWK(publicKeyPem, "public");
-    const did = `did:jwk:${Buffer.from(JSON.stringify(publicJwkForSigning)).toString("base64url")}`;
-    const kid = `${did}#0`;
+    const { did, kid } = computeDidJwkIssuerDidAndKidFromDidKeys();
     return { did, kid };
   };
   let headerOptions;
-  if (isHaip || process.env.ISSUER_SIGNATURE_TYPE === "x509") {
+  if (effectiveSignatureType === "x509") {
     headerOptions = {
       header: {
         x5c: [pemToBase64Der(certificatePemX509)],
@@ -671,7 +677,7 @@ export async function handleVcSdJwtFormatDeferred(sessionObject, serverURL) {
   expiryDate.setMonth(now.getMonth() + 6);
   // Compute issuer DID for payload
   let issuerDidForPayload;
-  if (isHaip || process.env.ISSUER_SIGNATURE_TYPE === "x509") {
+  if (effectiveSignatureType === "x509") {
     issuerDidForPayload = serverURL;
   } else if (sessionObject.signatureType === "did:web") {
     issuerDidForPayload = computeDidWebFromServer().did;
