@@ -12,6 +12,10 @@ import {
   didKeyToJwks,
   jwkFromX5cFirstCert,
 } from "../utils/cryptoUtils.js";
+import {
+  computeDidJwkIssuerDidAndKidFromDidKeys,
+  getIssuerJwkPairAlignedWithDidDocument,
+} from "../utils/issuerDidKeys.js";
 import fs from "fs";
 import { SDJwtVcInstance } from "@sd-jwt/sd-jwt-vc";
 
@@ -187,12 +191,7 @@ function computeDidWebFromServerURL(serverURL) {
 
 // Helper function to compute did:jwk identifier from public key
 async function computeDidJwkFromPublic() {
-  const publicJwkForSigning = pemToJWK(publicKeyPem, "public");
-  const jwkStr = Buffer.from(JSON.stringify(publicJwkForSigning)).toString(
-    "base64url",
-  );
-  const did = `did:jwk:${jwkStr}`;
-  return did;
+  return computeDidJwkIssuerDidAndKidFromDidKeys().did;
 }
 
 // const issuerConfig = require("../data/issuer-config.json");
@@ -368,24 +367,20 @@ export async function handleCredentialGenerationBasedOnFormat(
       },
     };
   } else {
-    // Covers "jwk", "kid-jwk", and "did:web"
+    // Covers "jwk", "kid-jwk", "did:web", and "did:jwk"
     let publicJwkForSigning;
     let privateJwkForSigning;
 
-    // For did:web, use the DID Web key pair that matches the DID document
-    if (effectiveSignatureType === "did:web") {
-      if (!privateKeyPemDidWeb || !publicKeyPemDidWeb) {
-        throw new Error(
-          "DID Web key files not found. Cannot sign credentials with did:web signature type. Ensure ./didjwks/did_private_pkcs8.key and ./didjwks/did_public.pem exist.",
-        );
-      }
+    if (effectiveSignatureType === "did:web" || effectiveSignatureType === "did:jwk") {
+      const { privateJwk, publicJwk } =
+        getIssuerJwkPairAlignedWithDidDocument();
+      privateJwkForSigning = privateJwk;
+      publicJwkForSigning = publicJwk;
       console.log(
-        "did:web signature type selected. Using DID Web key pair from ./didjwks/",
+        `${effectiveSignatureType} signature type selected. Using DID-aligned key pair from ./didjwks/`,
       );
-      publicJwkForSigning = pemToJWK(publicKeyPemDidWeb, "public");
-      privateJwkForSigning = pemToJWK(privateKeyPemDidWeb, "private");
     } else {
-      // For other signature types, use the default key pair
+      // Legacy JWK/KID modes use the default key pair
       publicJwkForSigning = pemToJWK(publicKeyPem, "public");
       privateJwkForSigning = pemToJWK(privateKey, "private");
     }
@@ -426,6 +421,13 @@ export async function handleCredentialGenerationBasedOnFormat(
       );
       joseHeader = {
         kid: kid,
+        alg: "ES256",
+      };
+    } else if (effectiveSignatureType === "did:jwk") {
+      console.log("did:jwk signature type selected.");
+      const { kid } = computeDidJwkIssuerDidAndKidFromDidKeys();
+      joseHeader = {
+        kid,
         alg: "ES256",
       };
     } else {
@@ -1267,32 +1269,36 @@ export async function handleCredentialGenerationBasedOnFormatDeferred(
       ? "x509"
       : sessionObject.signatureType || "kid-jwk";
   if (!isHaip) {
-    // Determine which key pair to use based on signature type
-    let privateJwkForSigning;
-    let publicJwkForSigning;
-
-    // For did:web, use the DID Web key pair that matches the DID document
-    if (effectiveSignatureType === "did:web") {
-      if (!privateKeyPemDidWeb || !publicKeyPemDidWeb) {
-        throw new Error(
-          "DID Web key files not found. Cannot sign credentials with did:web signature type. Ensure ./didjwks/did_private_pkcs8.key and ./didjwks/did_public.pem exist.",
-        );
-      }
-      console.log(
-        "did:web signature type selected for deferred issuance. Using DID Web key pair from ./didjwks/",
-      );
-      privateJwkForSigning = pemToJWK(privateKeyPemDidWeb, "private");
-      publicJwkForSigning = pemToJWK(publicKeyPemDidWeb, "public");
+    if (effectiveSignatureType === "x509") {
+      ({ signer, verifier } = await createSignerVerifierX509(
+        privateKeyPemX509,
+        certificatePemX509,
+      ));
     } else {
-      // For other signature types, use the default key pair
-      privateJwkForSigning = pemToJWK(privateKey, "private");
-      publicJwkForSigning = pemToJWK(publicKeyPem, "public");
-    }
+      let privateJwkForSigning;
+      let publicJwkForSigning;
 
-    ({ signer, verifier } = await createSignerVerifier(
-      privateJwkForSigning,
-      publicJwkForSigning,
-    ));
+      if (
+        effectiveSignatureType === "did:web" ||
+        effectiveSignatureType === "did:jwk"
+      ) {
+        const { privateJwk, publicJwk } =
+          getIssuerJwkPairAlignedWithDidDocument();
+        privateJwkForSigning = privateJwk;
+        publicJwkForSigning = publicJwk;
+        console.log(
+          `${effectiveSignatureType} signature type selected for deferred issuance. Using DID-aligned key pair from ./didjwks/`,
+        );
+      } else {
+        privateJwkForSigning = pemToJWK(privateKey, "private");
+        publicJwkForSigning = pemToJWK(publicKeyPem, "public");
+      }
+
+      ({ signer, verifier } = await createSignerVerifier(
+        privateJwkForSigning,
+        publicJwkForSigning,
+      ));
+    }
   }
 
   const sdjwt = new SDJwtVcInstance({
@@ -1369,19 +1375,38 @@ export async function handleCredentialGenerationBasedOnFormatDeferred(
 
   //TODO this should be update to check format before deciding on the typ of the header
   // Prepare issuance headers (DIIP v5: typ MUST be dc+sd-jwt for SD-JWT credentials)
-  const headerOptions = isHaip
-    ? {
-        header: {
-          typ: SDJWT_CREDENTIAL_TYP_HEADER,
-          x5c: [pemToBase64Der(certificatePemX509)],
-        },
-      }
-    : {
-        header: {
-          typ: SDJWT_CREDENTIAL_TYP_HEADER,
-          kid: "aegean#authentication-key",
-        },
-      };
+  let headerOptions;
+  if (effectiveSignatureType === "x509") {
+    headerOptions = {
+      header: {
+        typ: SDJWT_CREDENTIAL_TYP_HEADER,
+        x5c: [pemToBase64Der(certificatePemX509)],
+      },
+    };
+  } else if (effectiveSignatureType === "did:web") {
+    const controller = computeDidWebFromServerURL(resolvedServerURL);
+    headerOptions = {
+      header: {
+        typ: SDJWT_CREDENTIAL_TYP_HEADER,
+        kid: `${controller}#keys-1`,
+      },
+    };
+  } else if (effectiveSignatureType === "did:jwk") {
+    const { kid } = computeDidJwkIssuerDidAndKidFromDidKeys();
+    headerOptions = {
+      header: {
+        typ: SDJWT_CREDENTIAL_TYP_HEADER,
+        kid,
+      },
+    };
+  } else {
+    headerOptions = {
+      header: {
+        typ: SDJWT_CREDENTIAL_TYP_HEADER,
+        kid: "aegean#authentication-key",
+      },
+    };
+  }
 
   const now = new Date();
   const expiryDate = new Date(now);
