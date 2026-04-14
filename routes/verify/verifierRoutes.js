@@ -43,6 +43,7 @@ import didJwkRouter from "./didJwkRoutes.js";
 import { verifyMdlToken, validateMdlClaims } from "../../utils/mdlVerification.js";
 import base64url from "base64url";
 import { encode as encodeCbor } from 'cbor-x';
+import { processCs03PresentationResponse } from "../../utils/routeUtils.js";
 
 const getSessionTranscriptBytes = (
   oid4vpData,
@@ -1483,6 +1484,42 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
             }).catch(() => {});
           }
           return res.status(400).json({ error: `state mismatch. Received: '${submittedState}', expected: '${vpSession.state}'. See ${SPEC_REFS.VP_STATE}` });
+        }
+
+        // CS-03 (CSC qesRequest): capture VP credential response shape per WE BUILD spec §8.2
+        // (inline documentWithSignature / signatureObject, or empty {} per credential when using responseURI).
+        if (vpSession.cs03_signing) {
+          await logInfo(sessionId, "Processing CS-03 remote signing direct_post response", {});
+          const cs03Result = processCs03PresentationResponse(req.body["vp_token"], {
+            expectedCredentialIds:
+              vpSession.cs03_expected_credential_ids ||
+              vpSession.dcql_query?.credentials?.map((cred) => cred.id).filter(Boolean),
+            oobRequested: !!vpSession.cs03_oob,
+            oobResponse: vpSession.qes_oob_response || null,
+          });
+          if (!cs03Result.ok) {
+            try {
+              vpSession.status = "failed";
+              vpSession.error = cs03Result.error;
+              vpSession.error_description = cs03Result.error_description;
+              await storeVPSession(sessionId, vpSession);
+            } catch (_) {}
+            return res.status(400).json({
+              error: cs03Result.error,
+              error_description: cs03Result.error_description,
+            });
+          }
+          vpSession.qes = cs03Result.qes;
+          if (cs03Result.qes_combined) {
+            vpSession.qes_combined = cs03Result.qes_combined;
+          }
+          vpSession.status = "success";
+          vpSession.claims = cs03Result.claims;
+          await storeVPSession(sessionId, vpSession);
+          await logInfo(sessionId, "CS-03 signing response stored on session", {
+            credentialIds: cs03Result.claims.credentialIds,
+          });
+          return res.status(200).json({ status: "ok" });
         }
 
         await logDebug(sessionId, "Extracting claims from direct_post request");

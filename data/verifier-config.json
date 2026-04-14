@@ -15,7 +15,8 @@
     "mso_mdoc": {
       "issuerauth_alg_values": [-7, -35],
       "deviceauth_alg_values": [-7, -35]
-    }
+    },
+    "https://cloudsignatureconsortium.org/2025/x509": {}
   },
   "jwks": {
     "keys": [

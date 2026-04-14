@@ -15,7 +15,7 @@ import {
   setSessionContext,
   clearSessionContext,
 } from "../services/cacheServiceRedis.js";
-import { createPublicKey } from "crypto";
+import { createHash, createPublicKey } from "crypto";
 import base64url from "base64url";
 import jwt from "jsonwebtoken";
 import path from "path";
@@ -62,6 +62,7 @@ export const CLIENT_METADATA = {
       "sd-jwt_alg_values": ["ES256", "ES384"],
       "kb-jwt_alg_values": ["ES256", "ES384"],
     },
+    "https://cloudsignatureconsortium.org/2025/x509": {},
   },
 };
 
@@ -153,6 +154,297 @@ export const DEFAULT_DCQL_QUERY = {
     },
   ],
 };
+
+/** CS-03 / CSC remote signing: DCQL credential id must match qesRequest.credential_ids */
+export const CS03_SIGNING_CREDENTIAL_ID = "signing-cert-01";
+
+/** DCQL query for CSC X.509 (WE BUILD CS-03) */
+export const CS03_DCQL_QUERY = {
+  credentials: [
+    {
+      id: CS03_SIGNING_CREDENTIAL_ID,
+      format: "https://cloudsignatureconsortium.org/2025/x509",
+      meta: {
+        certificatePolicies: ["0.4.0.2042.1"],
+      },
+    },
+  ],
+};
+
+/**
+ * Parse CS-03 mode from query string (?cs03=1 | ?isCS03=true | ?cs03_oob=1 for out-of-band qesResponse POST).
+ * @param {Record<string, unknown>} query - req.query
+ */
+export function parseCs03Query(query) {
+  if (!query || typeof query !== "object") {
+    return { enabled: false, oob: false };
+  }
+  const truthy = (val) => {
+    if (val === undefined || val === null) return false;
+    const s = String(val).toLowerCase();
+    return s === "1" || s === "true" || s === "yes";
+  };
+  return {
+    enabled: truthy(query.cs03) || truthy(query.isCS03) || truthy(query.is_cs03),
+    oob: truthy(query.cs03_oob) || truthy(query.cs03Oob) || truthy(query.cs03ResponseUri),
+  };
+}
+
+/**
+ * Build CSC qesRequest object (decoded JSON before base64url encoding into transaction_data).
+ * Checksum is computed over {@code data/cs03-sample.pdf}.
+ *
+ * @param {string} serverURL - Verifier base URL (e.g. CONFIG.SERVER_URL)
+ * @param {string} [sessionId] - Required when oob is true (for responseURI path)
+ * @param {{ oob?: boolean }} [options]
+ */
+export function buildCs03QesRequestPayload(serverURL, sessionId, options = {}) {
+  const { oob = false, callbackToken = null } = options;
+  const base = String(serverURL || "").replace(/\/$/, "");
+  const pdfPath = path.join(process.cwd(), "data", "cs03-sample.pdf");
+  const pdfBytes = fs.readFileSync(pdfPath);
+  const hashB64 = createHash("sha256").update(pdfBytes).digest("base64");
+  const checksum = `sha256-${hashB64}`;
+  const documentHref = `${base}/x509/cs03-document`;
+
+  const signatureRequest = {
+    label: "CS-03 sample document",
+    access: { type: "public" },
+    href: documentHref,
+    checksum,
+    signature_format: "P",
+    conformance_level: "AdES-B-B",
+    signed_envelope_property: "Certification",
+  };
+
+  const qes = {
+    type: "https://cloudsignatureconsortium.org/2025/qes",
+    credential_ids: [CS03_SIGNING_CREDENTIAL_ID],
+    signatureQualifier: "eu_eidas_qes",
+    signatureRequests: [signatureRequest],
+  };
+
+  if (oob && sessionId) {
+    const callbackUrl = new URL(`${base}/x509/qes-callback/${sessionId}`);
+    if (callbackToken) {
+      callbackUrl.searchParams.set("callback_token", callbackToken);
+    }
+    qes.signatureRequests[0].responseURI = callbackUrl.toString();
+  }
+
+  return qes;
+}
+
+/** Base64url-encode a qesRequest for OpenID4VP transaction_data[] */
+export function encodeCs03TransactionData(qesRequestObj) {
+  return Buffer.from(JSON.stringify(qesRequestObj)).toString("base64url");
+}
+
+function getHostnameFromX509ClientId(clientId) {
+  if (typeof clientId !== "string" || !clientId.startsWith("x509_san_dns:")) {
+    return null;
+  }
+  return clientId.slice("x509_san_dns:".length);
+}
+
+export function validateCs03ResponseUriAlignment({ serverURL, clientId, responseURI }) {
+  let serverHost;
+  let responseHost;
+  try {
+    serverHost = new URL(serverURL).hostname;
+    responseHost = new URL(responseURI).hostname;
+  } catch (error) {
+    return {
+      ok: false,
+      error: `invalid CS-03 URL configuration: ${error.message}`,
+    };
+  }
+
+  const clientIdHost = getHostnameFromX509ClientId(clientId);
+  if (!clientIdHost) {
+    return {
+      ok: false,
+      error: "CS-03 requires an x509_san_dns client_id",
+    };
+  }
+
+  if (responseHost !== serverHost) {
+    return {
+      ok: false,
+      error: `CS-03 responseURI host '${responseHost}' must match verifier SERVER_URL host '${serverHost}'`,
+    };
+  }
+
+  if (responseHost !== clientIdHost) {
+    return {
+      ok: false,
+      error: `CS-03 responseURI host '${responseHost}' must match x509_san_dns client_id host '${clientIdHost}'`,
+    };
+  }
+
+  return { ok: true };
+}
+
+function isNonEmptyStringArray(value) {
+  return Array.isArray(value) && value.length > 0 && value.every((entry) => typeof entry === "string" && entry.length > 0);
+}
+
+export function validateCs03QesResponse(qesResponse) {
+  if (!qesResponse || typeof qesResponse !== "object" || Array.isArray(qesResponse)) {
+    return { ok: false, error: "qes response must be a JSON object" };
+  }
+
+  const hasDocumentWithSignature = qesResponse.documentWithSignature !== undefined;
+  const hasSignatureObject = qesResponse.signatureObject !== undefined;
+
+  if (!hasDocumentWithSignature && !hasSignatureObject) {
+    return { ok: false, error: "qes response must include documentWithSignature or signatureObject" };
+  }
+
+  if (hasDocumentWithSignature && hasSignatureObject) {
+    return { ok: false, error: "qes response must not include both documentWithSignature and signatureObject" };
+  }
+
+  if (hasDocumentWithSignature && !isNonEmptyStringArray(qesResponse.documentWithSignature)) {
+    return { ok: false, error: "documentWithSignature must be a non-empty array of base64 strings" };
+  }
+
+  if (hasSignatureObject && !isNonEmptyStringArray(qesResponse.signatureObject)) {
+    return { ok: false, error: "signatureObject must be a non-empty array of base64 strings" };
+  }
+
+  return { ok: true };
+}
+
+export function processCs03PresentationResponse(vpTokenRaw, options = {}) {
+  const {
+    expectedCredentialIds = [CS03_SIGNING_CREDENTIAL_ID],
+    oobRequested = false,
+    oobResponse = null,
+  } = options;
+
+  if (vpTokenRaw === undefined || vpTokenRaw === null) {
+    return {
+      ok: false,
+      error: "invalid_request",
+      error_description: "vp_token required for CS-03 signing flow",
+    };
+  }
+
+  let parsed = vpTokenRaw;
+  if (typeof vpTokenRaw === "string") {
+    if (!vpTokenRaw.trim().startsWith("{")) {
+      return {
+        ok: false,
+        error: "invalid_request",
+        error_description: "vp_token must be a JSON object for CS-03",
+      };
+    }
+    try {
+      parsed = JSON.parse(vpTokenRaw);
+    } catch (e) {
+      return {
+        ok: false,
+        error: "invalid_request",
+        error_description: `vp_token JSON parse failed: ${e.message}`,
+      };
+    }
+  }
+
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return {
+      ok: false,
+      error: "invalid_request",
+      error_description: "vp_token must be a JSON object for CS-03",
+    };
+  }
+
+  const responseCredentialIds = Object.keys(parsed);
+  const expectedSet = new Set(expectedCredentialIds);
+  const unexpectedIds = responseCredentialIds.filter((credId) => !expectedSet.has(credId));
+  if (unexpectedIds.length > 0) {
+    return {
+      ok: false,
+      error: "invalid_request",
+      error_description: `vp_token contains unexpected credential ids for CS-03: ${unexpectedIds.join(", ")}`,
+    };
+  }
+
+  const missingIds = expectedCredentialIds.filter((credId) => !(credId in parsed));
+  if (missingIds.length > 0) {
+    return {
+      ok: false,
+      error: "invalid_request",
+      error_description: `vp_token missing expected credential ids for CS-03: ${missingIds.join(", ")}`,
+    };
+  }
+
+  const qesByCredentialId = {};
+  for (const credId of expectedCredentialIds) {
+    const entry = parsed[credId];
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return {
+        ok: false,
+        error: "invalid_request",
+        error_description: `CS-03 credential response for '${credId}' must be a JSON object`,
+      };
+    }
+
+    const hasQes = Object.prototype.hasOwnProperty.call(entry, "qes");
+    const isEmptyObject = Object.keys(entry).length === 0;
+
+    if (oobRequested) {
+      if (!isEmptyObject) {
+        return {
+          ok: false,
+          error: "invalid_request",
+          error_description: `CS-03 credential response for '${credId}' must be empty when responseURI is used`,
+        };
+      }
+      qesByCredentialId[credId] = {
+        empty_credential_response: true,
+        note: "Wallet POSTed signed output to qesRequest.signatureRequests[].responseURI",
+      };
+      continue;
+    }
+
+    if (!hasQes) {
+      return {
+        ok: false,
+        error: "invalid_request",
+        error_description: `CS-03 credential response for '${credId}' must include qes when responseURI is not used`,
+      };
+    }
+
+    const qesValidation = validateCs03QesResponse(entry.qes);
+    if (!qesValidation.ok) {
+      return {
+        ok: false,
+        error: "invalid_request",
+        error_description: `Invalid qes response for '${credId}': ${qesValidation.error}`,
+      };
+    }
+    qesByCredentialId[credId] = entry.qes;
+  }
+
+  const result = {
+    ok: true,
+    qes: qesByCredentialId,
+    claims: {
+      cs03: true,
+      credentialIds: expectedCredentialIds,
+    },
+  };
+
+  if (oobResponse) {
+    result.qes_combined = {
+      inline: qesByCredentialId,
+      oob: oobResponse,
+    };
+  }
+
+  return result;
+}
 
 // Default transaction data configuration
 export const DEFAULT_TRANSACTION_DATA = {
@@ -782,6 +1074,9 @@ export async function generateVPRequest(params) {
     transactionData = null,
     usePostMethod = false,
     routePath,
+    cs03Signing = false,
+    cs03Oob = false,
+    cs03CallbackToken = null,
   } = params;
 
   await logInfo(sessionId, "Starting VP request generation in routeUtils", {
@@ -790,6 +1085,8 @@ export async function generateVPRequest(params) {
     clientId,
     hasDcqlQuery: !!dcqlQuery,
     hasTransactionData: !!transactionData,
+    cs03Signing,
+    cs03Oob,
     usePostMethod,
     routePath
   });
@@ -830,8 +1127,20 @@ export async function generateVPRequest(params) {
   if (transactionData) {
     sessionData.transaction_data = [transactionData];
     await logDebug(sessionId, "Added transaction data to session", {
-      transactionType: transactionData.type
+      transactionType:
+        typeof transactionData === "string"
+          ? "base64url-encoded"
+          : transactionData?.type,
     });
+  }
+
+  if (cs03Signing) {
+    sessionData.cs03_signing = true;
+    sessionData.cs03_oob = cs03Oob;
+    sessionData.cs03_callback_token = cs03CallbackToken;
+    sessionData.cs03_expected_credential_ids =
+      dcqlQuery?.credentials?.map((cred) => cred.id).filter(Boolean) || [CS03_SIGNING_CREDENTIAL_ID];
+    await logDebug(sessionId, "CS-03 remote signing flow flagged on session");
   }
 
   // Store session data

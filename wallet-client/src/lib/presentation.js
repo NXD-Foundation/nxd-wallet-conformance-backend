@@ -16,6 +16,16 @@ import {
   isMdocCredential,
 } from "../../utils/mdlVerification.js";
 import { didKeyToJwks } from "../../utils/cryptoUtils.js";
+import {
+  extractCs03Request,
+  loadLocalCs03Signer,
+  selectMatchingCs03Signer,
+  fetchCs03Documents,
+  buildCs03SignatureObject,
+  buildInlineCs03VpToken,
+  buildOobCs03VpToken,
+  sendCs03OobResponse,
+} from "./cs03.js";
 
 function makeSessionLogger(sessionId) {
   return function sessionLog(...args) {
@@ -572,6 +582,126 @@ export async function performPresentation(
 
     if (!responseUri) throw new Error("Missing response_uri in request");
     if (!nonce) throw new Error("Missing nonce in request");
+
+    const cs03Request = extractCs03Request(payload);
+    if (cs03Request) {
+      if ((responseMode || "direct_post") !== "direct_post") {
+        throw new Error("CS-03 wallet flow currently supports response_mode=direct_post only");
+      }
+
+      const signer = selectMatchingCs03Signer({
+        credentialQueries: cs03Request.credentialQueries,
+        signer: loadLocalCs03Signer(),
+      });
+      const credentialIds = cs03Request.credentialQueries
+        .map((cred) => cred.id)
+        .filter((id) => typeof id === "string" && id.length > 0);
+      if (credentialIds.length === 0) {
+        throw new Error("CS-03 request does not contain credential query ids");
+      }
+
+      const signatureRequests = Array.isArray(cs03Request.qesRequest.signatureRequests)
+        ? cs03Request.qesRequest.signatureRequests
+        : [];
+      if (signatureRequests.length === 0) {
+        throw new Error("CS-03 qesRequest.signatureRequests is required");
+      }
+
+      try {
+        slog("[present] CS-03 request detected", {
+          credentialIds,
+          signatureRequestCount: signatureRequests.length,
+          hasResponseURI: !!signatureRequests[0]?.responseURI,
+        });
+      } catch {}
+
+      const documents = await fetchCs03Documents(signatureRequests);
+      const qesResponse = buildCs03SignatureObject({ signer, documents });
+      const responseURI = signatureRequests[0]?.responseURI;
+      const vpTokenValue = responseURI
+        ? buildOobCs03VpToken({ credentialIds })
+        : buildInlineCs03VpToken({ credentialIds, qesResponse });
+
+      if (responseURI) {
+        await sendCs03OobResponse(responseURI, qesResponse, {
+          clientId,
+          clientMetadata: payload.client_metadata || payload.clientMetadata || null,
+        });
+        try {
+          slog("[present] CS-03 OOB qesResponse sent", {
+            responseURI,
+            signatureCount: qesResponse.signatureObject?.length || 0,
+          });
+        } catch {}
+      }
+
+      const body = {
+        vp_token: vpTokenValue,
+        ...(state ? { state } : {}),
+      };
+      const formParams = new URLSearchParams();
+      formParams.append("vp_token", JSON.stringify(vpTokenValue));
+      if (state) {
+        formParams.append("state", state);
+      }
+      const bodyContent = formParams.toString();
+      const contentType = "application/x-www-form-urlencoded";
+
+      const presRequestId = `pres_req_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+      const logBody = {
+        ...body,
+        vp_token: Object.fromEntries(
+          Object.keys(vpTokenValue).map((key) => [key, vpTokenValue[key]]),
+        ),
+      };
+
+      try {
+        slog("[PRESENTATION] [REQUEST] Sending CS-03 response to verifier", {
+          requestId: presRequestId,
+          method: "POST",
+          url: responseUri,
+          contentType,
+          headers: { "content-type": contentType },
+          body: logBody,
+        });
+      } catch {}
+
+      const res = await fetch(responseUri, {
+        method: "POST",
+        headers: { "content-type": contentType },
+        body: bodyContent,
+      });
+      const resText = await res.text().catch(() => "");
+      let responseBody = null;
+      try {
+        responseBody = resText ? JSON.parse(resText) : null;
+      } catch {}
+
+      try {
+        slog("[PRESENTATION] [RESPONSE] Verifier response", {
+          requestId: presRequestId,
+          url: responseUri,
+          status: res.status,
+          statusText: res.statusText,
+          headers: Object.fromEntries(res.headers.entries()),
+          body: responseBody || resText,
+        });
+      } catch {}
+
+      if (!res.ok) {
+        throw new Error(
+          `Verifier direct_post error ${res.status}${resText ? `: ${resText}` : ""}`,
+        );
+      }
+
+      return {
+        status: "ok",
+        mode: responseURI ? "cs03_oob" : "cs03_inline",
+        credentialIds,
+        verifierStatus: res.status,
+        response: responseBody || resText,
+      };
+    }
 
     // Determine which wallet credential to use
     let selectedType = credentialType;

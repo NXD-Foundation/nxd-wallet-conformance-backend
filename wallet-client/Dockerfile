@@ -23,6 +23,7 @@ COPY utils ./utils
 COPY didjwks ./didjwks
 COPY x509EC ./x509EC
 COPY x509 ./x509
+COPY x509CS03 ./x509CS03
 COPY X25519 ./X25519
 
 # Create non-root user for security
@@ -37,5 +38,4 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
 EXPOSE 4000
 
 CMD ["node", "src/server.js"]
-
 

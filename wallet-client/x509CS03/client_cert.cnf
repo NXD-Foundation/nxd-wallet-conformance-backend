@@ -1,0 +1,29 @@
+[ req ]
+default_bits = 2048
+default_md = sha256
+prompt = no
+distinguished_name = dn
+x509_extensions = v3_req
+
+[ dn ]
+C = GR
+ST = Aegean
+L = Chios
+O = WE BUILD Wallet Client
+OU = CS03 Test Signer
+CN = wallet-client-cs03.local
+
+[ v3_req ]
+basicConstraints = critical,CA:FALSE
+keyUsage = critical,digitalSignature,nonRepudiation
+extendedKeyUsage = emailProtection
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid,issuer
+subjectAltName = @alt_names
+certificatePolicies = @polsect
+
+[ alt_names ]
+DNS.1 = wallet-client-cs03.local
+
+[ polsect ]
+policyIdentifier = 0.4.0.2042.1

@@ -1,14 +1,21 @@
 import express from "express";
+import path from "path";
 import { v4 as uuidv4 } from "uuid";
 import {
   CONFIG,
   DEFAULT_DCQL_QUERY,
-  DEFAULT_TRANSACTION_DATA,
   loadConfigurationFiles,
   generateVPRequest,
   processVPRequest,
   createTransactionData,
   createErrorResponse,
+  parseCs03Query,
+  CS03_DCQL_QUERY,
+  CS03_SIGNING_CREDENTIAL_ID,
+  buildCs03QesRequestPayload,
+  encodeCs03TransactionData,
+  validateCs03QesResponse,
+  validateCs03ResponseUriAlignment,
 } from "../../utils/routeUtils.js";
 import {
   logInfo,
@@ -21,6 +28,39 @@ import {
 import { makeSessionLogger, logHttpRequest, logHttpResponse } from "../../utils/sessionLogger.js";
 
 const x509Router = express.Router();
+
+/**
+ * CS-03 (remote qualified signing): DCQL for CSC X.509 + qesRequest in transaction_data.
+ * Query: cs03=1 or isCS03=true; optional cs03_oob=1 to set qesRequest.responseURI to POST here.
+ * @param {import("express").Request["query"]} query
+ * @param {string} sessionId
+ */
+function resolveCs03VpOptions(query, sessionId) {
+  const { enabled, oob } = parseCs03Query(query);
+  if (!enabled) {
+    return { dcqlQuery: null, transactionData: null, cs03Signing: false, cs03Oob: false, callbackToken: null };
+  }
+  const callbackToken = oob ? uuidv4() : null;
+  const qes = buildCs03QesRequestPayload(CONFIG.SERVER_URL, sessionId, { oob, callbackToken });
+  if (oob) {
+    const responseURI = qes.signatureRequests?.[0]?.responseURI;
+    const alignment = validateCs03ResponseUriAlignment({
+      serverURL: CONFIG.SERVER_URL,
+      clientId: CONFIG.CLIENT_ID,
+      responseURI,
+    });
+    if (!alignment.ok) {
+      throw new Error(alignment.error);
+    }
+  }
+  return {
+    dcqlQuery: CS03_DCQL_QUERY,
+    transactionData: encodeCs03TransactionData(qes),
+    cs03Signing: true,
+    cs03Oob: oob,
+    callbackToken,
+  };
+}
 
 /**
  * SESSION-BASED LOGGING SYSTEM
@@ -157,6 +197,7 @@ x509Router.get("/generateVPRequestDCQL", async (req, res) => {
     requestId = logHttpRequest(slog, "GET", "/generateVPRequestDCQL", req.headers, req.query);
     try { slog("[VERIFIER] [START] VP request generation with DCQL", { responseMode, jarAlg }); } catch {}
 
+    const cs03 = resolveCs03VpOptions(req.query, sessionId);
     const result = await generateVPRequest({
       sessionId,
       responseMode,
@@ -166,7 +207,11 @@ x509Router.get("/generateVPRequestDCQL", async (req, res) => {
       clientMetadata,
       kid: null,
       serverURL: CONFIG.SERVER_URL,
-      dcqlQuery: DEFAULT_DCQL_QUERY,
+      dcqlQuery: cs03.dcqlQuery ?? DEFAULT_DCQL_QUERY,
+      transactionData: cs03.transactionData,
+      cs03Signing: cs03.cs03Signing,
+      cs03Oob: cs03.cs03Oob,
+      cs03CallbackToken: cs03.callbackToken,
       usePostMethod: true,
       routePath: "/x509/x509VPrequest",
     });
@@ -199,6 +244,7 @@ x509Router.get("/generateVPRequestDCQLGET", async (req, res) => {
     requestId = logHttpRequest(slog, "GET", "/generateVPRequestDCQLGET", req.headers, req.query);
     try { slog("[VERIFIER] [START] VP request generation with DCQL (GET method)", { responseMode, jarAlg }); } catch {}
 
+    const cs03 = resolveCs03VpOptions(req.query, sessionId);
     const result = await generateVPRequest({
       sessionId,
       responseMode,
@@ -208,7 +254,11 @@ x509Router.get("/generateVPRequestDCQLGET", async (req, res) => {
       clientMetadata,
       kid: null,
       serverURL: CONFIG.SERVER_URL,
-      dcqlQuery: DEFAULT_DCQL_QUERY,
+      dcqlQuery: cs03.dcqlQuery ?? DEFAULT_DCQL_QUERY,
+      transactionData: cs03.transactionData,
+      cs03Signing: cs03.cs03Signing,
+      cs03Oob: cs03.cs03Oob,
+      cs03CallbackToken: cs03.callbackToken,
       usePostMethod: false,
       routePath: "/x509/x509VPrequest",
     });
@@ -241,12 +291,23 @@ x509Router.get("/generateVPRequestTransaction", async (req, res) => {
     requestId = logHttpRequest(slog, "GET", "/generateVPRequestTransaction", req.headers, req.query);
     try { slog("[VERIFIER] [START] VP request generation with transaction data", { responseMode, jarAlg }); } catch {}
 
-    // IMPORTANT: When using DCQL, credential_ids in transaction_data MUST
-    // match the ids from the DCQL query (DEFAULT_DCQL_QUERY.credentials[].id)
-    // per OpenID4VP 5.1.2.8.2.2.
-    const transactionDataObj = createTransactionData(DEFAULT_DCQL_QUERY);
-    const base64UrlEncodedTxData = Buffer.from(JSON.stringify(transactionDataObj))
-      .toString("base64url");
+    const cs03 = resolveCs03VpOptions(req.query, sessionId);
+    let base64UrlEncodedTxData;
+    let dcqlForTx = DEFAULT_DCQL_QUERY;
+    let cs03Signing = false;
+    if (cs03.dcqlQuery) {
+      dcqlForTx = cs03.dcqlQuery;
+      base64UrlEncodedTxData = cs03.transactionData;
+      cs03Signing = true;
+    } else {
+      // IMPORTANT: When using DCQL, credential_ids in transaction_data MUST
+      // match the ids from the DCQL query (DEFAULT_DCQL_QUERY.credentials[].id)
+      // per OpenID4VP 5.1.2.8.2.2.
+      const transactionDataObj = createTransactionData(DEFAULT_DCQL_QUERY);
+      base64UrlEncodedTxData = Buffer.from(JSON.stringify(transactionDataObj)).toString(
+        "base64url"
+      );
+    }
 
     const result = await generateVPRequest({
       sessionId,
@@ -257,8 +318,11 @@ x509Router.get("/generateVPRequestTransaction", async (req, res) => {
       clientMetadata,
       kid: null,
       serverURL: CONFIG.SERVER_URL,
-      dcqlQuery: DEFAULT_DCQL_QUERY,
+      dcqlQuery: dcqlForTx,
       transactionData: base64UrlEncodedTxData,
+      cs03Signing,
+      cs03Oob: cs03.cs03Oob,
+      cs03CallbackToken: cs03.callbackToken,
       usePostMethod: true,
       routePath: "/x509/x509VPrequest",
     });
@@ -275,6 +339,65 @@ x509Router.get("/generateVPRequestTransaction", async (req, res) => {
     res.status(500).json(errorResponse);
   }
 });
+
+/**
+ * CS-03: public PDF for signatureRequests[].href (same host as client_id for wallet fetch).
+ */
+x509Router.get("/cs03-document", (req, res) => {
+  const pdfPath = path.join(process.cwd(), "data", "cs03-sample.pdf");
+  res.type("application/pdf");
+  res.sendFile(pdfPath, (err) => {
+    if (err && !res.headersSent) {
+      res.status(404).json({ error: "cs03-sample.pdf missing (see data/cs03-sample.pdf)" });
+    }
+  });
+});
+
+/**
+ * CS-03: optional out-of-band qesResponse delivery (when qesRequest includes responseURI).
+ */
+x509Router.post(
+  "/qes-callback/:sessionId",
+  express.json({ limit: "50mb" }),
+  async (req, res) => {
+    const sessionId = req.params.sessionId;
+    const slog = makeSessionLogger(sessionId);
+    try {
+      const { getVPSession, storeVPSession } = await import(
+        "../../services/cacheServiceRedis.js"
+      );
+      const vpSession = await getVPSession(sessionId);
+      if (!vpSession) {
+        return res.status(404).json({ error: "session not found" });
+      }
+      if (!vpSession.cs03_signing || !vpSession.cs03_oob) {
+        return res.status(400).json({ error: "session is not configured for CS-03 out-of-band response" });
+      }
+      if (!vpSession.cs03_callback_token || req.query.callback_token !== vpSession.cs03_callback_token) {
+        return res.status(403).json({ error: "invalid callback token" });
+      }
+      const qesValidation = validateCs03QesResponse(req.body);
+      if (!qesValidation.ok) {
+        return res.status(400).json({ error: "invalid_request", error_description: qesValidation.error });
+      }
+      vpSession.qes_oob_response = {
+        [CS03_SIGNING_CREDENTIAL_ID]: req.body,
+      };
+      await storeVPSession(sessionId, vpSession);
+      try {
+        slog("[VERIFIER] CS-03 qesResponse received at responseURI", {
+          hasDocumentWithSignature: Array.isArray(req.body?.documentWithSignature),
+        });
+      } catch {}
+      res.sendStatus(200);
+    } catch (e) {
+      try {
+        slog("[VERIFIER] CS-03 qes-callback error", { error: e.message });
+      } catch {}
+      res.status(500).json({ error: e.message });
+    }
+  }
+);
 
 /**
  * Request URI endpoint (handles both POST and GET)

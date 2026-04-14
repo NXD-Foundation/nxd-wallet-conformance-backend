@@ -78,12 +78,33 @@ describe('Presentation Definition (PE) structure - OID4VP v1.0', () => {
 
   });
 
+  it('Verifier metadata must advertise CSC X.509 (CS-03)', () => {
+    const verifierConfigRaw = fs.readFileSync('./data/verifier-config.json', 'utf-8');
+    const cfg = JSON.parse(verifierConfigRaw);
+    assert.ok(
+      cfg.vp_formats_supported &&
+        Object.prototype.hasOwnProperty.call(
+          cfg.vp_formats_supported,
+          'https://cloudsignatureconsortium.org/2025/x509'
+        ),
+      'verifier-config.vp_formats_supported must include CSC X.509 format URI'
+    );
+  });
+
   it('In-code CLIENT_METADATA must advertise dc+sd-jwt', async () => {
     // Dynamically import to read the object
     const rt = await import('../utils/routeUtils.js');
     const meta = rt.CLIENT_METADATA;
     assert.ok(meta && meta.vp_formats_supported && meta.vp_formats_supported['dc+sd-jwt'], 'CLIENT_METADATA.vp_formats_supported.dc+sd-jwt required');
     assert.ok(!meta.vp_formats_supported['vc+sd-jwt'], 'CLIENT_METADATA must not use legacy vc+sd-jwt');
+    assert.ok(
+      meta.vp_formats_supported &&
+        Object.prototype.hasOwnProperty.call(
+          meta.vp_formats_supported,
+          'https://cloudsignatureconsortium.org/2025/x509'
+        ),
+      'CLIENT_METADATA.vp_formats_supported must include CSC X.509 format URI'
+    );
   });
 
   it('Verifier metadata must specify sd-jwt_alg_values and kb-jwt_alg_values for dc+sd-jwt', () => {
