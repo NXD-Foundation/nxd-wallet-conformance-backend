@@ -1140,7 +1140,16 @@ export async function generateVPRequest(params) {
     sessionData.cs03_callback_token = cs03CallbackToken;
     sessionData.cs03_expected_credential_ids =
       dcqlQuery?.credentials?.map((cred) => cred.id).filter(Boolean) || [CS03_SIGNING_CREDENTIAL_ID];
-    await logDebug(sessionId, "CS-03 remote signing flow flagged on session");
+    await logInfo(sessionId, "CS-03 signing session configured", {
+      cs03Oob: cs03Oob,
+      hasCallbackToken: !!cs03CallbackToken,
+      expectedCredentialIds: sessionData.cs03_expected_credential_ids,
+      dcqlCredentialFormats: (dcqlQuery?.credentials || []).map((c) => c.format).filter(Boolean),
+      hasEncodedQesTransactionData: typeof transactionData === "string" && transactionData.length > 0,
+    });
+    await logDebug(sessionId, "CS-03 qesRequest is carried in transaction_data (base64url JSON)", {
+      qesType: "https://cloudsignatureconsortium.org/2025/qes",
+    });
   }
 
   // Store session data

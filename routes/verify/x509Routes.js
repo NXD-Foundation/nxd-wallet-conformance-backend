@@ -18,6 +18,10 @@ import {
   validateCs03ResponseUriAlignment,
 } from "../../utils/routeUtils.js";
 import {
+  summarizeCs03ValidationForLog,
+  validateCs03CredentialResponses,
+} from "../../utils/cs03Validation.js";
+import {
   logInfo,
   logWarn,
   logError,
@@ -35,7 +39,7 @@ const x509Router = express.Router();
  * @param {import("express").Request["query"]} query
  * @param {string} sessionId
  */
-function resolveCs03VpOptions(query, sessionId) {
+function resolveCs03VpOptions(query, sessionId, slog = null) {
   const { enabled, oob } = parseCs03Query(query);
   if (!enabled) {
     return { dcqlQuery: null, transactionData: null, cs03Signing: false, cs03Oob: false, callbackToken: null };
@@ -50,9 +54,30 @@ function resolveCs03VpOptions(query, sessionId) {
       responseURI,
     });
     if (!alignment.ok) {
+      try {
+        slog?.("[VERIFIER] CS-03 responseURI alignment check failed", {
+          error: alignment.error,
+          responseURI,
+        });
+      } catch {}
       throw new Error(alignment.error);
     }
+    try {
+      slog?.("[VERIFIER] CS-03 out-of-band qesResponse URI configured", {
+        responseURI,
+        hasCallbackToken: !!callbackToken,
+      });
+    } catch {}
   }
+  try {
+    slog?.("[VERIFIER] CS-03 qesRequest built for VP authorization", {
+      sessionId,
+      oob,
+      signatureRequests: qes.signatureRequests?.length ?? 0,
+      documentHref: qes.signatureRequests?.[0]?.href,
+      hasChecksum: !!qes.signatureRequests?.[0]?.checksum,
+    });
+  } catch {}
   return {
     dcqlQuery: CS03_DCQL_QUERY,
     transactionData: encodeCs03TransactionData(qes),
@@ -197,7 +222,7 @@ x509Router.get("/generateVPRequestDCQL", async (req, res) => {
     requestId = logHttpRequest(slog, "GET", "/generateVPRequestDCQL", req.headers, req.query);
     try { slog("[VERIFIER] [START] VP request generation with DCQL", { responseMode, jarAlg }); } catch {}
 
-    const cs03 = resolveCs03VpOptions(req.query, sessionId);
+    const cs03 = resolveCs03VpOptions(req.query, sessionId, slog);
     const result = await generateVPRequest({
       sessionId,
       responseMode,
@@ -217,7 +242,13 @@ x509Router.get("/generateVPRequestDCQL", async (req, res) => {
     });
 
     logHttpResponse(slog, requestId, "/generateVPRequestDCQL", 200, "OK", res.getHeaders(), result);
-    try { slog("[VERIFIER] [COMPLETE] VP request generation with DCQL", { success: true }); } catch {}
+    try {
+      slog("[VERIFIER] [COMPLETE] VP request generation with DCQL", {
+        success: true,
+        cs03Signing: cs03.cs03Signing,
+        cs03Oob: cs03.cs03Oob,
+      });
+    } catch {}
     res.json(result);
   } catch (error) {
     if (slog) {
@@ -244,7 +275,7 @@ x509Router.get("/generateVPRequestDCQLGET", async (req, res) => {
     requestId = logHttpRequest(slog, "GET", "/generateVPRequestDCQLGET", req.headers, req.query);
     try { slog("[VERIFIER] [START] VP request generation with DCQL (GET method)", { responseMode, jarAlg }); } catch {}
 
-    const cs03 = resolveCs03VpOptions(req.query, sessionId);
+    const cs03 = resolveCs03VpOptions(req.query, sessionId, slog);
     const result = await generateVPRequest({
       sessionId,
       responseMode,
@@ -264,7 +295,13 @@ x509Router.get("/generateVPRequestDCQLGET", async (req, res) => {
     });
 
     logHttpResponse(slog, requestId, "/generateVPRequestDCQLGET", 200, "OK", res.getHeaders(), result);
-    try { slog("[VERIFIER] [COMPLETE] VP request generation with DCQL (GET method)", { success: true }); } catch {}
+    try {
+      slog("[VERIFIER] [COMPLETE] VP request generation with DCQL (GET method)", {
+        success: true,
+        cs03Signing: cs03.cs03Signing,
+        cs03Oob: cs03.cs03Oob,
+      });
+    } catch {}
     res.json(result);
   } catch (error) {
     if (slog) {
@@ -291,7 +328,7 @@ x509Router.get("/generateVPRequestTransaction", async (req, res) => {
     requestId = logHttpRequest(slog, "GET", "/generateVPRequestTransaction", req.headers, req.query);
     try { slog("[VERIFIER] [START] VP request generation with transaction data", { responseMode, jarAlg }); } catch {}
 
-    const cs03 = resolveCs03VpOptions(req.query, sessionId);
+    const cs03 = resolveCs03VpOptions(req.query, sessionId, slog);
     let base64UrlEncodedTxData;
     let dcqlForTx = DEFAULT_DCQL_QUERY;
     let cs03Signing = false;
@@ -299,6 +336,11 @@ x509Router.get("/generateVPRequestTransaction", async (req, res) => {
       dcqlForTx = cs03.dcqlQuery;
       base64UrlEncodedTxData = cs03.transactionData;
       cs03Signing = true;
+      try {
+        slog("[VERIFIER] CS-03 transaction_data path (generateVPRequestTransaction)", {
+          cs03Oob: cs03.cs03Oob,
+        });
+      } catch {}
     } else {
       // IMPORTANT: When using DCQL, credential_ids in transaction_data MUST
       // match the ids from the DCQL query (DEFAULT_DCQL_QUERY.credentials[].id)
@@ -328,7 +370,13 @@ x509Router.get("/generateVPRequestTransaction", async (req, res) => {
     });
 
     logHttpResponse(slog, requestId, "/generateVPRequestTransaction", 200, "OK", res.getHeaders(), result);
-    try { slog("[VERIFIER] [COMPLETE] VP request generation with transaction data", { success: true }); } catch {}
+    try {
+      slog("[VERIFIER] [COMPLETE] VP request generation with transaction data", {
+        success: true,
+        cs03Signing,
+        cs03Oob: cs03.cs03Oob,
+      });
+    } catch {}
     res.json(result);
   } catch (error) {
     if (slog) {
@@ -344,11 +392,25 @@ x509Router.get("/generateVPRequestTransaction", async (req, res) => {
  * CS-03: public PDF for signatureRequests[].href (same host as client_id for wallet fetch).
  */
 x509Router.get("/cs03-document", (req, res) => {
+  const correlationId = req.query.sessionId || req.query.correlationId;
+  const docSlog = correlationId ? makeSessionLogger(String(correlationId)) : null;
+  try {
+    docSlog?.("[VERIFIER] CS-03 sample PDF request (document href)", {
+      userAgent: req.headers["user-agent"]?.slice(0, 120),
+    });
+  } catch {}
   const pdfPath = path.join(process.cwd(), "data", "cs03-sample.pdf");
   res.type("application/pdf");
   res.sendFile(pdfPath, (err) => {
     if (err && !res.headersSent) {
+      try {
+        docSlog?.("[VERIFIER] CS-03 sample PDF send failed", { error: err.message });
+      } catch {}
       res.status(404).json({ error: "cs03-sample.pdf missing (see data/cs03-sample.pdf)" });
+    } else if (!err) {
+      try {
+        docSlog?.("[VERIFIER] CS-03 sample PDF served OK", {});
+      } catch {}
     }
   });
 });
@@ -362,38 +424,134 @@ x509Router.post(
   async (req, res) => {
     const sessionId = req.params.sessionId;
     const slog = makeSessionLogger(sessionId);
+    let requestId = null;
+    try {
+      requestId = logHttpRequest(slog, "POST", `/x509/qes-callback/${sessionId}`, req.headers, {
+        query: req.query,
+        contentType: req.headers["content-type"],
+        contentLength: req.headers["content-length"],
+      });
+    } catch {}
     try {
       const { getVPSession, storeVPSession } = await import(
         "../../services/cacheServiceRedis.js"
       );
       const vpSession = await getVPSession(sessionId);
       if (!vpSession) {
+        try {
+          slog("[VERIFIER] CS-03 qes-callback rejected: session not found", { sessionId });
+        } catch {}
+        if (requestId != null) {
+          logHttpResponse(slog, requestId, `/x509/qes-callback/${sessionId}`, 404, "Not Found", res.getHeaders(), {
+            error: "session not found",
+          });
+        }
         return res.status(404).json({ error: "session not found" });
       }
       if (!vpSession.cs03_signing || !vpSession.cs03_oob) {
+        try {
+          slog("[VERIFIER] CS-03 qes-callback rejected: session not OOB CS-03", {
+            cs03_signing: !!vpSession.cs03_signing,
+            cs03_oob: !!vpSession.cs03_oob,
+          });
+        } catch {}
+        if (requestId != null) {
+          logHttpResponse(slog, requestId, `/x509/qes-callback/${sessionId}`, 400, "Bad Request", res.getHeaders(), {
+            error: "not CS-03 OOB session",
+          });
+        }
         return res.status(400).json({ error: "session is not configured for CS-03 out-of-band response" });
       }
       if (!vpSession.cs03_callback_token || req.query.callback_token !== vpSession.cs03_callback_token) {
+        try {
+          slog("[VERIFIER] CS-03 qes-callback rejected: invalid or missing callback_token", {
+            queryHadToken: typeof req.query.callback_token === "string",
+          });
+        } catch {}
+        if (requestId != null) {
+          logHttpResponse(slog, requestId, `/x509/qes-callback/${sessionId}`, 403, "Forbidden", res.getHeaders(), {
+            error: "invalid callback token",
+          });
+        }
         return res.status(403).json({ error: "invalid callback token" });
       }
       const qesValidation = validateCs03QesResponse(req.body);
       if (!qesValidation.ok) {
+        try {
+          slog("[VERIFIER] CS-03 qes-callback rejected: body validation failed", {
+            error: qesValidation.error,
+          });
+        } catch {}
+        if (requestId != null) {
+          logHttpResponse(slog, requestId, `/x509/qes-callback/${sessionId}`, 400, "Bad Request", res.getHeaders(), {
+            error: qesValidation.error,
+          });
+        }
         return res.status(400).json({ error: "invalid_request", error_description: qesValidation.error });
+      }
+      const artifactValidation = await validateCs03CredentialResponses({
+        qesByCredentialId: {
+          [CS03_SIGNING_CREDENTIAL_ID]: req.body,
+        },
+        vpSession,
+      });
+      const artifactValidationSummary = summarizeCs03ValidationForLog(artifactValidation);
+      if (!artifactValidation.ok) {
+        vpSession.qes_oob_validation = artifactValidation;
+        await storeVPSession(sessionId, vpSession);
+        try {
+          slog("[VERIFIER] CS-03 qes-callback rejected: artifact validation failed", artifactValidationSummary);
+        } catch {}
+        if (requestId != null) {
+          logHttpResponse(slog, requestId, `/x509/qes-callback/${sessionId}`, 400, "Bad Request", res.getHeaders(), {
+            error: "CS-03 artifact validation failed",
+            validation: artifactValidationSummary,
+          });
+        }
+        return res.status(400).json({
+          error: "invalid_request",
+          error_description: "CS-03 signed artifact validation failed",
+          validation: artifactValidationSummary,
+        });
       }
       vpSession.qes_oob_response = {
         [CS03_SIGNING_CREDENTIAL_ID]: req.body,
       };
+      vpSession.qes_oob_validation = artifactValidation;
       await storeVPSession(sessionId, vpSession);
+      const docCount = Array.isArray(req.body?.documentWithSignature)
+        ? req.body.documentWithSignature.length
+        : 0;
+      const sigCount = Array.isArray(req.body?.signatureObject) ? req.body.signatureObject.length : 0;
+      const firstLen =
+        (req.body?.documentWithSignature?.[0]?.length ?? req.body?.signatureObject?.[0]?.length) || 0;
       try {
-        slog("[VERIFIER] CS-03 qesResponse received at responseURI", {
-          hasDocumentWithSignature: Array.isArray(req.body?.documentWithSignature),
+        slog("[VERIFIER] CS-03 qesResponse stored from responseURI callback", {
+          documentWithSignatureCount: docCount,
+          signatureObjectCount: sigCount,
+          firstPayloadStringLength: firstLen,
+          validation: artifactValidationSummary,
         });
       } catch {}
+      if (requestId != null) {
+        logHttpResponse(slog, requestId, `/x509/qes-callback/${sessionId}`, 200, "OK", res.getHeaders(), {
+          stored: true,
+          documentWithSignatureCount: docCount,
+          signatureObjectCount: sigCount,
+        });
+      }
       res.sendStatus(200);
     } catch (e) {
       try {
-        slog("[VERIFIER] CS-03 qes-callback error", { error: e.message });
+        slog("[VERIFIER] CS-03 qes-callback error", { error: e.message, stack: e.stack?.split("\n")?.[0] });
       } catch {}
+      if (requestId != null) {
+        try {
+          logHttpResponse(slog, requestId, `/x509/qes-callback/${sessionId}`, 500, "Error", res.getHeaders(), {
+            error: e.message,
+          });
+        } catch {}
+      }
       res.status(500).json({ error: e.message });
     }
   }

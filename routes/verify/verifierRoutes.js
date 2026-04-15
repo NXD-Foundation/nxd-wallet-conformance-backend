@@ -44,6 +44,10 @@ import { verifyMdlToken, validateMdlClaims } from "../../utils/mdlVerification.j
 import base64url from "base64url";
 import { encode as encodeCbor } from 'cbor-x';
 import { processCs03PresentationResponse } from "../../utils/routeUtils.js";
+import {
+  summarizeCs03ValidationForLog,
+  validateCs03CredentialResponses,
+} from "../../utils/cs03Validation.js";
 
 const getSessionTranscriptBytes = (
   oid4vpData,
@@ -99,6 +103,39 @@ function computeSdHashFromPresentedToken(sdJwtToken) {
 
   const hash = crypto.createHash("sha256").update(Buffer.from(prefix, "ascii")).digest();
   return hash.toString("base64url");
+}
+
+/** Redact base64 payloads for CS-03 session / structured logs (counts and lengths only). */
+function summarizeCs03QesForLog(qesByCred) {
+  const out = {};
+  for (const [credId, v] of Object.entries(qesByCred || {})) {
+    if (!v || typeof v !== "object") {
+      out[credId] = { type: typeof v };
+      continue;
+    }
+    if (v.empty_credential_response) {
+      out[credId] = { emptyCredentialResponse: true, note: v.note };
+      continue;
+    }
+    if (Array.isArray(v.documentWithSignature)) {
+      out[credId] = {
+        kind: "documentWithSignature",
+        count: v.documentWithSignature.length,
+        firstEntryLength: v.documentWithSignature[0]?.length ?? 0,
+      };
+      continue;
+    }
+    if (Array.isArray(v.signatureObject)) {
+      out[credId] = {
+        kind: "signatureObject",
+        count: v.signatureObject.length,
+        firstEntryLength: v.signatureObject[0]?.length ?? 0,
+      };
+      continue;
+    }
+    out[credId] = { keys: Object.keys(v) };
+  }
+  return out;
 }
 
 const verifierRouter = express.Router();
@@ -268,7 +305,17 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
     }
     
     if (slog) {
-      try { slog("[PRESENTATION] VP session retrieved successfully", { hasNonce: !!vpSession.nonce, hasPresentationDefinition: !!vpSession.presentation_definition, hasDcqlQuery: !!vpSession.dcql_query, responseMode: vpSession.response_mode, status: vpSession.status }); } catch {}
+      try {
+        slog("[PRESENTATION] VP session retrieved successfully", {
+          hasNonce: !!vpSession.nonce,
+          hasPresentationDefinition: !!vpSession.presentation_definition,
+          hasDcqlQuery: !!vpSession.dcql_query,
+          responseMode: vpSession.response_mode,
+          status: vpSession.status,
+          cs03_signing: !!vpSession.cs03_signing,
+          cs03_oob: !!vpSession.cs03_oob,
+        });
+      } catch {}
     }
 
     // Check if this is an MDL presentation in multiple ways:
@@ -1489,15 +1536,44 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
         // CS-03 (CSC qesRequest): capture VP credential response shape per WE BUILD spec §8.2
         // (inline documentWithSignature / signatureObject, or empty {} per credential when using responseURI).
         if (vpSession.cs03_signing) {
-          await logInfo(sessionId, "Processing CS-03 remote signing direct_post response", {});
+          const expectedCredIds =
+            vpSession.cs03_expected_credential_ids ||
+            vpSession.dcql_query?.credentials?.map((cred) => cred.id).filter(Boolean);
+          await logInfo(sessionId, "Processing CS-03 remote signing direct_post response", {
+            oob: !!vpSession.cs03_oob,
+            hasOobResponse: !!vpSession.qes_oob_response,
+            expectedCredentialIds: expectedCredIds,
+          });
+          if (slog) {
+            try {
+              slog("[PRESENTATION] CS-03 direct_post branch (before processCs03PresentationResponse)", {
+                oob: !!vpSession.cs03_oob,
+                hasOobResponse: !!vpSession.qes_oob_response,
+                expectedCredentialIds: expectedCredIds,
+              });
+            } catch {}
+          }
+          await logDebug(sessionId, "CS-03 validating vp_token credential response shape", {
+            vpTokenType: typeof req.body["vp_token"],
+          });
           const cs03Result = processCs03PresentationResponse(req.body["vp_token"], {
-            expectedCredentialIds:
-              vpSession.cs03_expected_credential_ids ||
-              vpSession.dcql_query?.credentials?.map((cred) => cred.id).filter(Boolean),
+            expectedCredentialIds: expectedCredIds,
             oobRequested: !!vpSession.cs03_oob,
             oobResponse: vpSession.qes_oob_response || null,
           });
           if (!cs03Result.ok) {
+            await logError(sessionId, "CS-03 presentation response validation failed", {
+              error: cs03Result.error,
+              error_description: cs03Result.error_description,
+            }).catch(() => {});
+            if (slog) {
+              try {
+                slog("[PRESENTATION] [ERROR] CS-03 presentation rejected", {
+                  error: cs03Result.error,
+                  error_description: cs03Result.error_description,
+                });
+              } catch {}
+            }
             try {
               vpSession.status = "failed";
               vpSession.error = cs03Result.error;
@@ -1509,16 +1585,91 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
               error_description: cs03Result.error_description,
             });
           }
+          if (vpSession.cs03_oob && !vpSession.qes_oob_response) {
+            await logError(sessionId, "CS-03 OOB direct_post received before qes callback artifact", {
+              expectedCredentialIds: expectedCredIds,
+            }).catch(() => {});
+            try {
+              vpSession.status = "failed";
+              vpSession.error = "invalid_request";
+              vpSession.error_description = "CS-03 out-of-band response missing signed artifact callback";
+              await storeVPSession(sessionId, vpSession);
+            } catch (_) {}
+            return res.status(400).json({
+              error: "invalid_request",
+              error_description: "CS-03 out-of-band response missing signed artifact callback",
+            });
+          }
+          const qesArtifactsToValidate =
+            cs03Result.qes_combined?.oob ||
+            Object.fromEntries(
+              Object.entries(cs03Result.qes || {}).filter(
+                ([, value]) => !value?.empty_credential_response,
+              ),
+            );
+          const artifactValidation =
+            vpSession.cs03_oob && vpSession.qes_oob_validation
+              ? vpSession.qes_oob_validation
+              : await validateCs03CredentialResponses({
+                  qesByCredentialId: qesArtifactsToValidate,
+                  vpSession,
+                });
+          const artifactValidationSummary = summarizeCs03ValidationForLog(artifactValidation);
+          await logInfo(sessionId, "CS-03 signed artifact validation completed", {
+            source: vpSession.cs03_oob ? "oob" : "inline",
+            reusedStoredValidation: !!(vpSession.cs03_oob && vpSession.qes_oob_validation),
+            validation: artifactValidationSummary,
+          });
+          if (slog) {
+            try {
+              slog("[PRESENTATION] CS-03 signed artifact validation completed", {
+                source: vpSession.cs03_oob ? "oob" : "inline",
+                reusedStoredValidation: !!(vpSession.cs03_oob && vpSession.qes_oob_validation),
+                validation: artifactValidationSummary,
+              });
+            } catch {}
+          }
+          if (!artifactValidation.ok) {
+            await logError(sessionId, "CS-03 signed artifact validation failed", {
+              validation: artifactValidationSummary,
+            }).catch(() => {});
+            try {
+              vpSession.status = "failed";
+              vpSession.error = "invalid_request";
+              vpSession.error_description = "CS-03 signed artifact validation failed";
+              vpSession.cs03_validation = artifactValidation;
+              await storeVPSession(sessionId, vpSession);
+            } catch (_) {}
+            return res.status(400).json({
+              error: "invalid_request",
+              error_description: "CS-03 signed artifact validation failed",
+            });
+          }
           vpSession.qes = cs03Result.qes;
           if (cs03Result.qes_combined) {
             vpSession.qes_combined = cs03Result.qes_combined;
           }
           vpSession.status = "success";
           vpSession.claims = cs03Result.claims;
+          vpSession.cs03_validation = artifactValidation;
           await storeVPSession(sessionId, vpSession);
+          const qesSummary = summarizeCs03QesForLog(cs03Result.qes);
           await logInfo(sessionId, "CS-03 signing response stored on session", {
             credentialIds: cs03Result.claims.credentialIds,
+            qesSummary,
+            hasQesCombined: !!cs03Result.qes_combined,
+            validation: artifactValidationSummary,
           });
+          await logDebug(sessionId, "CS-03 qes detail (redacted)", { qesSummary });
+          if (slog) {
+            try {
+              slog("[PRESENTATION] [COMPLETE] CS-03 direct_post accepted", {
+                credentialIds: cs03Result.claims.credentialIds,
+                qesSummary,
+                hasQesCombined: !!cs03Result.qes_combined,
+              });
+            } catch {}
+          }
           return res.status(200).json({ status: "ok" });
         }
 
