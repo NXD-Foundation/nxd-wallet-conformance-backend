@@ -1,0 +1,87 @@
+# Signature Test Suite
+
+base_url: "https://dev-i4mlab.aegean.gr"
+
+
+
+
+# ==============================================================================
+# VERIFICATION (OID4VP) TEST CASES
+# ==============================================================================
+verifiable_presentations:
+
+  # ----------------------------------------------------------------------------
+  # EAA Verification
+  # ----------------------------------------------------------------------------
+  cs03_verification:
+
+    - id: "SIGNATRURE-01"
+      name: "CS03 Signature"
+      description: "Sign mock PDF with X.509 certificate"
+      method: "GET"
+      path: "/x509/generateVPRequestDCQL"
+      url: "https://dev-i4mlab.aegean.gr/rfc-issuer/x509/generateVPRequestDCQL?cs03=1&sessionId=1234"
+      parameters:
+        cs03: "1"
+        sessionId: "s1"
+      presentation_protocol: "OID4VP 1.0 (DCQL)"
+      credential_type: "X509 Certificate"
+
+    
+
+
+# ==============================================================================
+# STATUS / POLLING ENDPOINTS
+# ==============================================================================
+status_endpoints:
+
+  - id: "SIGNATRURE-STATUS-01"
+    name: "Verification Status Polling"
+    description: "Poll verification status for a Signature session"
+    method: "GET"
+    path: "/verificationStatus"
+    url: "https://dev-i4mlab.aegean.gr/rfc-issuer/verificationStatus?sessionId=s1"
+    parameters:
+      sessionId: "s1"
+
+# ==============================================================================
+# HOLDER ENDPOINTS 
+# ==============================================================================
+holder_endpoints:
+
+  - id: "Signature-Holder-01"
+    name: ""
+    description: "Submit credential offer or VP request URI to holder. Supports openid-credential-offer:// and openid4vp://"
+    method: "POST"
+    path: "/session"
+    url: "https://dev-i4mlab.aegean.gr/wallet-client/session"
+    body_example:
+      sessionId: "s1"
+      uri: "openid-credential-offer://?credential_offer_uri=..."
+    parameters:
+      sessionId: "s1"
+      deepLink: "openid-credential-offer:// or openid4vp://"
+
+# ==============================================================================
+# CREDENTIAL TYPE REFERENCE  
+# ==============================================================================
+credential_types:
+  - name: "EU PID SD-JWT"
+    identifier: "urn:eu.europa.ec.eudi:pid:1"
+    format: "sd-jwt"
+    description: "European Person Identification Data in SD-JWT format"
+    
+  - name: "EU PID MSO_MDOC"
+    identifier: "urn:eu.europa.ec.eudi:pid:1:mso_mdoc"
+    format: "mso_mdoc"
+    description: "European Person Identification Data in ISO 18013-5 format"
+    
+  - name: "Mobile Driving License"
+    identifier: "org.iso.18013.5.1.mDL"
+    format: "mso_mdoc"
+    description: "ISO 18013-5 compliant mobile Driving License"
+    
+  - name: "Photo ID"
+    identifier: "PhotoID"
+    format: "sd-jwt"
+    description: "Photo identification credential"
