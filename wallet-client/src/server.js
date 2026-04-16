@@ -8,6 +8,7 @@ import { decodeSdJwt, getClaims } from "@sd-jwt/decode";
 import { digest } from "@sd-jwt/crypto-nodejs";
 import { verifyReceivedMdlToken } from "../utils/mdlVerification.js";
 import { didKeyToJwks } from "../utils/cryptoUtils.js";
+import { isDpopBoundAccessToken, computeAthForDpop } from "../utils/tokenUtils.js";
 
 const app = express();
 app.use(express.json({ limit: "2mb" }));
@@ -990,10 +991,14 @@ async function runPreAuthorizedIssuance({ apiBase, issuerMeta, configurationId, 
   console.log("[preauth] tokenEndpoint=", tokenEndpoint); try { slog("[preauth] tokenEndpoint", { tokenEndpoint }); } catch {}
   console.log("[preauth] requesting token..."); try { slog("[preauth] requesting token"); } catch {}
   
-  // Generate DPoP (Demonstrating Proof-of-Possession) for token request
+  // Generate DPoP (Demonstrating Proof-of-Possession) for token request; retain keys for /credential when token is DPoP-bound
   let dpopJwt = null;
+  let dpopPrivateJwk = null;
+  let dpopPublicJwk = null;
   try {
-    const { privateJwk: dpopPrivateJwk, publicJwk: dpopPublicJwk } = await ensureOrCreateEcKeyPair(keyPath, "ES256");
+    const dpopKeys = await ensureOrCreateEcKeyPair(keyPath, "ES256");
+    dpopPrivateJwk = dpopKeys.privateJwk;
+    dpopPublicJwk = dpopKeys.publicJwk;
     dpopJwt = await createDPoP({
       privateJwk: dpopPrivateJwk,
       publicJwk: dpopPublicJwk,
@@ -1173,20 +1178,47 @@ async function runPreAuthorizedIssuance({ apiBase, issuerMeta, configurationId, 
   }
   try { slog("[preauth] credential request", { configurationId, hasProof: !!proofJwt }); } catch {}
   
+  let credentialDpopJwt = null;
+  try {
+    if (
+      accessToken &&
+      dpopPrivateJwk &&
+      dpopPublicJwk &&
+      isDpopBoundAccessToken(tokenBody, accessToken)
+    ) {
+      credentialDpopJwt = await createDPoP({
+        privateJwk: dpopPrivateJwk,
+        publicJwk: dpopPublicJwk,
+        htu: credentialEndpoint,
+        htm: "POST",
+        ath: computeAthForDpop(accessToken),
+        alg: "ES256"
+      });
+    }
+  } catch (dpopCredError) {
+    console.warn("[preauth] Failed to generate DPoP for credential request:", dpopCredError?.message);
+    try { slog("[preauth] DPoP for credential failed", { error: dpopCredError?.message }); } catch {}
+  }
+
   const credReqBody = JSON.stringify(credReq);
   const credRequestId = `cred_req_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+  const credHeaders = {
+    "content-type": "application/json",
+    authorization: `Bearer ${accessToken}`,
+    ...(credentialDpopJwt ? { DPoP: credentialDpopJwt } : {}),
+  };
   try { 
     slog("[CREDENTIAL] [REQUEST] Credential request", { 
       requestId: credRequestId,
       endpoint: credentialEndpoint,
       method: "POST",
-      headers: { "content-type": "application/json", authorization: "Bearer <redacted>" },
+      headers: { "content-type": "application/json", authorization: "Bearer <redacted>", DPoP: credentialDpopJwt ? "<redacted>" : undefined },
       body: { ...credReq, proofs: { jwt: ["<redacted>"] } }
     }); 
   } catch {}
   const credRes = await fetch(credentialEndpoint, {
     method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${accessToken}` },
+    headers: credHeaders,
     body: credReqBody,
   });
   const responseText = await credRes.text().catch(() => "");
@@ -1509,10 +1541,14 @@ async function runAuthorizationCodeIssuance({ apiBase, issuerMeta, configuration
   console.log("[codeflow] tokenEndpoint=", tokenEndpoint); try { slog("[codeflow] tokenEndpoint", { tokenEndpoint }); } catch {}
   console.log("[codeflow] requesting token..."); try { slog("[codeflow] requesting token"); } catch {}
   
-  // Generate DPoP (Demonstrating Proof-of-Possession) for token request
+  // Generate DPoP for token request; retain keys for /credential when token is DPoP-bound
   let dpopJwt = null;
+  let dpopPrivateJwk = null;
+  let dpopPublicJwk = null;
   try {
-    const { privateJwk: dpopPrivateJwk, publicJwk: dpopPublicJwk } = await ensureOrCreateEcKeyPair(keyPath, "ES256");
+    const dpopKeys = await ensureOrCreateEcKeyPair(keyPath, "ES256");
+    dpopPrivateJwk = dpopKeys.privateJwk;
+    dpopPublicJwk = dpopKeys.publicJwk;
     dpopJwt = await createDPoP({
       privateJwk: dpopPrivateJwk,
       publicJwk: dpopPublicJwk,
@@ -1669,11 +1705,37 @@ async function runAuthorizationCodeIssuance({ apiBase, issuerMeta, configuration
     } 
   };
   console.log("[codeflow] credential request:", JSON.stringify({ ...credReq, proofs: { jwt: ["<redacted>"] } }, null, 2)); try { slog("[codeflow] credential request body", { hasBody: true }); } catch {}
+  let credentialDpopJwtCode = null;
+  try {
+    if (
+      accessToken &&
+      dpopPrivateJwk &&
+      dpopPublicJwk &&
+      isDpopBoundAccessToken(tokenBody, accessToken)
+    ) {
+      credentialDpopJwtCode = await createDPoP({
+        privateJwk: dpopPrivateJwk,
+        publicJwk: dpopPublicJwk,
+        htu: credentialEndpoint,
+        htm: "POST",
+        ath: computeAthForDpop(accessToken),
+        alg: "ES256"
+      });
+    }
+  } catch (dpopCredError) {
+    console.warn("[codeflow] Failed to generate DPoP for credential request:", dpopCredError?.message);
+    try { slog("[codeflow] DPoP for credential failed", { error: dpopCredError?.message }); } catch {}
+  }
   const credReqBody = JSON.stringify(credReq);
-  try { slog("[codeflow] sending credential request", { endpoint: credentialEndpoint, body: { ...credReq, proofs: { jwt: ["<redacted>"] } } }); } catch {}
+  const credHeadersCode = {
+    "content-type": "application/json",
+    authorization: `Bearer ${accessToken}`,
+    ...(credentialDpopJwtCode ? { DPoP: credentialDpopJwtCode } : {}),
+  };
+  try { slog("[codeflow] sending credential request", { endpoint: credentialEndpoint, hasDPoP: !!credentialDpopJwtCode, body: { ...credReq, proofs: { jwt: ["<redacted>"] } } }); } catch {}
   const credRes = await fetch(credentialEndpoint, {
     method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${accessToken}` },
+    headers: credHeadersCode,
     body: credReqBody,
   });
   console.log("[codeflow] credentialRes.status=", credRes.status); 

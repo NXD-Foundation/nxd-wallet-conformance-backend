@@ -147,3 +147,39 @@ export function buildVPbyValue(
 //     }
 //   }
 // }
+
+/**
+ * Base64url (no padding) of SHA-256(access token), for DPoP `ath` claim (RFC 9449).
+ */
+export function computeAthForDpop(accessToken) {
+  const hash = crypto.createHash("sha256").update(accessToken, "utf8").digest();
+  return hash
+    .toString("base64")
+    .replace(/=/g, "")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_");
+}
+
+/**
+ * Whether the token response / access token is DPoP sender-constrained (RFC 9449).
+ * Uses token_type when present; for JWT access tokens, also detects cnf.jkt.
+ */
+export function isDpopBoundAccessToken(tokenBody, accessToken) {
+  const tt = tokenBody?.token_type;
+  if (typeof tt === "string" && tt.toLowerCase() === "dpop") {
+    return true;
+  }
+  if (typeof accessToken !== "string" || !accessToken) {
+    return false;
+  }
+  const parts = accessToken.split(".");
+  if (parts.length < 2) {
+    return false;
+  }
+  try {
+    const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
+    return !!(payload?.cnf?.jkt && typeof payload.cnf.jkt === "string");
+  } catch {
+    return false;
+  }
+}

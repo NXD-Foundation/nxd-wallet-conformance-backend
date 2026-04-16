@@ -2,24 +2,11 @@
 import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
 import fetch from "node-fetch";
-import crypto from "node:crypto";
 import { createProofJwt, generateDidJwkFromPrivateJwk, ensureOrCreateEcKeyPair, createWIA, createWUA, createDPoP } from "./lib/crypto.js";
 import { storeWalletCredentialByType } from "./lib/cache.js";
+import { isDpopBoundAccessToken, computeAthForDpop } from "../utils/tokenUtils.js";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-function base64url(input) {
-  return Buffer.from(input)
-    .toString("base64")
-    .replace(/=/g, "")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_");
-}
-
-function computeAth(accessToken) {
-  const hash = crypto.createHash("sha256").update(accessToken).digest();
-  return base64url(hash);
-}
 
 async function main() {
   const argv = yargs(hideBin(process.argv))
@@ -212,11 +199,16 @@ async function main() {
     },
   };
 
-  // Generate DPoP for credential request using the same key as the token request
+  // DPoP on /credential is required only for DPoP-bound access tokens (RFC 9449).
   let credentialDpopJwt = null;
   try {
-    if (accessToken && dpopPrivateJwk && dpopPublicJwk) {
-      const ath = computeAth(accessToken);
+    if (
+      accessToken &&
+      dpopPrivateJwk &&
+      dpopPublicJwk &&
+      isDpopBoundAccessToken(tokenBody, accessToken)
+    ) {
+      const ath = computeAthForDpop(accessToken);
       credentialDpopJwt = await createDPoP({
         privateJwk: dpopPrivateJwk,
         publicJwk: dpopPublicJwk,
