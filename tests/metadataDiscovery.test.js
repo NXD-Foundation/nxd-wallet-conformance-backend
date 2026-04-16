@@ -2262,6 +2262,30 @@ describe('OIDC4VCI V1.0 - Format-Specific Requirements', () => {
       });
     });
 
+    it('uses a namespace path for the PID mso_mdoc metadata claims', async () => {
+      const response = await request(app)
+        .get('/.well-known/openid-credential-issuer')
+        .expect(200);
+
+      const pidMdocConfig =
+        response.body.credential_configurations_supported[
+          'urn:eu.europa.ec.eudi:pid:1:mso_mdoc'
+        ];
+
+      expect(pidMdocConfig).to.exist;
+      expect(pidMdocConfig.credential_metadata.claims)
+        .to.be.an('array')
+        .that.is.not.empty;
+
+      const [namespaceGroup] = pidMdocConfig.credential_metadata.claims;
+      expect(namespaceGroup.path).to.deep.equal(['urn:eu.europa.ec.eudi:pid:1']);
+      expect(namespaceGroup.path[0]).to.not.equal('urn:eu.europa.ec.eudi:pid:1:mso_mdoc');
+
+      namespaceGroup.claims.forEach((claim) => {
+        expect(claim.path).to.be.an('array').with.length(1);
+      });
+    });
+
     it('SHOULD support ISO 18013-5 mDL doctype', async () => {
       const response = await request(app)
         .get('/.well-known/openid-credential-issuer')
@@ -6056,4 +6080,3 @@ describe('OIDC4VCI V1.0 - API-backed Endpoint Validations', () => {
     });
   });
 });
-

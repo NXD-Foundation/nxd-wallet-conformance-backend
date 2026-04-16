@@ -1,5 +1,8 @@
 import { expect } from 'chai';
-import { createCredentialOfferConfig } from '../utils/routeUtils.js';
+import {
+  createCredentialOfferConfig,
+  DEFAULT_MDL_DCQL_QUERY,
+} from '../utils/routeUtils.js';
 
 describe('Route Utils', () => {
   describe('createCredentialOfferConfig', () => {
@@ -85,6 +88,19 @@ describe('Route Utils', () => {
       expect(config).to.have.property('credential_issuer');
       expect(config.credential_issuer).to.be.a('string');
       expect(config.credential_issuer).to.match(/^https?:\/\//);
+    });
+  });
+
+  describe('DEFAULT_MDL_DCQL_QUERY', () => {
+    it('uses the PID namespace for mso_mdoc claim paths', () => {
+      const claimPaths = DEFAULT_MDL_DCQL_QUERY.credentials[0].claims.map(
+        ({ path }) => path
+      );
+
+      claimPaths.forEach((path) => {
+        expect(path[0]).to.equal('urn:eu.europa.ec.eudi:pid:1');
+        expect(path[0]).to.not.equal('urn:eu.europa.ec.eudi:pid:1:mso_mdoc');
+      });
     });
   });
 }); 

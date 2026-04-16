@@ -475,13 +475,13 @@ export const DEFAULT_MDL_DCQL_QUERY = {
     {
       claims: [
         {
-          path: ["urn:eu.europa.ec.eudi:pid:1:mso_mdoc", "family_name"],
+          path: ["urn:eu.europa.ec.eudi:pid:1", "family_name"],
         },
         {
-          path: ["urn:eu.europa.ec.eudi:pid:1:mso_mdoc", "given_name"],
+          path: ["urn:eu.europa.ec.eudi:pid:1", "given_name"],
         },
         {
-          path: ["urn:eu.europa.ec.eudi:pid:1:mso_mdoc", "age_over_18"],
+          path: ["urn:eu.europa.ec.eudi:pid:1", "age_over_18"],
         },
       ],
       format: "mso_mdoc",

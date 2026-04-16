@@ -1222,7 +1222,7 @@
         ],
         "claims": [
           {
-            "path": ["urn:eu.europa.ec.eudi:pid:1:mso_mdoc"],
+            "path": ["urn:eu.europa.ec.eudi:pid:1"],
             "claims": [
               {
                 "path": ["given_name"],

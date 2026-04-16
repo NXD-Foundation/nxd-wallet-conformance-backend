@@ -146,4 +146,47 @@ describe("mdoc issuance leaf certificate (x509EC/client_certificate.crt)", () =>
         KeyUsageFlags.digitalSignature
     ).to.equal(true);
   });
+
+  it("emits PID mso_mdoc claims under the namespace rather than the doctype", async function () {
+    if (
+      !fs.existsSync(MDOC_LEAF_CERT_PATH) ||
+      !fs.existsSync(MDOC_LEAF_KEY_PATH)
+    ) {
+      this.skip();
+    }
+
+    const { publicKey, privateKey } = await jose.generateKeyPair("ES256");
+    const proofJwk = await jose.exportJWK(publicKey);
+    const proofJwt = await new jose.SignJWT({
+      iss: "did:example:holder",
+      aud: "http://localhost:3000",
+      nonce: "test-nonce-mdoc-namespace",
+    })
+      .setProtectedHeader({
+        alg: "ES256",
+        typ: "openid4vci-proof+jwt",
+        jwk: proofJwk,
+      })
+      .sign(privateKey);
+
+    const credential = await handleCredentialGenerationBasedOnFormat(
+      {
+        vct: "urn:eu.europa.ec.eudi:pid:1:mso_mdoc",
+        proofs: { jwt: [proofJwt] },
+      },
+      {
+        signatureType: "x509",
+        isHaip: false,
+      },
+      "http://localhost:3000",
+      "mDL"
+    );
+
+    const issuerSigned = decode(Buffer.from(credential, "base64url"));
+    expect(issuerSigned).to.have.property("nameSpaces");
+    expect(issuerSigned.nameSpaces).to.have.property("urn:eu.europa.ec.eudi:pid:1");
+    expect(issuerSigned.nameSpaces).to.not.have.property(
+      "urn:eu.europa.ec.eudi:pid:1:mso_mdoc"
+    );
+  });
 });

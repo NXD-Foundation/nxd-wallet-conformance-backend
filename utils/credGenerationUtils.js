@@ -163,6 +163,29 @@ function normalizeIssuerAuthHeaders(preparedIssuerSigned) {
   }
 }
 
+function resolveMsoMdocNamespace(credentialConfiguration, credPayload) {
+  const metadataNamespace =
+    credentialConfiguration?.credential_metadata?.claims?.find(
+      (claim) =>
+        Array.isArray(claim?.path) &&
+        claim.path.length === 1 &&
+        Array.isArray(claim.claims)
+    )?.path?.[0];
+
+  if (metadataNamespace) {
+    return metadataNamespace;
+  }
+
+  const payloadNamespaces = Object.keys(credPayload?.claims || {});
+  if (payloadNamespaces.length === 1) {
+    return payloadNamespaces[0];
+  }
+
+  throw new Error(
+    `Unable to resolve mso_mdoc namespace. Available payload namespaces: ${payloadNamespaces.join(", ") || "none"}`
+  );
+}
+
 // Load issuer configuration for KID and JWK header preference
 let issuerConfigValues = {};
 try {
@@ -749,7 +772,10 @@ async function generateMdlCredentialManually(
       if (!docType) {
         throw new Error(`'doctype' not defined for VCT: ${vct}`);
       }
-      const namespace = docType;
+      const namespace = resolveMsoMdocNamespace(
+        credentialConfiguration,
+        credPayload
+      );
 
       const claims = credPayload;
       const msoMdocClaims = claims.claims[namespace];
@@ -1033,7 +1059,10 @@ async function generateMdlCredentialWithAuth0Library(
     console.error(`[mdl-issue] doctype not defined. Received: undefined, Expected: a doctype string in credential configuration for VCT: ${vct}`);
     throw new Error(`'doctype' not defined for VCT: ${vct}. Received: undefined, Expected: a doctype string`);
   }
-  const namespace = docType;
+  const namespace = resolveMsoMdocNamespace(
+    credentialConfiguration,
+    credPayload
+  );
   console.log(`[mdl-issue] Using docType: ${docType}, namespace: ${namespace}`);
 
   // Step 2: Extract claims
