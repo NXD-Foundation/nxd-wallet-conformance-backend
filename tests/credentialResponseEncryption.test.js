@@ -10,7 +10,7 @@ import {
 describe("credentialResponseEncryption", () => {
   const issuerMeta = {
     alg_values_supported: ["ECDH-ES", "RSA-OAEP-256"],
-    enc_values_supported: ["A256GCM"],
+    enc_values_supported: ["A128GCM", "A256GCM"],
   };
 
   it("validateCredentialResponseEncryptionParams rejects unsupported jwk.alg", () => {
@@ -56,6 +56,25 @@ describe("credentialResponseEncryption", () => {
 
     const parts = jwe.split(".");
     expect(parts.length).to.equal(5);
+
+    const { plaintext } = await jose.compactDecrypt(jwe, privateKey);
+    const roundTrip = JSON.parse(new TextDecoder().decode(plaintext));
+    expect(roundTrip).to.deep.equal(payload);
+  });
+
+  it("encryptCredentialResponseToJwe produces decryptable JWE (ECDH-ES + A128GCM)", async () => {
+    const { publicKey, privateKey } = await jose.generateKeyPair("ECDH-ES", { crv: "P-256" });
+    const jwk = await jose.exportJWK(publicKey);
+    jwk.alg = "ECDH-ES";
+    jwk.kid = "enc-key-a128";
+
+    const cre = { jwk, enc: "A128GCM" };
+    const issuerConfig = {
+      credential_response_encryption: issuerMeta,
+    };
+
+    const payload = { credentials: [{ credential: "xyz" }] };
+    const jwe = await encryptCredentialResponseToJwe(payload, cre, issuerConfig);
 
     const { plaintext } = await jose.compactDecrypt(jwe, privateKey);
     const roundTrip = JSON.parse(new TextDecoder().decode(plaintext));

@@ -11,6 +11,7 @@ import { v4 as uuidv4 } from 'uuid';
 
 // Load verifier config for client_metadata
 const verifierConfig = JSON.parse(fs.readFileSync('./data/verifier-config.json', 'utf-8'));
+const oauthConfigForPar = JSON.parse(fs.readFileSync('./data/oauth-config.json', 'utf-8'));
 
 // Create Express app
 const app = express();
@@ -311,35 +312,9 @@ testRouter.get('/authorize', async (req, res) => {
     let finalWalletIssuerId = wallet_issuer_id;
     let finalUserHint = user_hint;
 
-    if (request_uri) {
-      const parRequests = mockCacheService.getPushedAuthorizationRequests();
-      const parRequest = parRequests.get(request_uri);
+    const requirePar = oauthConfigForPar.require_pushed_authorization_requests === true;
 
-      // PAR-04 — Reject unknown request_uri
-      if (!parRequest) {
-        return res.status(400).json({ error: 'invalid_request', error_description: 'Unknown request_uri' });
-      }
-
-      const now = Date.now();
-
-      // PAR-05 — Reject expired request_uri (when expiry metadata present)
-      if (parRequest.expiresAt && parRequest.expiresAt < now) {
-        return res.status(400).json({ error: 'invalid_request', error_description: 'Expired request_uri' });
-      }
-
-      // PAR-06 — Enforce one-time use when marked/used
-      if (parRequest.used) {
-        return res.status(400).json({ error: 'invalid_request', error_description: 'request_uri already used' });
-      }
-
-      // PAR-11 — request_uri bound to client_id (cross-client misuse)
-      if (client_id && client_id !== parRequest.client_id) {
-        return res.status(400).json({ error: 'invalid_request', error_description: 'client_id does not match request_uri owner' });
-      }
-
-      // Mark as used for subsequent requests (one-time use enforcement)
-      parRequest.used = true;
-
+    const applyParToFinal = (parRequest) => {
       finalClientId = parRequest.client_id;
       finalResponseType = parRequest.response_type;
       finalRedirectUri = parRequest.redirect_uri;
@@ -353,6 +328,46 @@ testRouter.get('/authorize', async (req, res) => {
       finalClientMetadata = parRequest.clientMetadata;
       finalWalletIssuerId = parRequest.wallet_issuer_id;
       finalUserHint = parRequest.user_hint;
+    };
+
+    const resolveParOrError = (uri) => {
+      const parRequests = mockCacheService.getPushedAuthorizationRequests();
+      const parRequest = parRequests?.get(uri);
+      if (!parRequest) {
+        return { error: 'Unknown request_uri' };
+      }
+      const now = Date.now();
+      if (parRequest.expiresAt && parRequest.expiresAt < now) {
+        return { error: 'Expired request_uri' };
+      }
+      if (parRequest.used) {
+        return { error: 'request_uri already used' };
+      }
+      if (client_id && client_id !== parRequest.client_id) {
+        return { error: 'client_id does not match request_uri owner' };
+      }
+      parRequest.used = true;
+      applyParToFinal(parRequest);
+      return { ok: true };
+    };
+
+    if (requirePar) {
+      if (!request_uri || String(request_uri).trim() === '') {
+        return res.status(400).json({
+          error: 'invalid_request',
+          error_description:
+            'Pushed Authorization Request is required (require_pushed_authorization_requests); request_uri is missing.',
+        });
+      }
+      const r = resolveParOrError(request_uri);
+      if (r.error) {
+        return res.status(400).json({ error: 'invalid_request', error_description: r.error });
+      }
+    } else if (request_uri) {
+      const r = resolveParOrError(request_uri);
+      if (r.error) {
+        return res.status(400).json({ error: 'invalid_request', error_description: r.error });
+      }
     }
 
     const existingCodeSession = await mockCacheService.getCodeFlowSession(finalIssuerState);
@@ -994,11 +1009,9 @@ describe('Code Flow SD-JWT Routes', () => {
   });
 
   describe('GET /codeflow/authorize', () => {
-    it.skip('PAR-02 — should reject authorization request without request_uri when PAR-only is enforced', async () => {
-      // NOTE: Current mock implementation still allows non-PAR /authorize calls.
-      // This test documents desired PAR-only behavior and can be enabled once
-      // /authorize is hardened to require request_uri.
-      await request(app)
+    it('PAR-02 — should reject authorization request without request_uri when PAR-only is enforced', async () => {
+      expect(oauthConfigForPar.require_pushed_authorization_requests).to.equal(true);
+      const res = await request(app)
         .get('/codeflow/authorize')
         .query({
           response_type: 'code',
@@ -1008,9 +1021,25 @@ describe('Code Flow SD-JWT Routes', () => {
           redirect_uri: 'openid4vp://'
         })
         .expect(400);
+      expect(res.body.error).to.equal('invalid_request');
+      expect(res.body.error_description).to.be.a('string');
     });
 
     it('should handle non-dynamic authorization successfully', async () => {
+      const requestUri = 'urn:aegean.gr:nondyn-success';
+      const parRequest = {
+        client_id: 'test-client-id',
+        response_type: 'code',
+        redirect_uri: 'openid4vp://',
+        code_challenge: 'challenge',
+        code_challenge_method: 'S256',
+        state: 'test-state',
+        issuerState: 'test-issuer-state',
+        authorizationDetails: encodeURIComponent(JSON.stringify([{ type: 'openid_credential', credential_configuration_id: 'urn:eu.europa.ec.eudi:pid:1' }])),
+        scope: 'urn:eu.europa.ec.eudi:pid:1',
+      };
+      mockCacheService.getPushedAuthorizationRequests.returns(new Map([[requestUri, parRequest]]));
+
       const mockSession = {
         isDynamic: false,
         requests: { redirectUri: 'openid4vp://' },
@@ -1020,12 +1049,7 @@ describe('Code Flow SD-JWT Routes', () => {
 
       const response = await request(app)
         .get('/codeflow/authorize')
-        .query({
-          response_type: 'code',
-          issuer_state: 'test-issuer-state',
-          state: 'test-state',
-          client_id: 'test-client-id'
-        })
+        .query({ request_uri: requestUri })
         .expect(302);
 
       expect(response.header.location).to.include('code=');
@@ -1033,6 +1057,19 @@ describe('Code Flow SD-JWT Routes', () => {
     });
 
     it('should include request_uri_method=get for dynamic x509 scheme', async () => {
+      const requestUri = 'urn:aegean.gr:dyn-x509';
+      const parRequest = {
+        client_id: 'test-client-id',
+        response_type: 'code',
+        redirect_uri: 'openid4vp://',
+        code_challenge: 'c',
+        code_challenge_method: 'S256',
+        state: 'test-state',
+        issuerState: 'test-issuer-x509',
+        scope: 'urn:eu.europa.ec.eudi:pid:1',
+      };
+      mockCacheService.getPushedAuthorizationRequests.returns(new Map([[requestUri, parRequest]]));
+
       const mockSession = {
         isDynamic: true,
         client_id_scheme: 'x509_san_dns',
@@ -1043,14 +1080,7 @@ describe('Code Flow SD-JWT Routes', () => {
 
       const response = await request(app)
         .get('/codeflow/authorize')
-        .query({
-          response_type: 'code',
-          issuer_state: 'test-issuer-x509',
-          state: 'test-state',
-          client_id: 'test-client-id',
-          scope: 'urn:eu.europa.ec.eudi:pid:1',
-          client_id_scheme: 'x509_san_dns'
-        })
+        .query({ request_uri: requestUri, client_id_scheme: 'x509_san_dns' })
         .expect(302);
 
       expect(response.header.location).to.include('openid4vp://');
@@ -1059,6 +1089,19 @@ describe('Code Flow SD-JWT Routes', () => {
     });
 
     it('should include request_uri_method=get for dynamic did scheme', async () => {
+      const requestUri = 'urn:aegean.gr:dyn-did';
+      const parRequest = {
+        client_id: 'test-client-id',
+        response_type: 'code',
+        redirect_uri: 'openid4vp://',
+        code_challenge: 'c',
+        code_challenge_method: 'S256',
+        state: 'test-state',
+        issuerState: 'test-issuer-did',
+        scope: 'urn:eu.europa.ec.eudi:pid:1',
+      };
+      mockCacheService.getPushedAuthorizationRequests.returns(new Map([[requestUri, parRequest]]));
+
       const mockSession = {
         isDynamic: true,
         client_id_scheme: 'did',
@@ -1069,14 +1112,7 @@ describe('Code Flow SD-JWT Routes', () => {
 
       const response = await request(app)
         .get('/codeflow/authorize')
-        .query({
-          response_type: 'code',
-          issuer_state: 'test-issuer-did',
-          state: 'test-state',
-          client_id: 'test-client-id',
-          scope: 'urn:eu.europa.ec.eudi:pid:1',
-          client_id_scheme: 'did'
-        })
+        .query({ request_uri: requestUri, client_id_scheme: 'did' })
         .expect(302);
 
       expect(response.header.location).to.include('openid4vp://');
@@ -1085,6 +1121,19 @@ describe('Code Flow SD-JWT Routes', () => {
     });
 
     it('should handle dynamic authorization with redirect_uri scheme', async () => {
+      const requestUri = 'urn:aegean.gr:dyn-redirect';
+      const parRequest = {
+        client_id: 'test-client-id',
+        response_type: 'code',
+        redirect_uri: 'openid4vp://',
+        code_challenge: 'c',
+        code_challenge_method: 'S256',
+        state: 'test-state',
+        issuerState: 'test-issuer-state',
+        scope: 'urn:eu.europa.ec.eudi:pid:1',
+      };
+      mockCacheService.getPushedAuthorizationRequests.returns(new Map([[requestUri, parRequest]]));
+
       const mockSession = {
         isDynamic: true,
         client_id_scheme: 'redirect_uri',
@@ -1095,13 +1144,7 @@ describe('Code Flow SD-JWT Routes', () => {
 
       const response = await request(app)
         .get('/codeflow/authorize')
-        .query({
-          response_type: 'code',
-          issuer_state: 'test-issuer-state',
-          state: 'test-state',
-          client_id: 'test-client-id',
-          nonce: 'test-nonce'
-        })
+        .query({ request_uri: requestUri, nonce: 'test-nonce' })
         .expect(302);
 
       expect(mockTokenUtils.buildVPbyValue.called).to.be.true;
@@ -1341,16 +1384,24 @@ describe('Code Flow SD-JWT Routes', () => {
     });
 
     it('should handle missing session', async () => {
+      const requestUri = 'urn:aegean.gr:missing-session';
+      const parRequest = {
+        client_id: 'test-client-id',
+        response_type: 'code',
+        redirect_uri: 'openid4vp://',
+        code_challenge: 'c',
+        code_challenge_method: 'S256',
+        state: 'test-state',
+        issuerState: 'invalid-issuer-state',
+        scope: 'urn:eu.europa.ec.eudi:pid:1',
+      };
+      mockCacheService.getPushedAuthorizationRequests.returns(new Map([[requestUri, parRequest]]));
+
       mockCacheService.getCodeFlowSession.resolves(null);
 
       const response = await request(app)
         .get('/codeflow/authorize')
-        .query({
-          response_type: 'code',
-          issuer_state: 'invalid-issuer-state',
-          state: 'test-state',
-          client_id: 'test-client-id'
-        })
+        .query({ request_uri: requestUri })
         .expect(302);
 
       expect(response.header.location).to.include('error=invalid_request');
@@ -1358,6 +1409,19 @@ describe('Code Flow SD-JWT Routes', () => {
     });
 
     it('should handle invalid response_type', async () => {
+      const requestUri = 'urn:aegean.gr:invalid-rt';
+      const parRequest = {
+        client_id: 'test-client-id',
+        response_type: 'invalid',
+        redirect_uri: 'openid4vp://',
+        code_challenge: 'c',
+        code_challenge_method: 'S256',
+        state: 'test-state',
+        issuerState: 'test-issuer-state',
+        scope: 'urn:eu.europa.ec.eudi:pid:1',
+      };
+      mockCacheService.getPushedAuthorizationRequests.returns(new Map([[requestUri, parRequest]]));
+
       const mockSession = {
         isDynamic: false,
         requests: { redirectUri: 'openid4vp://' },
@@ -1367,12 +1431,7 @@ describe('Code Flow SD-JWT Routes', () => {
 
       const response = await request(app)
         .get('/codeflow/authorize')
-        .query({
-          response_type: 'invalid',
-          issuer_state: 'test-issuer-state',
-          state: 'test-state',
-          client_id: 'test-client-id'
-        })
+        .query({ request_uri: requestUri })
         .expect(302);
 
       expect(response.header.location).to.include('error=invalid_request');

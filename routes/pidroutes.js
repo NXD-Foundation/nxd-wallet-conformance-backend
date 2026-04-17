@@ -55,6 +55,7 @@ pidRouter.get(["/issue-pid-pre-auth"], async (req, res) => {
       persona: null,
       accessToken: null,
       isPID: true,
+      requireTxCode: true,
     });
   }
   let credentialOffer = `openid-credential-offer://?credential_offer_uri=${serverURL}/pid-pre-auth-offer/${uuid}`;

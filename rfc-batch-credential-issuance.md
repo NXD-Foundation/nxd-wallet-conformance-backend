@@ -1,12 +1,32 @@
 # RFC: Batch Verifiable Credential Issuance
 
+> **SUPERSEDED — DO NOT IMPLEMENT AS WRITTEN.**
+>
+> This historical draft described a dedicated `POST /batch-credential` endpoint
+> and a `batch_credential_endpoint` metadata entry. Both were removed from
+> OpenID for Verifiable Credential Issuance (OID4VCI) starting with draft-14
+> and are **not** part of OID4VCI 1.0. The APTITUDE RFC-01 Credential Issuance
+> Profile is constrained to OID4VCI 1.0, so the issuer in this repository
+> deliberately does **not** expose a batch credential endpoint and does **not**
+> advertise `batch_credential_endpoint` in its issuer metadata.
+>
+> RFC001-aligned way to issue multiple credentials:
+> - The Credential Offer MAY list multiple `credential_configuration_ids`
+>   (see `routes/multiCredentialOfferRoutes.js`).
+> - The wallet then calls the standard `POST /credential` endpoint with a
+>   `credential_configuration_id` (or `credential_identifier`) plus a
+>   `proofs.jwt[]` array containing one proof JWT per requested key.
+>
+> This file is retained only for historical context; the text below describes
+> the pre-OID4VCI-1.0 shape and MUST NOT be used as a specification.
+
 ## Abstract
 
 This RFC extends the OpenID for Verifiable Credential Issuance (OID4VCI) protocol to support batch issuance of verifiable credentials. It defines the necessary endpoints, message formats, and flows for issuing multiple credentials in a single transaction.
 
 ## Status
 
-This document is a draft specification.
+This document is a historical draft and has been **superseded** by OID4VCI 1.0 / APTITUDE RFC-01. See the banner above.
 
 ## 1. Introduction
 

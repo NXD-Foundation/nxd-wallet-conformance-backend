@@ -7,7 +7,7 @@
 
   "credential_response_encryption": {
     "alg_values_supported": ["ECDH-ES", "RSA-OAEP-256"],
-    "enc_values_supported": ["A256GCM"],
+    "enc_values_supported": ["A128GCM", "A256GCM"],
     "encryption_required": false
   },
 
@@ -20,7 +20,76 @@
     }
   ],
   "credential_configurations_supported": {
-    
+
+    "ETSIRfc001PidVcSdJwt": {
+      "scope": "ETSIRfc001PidVcSdJwt",
+      "cryptographic_binding_methods_supported": ["jwk"],
+      "credential_metadata": {
+        "display": [
+          {
+            "name": "PID (RFC001 ETSI — vc+sd-jwt)",
+            "locale": "en-GB",
+            "description": "JSON-LD W3C VC EAA secured with SD-JWT per RFC001 §5.1 / §7.7"
+          }
+        ],
+        "claims": []
+      },
+      "credential_signing_alg_values_supported": ["ES256"],
+      "format": "vc+sd-jwt",
+      "vct": "urn:eu.europa.ec.eudi:pid:1",
+      "proof_types_supported": {
+        "jwt": {
+          "proof_signing_alg_values_supported": ["ES256"]
+        }
+      }
+    },
+
+    "ETSIRfc001PidVcJwt": {
+      "scope": "ETSIRfc001PidVcJwt",
+      "cryptographic_binding_methods_supported": ["jwk"],
+      "credential_metadata": {
+        "display": [
+          {
+            "name": "PID (RFC001 ETSI — vc+jwt)",
+            "locale": "en-GB",
+            "description": "JSON-LD W3C VC EAA secured with JOSE per RFC001 §5.1 / §7.7"
+          }
+        ],
+        "claims": []
+      },
+      "credential_signing_alg_values_supported": ["ES256"],
+      "format": "vc+jwt",
+      "vct": "urn:eu.europa.ec.eudi:pid:1",
+      "proof_types_supported": {
+        "jwt": {
+          "proof_signing_alg_values_supported": ["ES256"]
+        }
+      }
+    },
+
+    "ETSIRfc001PidX509Attr": {
+      "scope": "ETSIRfc001PidX509Attr",
+      "cryptographic_binding_methods_supported": ["jwk"],
+      "credential_metadata": {
+        "display": [
+          {
+            "name": "PID (RFC001 ETSI — x509_attr)",
+            "locale": "en-GB",
+            "description": "X.509 Attribute Certificate (RFC 5755) per RFC001 §5.1 / §7.7 — pilot attribute encoding"
+          }
+        ],
+        "claims": []
+      },
+      "credential_signing_alg_values_supported": ["ES256"],
+      "format": "x509_attr",
+      "vct": "urn:eu.europa.ec.eudi:pid:1",
+      "proof_types_supported": {
+        "jwt": {
+          "proof_signing_alg_values_supported": ["ES256"]
+        }
+      }
+    },
+
     "VerifiablePortableDocumentA1SDJWT": {
       "scope": "VerifiablePortableDocumentA1SDJWT",
       "cryptographic_binding_methods_supported": ["jwk"],

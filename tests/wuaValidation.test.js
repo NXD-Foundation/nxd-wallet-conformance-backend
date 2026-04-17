@@ -4,8 +4,10 @@ import * as jose from "jose";
 import {
   validateWUA,
   proofKeyMatchesWUAAttestedKeys,
+  proofKeyMatchesAnyWUAAttestedKey,
   verifyWuaJwtSignature,
   isWuaWalletProviderTrustedByPolicy,
+  credentialConfigRequiresJwtProofKeyAttestation,
 } from "../utils/routeUtils.js";
 
 async function buildMinimalWua({ privateKey, publicJwk, attestedKeys }) {
@@ -28,6 +30,60 @@ async function buildMinimalWua({ privateKey, publicJwk, attestedKeys }) {
 }
 
 describe("WUA validation (routeUtils)", () => {
+  describe("credentialConfigRequiresJwtProofKeyAttestation (RFC001 §7.5.1)", () => {
+    it("is true for ETSI PID vc+sd-jwt / vc+jwt / x509_attr with EUDI PID vct", () => {
+      expect(
+        credentialConfigRequiresJwtProofKeyAttestation({
+          format: "vc+sd-jwt",
+          vct: "urn:eu.europa.ec.eudi:pid:1",
+          proof_types_supported: { jwt: { proof_signing_alg_values_supported: ["ES256"] } },
+        })
+      ).to.equal(true);
+      expect(
+        credentialConfigRequiresJwtProofKeyAttestation({
+          format: "vc+jwt",
+          vct: "urn:eu.europa.ec.eudi:pid:1",
+          proof_types_supported: { jwt: {} },
+        })
+      ).to.equal(true);
+      expect(
+        credentialConfigRequiresJwtProofKeyAttestation({
+          format: "x509_attr",
+          vct: "urn:eu.europa.ec.eudi:pid:1",
+          proof_types_supported: { jwt: {} },
+        })
+      ).to.equal(true);
+    });
+
+    it("is true when proof_types_supported.jwt.key_attestation_required is true", () => {
+      expect(
+        credentialConfigRequiresJwtProofKeyAttestation({
+          format: "dc+sd-jwt",
+          proof_types_supported: {
+            jwt: { proof_signing_alg_values_supported: ["ES256"], key_attestation_required: true },
+          },
+        })
+      ).to.equal(true);
+    });
+
+    it("is false for generic configs without opt-in", () => {
+      expect(
+        credentialConfigRequiresJwtProofKeyAttestation({
+          format: "dc+sd-jwt",
+          vct: "urn:eu.europa.ec.eudi:pid:1",
+          proof_types_supported: { jwt: { proof_signing_alg_values_supported: ["ES256"] } },
+        })
+      ).to.equal(false);
+      expect(
+        credentialConfigRequiresJwtProofKeyAttestation({
+          format: "vc+sd-jwt",
+          vct: "urn:other:vct",
+          proof_types_supported: { jwt: {} },
+        })
+      ).to.equal(false);
+    });
+  });
+
   it("isWuaWalletProviderTrustedByPolicy is stub true (Trusted List not wired)", () => {
     expect(
       isWuaWalletProviderTrustedByPolicy({ iss: "https://any.wallet-provider.example" }, {}, {})
@@ -111,6 +167,18 @@ describe("WUA validation (routeUtils)", () => {
       const j2 = await jose.exportJWK(p2);
       const wuaPayload = { attested_keys: [j1, j2] };
       expect(proofKeyMatchesWUAAttestedKeys(j2, wuaPayload)).to.equal(false);
+    });
+  });
+
+  describe("proofKeyMatchesAnyWUAAttestedKey (RFC001 P1-12)", () => {
+    it("returns true when proof key matches any attested key", async () => {
+      const { publicKey } = await jose.generateKeyPair("ES256");
+      const { publicKey: p2 } = await jose.generateKeyPair("ES256");
+      const j1 = await jose.exportJWK(publicKey);
+      const j2 = await jose.exportJWK(p2);
+      const wuaPayload = { attested_keys: [j1, j2] };
+      expect(proofKeyMatchesAnyWUAAttestedKey(j1, wuaPayload)).to.equal(true);
+      expect(proofKeyMatchesAnyWUAAttestedKey(j2, wuaPayload)).to.equal(true);
     });
   });
 });

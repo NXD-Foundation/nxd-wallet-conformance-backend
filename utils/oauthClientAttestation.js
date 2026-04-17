@@ -208,7 +208,76 @@ export async function verifyClientAttestationPopJwt(
   if (!payload.jti) {
     throw new Error(withSpecRef("PoP JWT missing jti", SPEC_REFS.OAUTH_CLIENT_ATTESTATION_POP));
   }
+  if (typeof payload.iss !== "string" || payload.iss.trim() === "") {
+    throw new Error(withSpecRef("PoP JWT missing or invalid iss", SPEC_REFS.OAUTH_CLIENT_ATTESTATION_POP));
+  }
   return { payload, protectedHeader };
+}
+
+/**
+ * After WIA and OAuth client attestation JWT are validated, ensure the instance key in WIA `cnf`
+ * matches the key bound in the client attestation JWT (RFC001 §7.3–7.4 structure; no WP trust list).
+ */
+export async function assertWiaCnfMatchesClientAttestation(wiaPayload, attestationPayload) {
+  const wCnf = wiaPayload?.cnf;
+  const aCnf = attestationPayload?.cnf;
+  if (!wCnf || typeof wCnf !== "object" || Array.isArray(wCnf)) {
+    throw new Error(
+      withSpecRef(
+        "WIA cnf is missing or invalid for client attestation binding",
+        SPEC_REFS.HAIP_WALLET_ATTESTATION,
+        SPEC_REFS.OAUTH_CLIENT_ATTESTATION
+      )
+    );
+  }
+  if (!aCnf || typeof aCnf !== "object" || Array.isArray(aCnf)) {
+    throw new Error(
+      withSpecRef(
+        "Client attestation cnf is missing or invalid",
+        SPEC_REFS.HAIP_WALLET_ATTESTATION,
+        SPEC_REFS.OAUTH_CLIENT_ATTESTATION
+      )
+    );
+  }
+  const aJwk = aCnf.jwk;
+  assertCnfJwkIsPublicOnly(aJwk);
+
+  const wJwk = wCnf.jwk;
+  const wJkt = typeof wCnf.jkt === "string" ? wCnf.jkt.trim() : null;
+  const hasWjwk = wJwk != null && typeof wJwk === "object";
+  if (hasWjwk) {
+    assertCnfJwkIsPublicOnly(wJwk);
+    const tW = await jose.calculateJwkThumbprint(wJwk, "sha256");
+    const tA = await jose.calculateJwkThumbprint(aJwk, "sha256");
+    if (tW !== tA) {
+      throw new Error(
+        withSpecRef(
+          "WIA cnf.jwk does not match client attestation cnf.jwk",
+          SPEC_REFS.HAIP_WALLET_ATTESTATION,
+          SPEC_REFS.OAUTH_CLIENT_ATTESTATION
+        )
+      );
+    }
+  } else if (wJkt) {
+    const tA = await jose.calculateJwkThumbprint(aJwk, "sha256");
+    if (wJkt !== tA) {
+      throw new Error(
+        withSpecRef(
+          "WIA cnf.jkt does not match client attestation cnf.jwk thumbprint",
+          SPEC_REFS.HAIP_WALLET_ATTESTATION,
+          SPEC_REFS.OAUTH_CLIENT_ATTESTATION
+        )
+      );
+    }
+  } else {
+    throw new Error(
+      withSpecRef(
+        "WIA cnf must include jwk or jkt to bind client attestation",
+        SPEC_REFS.HAIP_WALLET_ATTESTATION,
+        SPEC_REFS.OAUTH_CLIENT_ATTESTATION
+      )
+    );
+  }
 }
 
 export function assertClientIdMatchesAttestationSub(clientId, attestationSub) {

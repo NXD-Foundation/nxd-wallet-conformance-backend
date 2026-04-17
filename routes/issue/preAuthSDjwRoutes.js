@@ -15,6 +15,7 @@ import {
   QR_CONFIG,
   TX_CODE_CONFIG,
   URL_SCHEMES,
+  getCredentialOfferSchemeFromRequest,
   ERROR_MESSAGES,
   
   // Cryptographic utilities
@@ -84,13 +85,17 @@ router.get("/offer-tx-code", async (req, res) => {
     const credentialType = getCredentialType(req);
     const signatureType = getSignatureType(req);
 
-    const sessionData = createBaseSession("pre-auth", false, signatureType);
+    const sessionData = createBaseSession("pre-auth", false, signatureType, {
+      requireTxCode: true,
+    });
     await manageSession(sessionId, sessionData);
 
+    const invocationScheme = getCredentialOfferSchemeFromRequest(req);
     const credentialOffer = createPreAuthCredentialOfferUri(
       sessionId,
       credentialType,
-      "/credential-offer-tx-code"
+      "/credential-offer-tx-code",
+      invocationScheme,
     );
 
     const response = await createCredentialOfferResponse(credentialOffer, sessionId);
@@ -136,10 +141,12 @@ router.get("/offer-no-code", async (req, res) => {
     const sessionData = createBaseSession("pre-auth", false, signatureType);
     await manageSession(sessionId, sessionData);
 
+    const invocationScheme = getCredentialOfferSchemeFromRequest(req);
     const credentialOffer = createPreAuthCredentialOfferUri(
       sessionId,
       credentialType,
-      "/credential-offer-no-code"
+      "/credential-offer-no-code",
+      invocationScheme,
     );
 
     const response = await createCredentialOfferResponse(credentialOffer, sessionId);
@@ -168,10 +175,12 @@ router.post("/offer-no-code", async (req, res) => {
     const sessionData = createSessionWithPayload(credentialPayload, true);
     await manageSession(sessionId, sessionData);
 
+    const invocationScheme = getCredentialOfferSchemeFromRequest(req);
     const credentialOffer = createPreAuthCredentialOfferUri(
       sessionId,
       credentialType,
-      "/credential-offer-no-code"
+      "/credential-offer-no-code",
+      invocationScheme,
     );
 
     const response = await createCredentialOfferResponse(credentialOffer, sessionId);
@@ -231,7 +240,9 @@ router.get("/haip-offer-tx-code", async (req, res) => {
 
     const credentialType = getCredentialType(req);
 
-    const sessionData = createBaseSession("pre-auth", true);
+    const sessionData = createBaseSession("pre-auth", true, null, {
+      requireTxCode: true,
+    });
     await manageSession(sessionId, sessionData);
 
     const credentialOffer = createPreAuthCredentialOfferUri(

@@ -39,7 +39,6 @@ import {
   DEFAULT_REDIRECT_URI,
   QR_CONFIG,
   CLIENT_METADATA,
-  URL_SCHEMES,
   ERROR_MESSAGES,
   
   // Cryptographic utilities
@@ -54,6 +53,7 @@ import {
   
   // Session management utilities
   createCodeFlowSession,
+  getCredentialOfferSchemeFromRequest,
   
   // QR code and URL generation utilities
   generateQRCode,
@@ -71,13 +71,22 @@ import {
   // WIA/WUA validation utilities
   validateWIA,
   extractWIAFromTokenRequest,
+  parseAuthorizationDetailsParameterRaw,
+  assertOpenidCredentialAuthorizationDetails,
+  resolveCredentialIdentifierFromOpenidCredentialEntry,
 } from "../../utils/routeUtils.js";
 import {
   validateOAuthClientAttestationFromRequest,
   getTrustedClientAttesterJwks,
+  assertWiaCnfMatchesClientAttestation,
 } from "../../utils/oauthClientAttestation.js";
 
 const codeFlowRouterSDJWT = express.Router();
+
+const __dirnameCodeFlow = path.dirname(fileURLToPath(import.meta.url));
+const OAUTH_CONFIG_PAR = JSON.parse(
+  fs.readFileSync(path.join(__dirnameCodeFlow, "../../data/oauth-config.json"), "utf-8"),
+);
 
 // Load private key
 const PRIVATE_KEY = fs.readFileSync("./private-key.pem", "utf-8");
@@ -119,16 +128,11 @@ function createPARRequest(requestData) {
   };
 }
 
-function parseAuthorizationDetails(authorizationDetails) {
+function parseValidateAndNormalizeAuthorizationDetails(authorizationDetails) {
   if (!authorizationDetails) return null;
-  
-  try {
-    return JSON.parse(decodeURIComponent(authorizationDetails));
-  } catch (error) {
-    const received = typeof authorizationDetails === 'string' ? `string (${authorizationDetails.substring(0, 100)}...)` : typeof authorizationDetails;
-    console.log(`Error parsing authorization details. Received: ${received}, expected: valid JSON string, error: ${error.message}`);
-    throw new Error(`${ERROR_MESSAGES.PARSE_AUTHORIZATION_DETAILS_ERROR}. Received: ${received}, expected: valid JSON string`);
-  }
+  const parsed = parseAuthorizationDetailsParameterRaw(authorizationDetails);
+  assertOpenidCredentialAuthorizationDetails(parsed);
+  return parsed;
 }
 
 function extractCredentialsFromAuthorizationDetails(authorizationDetails) {
@@ -137,7 +141,7 @@ function extractCredentialsFromAuthorizationDetails(authorizationDetails) {
 
   if (authorizationDetails && authorizationDetails.length > 0) {
     authorizationDetails.forEach((item) => {
-      const cred = fetchVCTorCredentialConfigId(item);
+      const cred = resolveCredentialIdentifierFromOpenidCredentialEntry(item);
       credentials.push(cred);
       
       if (cred === "urn:eu.europa.ec.eudi:pid:1" || cred.indexOf("urn:eu.europa.ec.eudi:pid:1") >= 0) {
@@ -166,20 +170,50 @@ function extractCredentialsFromScope(scope) {
   return { credentials, isPIDIssuanceFlow };
 }
 
-function validateAuthorizationRequest(response_type, code_challenge, authorizationDetails) {
+function validateAuthorizationRequest(response_type, code_challenge, code_challenge_method) {
   const errors = [];
 
-  if (authorizationDetails) {
-    if (!response_type) {
-      errors.push(`${ERROR_MESSAGES.MISSING_RESPONSE_TYPE}. Received: ${response_type === undefined ? 'undefined' : response_type}, expected: 'code'. See ${SPEC_REFS.VCI_AUTHORIZATION}`);
+  if (!response_type) {
+    errors.push(
+      `${ERROR_MESSAGES.MISSING_RESPONSE_TYPE}. Received: ${response_type === undefined ? "undefined" : response_type}, expected: 'code'. See ${SPEC_REFS.VCI_AUTHORIZATION}`
+    );
+  } else if (response_type !== "code") {
+    errors.push(
+      `${ERROR_MESSAGES.INVALID_RESPONSE_TYPE}. Received: '${response_type}', expected: 'code'. See ${SPEC_REFS.VCI_AUTHORIZATION}`
+    );
+  } else {
+    // RFC7636 / RFC001 §7.3 — PKCE S256 is required for every authorization code request
+    // (scope-only or authorization_details; PAR or direct GET).
+    const challenge =
+      code_challenge === undefined || code_challenge === null
+        ? ""
+        : String(code_challenge).trim();
+    if (!challenge) {
+      errors.push(
+        `Authorization request missing code_challenge. Received: ${
+          code_challenge === undefined ? "undefined" : String(code_challenge)
+        }, expected: non-empty code_challenge (PKCE, S256). See ${SPEC_REFS.VCI_AUTHORIZATION}`
+      );
     }
-    if (!code_challenge) {
-      errors.push(`${ERROR_MESSAGES.MISSING_CODE_CHALLENGE}. Received: ${code_challenge === undefined ? 'undefined' : code_challenge}, expected: code_challenge string. See ${SPEC_REFS.VCI_AUTHORIZATION}`);
-    }
-  }
 
-  if (response_type !== "code") {
-    errors.push(`${ERROR_MESSAGES.INVALID_RESPONSE_TYPE}. Received: '${response_type}', expected: 'code'. See ${SPEC_REFS.VCI_AUTHORIZATION}`);
+    const methodRaw =
+      code_challenge_method === undefined || code_challenge_method === null
+        ? ""
+        : String(code_challenge_method).trim();
+
+    if (!methodRaw) {
+      errors.push(
+        `code_challenge_method is required and must be S256 (PKCE). Received: missing or empty, expected: S256. The plain method is not allowed (RFC001 §7.3). See ${SPEC_REFS.VCI_AUTHORIZATION}`
+      );
+    } else if (methodRaw.toLowerCase() === "plain") {
+      errors.push(
+        `code_challenge_method plain is not allowed; PKCE must use S256 (RFC7636; RFC001 §7.3). See ${SPEC_REFS.VCI_AUTHORIZATION}`
+      );
+    } else if (methodRaw.toUpperCase() !== "S256") {
+      errors.push(
+        `code_challenge_method must be S256. Received: '${methodRaw}', expected: 'S256'. See ${SPEC_REFS.VCI_AUTHORIZATION}`
+      );
+    }
   }
 
   return errors;
@@ -197,10 +231,27 @@ function handlePARRequest(request_uri) {
   return parRequest;
 }
 
+function authorizeInvalidRequestJson(res, error_description) {
+  return res.status(400).json({
+    error: "invalid_request",
+    error_description,
+  });
+}
+
+function normalizeAuthorizeClientId(v) {
+  if (v === undefined || v === null) return null;
+  const t = String(v).trim();
+  return t === "" ? null : t;
+}
+
 function updateSessionForAuthorization(existingCodeSession, requestData) {
   existingCodeSession.walletSession = requestData.state;
   existingCodeSession.authorizationDetails = requestData.authorizationDetails;
   existingCodeSession.scope = requestData.scope;
+  // RFC001 / P0-2: bind OAuth client_id from PAR/authorize for token redemption checks
+  existingCodeSession.authorizationRequestClientId = normalizeAuthorizeClientId(
+    requestData.client_id,
+  );
   existingCodeSession.requests = {
     redirectUri: requestData.redirectUri,
     challenge: requestData.code_challenge,
@@ -442,9 +493,8 @@ codeFlowRouterSDJWT.get(["/offer-code-sd-jwt"], async (req, res) => {
     const sessionData = createCodeFlowSession(client_id_scheme, "code", false, false, signatureType);
     await manageSession(sessionId, sessionData);
 
-    // Allow caller to control wallet invocation scheme (openid-credential-offer:// by default, haip:// if requested)
-    const invocationScheme =
-      req.query.url_scheme === "haip" ? URL_SCHEMES.HAIP : URL_SCHEMES.STANDARD;
+    // Wallet invocation: `offer_scheme` or `url_scheme` (openid-credential-offer://, haip://, eu-eaa-offer://)
+    const invocationScheme = getCredentialOfferSchemeFromRequest(req);
 
     const credentialOffer = createCodeFlowCredentialOfferResponse(
       sessionId,
@@ -477,8 +527,7 @@ codeFlowRouterSDJWT.get(["/offer-code-sd-jwt-dynamic"], async (req, res) => {
     const sessionData = createCodeFlowSession(client_id_scheme, "code", true);
     await manageSession(sessionId, sessionData);
 
-    const invocationScheme =
-      req.query.url_scheme === "haip" ? URL_SCHEMES.HAIP : URL_SCHEMES.STANDARD;
+    const invocationScheme = getCredentialOfferSchemeFromRequest(req);
 
     const credentialOffer = createCodeFlowCredentialOfferResponse(
       sessionId,
@@ -511,8 +560,7 @@ codeFlowRouterSDJWT.get(["/offer-code-defered"], async (req, res) => {
     const sessionData = createCodeFlowSession(client_id_scheme, "code", false, true);
     await manageSession(sessionId, sessionData);
 
-    const invocationScheme =
-      req.query.url_scheme === "haip" ? URL_SCHEMES.HAIP : URL_SCHEMES.STANDARD;
+    const invocationScheme = getCredentialOfferSchemeFromRequest(req);
 
     const credentialOffer = createCodeFlowCredentialOfferResponse(
       sessionId,
@@ -584,6 +632,7 @@ codeFlowRouterSDJWT.post(["/par", "/authorize/par"], async (req, res) => {
     if (slog) {
       const bodyForLog = { ...req.body };
       if (bodyForLog.code_challenge) bodyForLog.code_challenge = "[REDACTED]";
+      if (bodyForLog.client_assertion) bodyForLog.client_assertion = "[REDACTED]";
       requestId = logHttpRequest(slog, "POST", "/par", req.headers, bodyForLog);
       try { slog("[ISSUER] [PAR] [START] Processing PAR request", { hasIssuerState: !!issuerState, hasState: !!requestData.state }); } catch {}
     }
@@ -591,7 +640,7 @@ codeFlowRouterSDJWT.post(["/par", "/authorize/par"], async (req, res) => {
     const attestationResult = await validateOAuthClientAttestationFromRequest({
       headers: req.headers,
       clientId: requestData.client_id,
-      authorizationServerIssuer: SERVER_URL,
+      authorizationServerIssuer: process.env.SERVER_URL || "http://localhost:3000",
       trustedJwks: getTrustedClientAttesterJwks(),
     });
     if (!attestationResult.skip && !attestationResult.ok) {
@@ -620,30 +669,176 @@ codeFlowRouterSDJWT.post(["/par", "/authorize/par"], async (req, res) => {
       });
     }
 
-    // Extract and validate Wallet Instance Attestation (WIA) if present
-    // Based on TS3 spec: https://github.com/eu-digital-identity-wallet/eudi-doc-standards-and-technical-specifications/blob/main/docs/technical-specifications/ts3-wallet-unit-attestation.md
+    // RFC001 §7.3–7.4 — WIA is mandatory at PAR (same client_assertion carrier as token endpoint).
     const wiaJwt = extractWIAFromTokenRequest(req.body, req.headers);
-    if (wiaJwt) {
+    if (!wiaJwt) {
       if (slog) {
         try {
-          const decoded = jwt.decode(wiaJwt, { complete: true });
-          const p = decoded?.payload;
-          slog("[ISSUER] [PAR] WIA received", { length: wiaJwt.length, iss: p?.iss, aud: p?.aud, iat: p?.iat, exp: p?.exp, jti: p?.jti });
+          slog("[ISSUER] [PAR] [ERROR] Missing WIA (client_assertion)");
         } catch {}
+        logHttpResponse(
+          slog,
+          requestId,
+          "/par",
+          400,
+          "Bad Request",
+          res.getHeaders(),
+          { error: "invalid_client", error_description: "Wallet Instance Attestation (WIA) is required on PAR (RFC001 §7.3)." },
+        );
       }
-      const wiaValidation = await validateWIA(wiaJwt, issuerState);
-      if (wiaValidation.valid) {
-        if (slog) {
-          try { slog("[ISSUER] [PAR] WIA validated successfully", { wiaIssuer: wiaValidation.payload?.iss, wiaExp: wiaValidation.payload?.exp }); } catch {}
-        }
-      } else {
-        if (slog) {
-          try { slog("[ISSUER] [PAR] [WARN] WIA validation failed (continuing without WIA)", { error: wiaValidation.error }); } catch {}
-        }
-      }
-    } else {
+      return res.status(400).json({
+        error: "invalid_client",
+        error_description:
+          "Wallet Instance Attestation (WIA) is required: send client_assertion with client_assertion_type urn:ietf:params:oauth:client-assertion-type:jwt-bearer (RFC001 §7.3).",
+      });
+    }
+    if (slog) {
+      try {
+        const decoded = jwt.decode(wiaJwt, { complete: true });
+        const p = decoded?.payload;
+        slog("[ISSUER] [PAR] WIA received", {
+          length: wiaJwt.length,
+          iss: p?.iss,
+          aud: p?.aud,
+          iat: p?.iat,
+          exp: p?.exp,
+          jti: p?.jti,
+        });
+      } catch {}
+    }
+    const wiaValidation = await validateWIA(wiaJwt, issuerState);
+    if (!wiaValidation.valid) {
       if (slog) {
-        try { slog("[ISSUER] [PAR] WIA not found (continuing without WIA)"); } catch {}
+        try {
+          slog("[ISSUER] [PAR] [ERROR] WIA validation failed", { error: wiaValidation.error });
+        } catch {}
+        logHttpResponse(
+          slog,
+          requestId,
+          "/par",
+          400,
+          "Bad Request",
+          res.getHeaders(),
+          { error: "invalid_client", error_description: wiaValidation.error },
+        );
+      }
+      return res.status(400).json({
+        error: "invalid_client",
+        error_description: wiaValidation.error || "Invalid Wallet Instance Attestation",
+      });
+    }
+    if (slog) {
+      try {
+        slog("[ISSUER] [PAR] WIA validated successfully", {
+          wiaIssuer: wiaValidation.payload?.iss,
+          wiaExp: wiaValidation.payload?.exp,
+        });
+      } catch {}
+    }
+
+    if (attestationResult.skip) {
+      if (slog) {
+        try {
+          slog("[ISSUER] [PAR] [ERROR] Missing OAuth client attestation headers with WIA");
+        } catch {}
+        logHttpResponse(
+          slog,
+          requestId,
+          "/par",
+          400,
+          "Bad Request",
+          res.getHeaders(),
+          {
+            error: "invalid_client",
+            error_description:
+              "OAuth-Client-Attestation and OAuth-Client-Attestation-PoP headers are required with Wallet Instance Attestation (RFC001 §7.3).",
+          }
+        );
+      }
+      return res.status(400).json({
+        error: "invalid_client",
+        error_description:
+          "OAuth-Client-Attestation and OAuth-Client-Attestation-PoP headers are required with Wallet Instance Attestation (RFC001 §7.3).",
+      });
+    }
+    try {
+      await assertWiaCnfMatchesClientAttestation(
+        wiaValidation.payload,
+        attestationResult.attestationPayload
+      );
+    } catch (e) {
+      if (slog) {
+        try {
+          slog("[ISSUER] [PAR] [ERROR] WIA / client attestation cnf mismatch", {
+            message: e?.message,
+          });
+        } catch {}
+        logHttpResponse(
+          slog,
+          requestId,
+          "/par",
+          400,
+          "Bad Request",
+          res.getHeaders(),
+          { error: "invalid_client", error_description: e?.message || "WIA client attestation binding failed" }
+        );
+      }
+      return res.status(400).json({
+        error: "invalid_client",
+        error_description: e?.message || "WIA client attestation binding failed",
+      });
+    }
+
+    const parPkceErrors = validateAuthorizationRequest(
+      requestData.response_type,
+      requestData.code_challenge,
+      requestData.code_challenge_method
+    );
+    if (parPkceErrors.length > 0) {
+      if (slog) {
+        logHttpResponse(
+          slog,
+          requestId,
+          "/par",
+          400,
+          "Bad Request",
+          res.getHeaders(),
+          { error: "invalid_request", error_description: parPkceErrors.join(" ") }
+        );
+      }
+      return res.status(400).json({
+        error: "invalid_request",
+        error_description: parPkceErrors.join(" "),
+      });
+    }
+
+    if (
+      requestData.authorizationDetails !== undefined &&
+      requestData.authorizationDetails !== null
+    ) {
+      try {
+        const parsedAd = parseAuthorizationDetailsParameterRaw(
+          requestData.authorizationDetails,
+        );
+        assertOpenidCredentialAuthorizationDetails(parsedAd);
+        requestData.authorizationDetails = parsedAd;
+      } catch (e) {
+        const oauthError = e.oauthErrorCode || e.errorCode || "invalid_request";
+        if (slog) {
+          logHttpResponse(
+            slog,
+            requestId,
+            "/par",
+            400,
+            "Bad Request",
+            res.getHeaders(),
+            { error: oauthError, error_description: e.message },
+          );
+        }
+        return res.status(400).json({
+          error: oauthError,
+          error_description: e.message,
+        });
       }
     }
 
@@ -686,7 +881,10 @@ codeFlowRouterSDJWT.get("/authorize", async (req, res) => {
       authorizationDetails: req.query.authorization_details,
       scope: req.query.scope,
       redirect_uri: req.query.redirect_uri,
-      code_challenge: decodeURIComponent(req.query.code_challenge),
+      code_challenge:
+        req.query.code_challenge != null && req.query.code_challenge !== ""
+          ? decodeURIComponent(req.query.code_challenge)
+          : undefined,
       code_challenge_method: req.query.code_challenge_method,
       client_metadata: req.query.client_metadata,
       nonce: req.query.nonce,
@@ -707,10 +905,48 @@ codeFlowRouterSDJWT.get("/authorize", async (req, res) => {
       try { slog("[ISSUER] [AUTHORIZATION] [START] Processing authorization request", { hasRequestUri: !!requestData.request_uri, hasState: !!requestData.state }); } catch {}
     }
 
-    // Handle PAR request if present
-    const parRequest = handlePARRequest(requestData.request_uri);
-    if (parRequest) {
+    // RFC001 §7.3 / OAuth PAR: when AS metadata sets require_pushed_authorization_requests,
+    // the authorization request MUST use request_uri from a prior PAR (RFC 9126).
+    const requirePar =
+      OAUTH_CONFIG_PAR.require_pushed_authorization_requests === true;
+
+    if (requirePar) {
+      const requestUriRaw = requestData.request_uri;
+      if (
+        requestUriRaw === undefined ||
+        requestUriRaw === null ||
+        String(requestUriRaw).trim() === ""
+      ) {
+        if (slog) {
+          try {
+            slog("[ISSUER] [AUTHORIZATION] [ERROR] PAR required but request_uri missing");
+          } catch {}
+        }
+        return authorizeInvalidRequestJson(
+          res,
+          "Pushed Authorization Request is required (require_pushed_authorization_requests is true). Send the authorization request using request_uri returned from the PAR endpoint.",
+        );
+      }
+      const parRequest = handlePARRequest(requestUriRaw);
+      if (!parRequest) {
+        if (slog) {
+          try {
+            slog("[ISSUER] [AUTHORIZATION] [ERROR] PAR request_uri not found or expired", {
+              request_uri: requestUriRaw,
+            });
+          } catch {}
+        }
+        return authorizeInvalidRequestJson(
+          res,
+          "Invalid, expired, or unknown request_uri. Obtain a fresh request_uri from the PAR endpoint.",
+        );
+      }
       requestData = { ...requestData, ...parRequest };
+    } else {
+      const parRequest = handlePARRequest(requestData.request_uri);
+      if (parRequest) {
+        requestData = { ...requestData, ...parRequest };
+      }
     }
 
     console.log("wallet_issuer_id: " + requestData.wallet_issuer_id);
@@ -735,7 +971,18 @@ codeFlowRouterSDJWT.get("/authorize", async (req, res) => {
     let isPIDIssuanceFlow = false;
 
     if (requestData.authorizationDetails) {
-      const parsedAuthDetails = parseAuthorizationDetails(requestData.authorizationDetails);
+      let parsedAuthDetails;
+      try {
+        parsedAuthDetails = parseValidateAndNormalizeAuthorizationDetails(
+          requestData.authorizationDetails,
+        );
+      } catch (e) {
+        return authorizeInvalidRequestJson(
+          res,
+          e.message || "Invalid authorization_details",
+        );
+      }
+      requestData.authorizationDetails = parsedAuthDetails;
       const result = extractCredentialsFromAuthorizationDetails(parsedAuthDetails);
       credentialsRequested = result.credentials;
       isPIDIssuanceFlow = result.isPIDIssuanceFlow;
@@ -772,7 +1019,7 @@ codeFlowRouterSDJWT.get("/authorize", async (req, res) => {
     const errors = validateAuthorizationRequest(
       requestData.response_type,
       requestData.code_challenge,
-      requestData.authorizationDetails
+      requestData.code_challenge_method
     );
 
     if (errors.length > 0) {
@@ -978,49 +1225,5 @@ codeFlowRouterSDJWT.post("/direct_post_vci/:id", async (req, res) => {
     handleRouteError(error, "direct_post_vci", res, issuerState);
   }
 });
-
-// Function to fetch either vct or credential_configuration_id
-function fetchVCTorCredentialConfigId(data) {
-  // 1. Handle the structure from the user's first modification (most specific)
-  if (
-    data.credential_definition &&
-    data.credential_definition.type &&
-    Array.isArray(data.credential_definition.type) &&
-    data.credential_definition.type.length > 0
-  ) {
-    return data.credential_definition.type[0];
-  }
-
-  // 2. Handle 'credential_configuration_id'
-  // (Covers A, C, D part 1, E part 1 from examples)
-  if (data.credential_configuration_id) {
-    return data.credential_configuration_id;
-  }
-
-  // 3. Handle 'format' and its associated fields
-  if (data.format) {
-    // For 'vc+sd-jwt' format, use 'vct' (Covers B from examples)
-    if (data.format === "vc+sd-jwt" && data.vct) {
-      return data.vct;
-    }
-    // For 'mso_mdoc' format, use 'doctype' (Covers D part 2 from examples)
-    if (data.format === "mso_mdoc" && data.doctype) {
-      return data.doctype;
-    }
-  }
-
-  // 4. Fallback for the original `data.vct` if it wasn't caught by format-specific logic
-  // This respects the original function's high priority for `vct`.
-  if (data.vct) {
-    return data.vct;
-  }
-
-  // 5. Fallback to 'types' (from original function structure)
-  if (data.types) {
-    return data.types;
-  }
-
-  return null; // If none of the above, return null
-}
 
 export default codeFlowRouterSDJWT;

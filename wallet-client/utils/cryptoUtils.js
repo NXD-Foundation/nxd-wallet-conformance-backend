@@ -547,7 +547,7 @@ export async function jarOAutTokenResponse(
     jwtPayload.id_token = id_token;
   }
   if (authorization_details) {
-    jwtPayload.authorization_details = authorizatiton_details;
+    jwtPayload.authorization_details = authorization_details;
   }
 
   // JWT header

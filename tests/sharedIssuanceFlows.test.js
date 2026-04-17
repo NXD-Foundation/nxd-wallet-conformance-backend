@@ -12,14 +12,17 @@ import { v4 as uuidv4 } from 'uuid';
 // Set up environment for testing BEFORE importing modules
 process.env.ALLOW_NO_REDIS = 'true';
 process.env.SERVER_URL = 'http://localhost:3000';
-// HAIP profile toggle for requiring DPoP at the token endpoint (used by INT-* tests)
-process.env.HAIP_PROFILE_REQUIRE_DPOP_FOR_TOKEN = 'false';
 
 // NOTE: ES modules have immutable exports, so we cannot stub them directly.
 // We'll test the real implementation with real dependencies configured for testing.
 // The ALLOW_NO_REDIS flag allows Redis-dependent code to work without a Redis connection.
 
 describe('Shared Issuance Flows', () => {
+  /** Bound at PAR/authorize; token exchange must present the same `client_id` when set (RFC001 P0-2). */
+  const TEST_OAUTH_CLIENT_ID = 'test-oauth-client-id';
+  /** Bound at PAR/authorize; token exchange must present the same `redirect_uri` when set (RFC001 P0-3). */
+  const TEST_OAUTH_REDIRECT_URI = 'https://wallet.test/oauth/callback';
+
   let sandbox;
   let app;
   let sharedModule;
@@ -30,11 +33,120 @@ describe('Shared Issuance Flows', () => {
   let testKeys;
   let globalSandbox;
 
-  const signProofJwt = (payload) => {
+  const signProofJwt = (payload, headerOverrides = {}) => {
     return jwt.sign(payload, testKeys.privateKeyPem, {
       algorithm: 'ES256',
-      header: { jwk: testKeys.publicKeyJwk }
+      header: {
+        typ: 'openid4vci-proof+jwt',
+        jwk: testKeys.publicKeyJwk,
+        ...headerOverrides,
+      },
     });
+  };
+
+  // RFC001 §7.4: DPoP is mandatory at the token endpoint. Generates a fresh
+  // ephemeral key + DPoP proof JWT per invocation so tests stay isolated and
+  // avoid jti replay collisions between requests.
+  const makeTokenDpop = async (
+    { htu = 'http://localhost:3000/token_endpoint', htm = 'POST' } = {}
+  ) => {
+    const { publicKey, privateKey } = await jose.generateKeyPair('ES256');
+    const publicJwk = await jose.exportJWK(publicKey);
+    const dpopJwt = await new jose.SignJWT({ htu, htm })
+      .setProtectedHeader({ alg: 'ES256', typ: 'dpop+jwt', jwk: publicJwk })
+      .setIssuedAt()
+      .setJti(uuidv4())
+      .sign(privateKey);
+    return { dpopJwt, publicJwk };
+  };
+
+  const WIA_CLIENT_ASSERTION_TYPE =
+    "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
+
+  /** Last bundle for {@link wireWiaOAuthHeaders} / {@link pickWiaBodyFields} (tests run serially in this file). */
+  let lastWiaTestBundle = null;
+
+  const pickWiaBodyFields = (bundle) => {
+    const b = bundle ?? lastWiaTestBundle;
+    const { oauthAttestationHeaders: _h, ...rest } = b;
+    return rest;
+  };
+
+  const wireWiaOAuthHeaders = (req) => {
+    const h = lastWiaTestBundle?.oauthAttestationHeaders;
+    if (!h) return req;
+    let r = req;
+    for (const [k, v] of Object.entries(h)) {
+      r = r.set(k, v);
+    }
+    return r;
+  };
+
+  /**
+   * RFC001 §7.3–7.4 — WIA + OAuth-Client-Attestation + PoP: WIA carries cnf.jwk; PoP verified against attestation cnf; issuer binds WIA cnf to attestation cnf.
+   * @param {{ oauthClientId?: string }} [options] - When the request sends `client_id`, pass it so attestation `sub` and PoP `iss` match (HAIP).
+   */
+  const makeTestWiaClientAssertion = async (options = {}) => {
+    const base = process.env.SERVER_URL || "http://localhost:3000";
+    const tokenEndpoint = `${String(base).replace(/\/$/, "")}/token_endpoint`;
+    const { publicKey, privateKey } = await jose.generateKeyPair("ES256");
+    const publicJwk = await jose.exportJWK(publicKey);
+    const cnfJwk = { ...publicJwk };
+    delete cnfJwk.d;
+
+    const wiaIssuer = "did:jwk:test-wia";
+    const attestationSub =
+      options.oauthClientId != null && options.oauthClientId !== ""
+        ? options.oauthClientId
+        : wiaIssuer;
+
+    const now = Math.floor(Date.now() / 1000);
+    const exp = now + 3600;
+    const client_assertion = await new jose.SignJWT({
+      iss: wiaIssuer,
+      aud: tokenEndpoint,
+      iat: now,
+      exp,
+      jti: uuidv4(),
+      cnf: { jwk: cnfJwk },
+    })
+      .setProtectedHeader({ alg: "ES256", typ: "JWT", jwk: publicJwk })
+      .sign(privateKey);
+
+    const attJwt = await new jose.SignJWT({
+      iss: wiaIssuer,
+      sub: attestationSub,
+      aud: base,
+      iat: now,
+      nbf: now,
+      exp: now + 3600,
+      jti: uuidv4(),
+      cnf: { jwk: cnfJwk },
+    })
+      .setProtectedHeader({ alg: "ES256", typ: "oauth-client-attestation+jwt", jwk: publicJwk })
+      .sign(privateKey);
+
+    const popJwt = await new jose.SignJWT({
+      iss: attestationSub,
+      aud: base,
+      iat: now,
+      nbf: now,
+      exp: now + 300,
+      jti: uuidv4(),
+    })
+      .setProtectedHeader({ alg: "ES256", typ: "oauth-client-attestation-pop+jwt", jwk: publicJwk })
+      .sign(privateKey);
+
+    const bundle = {
+      client_assertion,
+      client_assertion_type: WIA_CLIENT_ASSERTION_TYPE,
+      oauthAttestationHeaders: {
+        "OAuth-Client-Attestation": attJwt,
+        "OAuth-Client-Attestation-PoP": popJwt,
+      },
+    };
+    lastWiaTestBundle = bundle;
+    return bundle;
   };
 
   before(async () => {
@@ -51,6 +163,14 @@ describe('Shared Issuance Flows', () => {
       .withArgs(sinon.match(/issuer-config\.json/)).returns(JSON.stringify({
         credential_configurations_supported: {
           'test-cred-config': { format: 'dc+sd-jwt', proof_types_supported: { jwt: { proof_signing_alg_values_supported: ['ES256'] } } },
+          'rfc001-device-bound-test': {
+            format: 'vc+sd-jwt',
+            vct: 'urn:eu.europa.ec.eudi:pid:1',
+            credential_signing_alg_values_supported: ['ES256'],
+            proof_types_supported: {
+              jwt: { proof_signing_alg_values_supported: ['ES256'] },
+            },
+          },
         },
         default_signing_kid: 'test-kid',
         credential_response_encryption: {
@@ -93,6 +213,10 @@ describe('Shared Issuance Flows', () => {
   });
 
   beforeEach(async () => {
+    // Other suites (e.g. metadata discovery) may change SERVER_URL; DPoP `htu` checks
+    // use getServerUrl() per request, so reset to this file's expected issuer base URL.
+    process.env.SERVER_URL = 'http://localhost:3000';
+
     sandbox = sinon.createSandbox();
 
     // Generate a valid EC private key for testing
@@ -121,6 +245,28 @@ describe('Shared Issuance Flows', () => {
   });
 
   describe('POST /token_endpoint', () => {
+    it('MUST return invalid_client when WIA (client_assertion) is missing', async () => {
+      if (!cacheServiceRedis.client.isReady) {
+        throw new Error("Redis is not ready - cannot run test");
+      }
+      const preAuthCode = "test-pre-auth-no-wia-" + uuidv4();
+      await cacheServiceRedis.storePreAuthSession(preAuthCode, {
+        status: "pending",
+        authorizationDetails: null,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const { dpopJwt } = await makeTokenDpop();
+      const response = await request(app)
+        .post("/token_endpoint")
+        .set("DPoP", dpopJwt)
+        .send({
+          grant_type: "urn:ietf:params:oauth:grant-type:pre-authorized_code",
+          "pre-authorized_code": preAuthCode,
+        })
+        .expect(400);
+      expect(response.body).to.have.property("error", "invalid_client");
+    });
+
     it('should handle pre-authorized code flow successfully', async () => {
       const preAuthCode = 'test-pre-auth-code-' + uuidv4();
       const preAuthSession = {
@@ -139,10 +285,17 @@ describe('Shared Issuance Flows', () => {
       // Small delay to ensure session is stored
       await new Promise(resolve => setTimeout(resolve, 50));
 
-      const response = await request(app)
-        .post('/token_endpoint')
-        .set('Authorization', 'Bearer test-token')
+      // RFC001 §7.4: DPoP is mandatory at the token endpoint.
+      const { dpopJwt, publicJwk } = await makeTokenDpop();
+
+      await makeTestWiaClientAssertion();
+      const response = await wireWiaOAuthHeaders(
+        request(app)
+          .post('/token_endpoint')
+          .set('DPoP', dpopJwt)
+      )
         .send({
+          ...pickWiaBodyFields(),
           grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
           'pre-authorized_code': preAuthCode
         })
@@ -150,13 +303,90 @@ describe('Shared Issuance Flows', () => {
 
       expect(response.body).to.have.property('access_token');
       expect(response.body).to.have.property('refresh_token');
-      expect(response.body).to.have.property('token_type', 'bearer');
+      expect(response.body).to.have.property('token_type', 'DPoP');
       expect(response.body).to.have.property('expires_in', 86400);
+      expect(response.body).to.have.property('c_nonce');
+      expect(response.body.c_nonce).to.be.a('string');
+      expect(response.body).to.have.property('c_nonce_expires_in', 86400);
+      expect(await cacheServiceRedis.checkNonce(response.body.c_nonce)).to.be.true;
 
-      // DPOP-01 — Current profile: missing DPoP header falls back to Bearer access token (no cnf.jkt)
+      // RFC001 §7.4 / RFC 9449 — access token MUST be sender-constrained via cnf.jkt.
       const decoded = jwt.decode(response.body.access_token);
       expect(decoded).to.be.an('object');
-      expect(decoded).to.not.have.property('cnf');
+      expect(decoded).to.have.property('cnf');
+      expect(decoded.cnf).to.have.property('jkt');
+      const expectedJkt = await jose.calculateJwkThumbprint(publicJwk, 'sha256');
+      expect(decoded.cnf.jkt).to.equal(expectedJkt);
+    });
+
+    it('MUST return invalid_grant when offer required tx_code but token request omits tx_code', async () => {
+      const preAuthCode = 'test-pre-auth-tx-required-' + uuidv4();
+      const preAuthSession = {
+        status: 'pending',
+        authorizationDetails: null,
+        requireTxCode: true,
+      };
+
+      if (!cacheServiceRedis.client.isReady) {
+        throw new Error('Redis is not ready - cannot run test');
+      }
+
+      await cacheServiceRedis.storePreAuthSession(preAuthCode, preAuthSession);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      const { dpopJwt } = await makeTokenDpop();
+
+      await makeTestWiaClientAssertion();
+      const response = await wireWiaOAuthHeaders(
+        request(app)
+          .post('/token_endpoint')
+          .set('DPoP', dpopJwt)
+      )
+        .send({
+          ...pickWiaBodyFields(),
+          grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
+          'pre-authorized_code': preAuthCode,
+        })
+        .expect(400);
+
+      expect(response.body).to.have.property('error', 'invalid_grant');
+    });
+
+    it('accepts any non-empty tx_code when offer required tx_code', async () => {
+      const preAuthCode = 'test-pre-auth-tx-any-' + uuidv4();
+      const preAuthSession = {
+        status: 'pending',
+        authorizationDetails: null,
+        requireTxCode: true,
+      };
+
+      if (!cacheServiceRedis.client.isReady) {
+        throw new Error('Redis is not ready - cannot run test');
+      }
+
+      await cacheServiceRedis.storePreAuthSession(preAuthCode, preAuthSession);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      const { dpopJwt, publicJwk } = await makeTokenDpop();
+
+      await makeTestWiaClientAssertion();
+      const response = await wireWiaOAuthHeaders(
+        request(app)
+          .post('/token_endpoint')
+          .set('DPoP', dpopJwt)
+      )
+        .send({
+          ...pickWiaBodyFields(),
+          grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
+          'pre-authorized_code': preAuthCode,
+          tx_code: 'not-validated-by-issuer',
+        })
+        .expect(200);
+
+      expect(response.body).to.have.property('access_token');
+      const decoded = jwt.decode(response.body.access_token);
+      const expectedJkt = await jose.calculateJwkThumbprint(publicJwk, 'sha256');
+      expect(decoded.cnf.jkt).to.equal(expectedJkt);
     });
 
     it('should issue a DPoP-bound access token with cnf.jkt in pre-authorized flow when DPoP header is present', async () => {
@@ -184,10 +414,14 @@ describe('Shared Issuance Flows', () => {
         .setJti(uuidv4())
         .sign(privateKey);
 
-      const response = await request(app)
-        .post('/token_endpoint')
-        .set('DPoP', dpopJwt)
+      await makeTestWiaClientAssertion();
+      const response = await wireWiaOAuthHeaders(
+        request(app)
+          .post('/token_endpoint')
+          .set('DPoP', dpopJwt)
+      )
         .send({
+          ...pickWiaBodyFields(),
           grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
           'pre-authorized_code': preAuthCode
         })
@@ -195,6 +429,9 @@ describe('Shared Issuance Flows', () => {
 
       expect(response.body).to.have.property('access_token');
       expect(response.body).to.have.property('token_type', 'DPoP');
+      expect(response.body).to.have.property('c_nonce');
+      expect(response.body).to.have.property('c_nonce_expires_in', 86400);
+      expect(await cacheServiceRedis.checkNonce(response.body.c_nonce)).to.be.true;
 
       // Decode the access_token (we trust local signing key from stubs)
       const decoded = jwt.decode(response.body.access_token);
@@ -211,46 +448,62 @@ describe('Shared Issuance Flows', () => {
     it('should handle authorization code flow successfully', async () => {
       const authCode = 'test-auth-code-' + uuidv4();
       const sessionId = 'test-session-id-' + uuidv4();
-      const codeChallenge = await cryptoUtils.base64UrlEncodeSha256('test-verifier');
+      const codeVerifier = 'test-verifier';
+      const codeChallenge = await cryptoUtils.base64UrlEncodeSha256(codeVerifier);
       const codeSession = {
-        requests: { challenge: codeChallenge },
-        results: { issuerState: sessionId }
+        authorizationRequestClientId: TEST_OAUTH_CLIENT_ID,
+        requests: {
+          challenge: codeChallenge,
+          sessionId: authCode,
+          issuerState: sessionId,
+          redirectUri: TEST_OAUTH_REDIRECT_URI,
+        },
+        results: { issuerState: sessionId, status: 'pending' },
       };
-      
-      // Set up real test data
-      await cacheServiceRedis.storeCodeFlowSession(sessionId, codeSession);
-      // Note: We need to set up the mapping from auth code to session ID
-      // This depends on how your implementation stores this mapping
-      // For now, we'll use a test that works with the actual implementation
 
-      const response = await request(app)
-        .post('/token_endpoint')
-        .set('Authorization', 'Bearer test-token')
+      await cacheServiceRedis.storeCodeFlowSession(sessionId, codeSession);
+
+      const { dpopJwt } = await makeTokenDpop();
+
+      await makeTestWiaClientAssertion({ oauthClientId: TEST_OAUTH_CLIENT_ID });
+      const response = await wireWiaOAuthHeaders(
+        request(app)
+          .post('/token_endpoint')
+          .set('DPoP', dpopJwt)
+      )
         .send({
+          ...pickWiaBodyFields(),
           grant_type: 'authorization_code',
           code: authCode,
-          code_verifier: 'test-verifier'
-        });
+          code_verifier: codeVerifier,
+          client_id: TEST_OAUTH_CLIENT_ID,
+          redirect_uri: TEST_OAUTH_REDIRECT_URI,
+        })
+        .expect(200);
 
-      // This test may need adjustment based on how auth codes are mapped to sessions
-      // Accept both success and error responses as valid for now
-      if (response.status === 200) {
-        expect(response.body).to.have.property('access_token');
-        expect(response.body).to.have.property('refresh_token');
-        expect(response.body).to.have.property('token_type');
-      } else {
-        // If auth code mapping isn't set up, expect an error
-        expect([400, 500]).to.include(response.status);
-      }
+      expect(response.body).to.have.property('access_token');
+      expect(response.body).to.have.property('refresh_token');
+      expect(response.body).to.have.property('token_type', 'DPoP');
+      expect(response.body).to.have.property('c_nonce');
+      expect(response.body.c_nonce).to.be.a('string');
+      expect(response.body).to.have.property('c_nonce_expires_in', 86400);
+      expect(await cacheServiceRedis.checkNonce(response.body.c_nonce)).to.be.true;
     });
 
     it('should issue a DPoP-bound access token with cnf.jkt in authorization_code flow when DPoP header is present', async () => {
       const authCode = 'test-auth-code-dpop-' + uuidv4();
       const sessionId = 'test-session-id-dpop-' + uuidv4();
-      const codeChallenge = await cryptoUtils.base64UrlEncodeSha256('test-verifier-dpop');
+      const codeVerifier = 'test-verifier-dpop';
+      const codeChallenge = await cryptoUtils.base64UrlEncodeSha256(codeVerifier);
       const codeSession = {
-        requests: { challenge: codeChallenge },
-        results: { issuerState: sessionId }
+        authorizationRequestClientId: TEST_OAUTH_CLIENT_ID,
+        requests: {
+          challenge: codeChallenge,
+          sessionId: authCode,
+          issuerState: sessionId,
+          redirectUri: TEST_OAUTH_REDIRECT_URI,
+        },
+        results: { issuerState: sessionId, status: 'pending' },
       };
 
       await cacheServiceRedis.storeCodeFlowSession(sessionId, codeSession);
@@ -264,18 +517,26 @@ describe('Shared Issuance Flows', () => {
         .setJti(uuidv4())
         .sign(privateKey);
 
-      const response = await request(app)
-        .post('/token_endpoint')
-        .set('DPoP', dpopJwt)
+      await makeTestWiaClientAssertion({ oauthClientId: TEST_OAUTH_CLIENT_ID });
+      const response = await wireWiaOAuthHeaders(
+        request(app)
+          .post('/token_endpoint')
+          .set('DPoP', dpopJwt)
+      )
         .send({
+          ...pickWiaBodyFields(),
           grant_type: 'authorization_code',
           code: authCode,
-          code_verifier: 'test-verifier-dpop'
+          code_verifier: codeVerifier,
+          client_id: TEST_OAUTH_CLIENT_ID,
+          redirect_uri: TEST_OAUTH_REDIRECT_URI,
         });
 
       if (response.status === 200) {
         expect(response.body).to.have.property('access_token');
         expect(response.body).to.have.property('token_type', 'DPoP');
+        expect(response.body).to.have.property('c_nonce');
+        expect(response.body).to.have.property('c_nonce_expires_in', 86400);
 
         const decoded = jwt.decode(response.body.access_token);
         expect(decoded).to.be.an('object');
@@ -309,10 +570,14 @@ describe('Shared Issuance Flows', () => {
       // Malformed DPoP header (not a valid JWS / bad base64)
       const malformedDpop = 'not-a-valid-jwt';
 
-      const response = await request(app)
-        .post('/token_endpoint')
-        .set('DPoP', malformedDpop)
+      await makeTestWiaClientAssertion();
+      const response = await wireWiaOAuthHeaders(
+        request(app)
+          .post('/token_endpoint')
+          .set('DPoP', malformedDpop)
+      )
         .send({
+          ...pickWiaBodyFields(),
           grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
           'pre-authorized_code': preAuthCode
         })
@@ -320,6 +585,45 @@ describe('Shared Issuance Flows', () => {
 
       expect(response.body).to.have.property('error', 'invalid_dpop_proof');
       expect(response.body).to.have.property('error_description');
+    });
+
+    it('DPOP-02b — should reject DPoP proof without jwk in protected header (no Bearer fallback)', async () => {
+      const preAuthCode = 'test-pre-auth-code-dpop-no-jwk-' + uuidv4();
+      const preAuthSession = { status: 'pending', authorizationDetails: null };
+
+      if (!cacheServiceRedis.client.isReady) {
+        throw new Error('Redis is not ready - cannot run test');
+      }
+
+      await cacheServiceRedis.storePreAuthSession(preAuthCode, preAuthSession);
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      const { privateKey } = await jose.generateKeyPair('ES256');
+      const now = Math.floor(Date.now() / 1000);
+      const dpopJwt = await new jose.SignJWT({
+        htu: 'http://localhost:3000/token_endpoint',
+        htm: 'POST',
+        iat: now,
+        jti: uuidv4(),
+      })
+        .setProtectedHeader({ alg: 'ES256', typ: 'dpop+jwt' })
+        .sign(privateKey);
+
+      await makeTestWiaClientAssertion();
+      const response = await wireWiaOAuthHeaders(
+        request(app)
+          .post('/token_endpoint')
+          .set('DPoP', dpopJwt)
+      )
+        .send({
+          ...pickWiaBodyFields(),
+          grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
+          'pre-authorized_code': preAuthCode,
+        })
+        .expect(400);
+
+      expect(response.body).to.have.property('error', 'invalid_dpop_proof');
+      expect(response.body.error_description).to.match(/jwk/i);
     });
 
     it('DPOP-03 — should reject DPoP JWT with missing required claims (htu, htm, iat, jti)', async () => {
@@ -349,10 +653,14 @@ describe('Shared Issuance Flows', () => {
           .setProtectedHeader({ alg: 'ES256', typ: 'dpop+jwt', jwk: publicJwk })
           .sign(privateKey);
 
-        const res = await request(app)
-          .post('/token_endpoint')
-          .set('DPoP', dpopJwt)
+        await makeTestWiaClientAssertion();
+        const res = await wireWiaOAuthHeaders(
+          request(app)
+            .post('/token_endpoint')
+            .set('DPoP', dpopJwt)
+        )
           .send({
+            ...pickWiaBodyFields(),
             grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
             'pre-authorized_code': preAuthCode
           })
@@ -398,10 +706,14 @@ describe('Shared Issuance Flows', () => {
         .setProtectedHeader({ alg: 'ES256', typ: 'dpop+jwt', jwk: publicJwk })
         .sign(privateKey);
 
-      const resMethod = await request(app)
-        .post('/token_endpoint')
-        .set('DPoP', dpopWrongMethod)
+      await makeTestWiaClientAssertion();
+      const resMethod = await wireWiaOAuthHeaders(
+        request(app)
+          .post('/token_endpoint')
+          .set('DPoP', dpopWrongMethod)
+      )
         .send({
+          ...pickWiaBodyFields(),
           grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
           'pre-authorized_code': preAuthCode
         })
@@ -419,10 +731,14 @@ describe('Shared Issuance Flows', () => {
         .setProtectedHeader({ alg: 'ES256', typ: 'dpop+jwt', jwk: publicJwk })
         .sign(privateKey);
 
-      const resUri = await request(app)
-        .post('/token_endpoint')
-        .set('DPoP', dpopWrongUri)
+      await makeTestWiaClientAssertion();
+      const resUri = await wireWiaOAuthHeaders(
+        request(app)
+          .post('/token_endpoint')
+          .set('DPoP', dpopWrongUri)
+      )
         .send({
+          ...pickWiaBodyFields(),
           grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
           'pre-authorized_code': preAuthCode
         })
@@ -457,10 +773,14 @@ describe('Shared Issuance Flows', () => {
         .setProtectedHeader({ alg: 'ES256', typ: 'dpop+jwt', jwk: publicJwk })
         .sign(privateKey);
 
-      const res = await request(app)
-        .post('/token_endpoint')
-        .set('DPoP', dpopStale)
+      await makeTestWiaClientAssertion();
+      const res = await wireWiaOAuthHeaders(
+        request(app)
+          .post('/token_endpoint')
+          .set('DPoP', dpopStale)
+      )
         .send({
+          ...pickWiaBodyFields(),
           grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
           'pre-authorized_code': preAuthCode
         })
@@ -495,10 +815,14 @@ describe('Shared Issuance Flows', () => {
         .sign(privateKey);
 
       // First request should be allowed (we accept any 2xx as "not DPoP-rejected")
-      const firstResponse = await request(app)
-        .post('/token_endpoint')
-        .set('DPoP', dpopJwt)
+      await makeTestWiaClientAssertion();
+      const firstResponse = await wireWiaOAuthHeaders(
+        request(app)
+          .post('/token_endpoint')
+          .set('DPoP', dpopJwt)
+      )
         .send({
+          ...pickWiaBodyFields(),
           grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
           'pre-authorized_code': preAuthCode
         });
@@ -509,10 +833,14 @@ describe('Shared Issuance Flows', () => {
       }
 
       // Second request with the same DPoP proof MUST be rejected as replay
-      const secondResponse = await request(app)
-        .post('/token_endpoint')
-        .set('DPoP', dpopJwt)
+      await makeTestWiaClientAssertion();
+      const secondResponse = await wireWiaOAuthHeaders(
+        request(app)
+          .post('/token_endpoint')
+          .set('DPoP', dpopJwt)
+      )
         .send({
+          ...pickWiaBodyFields(),
           grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
           'pre-authorized_code': preAuthCode
         })
@@ -547,10 +875,14 @@ describe('Shared Issuance Flows', () => {
         .setProtectedHeader({ alg: 'ES256', typ: 'dpop+jwt', jwk: publicJwk2 })
         .sign(privateKey1);
 
-      const res = await request(app)
-        .post('/token_endpoint')
-        .set('DPoP', badDpop)
+      await makeTestWiaClientAssertion();
+      const res = await wireWiaOAuthHeaders(
+        request(app)
+          .post('/token_endpoint')
+          .set('DPoP', badDpop)
+      )
         .send({
+          ...pickWiaBodyFields(),
           grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
           'pre-authorized_code': preAuthCode
         })
@@ -593,10 +925,14 @@ describe('Shared Issuance Flows', () => {
           .setProtectedHeader({ alg: 'ES256', typ: 'dpop+jwt', jwk: publicJwk })
           .sign(privateKey);
 
-        const response = await request(app)
-          .post('/token_endpoint')
-          .set('DPoP', dpopJwt)
+        await makeTestWiaClientAssertion();
+        const response = await wireWiaOAuthHeaders(
+          request(app)
+            .post('/token_endpoint')
+            .set('DPoP', dpopJwt)
+        )
           .send({
+            ...pickWiaBodyFields(),
             grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
             'pre-authorized_code': preAuthCode
           })
@@ -640,10 +976,14 @@ describe('Shared Issuance Flows', () => {
           .setProtectedHeader({ alg: 'ES256', typ: 'dpop+jwt', jwk: publicJwk })
           .sign(privateKey);
 
-        const challengeResponse = await request(app)
-          .post('/token_endpoint')
-          .set('DPoP', dpopWithoutNonce)
+        await makeTestWiaClientAssertion();
+        const challengeResponse = await wireWiaOAuthHeaders(
+          request(app)
+            .post('/token_endpoint')
+            .set('DPoP', dpopWithoutNonce)
+        )
           .send({
+            ...pickWiaBodyFields(),
             grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
             'pre-authorized_code': preAuthCode
           })
@@ -664,10 +1004,14 @@ describe('Shared Issuance Flows', () => {
           .setProtectedHeader({ alg: 'ES256', typ: 'dpop+jwt', jwk: publicJwk })
           .sign(privateKey);
 
-        const successResponse = await request(app)
-          .post('/token_endpoint')
-          .set('DPoP', dpopWithNonce)
+        await makeTestWiaClientAssertion();
+        const successResponse = await wireWiaOAuthHeaders(
+          request(app)
+            .post('/token_endpoint')
+            .set('DPoP', dpopWithNonce)
+        )
           .send({
+            ...pickWiaBodyFields(),
             grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
             'pre-authorized_code': preAuthCode
           })
@@ -710,10 +1054,14 @@ describe('Shared Issuance Flows', () => {
           .setProtectedHeader({ alg: 'ES256', typ: 'dpop+jwt', jwk: publicJwk })
           .sign(privateKey);
 
-        const initialResponse = await request(app)
-          .post('/token_endpoint')
-          .set('DPoP', initialDpop)
+        await makeTestWiaClientAssertion();
+        const initialResponse = await wireWiaOAuthHeaders(
+          request(app)
+            .post('/token_endpoint')
+            .set('DPoP', initialDpop)
+        )
           .send({
+            ...pickWiaBodyFields(),
             grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
             'pre-authorized_code': preAuthCode
           })
@@ -734,10 +1082,14 @@ describe('Shared Issuance Flows', () => {
           .setProtectedHeader({ alg: 'ES256', typ: 'dpop+jwt', jwk: publicJwk })
           .sign(privateKey);
 
-        const response = await request(app)
-          .post('/token_endpoint')
-          .set('DPoP', dpopWrongNonce)
+        await makeTestWiaClientAssertion();
+        const response = await wireWiaOAuthHeaders(
+          request(app)
+            .post('/token_endpoint')
+            .set('DPoP', dpopWrongNonce)
+        )
           .send({
+            ...pickWiaBodyFields(),
             grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
             'pre-authorized_code': preAuthCode
           })
@@ -782,10 +1134,14 @@ describe('Shared Issuance Flows', () => {
           .setProtectedHeader({ alg: 'ES256', typ: 'dpop+jwt', jwk: publicJwk })
           .sign(privateKey);
 
-        const challengeResponse = await request(app)
-          .post('/token_endpoint')
-          .set('DPoP', dpopNoNonce)
+        await makeTestWiaClientAssertion();
+        const challengeResponse = await wireWiaOAuthHeaders(
+          request(app)
+            .post('/token_endpoint')
+            .set('DPoP', dpopNoNonce)
+        )
           .send({
+            ...pickWiaBodyFields(),
             grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
             'pre-authorized_code': preAuthCode
           })
@@ -805,10 +1161,14 @@ describe('Shared Issuance Flows', () => {
           .setProtectedHeader({ alg: 'ES256', typ: 'dpop+jwt', jwk: publicJwk })
           .sign(privateKey);
 
-        const firstUseResponse = await request(app)
-          .post('/token_endpoint')
-          .set('DPoP', dpopFirstUse)
+        await makeTestWiaClientAssertion();
+        const firstUseResponse = await wireWiaOAuthHeaders(
+          request(app)
+            .post('/token_endpoint')
+            .set('DPoP', dpopFirstUse)
+        )
           .send({
+            ...pickWiaBodyFields(),
             grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
             'pre-authorized_code': preAuthCode
           });
@@ -829,10 +1189,14 @@ describe('Shared Issuance Flows', () => {
           .setProtectedHeader({ alg: 'ES256', typ: 'dpop+jwt', jwk: publicJwk })
           .sign(privateKey);
 
-        const secondUseResponse = await request(app)
-          .post('/token_endpoint')
-          .set('DPoP', dpopSecondUse)
+        await makeTestWiaClientAssertion();
+        const secondUseResponse = await wireWiaOAuthHeaders(
+          request(app)
+            .post('/token_endpoint')
+            .set('DPoP', dpopSecondUse)
+        )
           .send({
+            ...pickWiaBodyFields(),
             grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
             'pre-authorized_code': preAuthCode
           })
@@ -858,152 +1222,345 @@ describe('Shared Issuance Flows', () => {
     // D. “Glue” tests (PAR + DPoP interplay) / HAIP profile
     //
 
-    it('INT-01 — should reject authorization_code exchange without DPoP when HAIP profile requires it', async () => {
-      const prev = process.env.HAIP_PROFILE_REQUIRE_DPOP_FOR_TOKEN;
-      process.env.HAIP_PROFILE_REQUIRE_DPOP_FOR_TOKEN = 'true';
-      try {
-        const authCode = 'test-auth-code-haip-' + uuidv4();
-        const sessionId = 'test-session-id-haip-' + uuidv4();
-        const codeChallenge = await cryptoUtils.base64UrlEncodeSha256('test-verifier-haip');
-        const codeSession = {
-          requests: { challenge: codeChallenge },
-          results: { issuerState: sessionId }
-        };
+    it('INT-01 — MUST reject authorization_code exchange without DPoP (RFC001 §7.4)', async () => {
+      const authCode = 'test-auth-code-rfc001-' + uuidv4();
+      const sessionId = 'test-session-id-rfc001-' + uuidv4();
+      const codeChallenge = await cryptoUtils.base64UrlEncodeSha256('test-verifier-rfc001');
+      const codeSession = {
+        requests: { challenge: codeChallenge },
+        results: { issuerState: sessionId }
+      };
 
-        await cacheServiceRedis.storeCodeFlowSession(sessionId, codeSession);
+      await cacheServiceRedis.storeCodeFlowSession(sessionId, codeSession);
 
-        const response = await request(app)
+      await makeTestWiaClientAssertion();
+      const response = await wireWiaOAuthHeaders(
+        request(app)
           .post('/token_endpoint')
           // Note: no DPoP header on purpose
-          .send({
-            grant_type: 'authorization_code',
-            code: authCode,
-            code_verifier: 'test-verifier-haip'
-          })
-          .expect(400);
+      )
+        .send({
+          ...pickWiaBodyFields(),
+          grant_type: 'authorization_code',
+          code: authCode,
+          code_verifier: 'test-verifier-rfc001'
+        })
+        .expect(400);
 
-        // Under HAIP profile, missing DPoP should be treated as an error at the token endpoint
-        expect(response.body).to.have.property('error');
-        expect(response.body.error).to.equal('invalid_dpop_proof');
-      } finally {
-        process.env.HAIP_PROFILE_REQUIRE_DPOP_FOR_TOKEN = prev;
-      }
+      expect(response.body).to.have.property('error', 'invalid_dpop_proof');
     });
 
-    it('INT-02 — should reject authorization_code redeem when DPoP key (cnf.jkt) mismatches expected HAIP key', async () => {
-      const prev = process.env.HAIP_PROFILE_REQUIRE_DPOP_FOR_TOKEN;
-      process.env.HAIP_PROFILE_REQUIRE_DPOP_FOR_TOKEN = 'true';
-      try {
-        const authCode = 'test-auth-code-haip-mismatch-' + uuidv4();
-        const sessionId = 'test-session-id-haip-mismatch-' + uuidv4();
+    it('INT-01a — MUST reject pre-authorized_code exchange without DPoP (RFC001 §7.4)', async () => {
+      const preAuthCode = 'test-pre-auth-code-rfc001-' + uuidv4();
+      await cacheServiceRedis.storePreAuthSession(preAuthCode, { status: 'pending' });
 
-        // Key A: the key that the PAR / authorization phase would have used
-        const { publicKey: publicKeyA } = await jose.generateKeyPair('ES256');
-        const publicJwkA = await jose.exportJWK(publicKeyA);
-        const expectedJkt = await jose.calculateJwkThumbprint(publicJwkA, 'sha256');
-
-        // Store a code flow session that records the expected DPoP thumbprint for this auth code
-        const codeChallenge = await cryptoUtils.base64UrlEncodeSha256('test-verifier-haip-mismatch');
-        const codeSession = {
-          requests: { challenge: codeChallenge, sessionId: authCode },
-          results: { issuerState: sessionId },
-          expectedDpopJkt: expectedJkt
-        };
-        await cacheServiceRedis.storeCodeFlowSession(sessionId, codeSession);
-
-        // Key B: different key used when redeeming the authorization_code
-        const { publicKey: publicKeyB, privateKey: privateKeyB } = await jose.generateKeyPair('ES256');
-        const publicJwkB = await jose.exportJWK(publicKeyB);
-
-        const dpopJwt = await new jose.SignJWT({
-          htu: 'http://localhost:3000/token_endpoint',
-          htm: 'POST',
-          iat: Math.floor(Date.now() / 1000),
-          jti: uuidv4()
+      await makeTestWiaClientAssertion();
+      const response = await wireWiaOAuthHeaders(
+        request(app)
+          .post('/token_endpoint')
+      )
+        .send({
+          ...pickWiaBodyFields(),
+          grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
+          'pre-authorized_code': preAuthCode,
         })
-          .setProtectedHeader({ alg: 'ES256', typ: 'dpop+jwt', jwk: publicJwkB })
-          .sign(privateKeyB);
+        .expect(400);
 
-        const response = await request(app)
+      expect(response.body).to.have.property('error', 'invalid_dpop_proof');
+    });
+
+    it('INT-02 — MUST reject authorization_code redeem when DPoP key (cnf.jkt) mismatches expected session binding', async () => {
+      const authCode = 'test-auth-code-jkt-mismatch-' + uuidv4();
+      const sessionId = 'test-session-id-jkt-mismatch-' + uuidv4();
+
+      // Key A: the key that the PAR / authorization phase would have used
+      const { publicKey: publicKeyA } = await jose.generateKeyPair('ES256');
+      const publicJwkA = await jose.exportJWK(publicKeyA);
+      const expectedJkt = await jose.calculateJwkThumbprint(publicJwkA, 'sha256');
+
+      // Store a code flow session that records the expected DPoP thumbprint for this auth code
+      const codeChallenge = await cryptoUtils.base64UrlEncodeSha256('test-verifier-jkt-mismatch');
+      const codeSession = {
+        authorizationRequestClientId: TEST_OAUTH_CLIENT_ID,
+        requests: {
+          challenge: codeChallenge,
+          sessionId: authCode,
+          redirectUri: TEST_OAUTH_REDIRECT_URI,
+        },
+        results: { issuerState: sessionId },
+        expectedDpopJkt: expectedJkt
+      };
+      await cacheServiceRedis.storeCodeFlowSession(sessionId, codeSession);
+
+      // Key B: different key used when redeeming the authorization_code
+      const { publicKey: publicKeyB, privateKey: privateKeyB } = await jose.generateKeyPair('ES256');
+      const publicJwkB = await jose.exportJWK(publicKeyB);
+
+      const dpopJwt = await new jose.SignJWT({
+        htu: 'http://localhost:3000/token_endpoint',
+        htm: 'POST',
+        iat: Math.floor(Date.now() / 1000),
+        jti: uuidv4()
+      })
+        .setProtectedHeader({ alg: 'ES256', typ: 'dpop+jwt', jwk: publicJwkB })
+        .sign(privateKeyB);
+
+      await makeTestWiaClientAssertion({ oauthClientId: TEST_OAUTH_CLIENT_ID });
+      const response = await wireWiaOAuthHeaders(
+        request(app)
           .post('/token_endpoint')
           .set('DPoP', dpopJwt)
-          .send({
-            grant_type: 'authorization_code',
-            code: authCode,
-            code_verifier: 'test-verifier-haip-mismatch'
-          })
-          .expect(400);
+      )
+        .send({
+          ...pickWiaBodyFields(),
+          grant_type: 'authorization_code',
+          code: authCode,
+          code_verifier: 'test-verifier-jkt-mismatch',
+          client_id: TEST_OAUTH_CLIENT_ID,
+          redirect_uri: TEST_OAUTH_REDIRECT_URI,
+        })
+        .expect(400);
 
-        // Once HAIP binding is implemented, the server should detect jkt mismatch
-        expect(response.body).to.have.property('error');
-        expect(response.body.error).to.equal('invalid_dpop_proof');
-      } finally {
-        process.env.HAIP_PROFILE_REQUIRE_DPOP_FOR_TOKEN = prev;
-      }
+      expect(response.body).to.have.property('error', 'invalid_dpop_proof');
     });
 
-    // NEW: Optional c_nonce in token response (pre-authorized)
-    it('SHOULD include c_nonce and c_nonce_expires_in on success (pre-authorized_code) when implemented', async () => {
+    it('P0-2 — MUST reject authorization_code when client_id mismatches PAR-bound value (RFC001 §7.3–7.4)', async () => {
+      const authCode = 'test-auth-code-client-mismatch-' + uuidv4();
+      const sessionId = 'test-session-client-mismatch-' + uuidv4();
+      const codeVerifier = 'test-verifier-client-mismatch';
+      const codeChallenge = await cryptoUtils.base64UrlEncodeSha256(codeVerifier);
+      const codeSession = {
+        authorizationRequestClientId: TEST_OAUTH_CLIENT_ID,
+        requests: {
+          challenge: codeChallenge,
+          sessionId: authCode,
+          issuerState: sessionId,
+          redirectUri: TEST_OAUTH_REDIRECT_URI,
+        },
+        results: { issuerState: sessionId, status: 'pending' },
+      };
+      await cacheServiceRedis.storeCodeFlowSession(sessionId, codeSession);
+
+      const { dpopJwt } = await makeTokenDpop();
+
+      await makeTestWiaClientAssertion({ oauthClientId: 'different-oauth-client-id' });
+      const response = await wireWiaOAuthHeaders(
+        request(app)
+          .post('/token_endpoint')
+          .set('DPoP', dpopJwt)
+      )
+        .send({
+          ...pickWiaBodyFields(),
+          grant_type: 'authorization_code',
+          code: authCode,
+          code_verifier: codeVerifier,
+          client_id: 'different-oauth-client-id',
+          redirect_uri: TEST_OAUTH_REDIRECT_URI,
+        })
+        .expect(400);
+
+      expect(response.body).to.have.property('error', 'invalid_grant');
+    });
+
+    it('P0-2b — MUST reject authorization_code when client_id is omitted but PAR bound a client_id', async () => {
+      const authCode = 'test-auth-code-no-client-id-' + uuidv4();
+      const sessionId = 'test-session-no-client-id-' + uuidv4();
+      const codeVerifier = 'test-verifier-no-client-id';
+      const codeChallenge = await cryptoUtils.base64UrlEncodeSha256(codeVerifier);
+      const codeSession = {
+        authorizationRequestClientId: TEST_OAUTH_CLIENT_ID,
+        requests: {
+          challenge: codeChallenge,
+          sessionId: authCode,
+          issuerState: sessionId,
+          redirectUri: TEST_OAUTH_REDIRECT_URI,
+        },
+        results: { issuerState: sessionId, status: 'pending' },
+      };
+      await cacheServiceRedis.storeCodeFlowSession(sessionId, codeSession);
+
+      const { dpopJwt } = await makeTokenDpop();
+
+      await makeTestWiaClientAssertion();
+      const response = await wireWiaOAuthHeaders(
+        request(app)
+          .post('/token_endpoint')
+          .set('DPoP', dpopJwt)
+      )
+        .send({
+          ...pickWiaBodyFields(),
+          grant_type: 'authorization_code',
+          code: authCode,
+          code_verifier: codeVerifier,
+        })
+        .expect(400);
+
+      expect(response.body).to.have.property('error', 'invalid_grant');
+    });
+
+    it('P0-3 — MUST reject authorization_code when redirect_uri mismatches PAR-bound value (RFC001 §6.1.5 / §7.4)', async () => {
+      const authCode = 'test-auth-code-redirect-mismatch-' + uuidv4();
+      const sessionId = 'test-session-redirect-mismatch-' + uuidv4();
+      const codeVerifier = 'test-verifier-redirect-mismatch';
+      const codeChallenge = await cryptoUtils.base64UrlEncodeSha256(codeVerifier);
+      const codeSession = {
+        authorizationRequestClientId: TEST_OAUTH_CLIENT_ID,
+        requests: {
+          challenge: codeChallenge,
+          sessionId: authCode,
+          issuerState: sessionId,
+          redirectUri: TEST_OAUTH_REDIRECT_URI,
+        },
+        results: { issuerState: sessionId, status: 'pending' },
+      };
+      await cacheServiceRedis.storeCodeFlowSession(sessionId, codeSession);
+
+      const { dpopJwt } = await makeTokenDpop();
+
+      await makeTestWiaClientAssertion({ oauthClientId: TEST_OAUTH_CLIENT_ID });
+      const response = await wireWiaOAuthHeaders(
+        request(app)
+          .post('/token_endpoint')
+          .set('DPoP', dpopJwt)
+      )
+        .send({
+          ...pickWiaBodyFields(),
+          grant_type: 'authorization_code',
+          code: authCode,
+          code_verifier: codeVerifier,
+          client_id: TEST_OAUTH_CLIENT_ID,
+          redirect_uri: 'https://evil.example/other-callback',
+        })
+        .expect(400);
+
+      expect(response.body).to.have.property('error', 'invalid_grant');
+    });
+
+    it('P0-3b — MUST reject authorization_code when redirect_uri is omitted but PAR bound a redirect_uri', async () => {
+      const authCode = 'test-auth-code-no-redirect-' + uuidv4();
+      const sessionId = 'test-session-no-redirect-' + uuidv4();
+      const codeVerifier = 'test-verifier-no-redirect';
+      const codeChallenge = await cryptoUtils.base64UrlEncodeSha256(codeVerifier);
+      const codeSession = {
+        authorizationRequestClientId: TEST_OAUTH_CLIENT_ID,
+        requests: {
+          challenge: codeChallenge,
+          sessionId: authCode,
+          issuerState: sessionId,
+          redirectUri: TEST_OAUTH_REDIRECT_URI,
+        },
+        results: { issuerState: sessionId, status: 'pending' },
+      };
+      await cacheServiceRedis.storeCodeFlowSession(sessionId, codeSession);
+
+      const { dpopJwt } = await makeTokenDpop();
+
+      await makeTestWiaClientAssertion({ oauthClientId: TEST_OAUTH_CLIENT_ID });
+      const response = await wireWiaOAuthHeaders(
+        request(app)
+          .post('/token_endpoint')
+          .set('DPoP', dpopJwt)
+      )
+        .send({
+          ...pickWiaBodyFields(),
+          grant_type: 'authorization_code',
+          code: authCode,
+          code_verifier: codeVerifier,
+          client_id: TEST_OAUTH_CLIENT_ID,
+        })
+        .expect(400);
+
+      expect(response.body).to.have.property('error', 'invalid_grant');
+    });
+
+    it('MUST include c_nonce and c_nonce_expires_in on success (pre-authorized_code)', async () => {
       const preAuthCode = 'test-pre-auth-code-' + uuidv4();
       await cacheServiceRedis.storePreAuthSession(preAuthCode, { status: 'pending' });
 
-      const response = await request(app)
-        .post('/token_endpoint')
+      const { dpopJwt } = await makeTokenDpop();
+
+      await makeTestWiaClientAssertion();
+      const response = await wireWiaOAuthHeaders(
+        request(app)
+          .post('/token_endpoint')
+          .set('DPoP', dpopJwt)
+      )
         .send({
+          ...pickWiaBodyFields(),
           grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
-          'pre-authorized_code': preAuthCode
-        });
+          'pre-authorized_code': preAuthCode,
+        })
+        .expect(200);
 
-      if (response.status === 200) {
-        if (response.body.c_nonce) {
-          expect(response.body.c_nonce).to.be.a('string');
-          expect(response.body.c_nonce_expires_in).to.be.a('number');
-        }
-      } else {
-        expect([400, 500]).to.include(response.status);
-      }
+      expect(response.body.c_nonce).to.be.a('string');
+      expect(response.body).to.have.property('c_nonce_expires_in', 86400);
+      expect(await cacheServiceRedis.checkNonce(response.body.c_nonce)).to.be.true;
     });
 
-    // NEW: Optional c_nonce in token response (authorization_code)
-    it('SHOULD include c_nonce and c_nonce_expires_in on success (authorization_code) when implemented', async () => {
-      // This test may need adjustment based on auth code mapping
-      const response = await request(app)
-        .post('/token_endpoint')
-        .send({ grant_type: 'authorization_code', code: 'auth-code', code_verifier: 'test-verifier' });
+    it('MUST include c_nonce and c_nonce_expires_in on success (authorization_code)', async () => {
+      const authCode = 'test-auth-code-cn2-' + uuidv4();
+      const sessionId = 'test-session-cn2-' + uuidv4();
+      const codeVerifier = 'test-verifier-cn2';
+      const codeChallenge = await cryptoUtils.base64UrlEncodeSha256(codeVerifier);
+      const codeSession = {
+        authorizationRequestClientId: TEST_OAUTH_CLIENT_ID,
+        requests: {
+          challenge: codeChallenge,
+          sessionId: authCode,
+          issuerState: sessionId,
+          redirectUri: TEST_OAUTH_REDIRECT_URI,
+        },
+        results: { issuerState: sessionId, status: 'pending' },
+      };
+      await cacheServiceRedis.storeCodeFlowSession(sessionId, codeSession);
 
-      if (response.status === 200) {
-        if (response.body.c_nonce) {
-          expect(response.body.c_nonce).to.be.a('string');
-          expect(response.body.c_nonce_expires_in).to.be.a('number');
-        }
-      } else {
-        expect([400, 500]).to.include(response.status);
-      }
+      const { dpopJwt } = await makeTokenDpop();
+
+      await makeTestWiaClientAssertion({ oauthClientId: TEST_OAUTH_CLIENT_ID });
+      const response = await wireWiaOAuthHeaders(
+        request(app)
+          .post('/token_endpoint')
+          .set('DPoP', dpopJwt)
+      )
+        .send({
+          ...pickWiaBodyFields(),
+          grant_type: 'authorization_code',
+          code: authCode,
+          code_verifier: codeVerifier,
+          client_id: TEST_OAUTH_CLIENT_ID,
+          redirect_uri: TEST_OAUTH_REDIRECT_URI,
+        })
+        .expect(200);
+
+      expect(response.body.c_nonce).to.be.a('string');
+      expect(response.body).to.have.property('c_nonce_expires_in', 86400);
+      expect(await cacheServiceRedis.checkNonce(response.body.c_nonce)).to.be.true;
     });
 
-    // NEW: Persistence of c_nonce separate from access token
-    it('MUST persist c_nonce in session independently of access token (pre-authorized_code)', async () => {
+    it('MUST persist c_nonce in session and nonce store (pre-authorized_code)', async () => {
       const preAuthCode = 'test-pre-auth-code-' + uuidv4();
       const preAuthSession = { status: 'pending' };
       await cacheServiceRedis.storePreAuthSession(preAuthCode, preAuthSession);
 
-      const response = await request(app)
-        .post('/token_endpoint')
-        .send({
-          grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
-          'pre-authorized_code': preAuthCode
-        });
+      const { dpopJwt } = await makeTokenDpop();
 
-      if (response.status === 200) {
-        // Verify that session was updated with c_nonce
-        const updatedSession = await cacheServiceRedis.getPreAuthSession(preAuthCode);
-        if (updatedSession) {
-          expect(updatedSession).to.have.property('c_nonce');
-          expect(updatedSession.c_nonce).to.be.a('string');
-        }
-      } else {
-        expect([400, 500]).to.include(response.status);
-      }
+      await makeTestWiaClientAssertion();
+      const response = await wireWiaOAuthHeaders(
+        request(app)
+          .post('/token_endpoint')
+          .set('DPoP', dpopJwt)
+      )
+        .send({
+          ...pickWiaBodyFields(),
+          grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
+          'pre-authorized_code': preAuthCode,
+        })
+        .expect(200);
+
+      const updatedSession = await cacheServiceRedis.getPreAuthSession(preAuthCode);
+      expect(updatedSession).to.have.property('c_nonce');
+      expect(updatedSession.c_nonce).to.equal(response.body.c_nonce);
+      expect(await cacheServiceRedis.checkNonce(updatedSession.c_nonce)).to.be.true;
     });
 
     it('should handle authorization_details in pre-authorized flow', async () => {
@@ -1011,31 +1568,125 @@ describe('Shared Issuance Flows', () => {
       const preAuthSession = {
         status: 'pending',
         authorizationDetails: [
-          { credential_configuration_id: 'test-cred-config' }
-        ]
+          {
+            type: 'openid_credential',
+            credential_configuration_id: 'test-cred-config',
+          },
+        ],
       };
       await cacheServiceRedis.storePreAuthSession(preAuthCode, preAuthSession);
 
-      const response = await request(app)
-        .post('/token_endpoint')
-        .set('Authorization', 'Bearer test-token')
+      const { dpopJwt } = await makeTokenDpop();
+
+      await makeTestWiaClientAssertion();
+      const response = await wireWiaOAuthHeaders(
+        request(app)
+          .post('/token_endpoint')
+          .set('DPoP', dpopJwt)
+      )
         .send({
+          ...pickWiaBodyFields(),
           grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
           'pre-authorized_code': preAuthCode,
           authorization_details: [
-            { credential_configuration_id: 'test-cred-config' }
-          ]
+            {
+              type: 'openid_credential',
+              credential_configuration_id: 'test-cred-config',
+            },
+          ],
         })
         .expect(200);
 
       expect(response.body).to.have.property('authorization_details');
+      expect(response.body.authorization_details).to.be.an('array');
+      expect(response.body.authorization_details[0]).to.have.property(
+        'credential_identifiers'
+      );
+      expect(response.body.authorization_details[0].credential_identifiers).to.deep.equal([
+        'test-cred-config'
+      ]);
+      const roundTrip = JSON.parse(JSON.stringify(response.body.authorization_details));
+      expect(roundTrip[0].credential_identifiers).to.deep.equal(['test-cred-config']);
+      expect(response.body).to.have.property('c_nonce');
+      expect(response.body).to.have.property('c_nonce_expires_in', 86400);
+    });
+
+    it('should set credential_identifiers per authorization_details entry (not only from the first)', async () => {
+      const preAuthCode = 'test-pre-auth-code-' + uuidv4();
+      const vctId = 'https://example.org/SecondCredential';
+      const preAuthSession = {
+        status: 'pending',
+        authorizationDetails: [
+          { type: 'openid_credential', credential_configuration_id: 'test-cred-config' },
+          { type: 'openid_credential', format: 'vc+sd-jwt', vct: vctId },
+        ],
+      };
+      await cacheServiceRedis.storePreAuthSession(preAuthCode, preAuthSession);
+
+      const { dpopJwt } = await makeTokenDpop();
+
+      await makeTestWiaClientAssertion();
+      const response = await wireWiaOAuthHeaders(
+        request(app)
+          .post('/token_endpoint')
+          .set('DPoP', dpopJwt)
+      )
+        .send({
+          ...pickWiaBodyFields(),
+          grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
+          'pre-authorized_code': preAuthCode,
+          authorization_details: [
+            { type: 'openid_credential', credential_configuration_id: 'test-cred-config' },
+            { type: 'openid_credential', format: 'vc+sd-jwt', vct: vctId },
+          ],
+        })
+        .expect(200);
+
+      expect(response.body.authorization_details).to.have.length(2);
+      expect(response.body.authorization_details[0].credential_identifiers).to.deep.equal([
+        'test-cred-config',
+      ]);
+      expect(response.body.authorization_details[1].credential_identifiers).to.deep.equal([vctId]);
+      const roundTrip = JSON.parse(JSON.stringify(response.body.authorization_details));
+      expect(roundTrip[1].credential_identifiers).to.deep.equal([vctId]);
+    });
+
+    it('MUST return invalid_request when authorization_details omits type openid_credential', async () => {
+      const preAuthCode = 'test-pre-auth-code-' + uuidv4();
+      await cacheServiceRedis.storePreAuthSession(preAuthCode, { status: 'pending' });
+
+      const { dpopJwt } = await makeTokenDpop();
+
+      await makeTestWiaClientAssertion();
+      const response = await wireWiaOAuthHeaders(
+        request(app)
+          .post('/token_endpoint')
+          .set('DPoP', dpopJwt)
+      )
+        .send({
+          ...pickWiaBodyFields(),
+          grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
+          'pre-authorized_code': preAuthCode,
+          authorization_details: [
+            { credential_configuration_id: 'test-cred-config' },
+          ],
+        })
+        .expect(400);
+
+      expect(response.body).to.have.property('error', 'invalid_request');
     });
 
     it('should reject request without code or pre-authorized_code', async () => {
-      const response = await request(app)
-        .post('/token_endpoint')
-        .set('Authorization', 'Bearer test-token')
+      const { dpopJwt } = await makeTokenDpop();
+      await makeTestWiaClientAssertion();
+      const response = await wireWiaOAuthHeaders(
+        request(app)
+          .post('/token_endpoint')
+          .set('Authorization', 'Bearer test-token')
+          .set('DPoP', dpopJwt)
+      )
         .send({
+          ...pickWiaBodyFields(),
           grant_type: 'authorization_code'
         })
         .expect(400);
@@ -1047,10 +1698,16 @@ describe('Shared Issuance Flows', () => {
       // Don't create session - this should result in invalid grant
       const invalidCode = 'invalid-code-' + uuidv4();
 
-      const response = await request(app)
-        .post('/token_endpoint')
-        .set('Authorization', 'Bearer test-token')
+      const { dpopJwt } = await makeTokenDpop();
+
+      await makeTestWiaClientAssertion();
+      const response = await wireWiaOAuthHeaders(
+        request(app)
+          .post('/token_endpoint')
+          .set('DPoP', dpopJwt)
+      )
         .send({
+          ...pickWiaBodyFields(),
           grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
           'pre-authorized_code': invalidCode
         })
@@ -1062,10 +1719,16 @@ describe('Shared Issuance Flows', () => {
     it('should reject PKCE verification failure', async () => {
       // This test requires setting up auth code to session mapping
       // For now, we'll test that invalid PKCE results in error
-      const response = await request(app)
-        .post('/token_endpoint')
-        .set('Authorization', 'Bearer test-token')
+      const { dpopJwt } = await makeTokenDpop();
+
+      await makeTestWiaClientAssertion();
+      const response = await wireWiaOAuthHeaders(
+        request(app)
+          .post('/token_endpoint')
+          .set('DPoP', dpopJwt)
+      )
         .send({
+          ...pickWiaBodyFields(),
           grant_type: 'authorization_code',
           code: 'test-auth-code',
           code_verifier: 'wrong-verifier'
@@ -1076,10 +1739,16 @@ describe('Shared Issuance Flows', () => {
     });
 
     it('should reject unsupported grant type', async () => {
-      const response = await request(app)
-        .post('/token_endpoint')
-        .set('Authorization', 'Bearer test-token')
+      const { dpopJwt } = await makeTokenDpop();
+      await makeTestWiaClientAssertion();
+      const response = await wireWiaOAuthHeaders(
+        request(app)
+          .post('/token_endpoint')
+          .set('Authorization', 'Bearer test-token')
+          .set('DPoP', dpopJwt)
+      )
         .send({
+          ...pickWiaBodyFields(),
           grant_type: 'unsupported_grant_type',
           'pre-authorized_code': 'test-code'
         })
@@ -1093,9 +1762,16 @@ describe('Shared Issuance Flows', () => {
       // Set up session with pending_external status
       await cacheServiceRedis.storePreAuthSession(preAuthCode, { status: 'pending_external' });
 
-      const response = await request(app)
-        .post('/token_endpoint')
+      const { dpopJwt } = await makeTokenDpop();
+
+      await makeTestWiaClientAssertion();
+      const response = await wireWiaOAuthHeaders(
+        request(app)
+          .post('/token_endpoint')
+          .set('DPoP', dpopJwt)
+      )
         .send({
+          ...pickWiaBodyFields(),
           grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
           'pre-authorized_code': preAuthCode
         })
@@ -1109,20 +1785,32 @@ describe('Shared Issuance Flows', () => {
       await cacheServiceRedis.storePreAuthSession(preAuthCode, { status: 'pending_external' });
 
       // First poll: should get authorization_pending
-      const first = await request(app)
-        .post('/token_endpoint')
+      const { dpopJwt: firstDpop } = await makeTokenDpop();
+      await makeTestWiaClientAssertion();
+      const first = await wireWiaOAuthHeaders(
+        request(app)
+          .post('/token_endpoint')
+          .set('DPoP', firstDpop)
+      )
         .send({
+          ...pickWiaBodyFields(),
           grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
           'pre-authorized_code': preAuthCode
         })
         .expect(400);
-      
+
       expect(first.body).to.have.property('error', 'authorization_pending');
 
       // Immediate second poll: expect slow_down (Redis checkAndSetPollTime will return false)
-      const second = await request(app)
-        .post('/token_endpoint')
+      const { dpopJwt: secondDpop } = await makeTokenDpop();
+      await makeTestWiaClientAssertion();
+      const second = await wireWiaOAuthHeaders(
+        request(app)
+          .post('/token_endpoint')
+          .set('DPoP', secondDpop)
+      )
         .send({
+          ...pickWiaBodyFields(),
           grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
           'pre-authorized_code': preAuthCode
         })
@@ -1133,6 +1821,276 @@ describe('Shared Issuance Flows', () => {
   });
 
   describe('POST /credential', () => {
+    const makeCredentialDpopProof = async (accessToken, privateKey, publicJwk) => {
+      const ath = await cryptoUtils.base64UrlEncodeSha256(accessToken);
+      return new jose.SignJWT({
+        htm: 'POST',
+        htu: 'http://localhost:3000/credential',
+        iat: Math.floor(Date.now() / 1000),
+        jti: uuidv4(),
+        ath,
+      })
+        .setProtectedHeader({ alg: 'ES256', typ: 'dpop+jwt', jwk: publicJwk })
+        .sign(privateKey);
+    };
+
+    it('P0-4 — MUST return invalid_token when DPoP-bound access token is used without DPoP header (RFC001 §7.5)', async function () {
+      if (!cacheServiceRedis.client?.isReady) {
+        this.skip();
+      }
+      const { publicKey, privateKey } = await jose.generateKeyPair('ES256');
+      const publicJwk = await jose.exportJWK(publicKey);
+      const boundJkt = await jose.calculateJwkThumbprint(publicJwk, 'sha256');
+      const accessToken = jwt.sign(
+        { cnf: { jkt: boundJkt }, sub: 'sub', iat: Math.floor(Date.now() / 1000) },
+        testKeys.privateKeyPem,
+        { algorithm: 'ES256' }
+      );
+      const sessionKey = 'p04-nodpop-' + uuidv4();
+      await cacheServiceRedis.storePreAuthSession(sessionKey, {
+        status: 'success',
+        isDeferred: false,
+        accessToken,
+      });
+      const nonce = cryptoUtils.generateNonce();
+      await cacheServiceRedis.storeNonce(nonce, 300);
+      const testProofJwt = signProofJwt({
+        nonce,
+        iss: 'test-issuer',
+        aud: process.env.SERVER_URL,
+      });
+
+      const res = await request(app)
+        .post('/credential')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({
+          credential_configuration_id: 'test-cred-config',
+          proofs: { jwt: [testProofJwt] },
+        });
+
+      expect(res.status).to.equal(401);
+      expect(res.body).to.have.property('error', 'invalid_token');
+    });
+
+    it('P0-4b — MUST return invalid_dpop_proof when DPoP jkt does not match access token cnf.jkt', async function () {
+      if (!cacheServiceRedis.client?.isReady) {
+        this.skip();
+      }
+      const { publicKey: pubA, privateKey: privA } = await jose.generateKeyPair('ES256');
+      const pubJwkA = await jose.exportJWK(pubA);
+      const boundJkt = await jose.calculateJwkThumbprint(pubJwkA, 'sha256');
+      const accessToken = jwt.sign(
+        { cnf: { jkt: boundJkt }, sub: 'sub', iat: Math.floor(Date.now() / 1000) },
+        testKeys.privateKeyPem,
+        { algorithm: 'ES256' }
+      );
+      const { publicKey: pubB, privateKey: privB } = await jose.generateKeyPair('ES256');
+      const pubJwkB = await jose.exportJWK(pubB);
+      const dpopJwt = await makeCredentialDpopProof(accessToken, privB, pubJwkB);
+
+      const sessionKey = 'p04-wrongjkt-' + uuidv4();
+      await cacheServiceRedis.storePreAuthSession(sessionKey, {
+        status: 'success',
+        isDeferred: false,
+        accessToken,
+      });
+      const nonce = cryptoUtils.generateNonce();
+      await cacheServiceRedis.storeNonce(nonce, 300);
+      const testProofJwt = signProofJwt({
+        nonce,
+        iss: 'test-issuer',
+        aud: process.env.SERVER_URL,
+      });
+
+      const res = await request(app)
+        .post('/credential')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .set('DPoP', dpopJwt)
+        .send({
+          credential_configuration_id: 'test-cred-config',
+          proofs: { jwt: [testProofJwt] },
+        });
+
+      expect(res.status).to.equal(400);
+      expect(res.body).to.have.property('error', 'invalid_dpop_proof');
+    });
+
+    it('P1-1 — MUST return invalid_proof when device-bound RFC001 credential omits key_attestation (RFC001 §7.5.1)', async function () {
+      if (!cacheServiceRedis.client?.isReady) {
+        this.skip();
+      }
+      const sessionKey = 'p11-no-key-attestation-' + uuidv4();
+      const accessToken = 'test-access-token-p11-' + uuidv4();
+      const nonce = cryptoUtils.generateNonce();
+      await cacheServiceRedis.storeNonce(nonce, 300);
+      await cacheServiceRedis.storePreAuthSession(sessionKey, {
+        status: 'success',
+        isDeferred: false,
+        accessToken,
+        c_nonce: nonce,
+      });
+      const proof = signProofJwt({
+        nonce,
+        iss: 'did:holder:test',
+        aud: process.env.SERVER_URL,
+      });
+
+      const res = await request(app)
+        .post('/credential')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({
+          credential_configuration_id: 'rfc001-device-bound-test',
+          proofs: { jwt: [proof] },
+        });
+
+      expect(res.status).to.equal(400);
+      expect(res.body).to.have.property('error', 'invalid_proof');
+      expect(res.body.error_description).to.match(/key_attestation/i);
+    });
+
+    it('P1-1b — MUST return invalid_proof when proof signature does not verify with WUA attested_keys[0]', async function () {
+      if (!cacheServiceRedis.client?.isReady) {
+        this.skip();
+      }
+      const { privateKey: wpPriv, publicKey: wpPub } = await jose.generateKeyPair('ES256', { extractable: true });
+      const { privateKey: holderA, publicKey: pubA } = await jose.generateKeyPair('ES256', { extractable: true });
+      const { privateKey: holderB, publicKey: pubB } = await jose.generateKeyPair('ES256', { extractable: true });
+      const wpPubJwk = await jose.exportJWK(wpPub);
+      const holderAPubJwk = await jose.exportJWK(pubA);
+      const holderBPubJwk = await jose.exportJWK(pubB);
+
+      const wuaJwt = await new jose.SignJWT({
+        iss: 'https://wallet-provider.example',
+        aud: 'https://issuer.example/credential',
+        iat: Math.floor(Date.now() / 1000),
+        exp: Math.floor(Date.now() / 1000) + 3600,
+        jti: 'wua-p11b',
+        eudi_wallet_info: {
+          general_info: { name: 'test-wallet' },
+          key_storage_info: { level: 'tee' },
+        },
+        attested_keys: [holderAPubJwk],
+        status: { status_list: { uri: 'https://example.com/status', idx: 0 } },
+      })
+        .setProtectedHeader({ alg: 'ES256', typ: 'key-attestation+jwt', jwk: wpPubJwk })
+        .sign(wpPriv);
+
+      const nonce = cryptoUtils.generateNonce();
+      await cacheServiceRedis.storeNonce(nonce, 300);
+      const base = process.env.SERVER_URL || 'http://localhost:3000';
+      const proofJwt = await new jose.SignJWT({
+        nonce,
+        iss: 'did:holder:test',
+        aud: base,
+      })
+        .setProtectedHeader({
+          alg: 'ES256',
+          typ: 'openid4vci-proof+jwt',
+          jwk: holderBPubJwk,
+          key_attestation: wuaJwt,
+        })
+        .sign(holderB);
+
+      const sessionKey = 'p11-wrong-pop-key-' + uuidv4();
+      const accessToken = 'test-access-token-p11b-' + uuidv4();
+      await cacheServiceRedis.storePreAuthSession(sessionKey, {
+        status: 'success',
+        isDeferred: false,
+        accessToken,
+        c_nonce: nonce,
+      });
+
+      const res = await request(app)
+        .post('/credential')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({
+          credential_configuration_id: 'rfc001-device-bound-test',
+          proofs: { jwt: [proofJwt] },
+        });
+
+      expect(res.status).to.equal(400);
+      expect(res.body).to.have.property('error', 'invalid_proof');
+    });
+
+    it('P1-12 — MUST return one credential per WUA attested key (device-bound, 3 keys)', async function () {
+      if (!cacheServiceRedis.client?.isReady) {
+        this.skip();
+      }
+      const { privateKey: wpPriv, publicKey: wpPub } = await jose.generateKeyPair('ES256', { extractable: true });
+      const { privateKey: h1priv, publicKey: h1pub } = await jose.generateKeyPair('ES256', { extractable: true });
+      const { privateKey: _h2, publicKey: h2pub } = await jose.generateKeyPair('ES256', { extractable: true });
+      const { privateKey: _h3, publicKey: h3pub } = await jose.generateKeyPair('ES256', { extractable: true });
+      const wpPubJwk = await jose.exportJWK(wpPub);
+      const k1 = await jose.exportJWK(h1pub);
+      const k2 = await jose.exportJWK(h2pub);
+      const k3 = await jose.exportJWK(h3pub);
+
+      const wuaJwt = await new jose.SignJWT({
+        iss: 'https://wallet-provider.example',
+        aud: 'https://issuer.example/credential',
+        iat: Math.floor(Date.now() / 1000),
+        exp: Math.floor(Date.now() / 1000) + 3600,
+        jti: 'wua-p112',
+        eudi_wallet_info: {
+          general_info: { name: 'test-wallet' },
+          key_storage_info: { level: 'tee' },
+        },
+        attested_keys: [k1, k2, k3],
+        status: { status_list: { uri: 'https://example.com/status', idx: 0 } },
+      })
+        .setProtectedHeader({ alg: 'ES256', typ: 'key-attestation+jwt', jwk: wpPubJwk })
+        .sign(wpPriv);
+
+      const nonce = cryptoUtils.generateNonce();
+      await cacheServiceRedis.storeNonce(nonce, 300);
+      const base = process.env.SERVER_URL || 'http://localhost:3000';
+      const holder1PubJwk = await jose.exportJWK(h1pub);
+      const proofJwt = await new jose.SignJWT({
+        nonce,
+        iss: 'did:holder:test',
+        aud: base,
+      })
+        .setProtectedHeader({
+          alg: 'ES256',
+          typ: 'openid4vci-proof+jwt',
+          jwk: holder1PubJwk,
+          key_attestation: wuaJwt,
+        })
+        .sign(h1priv);
+
+      const sessionKey = 'p112-multi-key-' + uuidv4();
+      const accessToken = 'test-access-token-p112-' + uuidv4();
+      await cacheServiceRedis.storePreAuthSession(sessionKey, {
+        status: 'success',
+        isDeferred: false,
+        accessToken,
+        c_nonce: nonce,
+      });
+
+      const res = await request(app)
+        .post('/credential')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({
+          credential_configuration_id: 'rfc001-device-bound-test',
+          proofs: { jwt: [proofJwt] },
+        });
+
+      expect(res.status).to.equal(200);
+      expect(res.body.credentials).to.be.an('array').with.length(3);
+      const jkts = new Set();
+      for (const item of res.body.credentials) {
+        expect(item).to.have.property('credential');
+        const compact = String(item.credential).split('~')[0];
+        const payload = jwt.decode(compact, { complete: false });
+        expect(payload).to.have.property('cnf');
+        expect(payload.cnf).to.have.property('jwk');
+        const jkt = await jose.calculateJwkThumbprint(payload.cnf.jwk, 'sha256');
+        expect(jkts.has(jkt)).to.equal(false);
+        jkts.add(jkt);
+      }
+      expect(jkts.size).to.equal(3);
+    });
+
     it('should handle immediate credential issuance successfully', async () => {
       const sessionKey = 'test-session-key-' + uuidv4();
       const accessToken = 'test-access-token-' + uuidv4();
@@ -1305,7 +2263,7 @@ describe('Shared Issuance Flows', () => {
         .send({
           credential_configuration_id: 'test-cred-config',
           proofs: {
-            jwt: testProofJwt
+            jwt: [testProofJwt]
           }
         })
         .expect(400);
@@ -1340,7 +2298,7 @@ describe('Shared Issuance Flows', () => {
 
       const body = {
         credential_configuration_id: 'test-cred-config',
-        proofs: { jwt: testProofJwt }
+        proofs: { jwt: [testProofJwt] }
       };
 
       const first = await request(app)
@@ -1481,7 +2439,7 @@ describe('Shared Issuance Flows', () => {
         expect(res.body).to.have.property('error');
       });
 
-      it('MUST require non-empty array for the selected proof type', async () => {
+      it('MUST reject proofs.jwt with length !== 1 (RFC001 §7.5.1)', async () => {
         const sessionKey = 'test-session-key-' + uuidv4();
         const accessToken = 'test-access-token-' + uuidv4();
         await cacheServiceRedis.storePreAuthSession(sessionKey, { 
@@ -1497,11 +2455,61 @@ describe('Shared Issuance Flows', () => {
             credential_configuration_id: 'test-cred-config',
             proofs: { jwt: [] }
           });
-        expect([400, 500]).to.include(res.status);
-        expect(res.body).to.have.property('error');
+        expect(res.status).to.equal(400);
+        expect(res.body).to.have.property('error', 'invalid_proof');
       });
 
-      it('SHOULD accept proofs.jwt as array with one JWT element (once implemented)', async () => {
+      it('MUST reject proofs.jwt when value is a string (RFC001 §7.5.1)', async () => {
+        const sessionKey = 'test-session-key-' + uuidv4();
+        const accessToken = 'test-access-token-' + uuidv4();
+        const nonce = cryptoUtils.generateNonce();
+        await cacheServiceRedis.storePreAuthSession(sessionKey, {
+          status: 'success',
+          isDeferred: false,
+          accessToken: accessToken,
+        });
+        await cacheServiceRedis.storeNonce(nonce, 300);
+        const jwtStr = signProofJwt({ nonce, iss: 'w', aud: process.env.SERVER_URL });
+
+        const res = await request(app)
+          .post('/credential')
+          .set('Authorization', `Bearer ${accessToken}`)
+          .send({
+            credential_configuration_id: 'test-cred-config',
+            proofs: { jwt: jwtStr },
+          });
+        expect(res.status).to.equal(400);
+        expect(res.body).to.have.property('error', 'invalid_proof');
+        expect(res.body.error_description).to.match(/array/i);
+      });
+
+      it('MUST reject proofs.jwt with more than one JWT (RFC001 §7.5.1)', async () => {
+        const sessionKey = 'test-session-key-' + uuidv4();
+        const accessToken = 'test-access-token-' + uuidv4();
+        const n1 = cryptoUtils.generateNonce();
+        const n2 = cryptoUtils.generateNonce();
+        await cacheServiceRedis.storePreAuthSession(sessionKey, {
+          status: 'success',
+          isDeferred: false,
+          accessToken: accessToken,
+        });
+        await cacheServiceRedis.storeNonce(n1, 300);
+        await cacheServiceRedis.storeNonce(n2, 300);
+        const a = signProofJwt({ nonce: n1, iss: 'w', aud: process.env.SERVER_URL });
+        const b = signProofJwt({ nonce: n2, iss: 'w', aud: process.env.SERVER_URL });
+
+        const res = await request(app)
+          .post('/credential')
+          .set('Authorization', `Bearer ${accessToken}`)
+          .send({
+            credential_configuration_id: 'test-cred-config',
+            proofs: { jwt: [a, b] },
+          });
+        expect(res.status).to.equal(400);
+        expect(res.body).to.have.property('error', 'invalid_proof');
+      });
+
+      it('SHOULD accept proofs.jwt as array with exactly one JWT element', async () => {
         const sessionKey = 'test-session-key-' + uuidv4();
         const accessToken = 'test-access-token-' + uuidv4();
         const nonce = cryptoUtils.generateNonce();
@@ -1528,6 +2536,73 @@ describe('Shared Issuance Flows', () => {
     });
 
     describe('V1.0 PoP Cryptographic Validation', () => {
+      it('MUST reject proof JWT without iss in pre-authorized (non-code) flow', async () => {
+        const sessionKey = 'test-session-key-' + uuidv4();
+        const accessToken = 'test-access-token-' + uuidv4();
+        const nonce = cryptoUtils.generateNonce();
+        await cacheServiceRedis.storePreAuthSession(sessionKey, {
+          status: 'success',
+          isDeferred: false,
+          accessToken: accessToken,
+          c_nonce: nonce,
+        });
+        await cacheServiceRedis.storeNonce(nonce, 300);
+
+        const tampered = jwt.sign(
+          { nonce, aud: process.env.SERVER_URL },
+          testKeys.privateKeyPem,
+          {
+            algorithm: 'ES256',
+            header: {
+              typ: 'openid4vci-proof+jwt',
+              jwk: testKeys.publicKeyJwk,
+            },
+          }
+        );
+
+        const res = await request(app)
+          .post('/credential')
+          .set('Authorization', `Bearer ${accessToken}`)
+          .send({
+            credential_configuration_id: 'test-cred-config',
+            proofs: { jwt: [tampered] },
+          })
+          .expect(400);
+
+        expect(res.body).to.have.property('error', 'invalid_proof');
+        expect(res.body.error_description).to.match(/iss/i);
+      });
+
+      it('MUST reject proof JWT when header typ is not openid4vci-proof+jwt', async () => {
+        const sessionKey = 'test-session-key-' + uuidv4();
+        const accessToken = 'test-access-token-' + uuidv4();
+        const nonce = cryptoUtils.generateNonce();
+        await cacheServiceRedis.storePreAuthSession(sessionKey, {
+          status: 'success',
+          isDeferred: false,
+          accessToken: accessToken,
+          c_nonce: nonce,
+        });
+        await cacheServiceRedis.storeNonce(nonce, 300);
+
+        const wrongTyp = signProofJwt(
+          { nonce, aud: process.env.SERVER_URL, iss: 'wallet' },
+          { typ: 'JWT' }
+        );
+
+        const res = await request(app)
+          .post('/credential')
+          .set('Authorization', `Bearer ${accessToken}`)
+          .send({
+            credential_configuration_id: 'test-cred-config',
+            proofs: { jwt: [wrongTyp] },
+          })
+          .expect(400);
+
+        expect(res.body).to.have.property('error', 'invalid_proof');
+        expect(res.body.error_description).to.match(/openid4vci-proof\+jwt/i);
+      });
+
       it('MUST validate audience (aud) matches issuer credential endpoint', async () => {
         const sessionKey = 'test-session-key-' + uuidv4();
         const accessToken = 'test-access-token-' + uuidv4();
@@ -1567,9 +2642,45 @@ describe('Shared Issuance Flows', () => {
           .set('Authorization', `Bearer ${accessToken}`)
           .send({
             credential_configuration_id: 'test-cred-config',
-            proofs: { jwt: stale }
+            proofs: { jwt: [stale] }
           });
         expect(res.status).to.equal(400);
+        expect(res.body).to.have.property('error', 'invalid_nonce');
+      });
+
+      it('MUST reject proof nonce valid in store but not this session c_nonce (RFC001 P1-11)', async function () {
+        if (!cacheServiceRedis.client?.isReady) {
+          this.skip();
+        }
+        const otherNonce = cryptoUtils.generateNonce();
+        await cacheServiceRedis.storeNonce(otherNonce, 300);
+
+        const sessionKey = 'nonce-session-bind-' + uuidv4();
+        const accessToken = 'nonce-token-bind-' + uuidv4();
+        const sessionNonce = cryptoUtils.generateNonce();
+        await cacheServiceRedis.storeNonce(sessionNonce, 300);
+        await cacheServiceRedis.storePreAuthSession(sessionKey, {
+          status: 'success',
+          isDeferred: false,
+          accessToken,
+          c_nonce: sessionNonce,
+        });
+
+        const proofJwt = signProofJwt({
+          nonce: otherNonce,
+          iss: 'wallet',
+          aud: process.env.SERVER_URL,
+        });
+
+        const res = await request(app)
+          .post('/credential')
+          .set('Authorization', `Bearer ${accessToken}`)
+          .send({
+            credential_configuration_id: 'test-cred-config',
+            proofs: { jwt: [proofJwt] },
+          })
+          .expect(400);
+
         expect(res.body).to.have.property('error', 'invalid_nonce');
       });
     });
@@ -1590,7 +2701,7 @@ describe('Shared Issuance Flows', () => {
           .set('Authorization', `Bearer ${accessToken}`)
           .send({
             credential_configuration_id: 'test-cred-config',
-            proofs: { jwt: missingNonceJwt }
+            proofs: { jwt: [missingNonceJwt] }
           })
           .expect(400);
 
@@ -1615,7 +2726,7 @@ describe('Shared Issuance Flows', () => {
           .set('Authorization', `Bearer ${accessToken}`)
           .send({
             credential_configuration_id: 'test-cred-config',
-            proofs: { jwt: expiredNonceJwt }
+            proofs: { jwt: [expiredNonceJwt] }
           })
           .expect(400);
 
@@ -1675,7 +2786,7 @@ describe('Shared Issuance Flows', () => {
         const sessionKey = 'test-session-key-' + uuidv4();
         const accessToken = 'test-access-token-' + uuidv4();
         const nonce = cryptoUtils.generateNonce();
-        const sessionObject = { status: 'success', isDeferred: false, accessToken };
+        const sessionObject = { status: 'success', isDeferred: false, accessToken, c_nonce: nonce };
         await cacheServiceRedis.storePreAuthSession(sessionKey, sessionObject);
         await cacheServiceRedis.storeNonce(nonce, 300);
 
@@ -1753,7 +2864,7 @@ describe('Shared Issuance Flows', () => {
         const sessionKey = 'test-session-key-' + uuidv4();
         const accessToken = 'test-access-token-' + uuidv4();
         const nonce = cryptoUtils.generateNonce();
-        const sessionObject = { status: 'success', isDeferred: false, accessToken: accessToken };
+        const sessionObject = { status: 'success', isDeferred: false, accessToken: accessToken, c_nonce: nonce };
         await cacheServiceRedis.storePreAuthSession(sessionKey, sessionObject);
         await cacheServiceRedis.storeNonce(nonce, 300);
 
@@ -1824,7 +2935,7 @@ describe('Shared Issuance Flows', () => {
         const sessionKey = 'test-session-key-' + uuidv4();
         const accessToken = 'test-access-token-' + uuidv4();
         const nonce = cryptoUtils.generateNonce();
-        const sessionObject = { status: 'success', isDeferred: false, accessToken };
+        const sessionObject = { status: 'success', isDeferred: false, accessToken, c_nonce: nonce };
         await cacheServiceRedis.storePreAuthSession(sessionKey, sessionObject);
         await cacheServiceRedis.storeNonce(nonce, 300);
 
@@ -1854,7 +2965,10 @@ describe('Shared Issuance Flows', () => {
         expect(res.body).to.have.property('credentials');
       });
 
-      it('MUST allow override of credential_response_encryption in deferred polling', async () => {
+      it('MUST allow override of credential_response_encryption in deferred polling', async function () {
+        if (!cacheServiceRedis.client?.isReady) {
+          this.skip();
+        }
         // Start with deferred issuance to get transaction_id
         const sessionKey = 'test-session-key-' + uuidv4();
         const accessToken = 'test-access-token-' + uuidv4();
@@ -1875,16 +2989,10 @@ describe('Shared Issuance Flows', () => {
 
         if (first.status === 202) {
           const tx = first.body.transaction_id;
-          // Set up deferred session lookup
-          const deferredSessionId = 'deferred-session-' + uuidv4();
-          await cacheServiceRedis.storeCodeFlowSession(deferredSessionId, { 
-            status: 'pending', 
-            requestBody: {},
-            transaction_id: tx
-          });
 
           const poll = await request(app)
             .post('/credential_deferred')
+            .set('Authorization', `Bearer ${accessToken}`)
             .send({
               transaction_id: tx,
               credential_response_encryption: { jwk: { kty: 'EC', crv: 'P-256', x: 'AQ', y: 'AQ' }, enc: 'A256GCM' }
@@ -1899,9 +3007,59 @@ describe('Shared Issuance Flows', () => {
   });
 
   describe('POST /credential_deferred', () => {
-    it('should handle deferred credential issuance successfully', async () => {
+    it('MUST return 401 invalid_token without Authorization when transaction_id is present', async () => {
+      const res = await request(app)
+        .post('/credential_deferred')
+        .send({ transaction_id: 'txn-needs-auth-' + uuidv4() })
+        .expect(401);
+      expect(res.body).to.have.property('error', 'invalid_token');
+    });
+
+    it('MUST return invalid_grant when access token session does not own the transaction_id', async function () {
+      if (!cacheServiceRedis.client?.isReady) {
+        this.skip();
+      }
+      const tx = 'tx-mismatch-' + uuidv4();
+      const sessionA = 'sess-a-' + uuidv4();
+      const sessionB = 'sess-b-' + uuidv4();
+      const tokenA = 'tok-a-' + uuidv4();
+      const tokenB = 'tok-b-' + uuidv4();
+      const proofJwt = signProofJwt({
+        nonce: cryptoUtils.generateNonce(),
+        iss: 'test-wallet',
+        aud: process.env.SERVER_URL
+      });
+      await cacheServiceRedis.storeCodeFlowSession(sessionA, {
+        status: 'pending',
+        requests: { accessToken: tokenA },
+        requestBody: { vct: 'test-cred-config', proofs: { jwt: [proofJwt] } },
+        transaction_id: tx,
+        isCredentialReady: false,
+        deferred_poll_count: 0,
+        deferred_created_at: Math.floor(Date.now() / 1000),
+        deferred_expires_at: Math.floor(Date.now() / 1000) + 900,
+      });
+      await cacheServiceRedis.storeCodeFlowSession(sessionB, {
+        status: 'pending',
+        requests: { accessToken: tokenB },
+        requestBody: { vct: 'test-cred-config', proofs: { jwt: [proofJwt] } },
+      });
+
+      const res = await request(app)
+        .post('/credential_deferred')
+        .set('Authorization', `Bearer ${tokenB}`)
+        .send({ transaction_id: tx })
+        .expect(400);
+      expect(res.body).to.have.property('error', 'invalid_grant');
+    });
+
+    it('should handle deferred credential issuance successfully', async function () {
+      if (!cacheServiceRedis.client?.isReady) {
+        this.skip();
+      }
       const transactionId = 'test-transaction-id-' + uuidv4();
       const sessionId = 'test-session-id-' + uuidv4();
+      const accessToken = 'test-access-token-' + uuidv4();
 
       // Create a valid proof JWT for the test
       const proofPayload = {
@@ -1913,9 +3071,10 @@ describe('Shared Issuance Flows', () => {
 
       const sessionObject = {
         status: 'pending',
+        requests: { accessToken },
         requestBody: {
           vct: 'test-cred-config',
-          proofs: { jwt: proofJwt }
+          proofs: { jwt: [proofJwt] }
         },
         transaction_id: transactionId
       };
@@ -1925,24 +3084,39 @@ describe('Shared Issuance Flows', () => {
 
       const response = await request(app)
         .post('/credential_deferred')
+        .set('Authorization', `Bearer ${accessToken}`)
         .send({
           transaction_id: transactionId
         });
 
       // May succeed or fail depending on credential generation
       if (response.status === 200) {
-        expect(response.body).to.have.property('credential');
-        expect(typeof response.body.credential).to.equal('string');
+        expect(response.body).to.have.property('credentials');
+        expect(response.body.credentials).to.be.an('array');
+        expect(response.body.credentials[0]).to.have.property('credential');
+        expect(typeof response.body.credentials[0].credential).to.equal('string');
+        expect(response.body).to.have.property('notification_id');
       } else {
         expect([400, 500]).to.include(response.status);
       }
     });
 
-    it('should reject invalid transaction ID', async () => {
+    it('should reject invalid transaction ID', async function () {
+      if (!cacheServiceRedis.client?.isReady) {
+        this.skip();
+      }
       const invalidTransactionId = 'invalid-transaction-id-' + uuidv4();
+      const sessionId = 'deferred-invalid-tx-session-' + uuidv4();
+      const accessToken = 'test-access-token-invalid-tx-' + uuidv4();
+      await cacheServiceRedis.storeCodeFlowSession(sessionId, {
+        status: 'pending',
+        requests: { accessToken },
+        requestBody: {},
+      });
 
       const response = await request(app)
         .post('/credential_deferred')
+        .set('Authorization', `Bearer ${accessToken}`)
         .send({
           transaction_id: invalidTransactionId
         })
@@ -1951,42 +3125,230 @@ describe('Shared Issuance Flows', () => {
       expect(response.body).to.have.property('error', 'invalid_transaction_id');
     });
 
-    it('should handle missing session object', async () => {
-      // Don't create session - should result in invalid transaction
+    it('should return invalid_token when transaction_id is unknown and token has no issuance session', async () => {
       const missingTransactionId = 'missing-transaction-id-' + uuidv4();
 
       const response = await request(app)
         .post('/credential_deferred')
+        .set('Authorization', `Bearer orphan-token-${uuidv4()}`)
         .send({
           transaction_id: missingTransactionId
         })
-        .expect(400);
+        .expect(401);
 
-      expect(response.body).to.have.property('error', 'invalid_transaction_id');
+      expect(response.body).to.have.property('error', 'invalid_token');
+    });
+
+    // A6 / RFC001 §6.3, §7.6 / OID4VCI 1.0 §9 — pending / expiry paths.
+    it('MUST return issuance_pending with interval when credential is not yet ready', async function () {
+      if (!cacheServiceRedis.client?.isReady) {
+        this.skip();
+      }
+      const transactionId = 'pending-tx-' + uuidv4();
+      const sessionId = 'pending-session-' + uuidv4();
+      const proofJwt = signProofJwt({
+        nonce: cryptoUtils.generateNonce(),
+        iss: 'test-wallet',
+        aud: process.env.SERVER_URL
+      });
+
+      const nowSec = Math.floor(Date.now() / 1000);
+      // `deferred_pending_polls_override` forces N polls to return pending
+      // before readiness, independent of the process-level env setting.
+      const accessToken = 'pending-deferred-token-' + uuidv4();
+      await cacheServiceRedis.storeCodeFlowSession(sessionId, {
+        status: 'pending',
+        requests: { accessToken },
+        requestBody: {
+          vct: 'test-cred-config',
+          proofs: { jwt: [proofJwt] }
+        },
+        transaction_id: transactionId,
+        isCredentialReady: false,
+        deferred_poll_count: 0,
+        deferred_pending_polls_override: 3,
+        deferred_created_at: nowSec,
+        deferred_expires_at: nowSec + 900
+      });
+
+      const response = await request(app)
+        .post('/credential_deferred')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({ transaction_id: transactionId });
+
+      expect(response.status).to.equal(400);
+      expect(response.body).to.have.property('error', 'issuance_pending');
+      expect(response.body).to.have.property('interval');
+      expect(response.body.interval).to.be.a('number');
+      expect(response.body.interval).to.be.greaterThan(0);
+    });
+
+    it('MUST return expired_transaction_id after the transaction lifetime', async function () {
+      if (!cacheServiceRedis.client?.isReady) {
+        this.skip();
+      }
+      const transactionId = 'expired-tx-' + uuidv4();
+      const sessionId = 'expired-session-' + uuidv4();
+      const proofJwt = signProofJwt({
+        nonce: cryptoUtils.generateNonce(),
+        iss: 'test-wallet',
+        aud: process.env.SERVER_URL
+      });
+
+      const nowSec = Math.floor(Date.now() / 1000);
+      const accessToken = 'expired-deferred-token-' + uuidv4();
+      await cacheServiceRedis.storeCodeFlowSession(sessionId, {
+        status: 'pending',
+        requests: { accessToken },
+        requestBody: {
+          vct: 'test-cred-config',
+          proofs: { jwt: [proofJwt] }
+        },
+        transaction_id: transactionId,
+        isCredentialReady: false,
+        deferred_poll_count: 0,
+        deferred_created_at: nowSec - 2000,
+        deferred_expires_at: nowSec - 10
+      });
+
+      const response = await request(app)
+        .post('/credential_deferred')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({ transaction_id: transactionId });
+
+      expect(response.status).to.equal(400);
+      expect(response.body).to.have.property('error', 'expired_transaction_id');
     });
   });
 
   describe('POST /nonce', () => {
-    it('should generate and store nonce successfully', async () => {
+    it('MUST return 401 without Authorization', async () => {
+      const response = await request(app).post('/nonce').expect(401);
+      expect(response.body).to.have.property('error', 'invalid_token');
+    });
+
+    it('MUST return 401 for access token with no issuance session', async () => {
       const response = await request(app)
         .post('/nonce')
+        .set('Authorization', 'Bearer orphan-token-' + uuidv4())
+        .expect(401);
+      expect(response.body).to.have.property('error', 'invalid_token');
+    });
+
+    it('accepts Authorization: DPoP for Bearer-issued token (same token string)', async function () {
+      if (!cacheServiceRedis.client?.isReady) {
+        this.skip();
+      }
+      const sessionKey = 'nonce-dpop-scheme-' + uuidv4();
+      const accessToken = 'access-dpop-scheme-' + uuidv4();
+      await cacheServiceRedis.storePreAuthSession(sessionKey, {
+        status: 'success',
+        accessToken,
+      });
+      const response = await request(app)
+        .post('/nonce')
+        .set('Authorization', `DPoP ${accessToken}`)
+        .expect(200);
+      expect(response.body).to.have.property('c_nonce');
+      expect(await cacheServiceRedis.checkNonce(response.body.c_nonce)).to.be.true;
+    });
+
+    it('should generate and store nonce when Authorization matches an issuance session', async () => {
+      if (!cacheServiceRedis.client?.isReady) {
+        throw new Error('Redis is not ready - cannot run test');
+      }
+      const sessionKey = 'nonce-session-' + uuidv4();
+      const accessToken = 'access-for-nonce-' + uuidv4();
+      await cacheServiceRedis.storePreAuthSession(sessionKey, {
+        status: 'success',
+        accessToken,
+      });
+
+      const response = await request(app)
+        .post('/nonce')
+        .set('Authorization', `Bearer ${accessToken}`)
         .expect(200);
 
       expect(response.body).to.have.property('c_nonce');
       expect(response.body).to.have.property('c_nonce_expires_in', 86400);
-      
-      // Verify nonce was actually stored
-      const nonceExists = await cacheServiceRedis.checkNonce(response.body.c_nonce);
-      expect(nonceExists).to.be.true;
+      expect(await cacheServiceRedis.checkNonce(response.body.c_nonce)).to.be.true;
+
+      const updated = await cacheServiceRedis.getPreAuthSession(sessionKey);
+      expect(updated.c_nonce).to.equal(response.body.c_nonce);
     });
 
     it('should handle nonce storage errors', async () => {
-      // This test will use real storage - errors may occur if Redis is unavailable
-      const response = await request(app)
-        .post('/nonce');
+      const response = await request(app).post('/nonce');
 
-      // Accept both success and error responses
-      expect([200, 500]).to.include(response.status);
+      expect([401, 500]).to.include(response.status);
+    });
+  });
+
+  describe('POST /notification', () => {
+    it('MUST reject when session has no notification_id yet (RFC001 §8.7)', async function () {
+      if (!cacheServiceRedis.client?.isReady) {
+        this.skip();
+      }
+      const sessionKey = 'notif-no-nid-' + uuidv4();
+      const accessToken = 'access-notif-no-nid-' + uuidv4();
+      await cacheServiceRedis.storePreAuthSession(sessionKey, {
+        status: 'success',
+        accessToken,
+      });
+
+      const res = await request(app)
+        .post('/notification')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({ notification_id: uuidv4(), event: 'credential_accepted' })
+        .expect(400);
+
+      expect(res.body).to.have.property('error', 'invalid_notification_request');
+    });
+
+    it('MUST reject when notification_id does not match the session (invalid_notification_id)', async function () {
+      if (!cacheServiceRedis.client?.isReady) {
+        this.skip();
+      }
+      const sessionKey = 'notif-mismatch-' + uuidv4();
+      const accessToken = 'access-notif-mismatch-' + uuidv4();
+      const issuedId = uuidv4();
+      await cacheServiceRedis.storePreAuthSession(sessionKey, {
+        status: 'success',
+        accessToken,
+        notification_id: issuedId,
+      });
+
+      const res = await request(app)
+        .post('/notification')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({ notification_id: uuidv4(), event: 'credential_accepted' })
+        .expect(403);
+
+      expect(res.body).to.have.property('error', 'invalid_notification_id');
+    });
+
+    it('MUST return 204 when notification_id matches the session', async function () {
+      if (!cacheServiceRedis.client?.isReady) {
+        this.skip();
+      }
+      const sessionKey = 'notif-ok-' + uuidv4();
+      const accessToken = 'access-notif-ok-' + uuidv4();
+      const issuedId = uuidv4();
+      await cacheServiceRedis.storePreAuthSession(sessionKey, {
+        status: 'success',
+        accessToken,
+        notification_id: issuedId,
+      });
+
+      await request(app)
+        .post('/notification')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({
+          notification_id: issuedId,
+          event: 'credential_accepted',
+          event_description: 'ok',
+        })
+        .expect(204);
     });
   });
 
@@ -2036,10 +3398,16 @@ describe('Shared Issuance Flows', () => {
   describe('Error handling', () => {
     it('should handle token endpoint errors gracefully', async () => {
       // Test with invalid request to trigger error handling
-      const response = await request(app)
-        .post('/token_endpoint')
-        .set('Authorization', 'Bearer test-token')
+      const { dpopJwt } = await makeTokenDpop();
+      await makeTestWiaClientAssertion();
+      const response = await wireWiaOAuthHeaders(
+        request(app)
+          .post('/token_endpoint')
+          .set('Authorization', 'Bearer test-token')
+          .set('DPoP', dpopJwt)
+      )
         .send({
+          ...pickWiaBodyFields(),
           grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
           'pre-authorized_code': 'invalid-code-that-does-not-exist'
         });
@@ -2069,12 +3437,8 @@ describe('Shared Issuance Flows', () => {
     });
 
     it('should handle nonce endpoint errors gracefully', async () => {
-      // Test with real nonce generation - errors may occur if Redis is unavailable
-      const response = await request(app)
-        .post('/nonce');
-
-      // Accept both success and error responses
-      expect([200, 500]).to.include(response.status);
+      const response = await request(app).post('/nonce');
+      expect([401, 500]).to.include(response.status);
     });
   });
 }); 

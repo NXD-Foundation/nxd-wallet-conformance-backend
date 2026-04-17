@@ -46,7 +46,8 @@ testRouter.get('/offer-tx-code', async (req, res) => {
         accessToken: null,
         flowType: 'pre-auth',
         isHaip: false,
-        signatureType: signatureType
+        signatureType: signatureType,
+        requireTxCode: true,
       });
     }
 
@@ -221,6 +222,7 @@ testRouter.get('/haip-offer-tx-code', async (req, res) => {
         accessToken: null,
         isHaip: true,
         flowType: 'pre-auth',
+        requireTxCode: true,
       });
     }
 
@@ -345,6 +347,7 @@ describe('Pre-Auth SD-JWT Routes', () => {
       expect(mockCacheServiceRedis.storePreAuthSession.called).to.be.true;
       const callArgs = mockCacheServiceRedis.storePreAuthSession.getCall(0).args;
       expect(callArgs[1]).to.have.property('signatureType', signatureType);
+      expect(callArgs[1]).to.have.property('requireTxCode', true);
     });
 
     it('should not create new session if existing session found', async () => {
@@ -373,6 +376,7 @@ describe('Pre-Auth SD-JWT Routes', () => {
       expect(callArgs[1]).to.have.property('flowType', 'pre-auth');
       expect(callArgs[1]).to.have.property('isHaip', false);
       expect(callArgs[1]).to.have.property('signatureType', 'ES384');
+      expect(callArgs[1]).to.have.property('requireTxCode', true);
     });
   });
 
@@ -562,6 +566,7 @@ describe('Pre-Auth SD-JWT Routes', () => {
       expect(mockCacheServiceRedis.storePreAuthSession.called).to.be.true;
       const callArgs = mockCacheServiceRedis.storePreAuthSession.getCall(0).args;
       expect(callArgs[1]).to.have.property('isHaip', true);
+      expect(callArgs[1]).to.have.property('requireTxCode', true);
     });
 
     it('should use custom sessionId and credentialType', async () => {

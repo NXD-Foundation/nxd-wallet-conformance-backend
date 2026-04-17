@@ -3,6 +3,109 @@ import request from 'supertest';
 import express from 'express';
 import fs from 'fs';
 import crypto from 'crypto';
+import * as jose from 'jose';
+import { v4 as uuidv4 } from 'uuid';
+
+// RFC001 §7.4: DPoP is mandatory at the token endpoint. Returns a fresh
+// ephemeral key + signed DPoP proof JWT per invocation. `htu` defaults to the
+// current SERVER_URL so the proof matches what getServerUrl() produces server-side.
+const makeTokenDpopHeader = async ({ htu, htm = 'POST' } = {}) => {
+  const base = process.env.SERVER_URL || 'http://localhost:3000';
+  const effectiveHtu = htu || `${base}/token_endpoint`;
+  const { publicKey, privateKey } = await jose.generateKeyPair('ES256');
+  const publicJwk = await jose.exportJWK(publicKey);
+  return await new jose.SignJWT({ htu: effectiveHtu, htm })
+    .setProtectedHeader({ alg: 'ES256', typ: 'dpop+jwt', jwk: publicJwk })
+    .setIssuedAt()
+    .setJti(uuidv4())
+    .sign(privateKey);
+};
+
+const WIA_CLIENT_ASSERTION_TYPE_MD =
+  'urn:ietf:params:oauth:client-assertion-type:jwt-bearer';
+
+/** RFC001 §7.3 / §7.4 — WIA + OAuth-Client-Attestation + PoP; cnf binding (no WP trust list). */
+const makeTestWiaClientAssertionBody = async (options = {}) => {
+  const base = process.env.SERVER_URL || 'http://localhost:3000';
+  const tokenEndpoint = `${String(base).replace(/\/$/, '')}/token_endpoint`;
+  const { publicKey, privateKey } = await jose.generateKeyPair('ES256');
+  const publicJwk = await jose.exportJWK(publicKey);
+  const cnfJwk = { ...publicJwk };
+  delete cnfJwk.d;
+
+  const wiaIssuer = 'did:jwk:test-wia-metadata';
+  const attestationSub =
+    options.oauthClientId != null && options.oauthClientId !== ''
+      ? options.oauthClientId
+      : wiaIssuer;
+
+  const now = Math.floor(Date.now() / 1000);
+  const exp = now + 3600;
+  const client_assertion = await new jose.SignJWT({
+    iss: wiaIssuer,
+    aud: tokenEndpoint,
+    iat: now,
+    exp,
+    jti: uuidv4(),
+    cnf: { jwk: cnfJwk },
+  })
+    .setProtectedHeader({ alg: 'ES256', typ: 'JWT', jwk: publicJwk })
+    .sign(privateKey);
+
+  const attJwt = await new jose.SignJWT({
+    iss: wiaIssuer,
+    sub: attestationSub,
+    aud: base,
+    iat: now,
+    nbf: now,
+    exp: now + 3600,
+    jti: uuidv4(),
+    cnf: { jwk: cnfJwk },
+  })
+    .setProtectedHeader({ alg: 'ES256', typ: 'oauth-client-attestation+jwt', jwk: publicJwk })
+    .sign(privateKey);
+
+  const popJwt = await new jose.SignJWT({
+    iss: attestationSub,
+    aud: base,
+    iat: now,
+    nbf: now,
+    exp: now + 300,
+    jti: uuidv4(),
+  })
+    .setProtectedHeader({ alg: 'ES256', typ: 'oauth-client-attestation-pop+jwt', jwk: publicJwk })
+    .sign(privateKey);
+
+  return {
+    client_assertion,
+    client_assertion_type: WIA_CLIENT_ASSERTION_TYPE_MD,
+    oauthAttestationHeaders: {
+      'OAuth-Client-Attestation': attJwt,
+      'OAuth-Client-Attestation-PoP': popJwt,
+    },
+  };
+};
+
+const pickWiaBodyFieldsMd = (wia) => {
+  const { oauthAttestationHeaders: _h, ...rest } = wia;
+  return rest;
+};
+
+const applyWiaOAuthHeadersMd = (req, wia) => {
+  const h = wia.oauthAttestationHeaders;
+  if (!h) return req;
+  let r = req;
+  for (const [k, v] of Object.entries(h)) {
+    r = r.set(k, v);
+  }
+  return r;
+};
+
+function x5cToPem(x5cEntry) {
+  return `-----BEGIN CERTIFICATE-----\n${String(x5cEntry)
+    .match(/.{1,64}/g)
+    .join('\n')}\n-----END CERTIFICATE-----\n`;
+}
 
 /**
  * OIDC4VCI V1.0 Metadata Discovery Compliance Tests
@@ -78,6 +181,69 @@ describe('OIDC4VCI V1.0 - Metadata Discovery Compliance', () => {
       expect(metadata).to.have.property('credential_configurations_supported').that.is.an('object');
     });
 
+    it('MUST advertise A128GCM and A256GCM in credential_response_encryption (RFC001 P2-4)', async () => {
+      const response = await request(app)
+        .get('/.well-known/openid-credential-issuer')
+        .expect(200);
+
+      expect(response.body).to.have.property('credential_response_encryption').that.is.an('object');
+      const encList = response.body.credential_response_encryption.enc_values_supported;
+      expect(encList).to.be.an('array');
+      expect(encList).to.include('A128GCM');
+      expect(encList).to.include('A256GCM');
+    });
+
+    it('MUST include issuer_info with registration certificate and registrar dataset (RFC001 §7.7 SHALL 8)', async () => {
+      const response = await request(app)
+        .get('/.well-known/openid-credential-issuer')
+        .expect(200);
+
+      expect(response.body).to.have.property('issuer_info').that.is.an('object');
+      const issuerInfo = response.body.issuer_info;
+
+      expect(issuerInfo).to.have.property('registration_certificate').that.is.a('string');
+      expect(issuerInfo.registration_certificate).to.match(/^[A-Za-z0-9+/=]+$/);
+      expect(issuerInfo.registration_certificate.length).to.be.greaterThan(100);
+
+      expect(issuerInfo).to.have.property('registration_certificate_pem').that.includes('BEGIN CERTIFICATE');
+      expect(issuerInfo).to.have.property('registration_certificate_summary').that.is.an('object');
+      const summary = issuerInfo.registration_certificate_summary;
+      expect(summary).to.include.keys([
+        'subject',
+        'issuer',
+        'serial_number',
+        'not_before',
+        'not_after',
+        'self_signed',
+      ]);
+      expect(summary.self_signed).to.be.a('boolean');
+
+      expect(issuerInfo).to.have.property('registration_information').that.is.an('object');
+      expect(issuerInfo).to.have.property('profile').that.includes('ETSI TS 119 472-3');
+    });
+
+    it('MUST support signed issuer metadata with x5c when client requests application/jwt (RFC001 §7.7 SHALL 7)', async () => {
+      const response = await request(app)
+        .get('/.well-known/openid-credential-issuer')
+        .set('Accept', 'application/jwt')
+        .expect(200);
+
+      expect(response.header['content-type']).to.include('application/jwt');
+      expect(response.text).to.be.a('string').and.to.include('.');
+
+      const protectedHeader = jose.decodeProtectedHeader(response.text);
+      expect(protectedHeader).to.have.property('alg', 'ES256');
+      expect(protectedHeader).to.have.property('typ', 'openid-credential-issuer-metadata+jwt');
+      expect(protectedHeader).to.have.property('x5c').that.is.an('array').with.length.greaterThan(0);
+
+      const verifyKey = await jose.importX509(x5cToPem(protectedHeader.x5c[0]), 'ES256');
+      const { payload } = await jose.jwtVerify(response.text, verifyKey);
+
+      expect(payload).to.have.property('credential_issuer', 'https://issuer.example.com');
+      expect(payload).to.have.property('credential_endpoint', 'https://issuer.example.com/credential');
+      expect(payload).to.have.property('issuer_info').that.is.an('object');
+    });
+
     it('MUST include credential_issuer identifier in metadata', async () => {
       const response = await request(app)
         .get('/.well-known/openid-credential-issuer')
@@ -143,7 +309,9 @@ describe('OIDC4VCI V1.0 - Metadata Discovery Compliance', () => {
         'ldp_vc',
         'vc+sd-jwt',
         'dc+sd-jwt',
-        'mso_mdoc'
+        'mso_mdoc',
+        'vc+jwt',
+        'x509_attr',
       ]);
     });
   });
@@ -249,23 +417,45 @@ describe('OIDC4VCI V1.0 - Metadata Discovery Compliance', () => {
   });
 
   describe('V1.0 Nonce Endpoint - Behavior', () => {
-    it('POST /nonce returns JSON with c_nonce and c_nonce_expires_in', async () => {
-      const res = await request(app).post('/nonce').expect([200, 500]);
-      if (res.status === 200) {
-        expect(res.header['content-type']).to.include('application/json');
-        expect(res.body).to.have.property('c_nonce');
-        expect(res.body).to.have.property('c_nonce_expires_in');
-      }
+    it('POST /nonce without Authorization MUST return 401 invalid_token', async () => {
+      const res = await request(app).post('/nonce').expect(401);
+      expect(res.body.error).to.equal('invalid_token');
     });
 
-    it('POST /nonce twice SHOULD yield different c_nonce values', async () => {
-      const r1 = await request(app).post('/nonce');
-      const r2 = await request(app).post('/nonce');
-      if (r1.status === 200 && r2.status === 200) {
-        expect(r1.body.c_nonce).to.be.a('string');
-        expect(r2.body.c_nonce).to.be.a('string');
-        expect(r1.body.c_nonce).to.not.equal(r2.body.c_nonce);
-      }
+    it('POST /nonce with valid access_token returns c_nonce and c_nonce_expires_in', async function () {
+      const cache = await import('../services/cacheServiceRedis.js');
+      if (!cache.client?.isReady) this.skip();
+      const accessToken = `md-nonce-${crypto.randomUUID()}`;
+      const sessionKey = `md-nonce-sess-${crypto.randomUUID()}`;
+      await cache.storePreAuthSession(sessionKey, { status: 'success', accessToken });
+
+      const res = await request(app)
+        .post('/nonce')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .expect(200);
+      expect(res.header['content-type']).to.include('application/json');
+      expect(res.body).to.have.property('c_nonce');
+      expect(res.body).to.have.property('c_nonce_expires_in');
+    });
+
+    it('POST /nonce twice with same token SHOULD yield different c_nonce values', async function () {
+      const cache = await import('../services/cacheServiceRedis.js');
+      if (!cache.client?.isReady) this.skip();
+      const accessToken = `md-nonce-twice-${crypto.randomUUID()}`;
+      const sessionKey = `md-nonce-sess2-${crypto.randomUUID()}`;
+      await cache.storePreAuthSession(sessionKey, { status: 'success', accessToken });
+
+      const r1 = await request(app)
+        .post('/nonce')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .expect(200);
+      const r2 = await request(app)
+        .post('/nonce')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .expect(200);
+      expect(r1.body.c_nonce).to.be.a('string');
+      expect(r2.body.c_nonce).to.be.a('string');
+      expect(r1.body.c_nonce).to.not.equal(r2.body.c_nonce);
     });
   });
 
@@ -274,6 +464,14 @@ describe('OIDC4VCI V1.0 - Metadata Discovery Compliance', () => {
       const res = await request(app).post('/credential_deferred').send({});
       expect(res.status).to.equal(400);
       expect(res.body.error).to.equal('invalid_request');
+    });
+
+    it('POST /credential_deferred without Authorization MUST return 401 invalid_token when transaction_id is present', async () => {
+      const res = await request(app)
+        .post('/credential_deferred')
+        .send({ transaction_id: 'txn_requires_authorization' });
+      expect(res.status).to.equal(401);
+      expect(res.body.error).to.equal('invalid_token');
     });
 
     it('GET /credential_deferred SHOULD NOT be allowed (expect 404/405)', async () => {
@@ -637,7 +835,10 @@ describe('OIDC4VCI V1.0 - Metadata Discovery Compliance', () => {
             'ldp_vc',
             'vc+sd-jwt',
             'dc+sd-jwt',
-            'mso_mdoc'
+            'mso_mdoc',
+            // RFC001 / ETSI TS 119 472-3 credential format identifiers (§5.1, §7.7)
+            'vc+jwt',
+            'x509_attr',
           ]);
       });
     });
@@ -946,11 +1147,23 @@ describe('OIDC4VCI V1.0 - Metadata Discovery Compliance', () => {
         .get('/.well-known/openid-credential-issuer')
         .expect(200);
 
-      // batch_credential_endpoint was removed in draft-14
-      // Should log warning if present in config but not include in response
-      if (response.body.batch_credential_endpoint) {
-        console.warn('Warning: batch_credential_endpoint should not be in V1.0 metadata');
-      }
+      // OID4VCI 1.0 (draft-14+) removed batch_credential_endpoint.
+      // RFC001 is constrained to OID4VCI 1.0, so the field MUST NOT appear in
+      // the credential-issuer metadata response, regardless of what is present
+      // in the on-disk issuer config.
+      expect(response.body).to.not.have.property('batch_credential_endpoint');
+    });
+
+    it('RFC001 ETSI: issuer metadata MUST advertise vc+sd-jwt, vc+jwt, and x509_attr in at least one credential configuration each', async () => {
+      const response = await request(app)
+        .get('/.well-known/openid-credential-issuer')
+        .expect(200);
+
+      const configs = Object.values(response.body.credential_configurations_supported || {});
+      const formats = new Set(configs.map((c) => c && c.format).filter(Boolean));
+      expect(formats.has('vc+sd-jwt'), 'vc+sd-jwt').to.be.true;
+      expect(formats.has('vc+jwt'), 'vc+jwt').to.be.true;
+      expect(formats.has('x509_attr'), 'x509_attr').to.be.true;
     });
 
     it('MUST use authorization_servers (array) instead of authorization_server (string)', async () => {
@@ -1414,6 +1627,17 @@ describe('OIDC4VCI V1.0 - Authorization Details (RFC 9396) Requirements', () => 
       if (response.body.authorization_details_types_supported) {
         expect(response.body.authorization_details_types_supported).to.be.an('array');
       }
+    });
+
+    it('MUST advertise pre-authorized_grant_anonymous_access_supported: false (RFC001 P3-3)', async () => {
+      const response = await request(app)
+        .get('/.well-known/oauth-authorization-server')
+        .expect(200);
+
+      expect(response.body).to.have.property(
+        'pre-authorized_grant_anonymous_access_supported',
+        false,
+      );
     });
 
     it('MUST advertise openid_credential as supported authorization details type', async () => {
@@ -2954,12 +3178,17 @@ describe('OIDC4VCI V1.0 - c_nonce in Token Response', () => {
     });
 
     it('POST /token_endpoint (pre-authorized_code) should respond and MAY include c_nonce on success', async () => {
-      const res = await request(app)
-        .post('/token_endpoint')
-        .send({
-          grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
-          'pre-authorized_code': 'dummy-code'
-        });
+      // RFC001 §7.4: DPoP is mandatory at the token endpoint.
+      const dpopHeader = await makeTokenDpopHeader();
+      const wia = await makeTestWiaClientAssertionBody();
+      const res = await applyWiaOAuthHeadersMd(
+        request(app).post('/token_endpoint').set('DPoP', dpopHeader),
+        wia
+      ).send({
+        ...pickWiaBodyFieldsMd(wia),
+        grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
+        'pre-authorized_code': 'dummy-code'
+      });
 
       // During migration, accept varied outcomes; if 200, assert shape and optionally c_nonce
       expect([200, 400, 500]).to.include(res.status);
@@ -3357,15 +3586,19 @@ describe('OIDC4VCI V1.0 - c_nonce in Token Response', () => {
         .expect(200);
     });
 
-    it('POST /nonce should return fresh c_nonce and c_nonce_expires_in on success', async () => {
-      const res = await request(app).post('/nonce');
-      expect([200, 500]).to.include(res.status);
-      if (res.status === 200) {
-        expect(res.body).to.have.property('c_nonce');
-        expect(res.body).to.have.property('c_nonce_expires_in');
-      } else {
-        expect(res.body).to.have.property('error');
-      }
+    it('POST /nonce should return fresh c_nonce when authorized', async function () {
+      const cache = await import('../services/cacheServiceRedis.js');
+      if (!cache.client?.isReady) this.skip();
+      const accessToken = `md-refresh-${crypto.randomUUID()}`;
+      const sessionKey = `md-refresh-sess-${crypto.randomUUID()}`;
+      await cache.storePreAuthSession(sessionKey, { status: 'success', accessToken });
+
+      const res = await request(app)
+        .post('/nonce')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .expect(200);
+      expect(res.body).to.have.property('c_nonce');
+      expect(res.body).to.have.property('c_nonce_expires_in');
     });
     
     it('SHOULD allow c_nonce refresh without new access token', () => {
@@ -5632,9 +5865,20 @@ describe('OIDC4VCI V1.0 - OAuth Authorization Server Metadata Discovery', () => 
 
       if (response.body.grant_types_supported) {
         expect(response.body.grant_types_supported).to.include.members(
-          ['authorization_code']
+          [
+            'authorization_code',
+            'urn:ietf:params:oauth:grant-type:pre-authorized_code',
+          ]
         );
       }
+    });
+
+    it('MUST advertise only issuance response types in OAuth metadata', async () => {
+      const response = await request(app)
+        .get('/.well-known/oauth-authorization-server')
+        .expect(200);
+
+      expect(response.body).to.have.property('response_types_supported').that.deep.equals(['code']);
     });
   });
 });
@@ -5678,6 +5922,46 @@ describe('OIDC4VCI V1.0 - API-backed Endpoint Validations', () => {
     }
   });
 
+  describe('RFC001 P2-3 — eu-eaa-offer:// (API-backed)', () => {
+    it('GET /offer-code-sd-jwt with offer_scheme=eu_eaa prefixes deep link with eu-eaa-offer://', async function () {
+      this.timeout(10000);
+      if (!codeFlowRouter) {
+        this.skip();
+      }
+      const res = await request(app)
+        .get('/offer-code-sd-jwt')
+        .query({
+          sessionId: `eaa-code-${Date.now()}`,
+          credentialType: 'urn:eu.europa.ec.eudi:pid:1',
+          client_id_scheme: 'redirect_uri',
+          offer_scheme: 'eu_eaa',
+        })
+        .expect(200);
+
+      expect(res.body).to.have.property('deepLink');
+      expect(res.body.deepLink.startsWith('eu-eaa-offer://?')).to.equal(true);
+      expect(res.body.deepLink).to.include('credential_offer_uri=');
+    });
+
+    it('GET /offer-no-code with offer_scheme=eu_eaa prefixes deep link with eu-eaa-offer://', async function () {
+      this.timeout(10000);
+      if (!preAuthRouter) {
+        this.skip();
+      }
+      const res = await request(app)
+        .get('/offer-no-code')
+        .query({
+          sessionId: `eaa-pre-${Date.now()}`,
+          credentialType: 'urn:eu.europa.ec.eudi:pid:1',
+          offer_scheme: 'eu-eaa',
+        })
+        .expect(200);
+
+      expect(res.body).to.have.property('deepLink');
+      expect(res.body.deepLink.startsWith('eu-eaa-offer://?')).to.equal(true);
+    });
+  });
+
   describe('Authorization Server Metadata - PAR endpoint (API-backed)', () => {
     it('MUST include pushed_authorization_request_endpoint as absolute URL on same origin', async () => {
       const res = await request(app)
@@ -5700,7 +5984,9 @@ describe('OIDC4VCI V1.0 - API-backed Endpoint Validations', () => {
 
   describe('PAR endpoint (/par) availability (API-backed)', () => {
     it('POST /par should create a PAR request object with request_uri and expires_in', async () => {
+      const wia = await makeTestWiaClientAssertionBody({ oauthClientId: 'test-client' });
       const parBody = {
+        ...pickWiaBodyFieldsMd(wia),
         client_id: 'test-client',
         response_type: 'code',
         redirect_uri: 'openid4vp://',
@@ -5710,8 +5996,7 @@ describe('OIDC4VCI V1.0 - API-backed Endpoint Validations', () => {
         issuer_state: encodeURIComponent('test-session-123')
       };
 
-      const res = await request(app)
-        .post('/par')
+      const res = await applyWiaOAuthHeadersMd(request(app).post('/par'), wia)
         .send(parBody)
         .expect(201);
 
@@ -5727,42 +6012,191 @@ describe('OIDC4VCI V1.0 - API-backed Endpoint Validations', () => {
 
       const parEndpoint = new URL(meta.body.pushed_authorization_request_endpoint);
 
-      const res = await request(app)
-        .post(parEndpoint.pathname)
-        .send({ client_id: 'wallet', response_type: 'code', redirect_uri: 'openid4vp://' })
+      const wia = await makeTestWiaClientAssertionBody({ oauthClientId: 'wallet' });
+      const res = await applyWiaOAuthHeadersMd(
+        request(app).post(parEndpoint.pathname),
+        wia
+      )
+        .send({
+          ...pickWiaBodyFieldsMd(wia),
+          client_id: 'wallet',
+          response_type: 'code',
+          redirect_uri: 'openid4vp://',
+          code_challenge: 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM',
+          code_challenge_method: 'S256',
+        })
         .expect(201);
 
       expect(res.body).to.have.property('request_uri');
     });
+
+    it('POST /par MUST return invalid_request when code_challenge is missing (PKCE)', async () => {
+      const wia = await makeTestWiaClientAssertionBody({ oauthClientId: 'test-client' });
+      const res = await applyWiaOAuthHeadersMd(request(app).post('/par'), wia)
+        .send({
+          ...pickWiaBodyFieldsMd(wia),
+          client_id: 'test-client',
+          response_type: 'code',
+          redirect_uri: 'openid4vp://',
+          code_challenge_method: 'S256',
+        })
+        .expect(400);
+
+      expect(res.body).to.have.property('error', 'invalid_request');
+    });
+
+    it('POST /par MUST return invalid_request when code_challenge is missing (scope-only selection)', async () => {
+      const wia = await makeTestWiaClientAssertionBody({ oauthClientId: 'test-client' });
+      const res = await applyWiaOAuthHeadersMd(request(app).post('/par'), wia)
+        .send({
+          ...pickWiaBodyFieldsMd(wia),
+          client_id: 'test-client',
+          response_type: 'code',
+          redirect_uri: 'openid4vp://',
+          code_challenge_method: 'S256',
+          scope: 'urn:eu.europa.ec.eudi:pid:1',
+          issuer_state: encodeURIComponent('test-session-123'),
+        })
+        .expect(400);
+
+      expect(res.body).to.have.property('error', 'invalid_request');
+      expect(String(res.body.error_description)).to.match(/code_challenge/i);
+    });
+
+    it('POST /par MUST return invalid_request when code_challenge_method is plain (S256 only)', async () => {
+      const wia = await makeTestWiaClientAssertionBody({ oauthClientId: 'test-client' });
+      const res = await applyWiaOAuthHeadersMd(request(app).post('/par'), wia)
+        .send({
+          ...pickWiaBodyFieldsMd(wia),
+          client_id: 'test-client',
+          response_type: 'code',
+          redirect_uri: 'openid4vp://',
+          code_challenge: 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM',
+          code_challenge_method: 'plain',
+          scope: 'urn:eu.europa.ec.eudi:pid:1',
+          issuer_state: encodeURIComponent('test-session-123'),
+        })
+        .expect(400);
+
+      expect(res.body).to.have.property('error', 'invalid_request');
+      expect(String(res.body.error_description)).to.match(/plain|S256/i);
+    });
+
+    it('POST /par MUST return invalid_request when code_challenge_method is missing', async () => {
+      const wia = await makeTestWiaClientAssertionBody({ oauthClientId: 'test-client' });
+      const res = await applyWiaOAuthHeadersMd(request(app).post('/par'), wia)
+        .send({
+          ...pickWiaBodyFieldsMd(wia),
+          client_id: 'test-client',
+          response_type: 'code',
+          redirect_uri: 'openid4vp://',
+          code_challenge: 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM',
+          scope: 'urn:eu.europa.ec.eudi:pid:1',
+          issuer_state: encodeURIComponent('test-session-123'),
+        })
+        .expect(400);
+
+      expect(res.body).to.have.property('error', 'invalid_request');
+      expect(String(res.body.error_description)).to.match(/code_challenge_method|S256/i);
+    });
+
+    it('POST /par MUST return invalid_request when authorization_details omits type openid_credential', async () => {
+      const wia = await makeTestWiaClientAssertionBody({ oauthClientId: 'test-client' });
+      const res = await applyWiaOAuthHeadersMd(request(app).post('/par'), wia)
+        .send({
+          ...pickWiaBodyFieldsMd(wia),
+          client_id: 'test-client',
+          response_type: 'code',
+          redirect_uri: 'openid4vp://',
+          code_challenge: 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM',
+          code_challenge_method: 'S256',
+          issuer_state: encodeURIComponent('test-session-123'),
+          authorization_details: [{ credential_configuration_id: 'UniversityDegree_jwt' }],
+        })
+        .expect(400);
+
+      expect(res.body).to.have.property('error', 'invalid_request');
+      expect(String(res.body.error_description)).to.match(/openid_credential|type/i);
+    });
+
+    it('GET /authorize MUST return 400 invalid_request when PAR is required and request_uri is missing', async () => {
+      const meta = await request(app)
+        .get('/.well-known/oauth-authorization-server')
+        .expect(200);
+      expect(meta.body.require_pushed_authorization_requests).to.equal(true);
+
+      const res = await request(app)
+        .get('/authorize')
+        .query({
+          response_type: 'code',
+          issuer_state: 'iss',
+          state: 'st',
+          client_id: 'c',
+          redirect_uri: 'openid4vp://',
+          scope: 'urn:eu.europa.ec.eudi:pid:1',
+          code_challenge: 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM',
+          code_challenge_method: 'S256',
+        })
+        .expect(400);
+
+      expect(res.body.error).to.equal('invalid_request');
+      expect(res.body.error_description).to.be.a('string');
+    });
+
+    it('GET /authorize MUST return 400 invalid_request for unknown request_uri when PAR is required', async () => {
+      const res = await request(app)
+        .get('/authorize')
+        .query({ request_uri: 'urn:aegean.gr:00000000-0000-0000-0000-000000000099' })
+        .expect(400);
+
+      expect(res.body.error).to.equal('invalid_request');
+      expect(res.body.error_description).to.be.a('string');
+    });
   });
 
   describe('Nonce Endpoint (/nonce)', () => {
-    it('POST /nonce should respond (200 with c_nonce or 500 with server_error)', async () => {
-      const res = await request(app).post('/nonce');
-      expect([200, 500]).to.include(res.status);
-      if (res.status === 200) {
-        expect(res.body).to.have.property('c_nonce');
-        expect(res.body).to.have.property('c_nonce_expires_in');
-      } else {
-        expect(res.body).to.have.property('error');
-      }
+    it('POST /nonce without auth returns 401; with session returns c_nonce', async function () {
+      const unauth = await request(app).post('/nonce').expect(401);
+      expect(unauth.body).to.have.property('error', 'invalid_token');
+
+      const cache = await import('../services/cacheServiceRedis.js');
+      if (!cache.client?.isReady) this.skip();
+      const accessToken = `md-par-nonce-${crypto.randomUUID()}`;
+      const sessionKey = `md-par-sess-${crypto.randomUUID()}`;
+      await cache.storePreAuthSession(sessionKey, { status: 'success', accessToken });
+
+      const res = await request(app)
+        .post('/nonce')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .expect(200);
+      expect(res.body).to.have.property('c_nonce');
+      expect(res.body).to.have.property('c_nonce_expires_in');
     });
   });
 
   describe('Token Endpoint (/token_endpoint)', () => {
     it('POST /token_endpoint without required params should return invalid_request', async () => {
-      const res = await request(app).post('/token_endpoint').send({ grant_type: 'authorization_code' });
+      const wia = await makeTestWiaClientAssertionBody();
+      const res = await applyWiaOAuthHeadersMd(request(app).post('/token_endpoint'), wia).send({
+        ...pickWiaBodyFieldsMd(wia),
+        grant_type: 'authorization_code',
+      });
       expect(res.status).to.equal(400);
       expect(res.body.error).to.equal('invalid_request');
     });
 
     it('POST /token_endpoint with dummy pre-authorized code should return invalid_grant', async () => {
-      const res = await request(app)
-        .post('/token_endpoint')
-        .send({
-          grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
-          'pre-authorized_code': 'dummy-code',
-        });
+      // RFC001 §7.4: DPoP is mandatory at the token endpoint.
+      const dpopHeader = await makeTokenDpopHeader();
+      const wia = await makeTestWiaClientAssertionBody();
+      const res = await applyWiaOAuthHeadersMd(
+        request(app).post('/token_endpoint').set('DPoP', dpopHeader),
+        wia
+      ).send({
+        ...pickWiaBodyFieldsMd(wia),
+        grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
+        'pre-authorized_code': 'dummy-code',
+      });
       expect([400, 500]).to.include(res.status);
       // Until sessions are created, we expect invalid_grant or server_error depending on env setup
       if (res.status === 400) {
@@ -5791,8 +6225,11 @@ describe('OIDC4VCI V1.0 - API-backed Endpoint Validations', () => {
     it('POST /credential_deferred with missing/invalid transaction_id should return an error', async () => {
       const resMissing = await request(app).post('/credential_deferred').send({});
       expect(resMissing.status).to.equal(400);
-      const resInvalid = await request(app).post('/credential_deferred').send({ transaction_id: 'non-existent' });
-      expect([400, 500]).to.include(resInvalid.status);
+      const resNoAuth = await request(app)
+        .post('/credential_deferred')
+        .send({ transaction_id: 'non-existent' });
+      expect(resNoAuth.status).to.equal(401);
+      expect(resNoAuth.body).to.have.property('error', 'invalid_token');
     });
   });
 
@@ -5823,7 +6260,7 @@ describe('OIDC4VCI V1.0 - API-backed Endpoint Validations', () => {
         .set('Authorization', 'Bearer dummy')
         .send({
           credential_configuration_id: 'VerifiableIdCardJwtVc',
-          proofs: { jwt: jwtWithoutNonce }
+          proofs: { jwt: [jwtWithoutNonce] }
         });
 
       // Expected behavior per V1.0: 400 with fresh c_nonce in body
@@ -5842,7 +6279,7 @@ describe('OIDC4VCI V1.0 - API-backed Endpoint Validations', () => {
         .set('Authorization', 'Bearer dummy')
         .send({
           credential_configuration_id: 'VerifiableIdCardJwtVc',
-          proofs: { jwt: jwtWithExpiredNonce }
+          proofs: { jwt: [jwtWithExpiredNonce] }
         });
 
       // Expected behavior per V1.0: 400 with fresh c_nonce in body
@@ -6058,9 +6495,30 @@ describe('OIDC4VCI V1.0 - API-backed Endpoint Validations', () => {
   });
 
   describe('Deferred encryption override (API-backed)', () => {
-    it('POST /credential_deferred can supply new credential_response_encryption to override previous (expect 200/400/500)', async () => {
+    it('POST /credential_deferred can supply new credential_response_encryption to override previous (expect 200/400/500)', async function () {
+      const cache = await import('../services/cacheServiceRedis.js');
+      if (!cache.client?.isReady) {
+        this.skip();
+      }
+      const token = `meta-deferred-enc-${uuidv4()}`;
+      const sessionKey = `meta-deferred-enc-${uuidv4()}`;
+      const nowSec = Math.floor(Date.now() / 1000);
+      await cache.storeCodeFlowSession(sessionKey, {
+        status: 'pending',
+        requests: { accessToken: token },
+        transaction_id: 'txn_dummy',
+        isCredentialReady: true,
+        requestBody: {
+          credential_configuration_id: 'VerifiableIdCardJwtVc',
+          proofs: { jwt: ['eyJhbGci.header.payload.signature'] },
+        },
+        deferred_created_at: nowSec,
+        deferred_expires_at: nowSec + 900,
+      });
+
       const res = await request(app)
         .post('/credential_deferred')
+        .set('Authorization', `Bearer ${token}`)
         .send({
           transaction_id: 'txn_dummy',
           credential_response_encryption: {

@@ -193,8 +193,8 @@ export function validateAttestationClaimsAndExtractAttestedKeys(payload, specRef
 }
 
 /**
- * Holder binding for attestation proofs: cnf from attested key material (first attested key).
- * Multiple keys in attested_keys: issuance returns one credential bound to the first key (same pattern as single credential response).
+ * Holder binding helper for a single cnf from the first attested key (e.g. legacy callers).
+ * Multi-key issuance uses each distinct JWK in `attested_keys` (RFC001 P1-12).
  * @param {object[]} attestedKeys
  * @returns {{ jwk: object }}
  */

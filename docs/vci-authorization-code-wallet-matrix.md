@@ -61,8 +61,8 @@ The issuer metadata relevant to this flow is advertised in:
 | Wallet Invocation Scheme | `openid-credential-offer://` | `haip://` if requested on offer endpoints |
 | Wallet Auth at Token Endpoint | `public` works | OAuth client attestation is enforced for `/par` and `/token_endpoint` (unless validator returns `skip`) |
 | PKCE | required in practice for successful token redemption | challenge validated server-side during code redemption |
-| Token Type | bearer by default | `DPoP` if valid DPoP proof is supplied |
-| HAIP DPoP Policy | optional by default | can become mandatory for `authorization_code` if `HAIP_PROFILE_REQUIRE_DPOP_FOR_TOKEN=true` |
+| Token Type | always `DPoP` (sender-constrained via RFC 9449) | — no `Bearer` fallback |
+| DPoP Policy | mandatory for `authorization_code` and `urn:ietf:params:oauth:grant-type:pre-authorized_code` (RFC001 §7.4) | missing/invalid DPoP → `400 invalid_dpop_proof` |
 | Proof Container | `proofs` | legacy `proof` rejected |
 | Proof Type for Credential Request | `proofs.jwt` | also supports `proofs.attestation` (key-attestation+jwt) when credential config advertises `proof_types_supported.attestation` |
 | Proof Signing Alg | `ES256` | `ES256` only for PID JWT proof metadata |

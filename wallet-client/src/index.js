@@ -85,7 +85,9 @@ async function main() {
       alg: "ES256"
     });
   } catch (dpopError) {
-    console.warn("Failed to generate DPoP:", dpopError?.message);
+    // RFC001 §7.4 / RFC 9449: DPoP is mandatory at the token endpoint; the issuer
+    // will reject the exchange with 400 invalid_dpop_proof if this header is missing.
+    console.warn("Failed to generate DPoP (token exchange will be rejected by the issuer):", dpopError?.message);
   }
   
   // Generate WIA (Wallet Instance Attestation) for token request
@@ -127,7 +129,9 @@ async function main() {
 
   if (!c_nonce) {
     const nonceEndpoint = `${apiBase}/nonce`;
-    const nonceRes = await httpPostJson(nonceEndpoint, {});
+    const nonceRes = await httpPostJson(nonceEndpoint, {}, null, {
+      Authorization: `Bearer ${accessToken}`,
+    });
     if (!nonceRes.ok) {
       const err = await nonceRes.json().catch(() => ({}));
       throw new Error(`Nonce error ${nonceRes.status}: ${JSON.stringify(err)}`);
@@ -239,10 +243,36 @@ async function main() {
   if (credRes.status === 202) {
     //deferred issuance
     const { transaction_id } = await credRes.json();
+    const deferredUrl = `${apiBase}/credential_deferred`;
     const start = Date.now();
     while (Date.now() - start < argv["poll-timeout"]) {
       await sleep(argv["poll-interval"]);
-      const defRes = await httpPostJson(`${apiBase}/credential_deferred`, { transaction_id });
+      let deferredDpopJwt = null;
+      try {
+        if (
+          accessToken &&
+          dpopPrivateJwk &&
+          dpopPublicJwk &&
+          isDpopBoundAccessToken(tokenBody, accessToken)
+        ) {
+          deferredDpopJwt = await createDPoP({
+            privateJwk: dpopPrivateJwk,
+            publicJwk: dpopPublicJwk,
+            htu: deferredUrl,
+            htm: "POST",
+            ath: computeAthForDpop(accessToken),
+            alg: "ES256",
+          });
+        }
+      } catch (dpopDefErr) {
+        console.warn("Failed to generate DPoP for deferred poll:", dpopDefErr?.message);
+      }
+      const defRes = await httpPostJson(
+        deferredUrl,
+        { transaction_id },
+        deferredDpopJwt,
+        { Authorization: `Bearer ${accessToken}` },
+      );
       if (defRes.ok) {
         const body = await defRes.json();
         // store credential and key-binding material using preAuthorizedCode as session key
@@ -335,15 +365,15 @@ function parseCredentialOfferParam(value) {
 }
 
 async function promptTxCode(cfg) {
-  // Non-interactive default: generate a dummy numeric code if required; issuer currently does not validate tx_code server-side.
+  // Non-interactive default: generate a dummy numeric code if required; issuer enforces non-empty tx_code only (no value check).
   if (cfg?.input_mode === "numeric" && typeof cfg?.length === "number") {
     return "".padStart(cfg.length, "1");
   }
   return undefined;
 }
 
-async function httpPostJson(url, body, dpopHeader = null) {
-  const headers = { "content-type": "application/json" };
+async function httpPostJson(url, body, dpopHeader = null, extraHeaders = {}) {
+  const headers = { "content-type": "application/json", ...extraHeaders };
   if (dpopHeader) {
     headers["DPoP"] = dpopHeader;
   }

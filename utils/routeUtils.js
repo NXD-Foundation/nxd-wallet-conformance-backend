@@ -15,11 +15,12 @@ import {
   setSessionContext,
   clearSessionContext,
 } from "../services/cacheServiceRedis.js";
-import { createHash, createPublicKey } from "crypto";
+import { createHash, createPublicKey, X509Certificate } from "crypto";
 import base64url from "base64url";
 import jwt from "jsonwebtoken";
 import path from "path";
 import * as jose from "jose";
+import { assertCnfJwkIsPublicOnly } from "./oauthClientAttestation.js";
 
 const WUA_SPEC_REF =
   "TS3 Wallet Unit Attestation";
@@ -38,6 +39,46 @@ function withSpecRef(message, ...refs) {
 
 export const SERVER_URL = process.env.SERVER_URL || "http://localhost:3000";
 export const PROXY_PATH = process.env.PROXY_PATH || null;
+
+/**
+ * Public issuer / authorization-server base URL for security-sensitive checks:
+ * DPoP `htu`, proof JWT `aud`, access token `iss`, OAuth attestation audience, SD-JWT issuer.
+ *
+ * When `TRUST_FORWARDED_ISSUER_URL` is `true` and `req` is provided, derives the URL from
+ * `X-Forwarded-Proto` and `X-Forwarded-Host` (first hop) so clients behind a reverse proxy
+ * see the same origin as in metadata. **Only enable when the proxy strips/forges untrusted
+ * `Forwarded` headers.**
+ *
+ * @param {{ headers?: Record<string, unknown> }} [req] Express-style request
+ * @returns {string}
+ */
+export function getPublicIssuerBaseUrl(req) {
+  if (
+    req &&
+    process.env.TRUST_FORWARDED_ISSUER_URL === "true" &&
+    req.headers &&
+    typeof req.headers === "object"
+  ) {
+    const protoHeader = req.headers["x-forwarded-proto"];
+    const hostHeader = req.headers["x-forwarded-host"];
+    const protoRaw =
+      typeof protoHeader === "string"
+        ? protoHeader.split(",")[0].trim().toLowerCase()
+        : "";
+    const hostRaw =
+      typeof hostHeader === "string"
+        ? hostHeader.split(",")[0].trim()
+        : "";
+    if (
+      protoRaw &&
+      hostRaw &&
+      (protoRaw === "https" || protoRaw === "http")
+    ) {
+      return `${protoRaw}://${hostRaw}`;
+    }
+  }
+  return process.env.SERVER_URL || "http://localhost:3000";
+}
 
 export const DEFAULT_CREDENTIAL_TYPE = "VerifiablePortableDocumentA2SDJWT";
 export const DEFAULT_SIGNATURE_TYPE = "jwt";
@@ -75,8 +116,80 @@ export const TX_CODE_CONFIG = {
 export const URL_SCHEMES = {
   STANDARD: "openid-credential-offer://",
   HAIP: "haip://",
+  /** RFC001 §5 / §7.1 SHALL 13 — ETSI TS 119 472-3 same-device wallet invocation */
+  EU_EAA: "eu-eaa-offer://",
   OPENID4VP: "openid4vp://",
 };
+
+/**
+ * Resolve wallet deep-link scheme for credential offers from a query/body parameter.
+ * Use `offer_scheme` (preferred) or `url_scheme` on issuance offer routes.
+ *
+ * Accepted short names: `standard` | `openid` (default OID4VCI), `haip`, `eu_eaa` | `eu-eaa` | `eaa`.
+ * Full prefixes `openid-credential-offer://`, `haip://`, `eu-eaa-offer://` are recognized.
+ * Unknown values fall back to {@link URL_SCHEMES.STANDARD}.
+ *
+ * @param {string|undefined|null} raw
+ * @returns {string}
+ */
+export function resolveCredentialOfferUrlScheme(raw) {
+  if (raw === undefined || raw === null) return URL_SCHEMES.STANDARD;
+  const trimmed = String(raw).trim();
+  if (trimmed === "") return URL_SCHEMES.STANDARD;
+  const v = trimmed.toLowerCase();
+
+  if (v === "haip" || v.startsWith("haip://")) {
+    return URL_SCHEMES.HAIP;
+  }
+  if (
+    v === "eu_eaa" ||
+    v === "eu-eaa" ||
+    v === "eaa" ||
+    v === "eu_eaa_offer" ||
+    v === "eu-eaa-offer" ||
+    v.startsWith("eu-eaa-offer://")
+  ) {
+    return URL_SCHEMES.EU_EAA;
+  }
+  if (
+    v === "standard" ||
+    v === "openid" ||
+    v === "openid_credential_offer" ||
+    v.startsWith("openid-credential-offer://")
+  ) {
+    return URL_SCHEMES.STANDARD;
+  }
+  return URL_SCHEMES.STANDARD;
+}
+
+/**
+ * Read invocation scheme from an Express request: `offer_scheme` (query or JSON body)
+ * takes precedence over `url_scheme` (backward compatible with existing HAIP tests).
+ *
+ * @param {{ query?: object; body?: unknown }} req - Express-style request
+ * @returns {string}
+ */
+export function getCredentialOfferSchemeFromRequest(req) {
+  const q = req.query || {};
+  const b = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+  const offerQ = q.offer_scheme;
+  if (offerQ !== undefined && offerQ !== null && String(offerQ).trim() !== "") {
+    return resolveCredentialOfferUrlScheme(offerQ);
+  }
+  const offerB = b.offer_scheme;
+  if (offerB !== undefined && offerB !== null && String(offerB).trim() !== "") {
+    return resolveCredentialOfferUrlScheme(offerB);
+  }
+  const urlQ = q.url_scheme;
+  if (urlQ !== undefined && urlQ !== null && String(urlQ).trim() !== "") {
+    return resolveCredentialOfferUrlScheme(urlQ);
+  }
+  const urlB = b.url_scheme;
+  if (urlB !== undefined && urlB !== null && String(urlB).trim() !== "") {
+    return resolveCredentialOfferUrlScheme(urlB);
+  }
+  return URL_SCHEMES.STANDARD;
+}
 
 export const ERROR_MESSAGES = {
   // Common errors
@@ -93,8 +206,8 @@ export const ERROR_MESSAGES = {
   INVALID_RESPONSE_TYPE: "Invalid response_type",
   NO_CREDENTIALS_REQUESTED: "no credentials requested",
   PARSE_AUTHORIZATION_DETAILS_ERROR: "error parsing authorization details",
-  MISSING_RESPONSE_TYPE: "authorizationDetails missing response_type",
-  MISSING_CODE_CHALLENGE: "authorizationDetails missing code_challenge",
+  MISSING_RESPONSE_TYPE: "Authorization request missing response_type",
+  MISSING_CODE_CHALLENGE: "Authorization request missing code_challenge",
   PAR_REQUEST_NOT_FOUND: "ERROR: request_uri present in authorization endpoint, but no par request cached for request_uri",
   ISSUANCE_SESSION_NOT_FOUND: "issuance session not found",
   NO_JWT_PRESENTED: "no jwt presented",
@@ -818,28 +931,51 @@ export const createCredentialOfferResponse = async (credentialOffer, sessionId) 
 
 /**
  * Create credential offer configuration object
- * @param {string} credentialType - Credential type
+ * @param {string|string[]} credentialTypeOrIds - One credential configuration id, or several (multi-credential offer).
  * @param {string} sessionId - Session ID
  * @param {boolean} includeTxCode - Whether to include transaction code
  * @param {string} grantType - Grant type to use
  * @returns {Object} Credential offer configuration
  */
-export const createCredentialOfferConfig = (credentialType, sessionId, includeTxCode = false, grantType = "urn:ietf:params:oauth:grant-type:pre-authorized_code") => {
+export const createCredentialOfferConfig = (
+  credentialTypeOrIds,
+  sessionId,
+  includeTxCode = false,
+  grantType = "urn:ietf:params:oauth:grant-type:pre-authorized_code",
+) => {
+  const rawList = Array.isArray(credentialTypeOrIds)
+    ? credentialTypeOrIds
+    : [credentialTypeOrIds];
+  const ids = rawList
+    .filter((id) => id !== undefined && id !== null && String(id).trim() !== "")
+    .map((id) => String(id).trim());
+  if (ids.length === 0) {
+    throw new Error(
+      `${ERROR_MESSAGES.INVALID_CREDENTIAL_TYPE}: credential_configuration_ids must be non-empty`,
+    );
+  }
+
   const config = {
     credential_issuer: SERVER_URL,
-    credential_configuration_ids: [credentialType],
+    credential_configuration_ids: ids,
     grants: {
       [grantType]: {},
     },
   };
 
-  // For authorization code flow, use issuer_state
+  // OAuth scope is space-separated (RFC 6749). For multiple credential configurations,
+  // wallets using the scope-based authorize path need all values; authorization_details
+  // remains valid without scope (OID4VCI / RFC001 P3-4).
+  const scopeValue = ids.join(" ");
+
   if (grantType === "authorization_code") {
     config.grants[grantType].issuer_state = sessionId;
-    config.grants[grantType].scope = credentialType
+    config.grants[grantType].scope = scopeValue;
   } else {
-    // For pre-authorized code flow, use pre-authorized_code
     config.grants[grantType]["pre-authorized_code"] = sessionId;
+    if (ids.length > 1) {
+      config.grants[grantType].scope = scopeValue;
+    }
   }
 
   if (includeTxCode) {
@@ -1558,6 +1694,71 @@ export async function verifyWuaJwtSignature(wuaJwt, decodedHeader, issuerMetadat
 }
 
 /**
+ * JWK (or JWK derived from x5c) for verifying the WIA JWS. Optional issuer-config
+ * `wallet_instance_attestation_jwks`; otherwise header `jwk` or first `x5c` certificate.
+ * No Trusted List / `iss` policy — any cryptographically valid signature is accepted.
+ */
+export function resolveWiaVerificationJwk(decodedHeader, issuerMetadata) {
+  const jwks = issuerMetadata?.wallet_instance_attestation_jwks;
+  if (jwks?.keys?.length) {
+    const kid = decodedHeader?.kid;
+    if (kid) {
+      const match = jwks.keys.find((k) => k.kid === kid);
+      if (match) return match;
+    }
+    return jwks.keys[0];
+  }
+  if (decodedHeader?.jwk) return decodedHeader.jwk;
+  if (Array.isArray(decodedHeader?.x5c) && decodedHeader.x5c.length > 0) {
+    try {
+      const der = Buffer.from(decodedHeader.x5c[0], "base64");
+      const cert = new X509Certificate(der);
+      return cert.publicKey.export({ format: "jwk" });
+    } catch (e) {
+      throw new Error(
+        withSpecRef(
+          `WIA x5c certificate parsing failed: ${e?.message || e}`,
+          WUA_SPEC_REF,
+          OID4VCI_WALLET_ATTESTATION_SPEC_REF,
+        ),
+      );
+    }
+  }
+  throw new Error(
+    withSpecRef(
+      "Cannot verify WIA signature: configure wallet_instance_attestation_jwks or send WIA with jwk or x5c in the protected header",
+      WUA_SPEC_REF,
+      OID4VCI_WALLET_ATTESTATION_SPEC_REF,
+    ),
+  );
+}
+
+/**
+ * @param {string} wiaJwt
+ * @param {object} decodedHeader - jwt.decode(..., { complete: true }).header
+ * @param {object} [issuerMetadata] - issuer-config JSON root
+ */
+export async function verifyWiaJwtSignature(wiaJwt, decodedHeader, issuerMetadata = null) {
+  const meta = issuerMetadata ?? loadIssuerMetadataForWua();
+  const alg = decodedHeader?.alg || "ES256";
+  if (!alg) {
+    return { ok: false, error: withSpecRef("WIA JWT header missing alg", WUA_SPEC_REF, OID4VCI_WALLET_ATTESTATION_SPEC_REF) };
+  }
+  try {
+    const verificationJwk = resolveWiaVerificationJwk(decodedHeader, meta);
+    const key = await jose.importJWK(verificationJwk, alg);
+    await jose.jwtVerify(wiaJwt, key, { algorithms: [alg] });
+    return { ok: true };
+  } catch (e) {
+    const msg = e?.message || String(e);
+    return {
+      ok: false,
+      error: withSpecRef(`WIA signature verification failed: ${msg}`, WUA_SPEC_REF, OID4VCI_WALLET_ATTESTATION_SPEC_REF),
+    };
+  }
+}
+
+/**
  * Policy gate: is the WUA issuer (`iss` = Wallet Provider) trusted by this credential issuer?
  *
  * Stub: always returns true. Replace with Trusted List lookup, WP registry, allow-lists keyed by
@@ -1643,21 +1844,112 @@ export const validateWIA = async (wiaJwt, sessionId = null) => {
       };
     }
 
-    // TODO: Verify signature against Wallet Provider's JWKS
-    // The WIA SHALL be signed by the Wallet Provider
-    // This requires fetching the JWKS from the issuer (decoded.payload.iss)
-    // For now, we'll log the WIA but note that signature verification is pending
-    
+    const wiaClockTolerance = 120;
+    if (decoded.payload.nbf !== undefined && decoded.payload.nbf !== null) {
+      if (typeof decoded.payload.nbf !== "number" || !Number.isFinite(decoded.payload.nbf)) {
+        return {
+          valid: false,
+          error: withSpecRef(
+            "WIA JWT nbf must be a numeric Unix timestamp when present",
+            WUA_SPEC_REF,
+            OID4VCI_WALLET_ATTESTATION_SPEC_REF
+          ),
+        };
+      }
+      if (now + wiaClockTolerance < decoded.payload.nbf) {
+        return {
+          valid: false,
+          error: withSpecRef(
+            "WIA JWT is not yet valid (nbf)",
+            WUA_SPEC_REF,
+            OID4VCI_WALLET_ATTESTATION_SPEC_REF
+          ),
+        };
+      }
+    }
+
+    const cnf = decoded.payload.cnf;
+    if (!cnf || typeof cnf !== "object" || Array.isArray(cnf)) {
+      return {
+        valid: false,
+        error: withSpecRef(
+          "WIA JWT missing or invalid cnf claim",
+          WUA_SPEC_REF,
+          OID4VCI_WALLET_ATTESTATION_SPEC_REF
+        ),
+      };
+    }
+    const hasCnfJwk = cnf.jwk != null && typeof cnf.jwk === "object";
+    const hasCnfJkt = typeof cnf.jkt === "string" && cnf.jkt.trim().length > 0;
+    if (!hasCnfJwk && !hasCnfJkt) {
+      return {
+        valid: false,
+        error: withSpecRef(
+          "WIA JWT cnf must include a well-formed jwk and/or jkt",
+          WUA_SPEC_REF,
+          OID4VCI_WALLET_ATTESTATION_SPEC_REF
+        ),
+      };
+    }
+    if (hasCnfJwk) {
+      try {
+        assertCnfJwkIsPublicOnly(cnf.jwk);
+      } catch (e) {
+        return {
+          valid: false,
+          error: withSpecRef(
+            String(e?.message || e),
+            WUA_SPEC_REF,
+            OID4VCI_WALLET_ATTESTATION_SPEC_REF
+          ),
+        };
+      }
+    }
+    if (hasCnfJwk && hasCnfJkt) {
+      try {
+        const tp = await jose.calculateJwkThumbprint(cnf.jwk, "sha256");
+        if (tp !== cnf.jkt.trim()) {
+          return {
+            valid: false,
+            error: withSpecRef(
+              "WIA JWT cnf.jkt does not match cnf.jwk thumbprint",
+              WUA_SPEC_REF,
+              OID4VCI_WALLET_ATTESTATION_SPEC_REF
+            ),
+          };
+        }
+      } catch (e) {
+        return {
+          valid: false,
+          error: withSpecRef(
+            `WIA JWT cnf.jwk thumbprint could not be computed: ${e?.message || e}`,
+            WUA_SPEC_REF,
+            OID4VCI_WALLET_ATTESTATION_SPEC_REF
+          ),
+        };
+      }
+    }
+
+    const meta = loadIssuerMetadataForWua();
+    const sigResult = await verifyWiaJwtSignature(wiaJwt, decoded.header, meta);
+    if (!sigResult.ok) {
+      if (sessionId) {
+        await logError(sessionId, "WIA signature verification failed", { error: sigResult.error }).catch(() => {});
+      }
+      return { valid: false, error: sigResult.error };
+    }
+
     if (sessionId) {
-      const ttlInHours = decoded.payload.exp && decoded.payload.iat 
-        ? ((decoded.payload.exp - decoded.payload.iat) / 3600).toFixed(2)
-        : 'unknown';
-      await logInfo(sessionId, "WIA extracted and basic validation passed", {
+      const ttlInHours =
+        decoded.payload.exp && decoded.payload.iat
+          ? ((decoded.payload.exp - decoded.payload.iat) / 3600).toFixed(2)
+          : 'unknown';
+      await logInfo(sessionId, "WIA validated (structure + JWS signature; no WP trust list)", {
         wiaIssuer: decoded.payload.iss,
         wiaExp: decoded.payload.exp,
         wiaIat: decoded.payload.iat,
         ttlHours: ttlInHours,
-        signatureVerification: 'pending'
+        signatureVerification: 'verified',
       }).catch(() => {});
     }
 
@@ -1815,6 +2107,27 @@ export const extractWIAFromTokenRequest = (reqBody, reqHeaders) => {
 };
 
 /**
+ * Whether this credential configuration requires a device-bound `proofs.jwt` path per RFC001 §7.5.1:
+ * the proof JWT MUST carry a Wallet Unit Attestation in the protected header (`key_attestation`),
+ * and the proof signature MUST verify under WUA `attested_keys[0]`.
+ *
+ * Triggered when:
+ * - `proof_types_supported.jwt.key_attestation_required === true`, or
+ * - ETSI RFC001 PID profile: `vct` is the EUDI PID and `format` is `vc+sd-jwt`, `vc+jwt`, or `x509_attr`.
+ *
+ * @param {object} credConfig - entry from `credential_configurations_supported`
+ * @returns {boolean}
+ */
+export function credentialConfigRequiresJwtProofKeyAttestation(credConfig) {
+  if (!credConfig || typeof credConfig !== "object") return false;
+  if (credConfig.proof_types_supported?.jwt?.key_attestation_required === true) return true;
+  const vct = credConfig.vct;
+  if (vct !== "urn:eu.europa.ec.eudi:pid:1") return false;
+  const fmt = credConfig.format;
+  return fmt === "vc+sd-jwt" || fmt === "vc+jwt" || fmt === "x509_attr";
+}
+
+/**
  * Extracts WUA from credential request
  * WUA can be in proofs.attestation or in the header of proofs.jwt
  * 
@@ -1866,21 +2179,168 @@ export const extractWUAFromCredentialRequest = (requestBody) => {
  * @param {object} wuaPayload - Decoded WUA JWT payload (must have attested_keys array)
  * @returns {boolean}
  */
+function normProofKeyMaterialForMatch(jwk, proofPublicKeyJwk) {
+  if (!jwk || jwk.kty !== proofPublicKeyJwk?.kty) return null;
+  if (jwk.kty === "EC") {
+    return [jwk.kty, jwk.crv, jwk.x, jwk.y].filter(Boolean).join("|");
+  }
+  if (jwk.kty === "RSA") {
+    return [jwk.kty, jwk.n, jwk.e].filter(Boolean).join("|");
+  }
+  return JSON.stringify(jwk);
+}
+
 export function proofKeyMatchesWUAAttestedKeys(proofPublicKeyJwk, wuaPayload) {
   const attested = wuaPayload?.attested_keys;
   if (!Array.isArray(attested) || attested.length === 0) return false;
   const first = attested[0];
-  const norm = (jwk) => {
-    if (!jwk || jwk.kty !== proofPublicKeyJwk?.kty) return null;
-    if (jwk.kty === 'EC') {
-      return [jwk.kty, jwk.crv, jwk.x, jwk.y].filter(Boolean).join('|');
-    }
-    if (jwk.kty === 'RSA') {
-      return [jwk.kty, jwk.n, jwk.e].filter(Boolean).join('|');
-    }
-    return JSON.stringify(jwk);
-  };
+  const norm = (jwk) => normProofKeyMaterialForMatch(jwk, proofPublicKeyJwk);
   const proofNorm = norm(proofPublicKeyJwk);
   if (!proofNorm) return false;
   return norm(first) === proofNorm;
-} 
+}
+
+/**
+ * True if the proof signing JWK matches any entry in WUA `attested_keys` (RFC001 P1-12 / multi-key device-bound).
+ *
+ * @param {object} proofPublicKeyJwk
+ * @param {object} wuaPayload
+ * @returns {boolean}
+ */
+export function proofKeyMatchesAnyWUAAttestedKey(proofPublicKeyJwk, wuaPayload) {
+  const attested = wuaPayload?.attested_keys;
+  if (!Array.isArray(attested) || attested.length === 0) return false;
+  const norm = (jwk) => normProofKeyMaterialForMatch(jwk, proofPublicKeyJwk);
+  const proofNorm = norm(proofPublicKeyJwk);
+  if (!proofNorm) return false;
+  return attested.some((k) => norm(k) === proofNorm);
+}
+
+/** RFC 9396 / OID4VCI — credential entries in `authorization_details`. */
+export const OPENID_CREDENTIAL_AUTH_DETAILS_TYPE = "openid_credential";
+
+const VCI_1_0_SPEC_URL =
+  "https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html";
+
+function attachOAuthInvalidRequest(err) {
+  err.oauthErrorCode = "invalid_request";
+  err.errorCode = "invalid_request";
+  return err;
+}
+
+/**
+ * Resolve a credential identifier from one `openid_credential` authorization_details object
+ * (credential_configuration_id, vct/doctype, credential_definition.type, etc.).
+ *
+ * @param {object} data
+ * @returns {string|null}
+ */
+export function resolveCredentialIdentifierFromOpenidCredentialEntry(data) {
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    return null;
+  }
+
+  if (
+    data.credential_definition &&
+    data.credential_definition.type &&
+    Array.isArray(data.credential_definition.type) &&
+    data.credential_definition.type.length > 0
+  ) {
+    return data.credential_definition.type[0];
+  }
+
+  if (data.credential_configuration_id) {
+    return data.credential_configuration_id;
+  }
+
+  if (data.format) {
+    if (data.format === "vc+sd-jwt" && data.vct) {
+      return data.vct;
+    }
+    if (data.format === "mso_mdoc" && data.doctype) {
+      return data.doctype;
+    }
+  }
+
+  if (data.vct) {
+    return data.vct;
+  }
+
+  if (data.types) {
+    return data.types;
+  }
+
+  return null;
+}
+
+/**
+ * Non-empty array of objects, each `type: openid_credential`, each with a resolvable credential id.
+ * @throws {Error} with oauthErrorCode and errorCode `invalid_request`
+ */
+export function assertOpenidCredentialAuthorizationDetails(parsed) {
+  if (!Array.isArray(parsed) || parsed.length === 0) {
+    throw attachOAuthInvalidRequest(
+      new Error(
+        `authorization_details must be a non-empty JSON array. See ${VCI_1_0_SPEC_URL}`,
+      ),
+    );
+  }
+  for (let i = 0; i < parsed.length; i++) {
+    const entry = parsed[i];
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw attachOAuthInvalidRequest(
+        new Error(
+          `authorization_details[${i}] must be a JSON object. See ${VCI_1_0_SPEC_URL}`,
+        ),
+      );
+    }
+    if (entry.type !== OPENID_CREDENTIAL_AUTH_DETAILS_TYPE) {
+      const received =
+        entry.type === undefined || entry.type === null
+          ? "missing"
+          : String(entry.type);
+      throw attachOAuthInvalidRequest(
+        new Error(
+          `authorization_details[${i}].type must be '${OPENID_CREDENTIAL_AUTH_DETAILS_TYPE}' (RFC 9396 / OpenID4VCI). Received: '${received}'. See ${VCI_1_0_SPEC_URL}`,
+        ),
+      );
+    }
+    if (!resolveCredentialIdentifierFromOpenidCredentialEntry(entry)) {
+      throw attachOAuthInvalidRequest(
+        new Error(
+          `authorization_details[${i}] is missing a resolvable credential identifier (credential_configuration_id, vct, or equivalent). See ${VCI_1_0_SPEC_URL}`,
+        ),
+      );
+    }
+  }
+}
+
+/**
+ * Parse `authorization_details` from a URL query (encoded JSON string) or PAR body (string or JSON array).
+ * @throws {Error} with oauthErrorCode and errorCode `invalid_request` when JSON is invalid or not an array.
+ */
+export function parseAuthorizationDetailsParameterRaw(raw) {
+  if (raw === undefined || raw === null) return null;
+  if (Array.isArray(raw)) {
+    return raw;
+  }
+  if (typeof raw === "string") {
+    try {
+      return JSON.parse(decodeURIComponent(raw));
+    } catch (e) {
+      throw attachOAuthInvalidRequest(
+        new Error(
+          `Invalid authorization_details JSON: ${e.message}. See ${VCI_1_0_SPEC_URL}`,
+        ),
+      );
+    }
+  }
+  if (typeof raw === "object") {
+    throw attachOAuthInvalidRequest(
+      new Error(`authorization_details must be a JSON array. See ${VCI_1_0_SPEC_URL}`),
+    );
+  }
+  throw attachOAuthInvalidRequest(
+    new Error(`authorization_details has invalid type. See ${VCI_1_0_SPEC_URL}`),
+  );
+}

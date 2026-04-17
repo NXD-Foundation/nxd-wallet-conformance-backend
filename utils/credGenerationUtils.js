@@ -46,6 +46,8 @@ import {
   getLoyaltyCardSDJWTDataWithPayload,
 } from "../utils/credPayloadUtil.js";
 
+import { issueX509AttrCredentialWithDefaultKey } from "./issueX509AttrCredential.js";
+
 import {
   MDoc,
   Document,
@@ -474,7 +476,9 @@ export async function handleCredentialGenerationBasedOnFormat(
   const credentialProofKind = requestBody.credentialRequestProofKind || "jwt";
 
   let cnf;
-  if (credentialProofKind === "attestation") {
+  if (requestBody._overrideHolderCnf && typeof requestBody._overrideHolderCnf === "object") {
+    cnf = requestBody._overrideHolderCnf;
+  } else if (credentialProofKind === "attestation") {
     if (!requestBody._credentialBindingCnf) {
       throw new Error(
         "Credential binding missing for attestation proof (internal error)."
@@ -679,12 +683,10 @@ export async function handleCredentialGenerationBasedOnFormat(
     console.log("Credential issued (dc+sd-jwt): ", credential);
     return credential;
   } else if (format === "jwt_vc_json") {
-    // Legacy jwt_vc_json format — kept for backward compatibility but NOT DIIP v5 compliant
-    // DIIP v5 requires SD-JWT for securing W3C VCDM credentials (use vc+sd-jwt instead)
-    console.warn(
-      "WARNING: jwt_vc_json format is not DIIP v5 compliant. Use vc+sd-jwt for W3C VCDM credentials.",
+    // OID4VCI `jwt_vc_json` and RFC001 ETSI `vc+jwt` (normalized to this branch in sharedIssuanceFlows).
+    console.log(
+      "Issuing jwt_vc_json / ETSI vc+jwt (JSON-LD VC in JWT; for DIIP v5 SD-JWT VC prefer vc+sd-jwt).",
     );
-    console.log("Issuing a jwt_vc_json format credential (legacy)");
     const vcPayload = {
       "@context": ["https://www.w3.org/ns/credentials/v2"],
       type: ["VerifiableCredential", vct],
@@ -740,6 +742,13 @@ export async function handleCredentialGenerationBasedOnFormat(
       console.error("Error generating mDL with @auth0/mdl:", error);
       throw new Error(`Failed to generate mDL: ${error.message}`);
     }
+  } else if (format === "x509_attr") {
+    console.log("Issuing x509_attr (RFC 5755 Attribute Certificate, RFC001 ETSI format identifier)");
+    return issueX509AttrCredentialWithDefaultKey({
+      issuerUri: issuerIdentifier,
+      cnf,
+      claimsObject: credPayload.claims,
+    });
   } else {
     throw new Error(`Unsupported format: ${format}`);
   }
@@ -1246,6 +1255,7 @@ async function generateMdlCredentialWithAuth0Library(
 export async function handleCredentialGenerationBasedOnFormatDeferred(
   sessionObject,
   serverURL,
+  holderCnfOverride = null,
 ) {
   const resolvedServerURL =
     serverURL ?? process.env.SERVER_URL ?? "http://localhost:3000";
@@ -1260,7 +1270,9 @@ export async function handleCredentialGenerationBasedOnFormatDeferred(
   // Same cnf semantics as handleCredentialGenerationBasedOnFormat (jwt PoP vs attestation attested_keys).
   const credentialProofKindDeferred = requestBody.credentialRequestProofKind || "jwt";
   let cnf;
-  if (credentialProofKindDeferred === "attestation") {
+  if (holderCnfOverride && typeof holderCnfOverride === "object") {
+    cnf = holderCnfOverride;
+  } else if (credentialProofKindDeferred === "attestation") {
     if (!requestBody._credentialBindingCnf) {
       throw new Error(
         "Credential binding missing for attestation proof (internal error)."

@@ -5,8 +5,8 @@ import {
   getSessionId,
   getCredentialType,
   getSignatureType,
-  URL_SCHEMES,
   createCodeFlowSession,
+  getCredentialOfferSchemeFromRequest,
   createBaseSession,
   generateQRCode,
   createCodeFlowCredentialOfferResponse,
@@ -89,11 +89,7 @@ vciStandardRouter.get("/vci/offer", async (req, res) => {
       
       await storeCodeFlowSession(sessionId, sessionData);
 
-      // Allow caller to control wallet invocation scheme for authorization_code offers.
-      // Default: openid-credential-offer://
-      // If url_scheme=haip, use haip:// as required by HAIP profile.
-      const invocationScheme =
-        req.query.url_scheme === "haip" ? URL_SCHEMES.HAIP : URL_SCHEMES.STANDARD;
+      const invocationScheme = getCredentialOfferSchemeFromRequest(req);
 
       const credentialOffer = createCodeFlowCredentialOfferResponse(
         sessionId,
@@ -125,7 +121,10 @@ vciStandardRouter.get("/vci/offer", async (req, res) => {
         false, // isHaip
         internalSignatureType
       );
-      
+      if (txCodeRequired) {
+        sessionData.requireTxCode = true;
+      }
+
       await storePreAuthSession(sessionId, sessionData);
 
       // Determine endpoint path based on tx_code_required
@@ -133,10 +132,12 @@ vciStandardRouter.get("/vci/offer", async (req, res) => {
         ? "/credential-offer-tx-code"
         : "/credential-offer-no-code";
 
+      const invocationScheme = getCredentialOfferSchemeFromRequest(req);
       const credentialOffer = createPreAuthCredentialOfferUri(
         sessionId,
         credentialType,
-        endpointPath
+        endpointPath,
+        invocationScheme,
       );
 
       const response = await createCredentialOfferResponse(credentialOffer, sessionId);

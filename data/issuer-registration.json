@@ -1,0 +1,19 @@
+{
+  "_comment": "Placeholder registrar-provided registration information for RFC001 / ETSI TS 119 472-3 `issuer_info`. Replace this with the registrar-delivered dataset once an APTITUDE registrar is available. The `self_registered` flag SHOULD remain true for development/self-signed certificates so that wallets do not treat this as production trust material.",
+  "legal_name": "University of the Aegean",
+  "organization_identifier": "uaegean.gr",
+  "trade_name": "UAegean",
+  "country": "GR",
+  "jurisdiction": "GR",
+  "registrar": {
+    "name": "Self-registered (development)",
+    "identifier": "dev:rfc-issuer-v1",
+    "country": "GR"
+  },
+  "registered_on": "2026-04-01",
+  "homepage_uri": "https://uaegean.gr",
+  "logo_uri": null,
+  "policy_uri": null,
+  "terms_of_service_uri": null,
+  "self_registered": true
+}

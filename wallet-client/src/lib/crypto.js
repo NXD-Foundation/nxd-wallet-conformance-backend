@@ -168,6 +168,9 @@ export async function createWIA({ privateJwk, publicJwk, issuer, audience, alg =
     iat: now,
     exp: exp,
     jti: base64url(crypto.randomBytes(16)),
+    cnf: {
+      jwk: publicJwkWithoutPrivateMaterial(publicJwk),
+    },
   };
 
   const key = await importJWK(privateJwk, alg);

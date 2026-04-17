@@ -737,23 +737,24 @@ function makeTxCode(cfg) {
   return undefined;
 }
 
-async function httpPostJson(url, body, logSessionId) {
+async function httpPostJson(url, body, logSessionId, extraHeaders = {}) {
   const slog = logSessionId ? makeSessionLogger(logSessionId) : (() => {});
   const bodyString = JSON.stringify(body || {});
   const requestId = `req_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
-  
+  const headers = { "content-type": "application/json", ...extraHeaders };
+
   try { console.log("[http] POST JSON ->", url); } catch {}
-  try { 
-    slog("[HTTP] [REQUEST] POST JSON", { 
+  try {
+    slog("[HTTP] [REQUEST] POST JSON", {
       requestId,
       method: "POST",
-      url, 
-      headers: { "content-type": "application/json" },
-      body: body || {}
-    }); 
+      url,
+      headers: { "content-type": "application/json", hasAuthorization: Boolean(extraHeaders.Authorization) },
+      body: body || {},
+    });
   } catch {}
-  
-  const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: bodyString });
+
+  const res = await fetch(url, { method: "POST", headers, body: bodyString });
   
   // Clone the response so we can read it for logging without consuming the original
   const resClone = res.clone();
@@ -1008,7 +1009,9 @@ async function runPreAuthorizedIssuance({ apiBase, issuerMeta, configurationId, 
     });
     console.log("[preauth] DPoP generated for token request"); try { slog("[preauth] DPoP generated", { hasDPoP: !!dpopJwt }); } catch {}
   } catch (dpopError) {
-    console.warn("[preauth] Failed to generate DPoP:", dpopError?.message); try { slog("[preauth] DPoP generation failed", { error: dpopError?.message }); } catch {}
+    // RFC001 §7.4 / RFC 9449: DPoP is mandatory at the token endpoint; the issuer
+    // will reject the exchange with 400 invalid_dpop_proof if this header is missing.
+    console.warn("[preauth] Failed to generate DPoP (token exchange will be rejected by the issuer):", dpopError?.message); try { slog("[preauth] DPoP generation failed", { error: dpopError?.message }); } catch {}
   }
   
   // Generate WIA (Wallet Instance Attestation) for token request
@@ -1085,7 +1088,12 @@ async function runPreAuthorizedIssuance({ apiBase, issuerMeta, configurationId, 
   if (!c_nonce && issuerMeta.nonce_endpoint) {
     const nonceEndpoint = issuerMeta.nonce_endpoint;
     console.log("[preauth] nonceEndpoint=", nonceEndpoint); try { slog("[preauth] nonceEndpoint", { nonceEndpoint }); } catch {}
-    const nonceRes = await httpPostJson(nonceEndpoint, {}, logSessionId); try { slog("[preauth] nonce request", { endpoint: nonceEndpoint, status: nonceRes.status }); } catch {}
+    const nonceRes = await httpPostJson(
+      nonceEndpoint,
+      {},
+      logSessionId,
+      accessToken ? { Authorization: `Bearer ${accessToken}` } : {}
+    ); try { slog("[preauth] nonce request", { endpoint: nonceEndpoint, status: nonceRes.status }); } catch {}
     if (!nonceRes.ok) {
       const text = await nonceRes.text().catch(() => "");
       console.error("[preauth] nonce error", nonceRes.status, text);
@@ -1287,7 +1295,38 @@ async function runPreAuthorizedIssuance({ apiBase, issuerMeta, configurationId, 
     const deferredEndpoint = issuerMeta.credential_deferred_endpoint || `${apiBase}/credential_deferred`;
     while (Date.now() - start < timeout) {
       await sleep(interval);
-      const defRes = await httpPostJson(deferredEndpoint, { transaction_id }, logSessionId);
+      let deferredDpopJwtPre = null;
+      try {
+        if (
+          accessToken &&
+          dpopPrivateJwk &&
+          dpopPublicJwk &&
+          isDpopBoundAccessToken(tokenBody, accessToken)
+        ) {
+          deferredDpopJwtPre = await createDPoP({
+            privateJwk: dpopPrivateJwk,
+            publicJwk: dpopPublicJwk,
+            htu: deferredEndpoint,
+            htm: "POST",
+            ath: computeAthForDpop(accessToken),
+            alg: "ES256",
+          });
+        }
+      } catch (deferredDpopErr) {
+        console.warn("[preauth] Failed to generate DPoP for deferred poll:", deferredDpopErr?.message);
+        try {
+          slog("[preauth] DPoP for deferred poll failed", { error: deferredDpopErr?.message });
+        } catch {}
+      }
+      const defRes = await httpPostJson(
+        deferredEndpoint,
+        { transaction_id },
+        logSessionId,
+        {
+          Authorization: `Bearer ${accessToken}`,
+          ...(deferredDpopJwtPre ? { DPoP: deferredDpopJwtPre } : {}),
+        },
+      );
       console.log("[preauth] deferred poll ->", defRes.status); 
       try { slog("[preauth] deferred poll", { status: defRes.status }); } catch {}
       if (defRes.ok) {
@@ -1558,7 +1597,9 @@ async function runAuthorizationCodeIssuance({ apiBase, issuerMeta, configuration
     });
     console.log("[codeflow] DPoP generated for token request"); try { slog("[codeflow] DPoP generated", { hasDPoP: !!dpopJwt }); } catch {}
   } catch (dpopError) {
-    console.warn("[codeflow] Failed to generate DPoP:", dpopError?.message); try { slog("[codeflow] DPoP generation failed", { error: dpopError?.message }); } catch {}
+    // RFC001 §7.4 / RFC 9449: DPoP is mandatory at the token endpoint; the issuer
+    // will reject the exchange with 400 invalid_dpop_proof if this header is missing.
+    console.warn("[codeflow] Failed to generate DPoP (token exchange will be rejected by the issuer):", dpopError?.message); try { slog("[codeflow] DPoP generation failed", { error: dpopError?.message }); } catch {}
   }
   
   // Generate WIA (Wallet Instance Attestation) for token request
@@ -1622,7 +1663,12 @@ async function runAuthorizationCodeIssuance({ apiBase, issuerMeta, configuration
   } else if (issuerMeta.nonce_endpoint) {
     const nonceEndpoint = issuerMeta.nonce_endpoint;
     console.log("[codeflow] nonceEndpoint=", nonceEndpoint); try { slog("[codeflow] nonceEndpoint", { nonceEndpoint }); } catch {}
-    const nonceRes = await httpPostJson(nonceEndpoint, {}, logSessionId); try { slog("[codeflow] nonce request", { endpoint: nonceEndpoint, status: nonceRes.status }); } catch {}
+    const nonceRes = await httpPostJson(
+      nonceEndpoint,
+      {},
+      logSessionId,
+      accessToken ? { Authorization: `Bearer ${accessToken}` } : {}
+    ); try { slog("[codeflow] nonce request", { endpoint: nonceEndpoint, status: nonceRes.status }); } catch {}
     if (!nonceRes.ok) {
       const text = await nonceRes.text().catch(() => "");
       console.error("[codeflow] nonce error", nonceRes.status, text); try { slog("[codeflow] nonce error", { status: nonceRes.status, error: text }); } catch {}
@@ -1765,7 +1811,38 @@ async function runAuthorizationCodeIssuance({ apiBase, issuerMeta, configuration
     const deferredEndpoint = issuerMeta.credential_deferred_endpoint || `${apiBase}/credential_deferred`;
     while (Date.now() - start < timeout) {
       await sleep(interval);
-      const defRes = await httpPostJson(deferredEndpoint, { transaction_id }, logSessionId); 
+      let deferredDpopJwtCode = null;
+      try {
+        if (
+          accessToken &&
+          dpopPrivateJwk &&
+          dpopPublicJwk &&
+          isDpopBoundAccessToken(tokenBody, accessToken)
+        ) {
+          deferredDpopJwtCode = await createDPoP({
+            privateJwk: dpopPrivateJwk,
+            publicJwk: dpopPublicJwk,
+            htu: deferredEndpoint,
+            htm: "POST",
+            ath: computeAthForDpop(accessToken),
+            alg: "ES256",
+          });
+        }
+      } catch (deferredDpopErr) {
+        console.warn("[codeflow] Failed to generate DPoP for deferred poll:", deferredDpopErr?.message);
+        try {
+          slog("[codeflow] DPoP for deferred poll failed", { error: deferredDpopErr?.message });
+        } catch {}
+      }
+      const defRes = await httpPostJson(
+        deferredEndpoint,
+        { transaction_id },
+        logSessionId,
+        {
+          Authorization: `Bearer ${accessToken}`,
+          ...(deferredDpopJwtCode ? { DPoP: deferredDpopJwtCode } : {}),
+        },
+      );
       try { slog("[codeflow] deferred poll", { status: defRes.status }); } catch {}
       if (defRes.ok) {
         const defBodyText = await defRes.text().catch(() => "");

@@ -198,33 +198,50 @@ export async function getSessionAccessToken(token) {
   }
 }
 
-export async function getDeferredSessionTransactionId(transaction_id) {
+/**
+ * Resolve deferred issuance session by `transaction_id` (code flow or pre-auth store).
+ * @returns {Promise<{ sessionKey: string, flowType: 'code'|'pre-auth' } | null>}
+ */
+export async function resolveDeferredIssuanceContext(transaction_id) {
   try {
     if (!client.isReady) {
-      console.log("Redis not ready, skipping getDeferredSessionTransactionId");
+      console.log("Redis not ready, skipping resolveDeferredIssuanceContext");
       return null;
     }
-    const keys = await client.keys("code-flow-sessions:*"); // Get all session keys
-    for (const key of keys) {
-      const session = await client.get(key);
-      if (session) {
-        const parsedSession = JSON.parse(session);
-        if (
-          parsedSession.transaction_id &&
-          parsedSession.transaction_id == transaction_id
-        ) {
-          console.log(
-            `Found session key for transaction_id: ${transaction_id}`
-          );
-          return key.replace("code-flow-sessions:", ""); // Return the session key without the prefix
+    const scan = async (prefix, flowType) => {
+      const keys = await client.keys(`${prefix}*`);
+      for (const key of keys) {
+        const session = await client.get(key);
+        if (session) {
+          const parsedSession = JSON.parse(session);
+          if (
+            parsedSession.transaction_id &&
+            parsedSession.transaction_id == transaction_id
+          ) {
+            console.log(
+              `Found ${flowType} session key for transaction_id: ${transaction_id}`,
+            );
+            return {
+              sessionKey: key.replace(prefix, ""),
+              flowType,
+            };
+          }
         }
       }
-    }
-    console.log("No session found for transaction_id:", transaction_id);
-    return null;
+      return null;
+    };
+    const fromCode = await scan("code-flow-sessions:", "code");
+    if (fromCode) return fromCode;
+    return await scan("pre-auth-sessions:", "pre-auth");
   } catch (err) {
-    console.error("Error retrieving session key for access token:", err);
+    console.error("Error in resolveDeferredIssuanceContext:", err);
   }
+  return null;
+}
+
+export async function getDeferredSessionTransactionId(transaction_id) {
+  const ctx = await resolveDeferredIssuanceContext(transaction_id);
+  return ctx ? ctx.sessionKey : null;
 }
 
 export async function storeVPSession(sessionKey, sessionValue) {

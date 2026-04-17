@@ -202,7 +202,7 @@ The issuer/verifier service is built on **Express.js** and follows a modular rou
 - **`educationalRoutes.js`**: Education ID routes
 - **`paymentRoutes.js`**: Payment-specific routes
 - **`receiptsRoutes.js`**: Receipt credential routes
-- **`batchRequestRoutes.js`**: Batch credential request handling
+- **`multiCredentialOfferRoutes.js`**: Multi-credential **offer** helpers (produce a Credential Offer listing multiple `credential_configuration_ids`). Not a separate batch-credential endpoint — OID4VCI 1.0 / RFC001 remove `batch_credential_endpoint`; the wallet requests each credential from the standard `POST /credential` endpoint using `proofs.jwt[]`.
 - **`didweb.js`**: DID Web resolution routes
 - **`redirectUriRoutes.js`**: Redirect URI-based client identification routes
 
@@ -457,16 +457,21 @@ The implementation supports the **High Assurance Identity Profile (HAIP)** for e
 - **X.509 Certificate Signing**: HAIP flows support X.509 certificate-based credential signing (`signature_type=x509`)
 - **HAIP Credential Offers**: Credential offers generated with `haip://` scheme when `url_scheme=haip` is specified
 
-### HAIP DPoP & Token Endpoint Hardening
+### Sender-Constrained Access Tokens (DPoP) — always on
 
-- **Env: `HAIP_PROFILE_REQUIRE_DPOP_FOR_TOKEN`**:
-  - When set to `true`, the token endpoint **requires DPoP** for `authorization_code` exchanges.
-  - Missing DPoP header for `grant_type=authorization_code` → `400 invalid_dpop_proof`.
+Per **RFC001 §7.4**, **OpenID4VC-HAIP §5.3** and **RFC 9449**, access tokens issued by this issuer are **always sender-constrained via DPoP**. There is no `Bearer` fallback and no opt-in flag.
+
+- **DPoP is mandatory at the token endpoint** for both `authorization_code` and `urn:ietf:params:oauth:grant-type:pre-authorized_code` exchanges.
+  - Missing `DPoP` header → `400 invalid_dpop_proof`.
+  - Malformed or replayed DPoP proof → `400 invalid_dpop_proof` (see RFC 9449 §4).
+  - Successful token responses always carry `token_type: "DPoP"` and an access token with `cnf.jkt` matching the DPoP public key thumbprint.
 - **DPoP key binding to authorization code**:
   - Authorization-code sessions can store an expected DPoP thumbprint (`expectedDpopJkt`) derived from the key used at PAR/authorization time.
-  - Under HAIP profile, the token endpoint compares the incoming DPoP `cnf.jkt` with the stored `expectedDpopJkt`; mismatches yield `400 invalid_dpop_proof`.
+  - The token endpoint compares the incoming DPoP `cnf.jkt` with the stored `expectedDpopJkt`; mismatches yield `400 invalid_dpop_proof`.
 - **Integration with PAR**:
-  - PAR-issued authorization codes can be bound to a specific DPoP key, preventing redemption with a different key when HAIP hardening is enabled.
+  - PAR-issued authorization codes can be bound to a specific DPoP key, preventing redemption with a different key.
+
+> Previously this behavior was gated by the `HAIP_PROFILE_REQUIRE_DPOP_FOR_TOKEN` environment variable. That flag has been removed — DPoP is now always required because RFC001 mandates sender-constrained tokens and this implementation uses DPoP as the sender-constraining mechanism.
 
 ### HAIP Verifiable Presentation
 

@@ -1,13 +1,25 @@
 import express from "express";
 import fs from "fs";
+import * as jose from "jose";
 import { pemToJWK } from "../utils/cryptoUtils.js";
+import { pemToBase64Der } from "../utils/sdjwtUtils.js";
 import { PROXY_PATH } from "../utils/routeUtils.js";
+import { buildIssuerInfo } from "../utils/issuerInfo.js";
 const metadataRouter = express.Router();
 
 const serverURL = process.env.SERVER_URL || "http://localhost:3000";
 
 const privateKey = fs.readFileSync("./private-key.pem", "utf-8");
 const publicKeyPem = fs.readFileSync("./public-key.pem", "utf-8");
+const issuerMetadataSigningKey = fs.readFileSync(
+  "./x509EC/ec_private_pkcs8.key",
+  "utf-8",
+);
+const issuerMetadataSigningCertPem = fs.readFileSync(
+  "./x509EC/client_certificate.crt",
+  "utf-8",
+);
+const issuerMetadataSigningX5c = [pemToBase64Der(issuerMetadataSigningCertPem)];
 
 const issuerConfig = JSON.parse(
   fs.readFileSync("./data/issuer-config.json", "utf-8")
@@ -27,6 +39,31 @@ try {
 const defaultSigningKid = issuerConfigValues.default_signing_kid || "aegean#authentication-key";
 
 const jwks = pemToJWK(publicKeyPem, "public");
+
+// RFC001 §7.7 SHALL 8 / ETSI TS 119 472-3: build the `issuer_info` metadata
+// parameter once at module load. We intentionally do not fail module init if
+// the registration certificate is missing — the metadata response simply
+// omits `issuer_info` when no material is available.
+let issuerInfoPromise = buildIssuerInfo().catch((err) => {
+  console.warn("[issuer_info] Failed to build issuer_info:", err?.message);
+  return null;
+});
+
+function clientWantsSignedMetadata(req) {
+  const accept = String(req.headers.accept || "").toLowerCase();
+  return accept.includes("application/jwt");
+}
+
+async function signMetadataPayload(payload, typ) {
+  const importedKey = await jose.importPKCS8(issuerMetadataSigningKey, "ES256");
+  return await new jose.SignJWT(payload)
+    .setProtectedHeader({
+      alg: "ES256",
+      typ,
+      x5c: issuerMetadataSigningX5c,
+    })
+    .sign(importedKey);
+}
 
 
 /**
@@ -64,8 +101,30 @@ metadataRouter.get(
       };
     }
 
-    if (issuerConfig.batch_credential_endpoint) {
-      console.warn("Warning: batch_credential_endpoint is part of issuerConfig but removed from spec draft -14. Consider removing from data/issuer-config.json");
+    // OID4VCI 1.0 (draft-14+) removed `batch_credential_endpoint` from the issuer
+    // metadata. RFC001 is constrained to OID4VCI 1.0, so we MUST NOT advertise it —
+    // strip it from the outgoing metadata regardless of what `data/issuer-config.json`
+    // contains. Batch/multi-credential issuance is performed against the standard
+    // `POST /credential` endpoint using `proofs.jwt[]`.
+    if (Object.prototype.hasOwnProperty.call(issuerConfig, "batch_credential_endpoint")) {
+      delete issuerConfig.batch_credential_endpoint;
+    }
+
+    // RFC001 §7.7 SHALL 8 — attach `issuer_info` (registration certificate +
+    // registrar-provided registration information) when available.
+    const issuerInfo = await issuerInfoPromise;
+    if (issuerInfo) {
+      issuerConfig.issuer_info = issuerInfo;
+    } else if (Object.prototype.hasOwnProperty.call(issuerConfig, "issuer_info")) {
+      delete issuerConfig.issuer_info;
+    }
+
+    if (clientWantsSignedMetadata(req)) {
+      const signedMetadata = await signMetadataPayload(
+        issuerConfig,
+        "openid-credential-issuer-metadata+jwt",
+      );
+      return res.type("application/jwt").send(signedMetadata);
     }
 
     res.type("application/json").send(issuerConfig);

@@ -57,6 +57,7 @@ paymentRouter.get(["/issue-pwa-pre-auth"], async (req, res) => {
       persona: null,
       accessToken: null,
       isPID: false,
+      requireTxCode: true,
     });
   }
   let credentialOffer = `openid-credential-offer://?credential_offer_uri=${serverURL}/pwa-pre-auth-offer/${uuid}`;
