@@ -11,6 +11,7 @@ import {
   resolveVerifierX509ClientId,
   resolveVerifierResponseMode,
   resolveVerifierInfoFromRequest,
+  resolveMdocInvocationScheme,
 } from "../../utils/routeUtils.js";
 import {
   logInfo,
@@ -57,12 +58,14 @@ mdlRouter.get("/generateVPRequest", async (req, res) => {
     const jarAlg = req.query.jar_alg || CONFIG.DEFAULT_JAR_ALG;
     const clientId = resolveVerifierX509ClientId(req.query.client_id_scheme, { responseMode, jarAlg });
     const effectiveVerifierInfo = resolveVerifierInfoFromRequest(req, verifierInfo);
+    const invocationScheme = resolveMdocInvocationScheme(req.query.invocation_scheme);
     
     await logInfo(sessionId, "Starting mDL VP request generation", {
       endpoint: "/generateVPRequest",
       responseMode,
       clientId,
-      sessionId
+      sessionId,
+      invocationScheme,
     });
 
     const result = await generateVPRequest({
@@ -78,11 +81,13 @@ mdlRouter.get("/generateVPRequest", async (req, res) => {
       dcqlQuery: DEFAULT_MDL_DCQL_QUERY,
       usePostMethod: false, // GET method, no request_uri_method
       routePath: "/mdl/VPrequest",
+      invocationScheme,
     });
 
     await logInfo(sessionId, "mDL VP request generated successfully", {
       hasQR: !!result.qr,
-      deepLinkLength: result.deepLink?.length
+      deepLinkLength: result.deepLink?.length,
+      invocationScheme,
     });
     
     res.json(result);

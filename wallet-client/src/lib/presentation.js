@@ -93,8 +93,10 @@ function makeSessionLogger(sessionId) {
 function parseOpenId4VpDeepLink(deepLink) {
   console.log("[present] Parsing deep link:", deepLink);
   const url = new URL(deepLink);
-  if (url.protocol !== "openid4vp:")
-    throw new Error("Unsupported request scheme");
+  const supported = new Set(["openid4vp:", "mdoc-openid4vp:"]);
+  if (!supported.has(url.protocol)) {
+    throw new Error(`Unsupported request scheme: ${url.protocol}`);
+  }
   const requestUri = url.searchParams.get("request_uri");
   const clientId = url.searchParams.get("client_id");
   const method = url.searchParams.get("request_uri_method") || "get";
@@ -1392,7 +1394,7 @@ export async function resolveDeepLinkFromEndpoint(verifierBase, path) {
   if (body.request) {
     // No request_uri; not supported here
     throw new Error(
-      "Received inline request JWT; provide openid4vp deep link instead",
+      "Received inline request JWT; provide an openid4vp:// or mdoc-openid4vp:// deep link instead",
     );
   }
   throw new Error("Unexpected response from verifier when fetching VP request");

@@ -18,6 +18,7 @@ import {
   resolveVerifierX509ClientId,
   resolveVerifierResponseMode,
   resolveVerifierInfoFromRequest,
+  resolveMdocInvocationScheme,
 } from "../../utils/routeUtils.js";
 import {
   logInfo,
@@ -54,6 +55,7 @@ vpStandardRouter.use((req, res, next) => {
  * - request_uri_method: get | post
  * - response_mode: direct_post | direct_post.jwt
  * - tx_data: true | false
+ * - invocation_scheme: mdoc-openid4vp | openid4vp (only for credential_profile=mdl; default mdoc-openid4vp per RFC002)
  */
 vpStandardRouter.get("/vp/request", async (req, res) => {
   let sessionId;
@@ -126,6 +128,10 @@ vpStandardRouter.get("/vp/request", async (req, res) => {
       fs.readFileSync("./data/verifier-config.json", "utf-8")
     );
     const verifierInfo = resolveVerifierInfoFromRequest(req);
+    const invocationScheme =
+      credentialProfile === "mdl"
+        ? resolveMdocInvocationScheme(req.query.invocation_scheme)
+        : "openid4vp";
 
     // Determine client ID, private key, and kid based on client_id_scheme
     let clientId;
@@ -182,6 +188,7 @@ vpStandardRouter.get("/vp/request", async (req, res) => {
       transactionData,
       usePostMethod: requestUriMethod === "post",
       routePath,
+      invocationScheme,
     });
 
     logHttpResponse(slog, requestId, "/vp/request", 200, "OK", res.getHeaders(), result);

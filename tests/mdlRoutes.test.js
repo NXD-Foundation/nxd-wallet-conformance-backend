@@ -64,6 +64,17 @@ function resolveClientId(clientIdScheme, jarAlg = 'ES256') {
   return String(jarAlg).toUpperCase() === 'RS256' ? X509_HASH_RS256_CLIENT_ID : X509_HASH_CLIENT_ID;
 }
 
+/** Mirrors utils/routeUtils.resolveMdocInvocationScheme for this mock router */
+function resolveMdocInvocationSchemeForTest(raw) {
+  if (raw == null || raw === '') return 'mdoc-openid4vp';
+  const s = String(raw).trim().toLowerCase().replace(/:\/?\/?$/, '');
+  if (s === 'openid4vp') return 'openid4vp';
+  if (s === 'mdoc-openid4vp' || s === 'mdoc_openid4vp') return 'mdoc-openid4vp';
+  throw new Error(
+    `Invalid invocation_scheme for mDL. Received: '${raw}', expected 'mdoc-openid4vp' or 'openid4vp'`
+  );
+}
+
 // Create a test router that mimics the actual mdlRoutes behavior
 const testRouter = express.Router();
 
@@ -91,9 +102,9 @@ testRouter.get('/generateVPRequest', async (req, res) => {
       jar_alg: jarAlg,
     });
 
-    // Create the openid4vp:// URL (GET method, no request_uri_method)
+    const scheme = resolveMdocInvocationSchemeForTest(req.query.invocation_scheme);
     const requestUri = `http://localhost:3000/mdl/VPrequest/${uuid}`;
-    const vpRequest = `openid4vp://?request_uri=${encodeURIComponent(
+    const vpRequest = `${scheme}://?request_uri=${encodeURIComponent(
       requestUri
     )}&client_id=${encodeURIComponent(client_id)}`;
 
@@ -107,11 +118,15 @@ testRouter.get('/generateVPRequest', async (req, res) => {
     let mediaType = 'PNG';
     let encodedQR = imageDataURI.encode(await mockStreamToBuffer(code), mediaType);
     
-    res.json({
+    const payload = {
       qr: encodedQR,
       deepLink: vpRequest,
       sessionId: uuid,
-    });
+    };
+    if (scheme !== 'openid4vp') {
+      payload.invocationScheme = scheme;
+    }
+    res.json(payload);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -363,6 +378,7 @@ describe('MDL Routes', () => {
       expect(response.body.deepLink).to.not.include('client_id_scheme=');
       const storedSession = mockCacheService.storeVPSession.getCall(0).args[1];
       expect(storedSession).to.have.property('response_mode', STRICT_DEFAULT_RESPONSE_MODE);
+      expect(response.body).to.have.property('invocationScheme', 'mdoc-openid4vp');
     });
 
     it('should generate VP request with custom sessionId', async () => {
@@ -404,15 +420,25 @@ describe('MDL Routes', () => {
       expect(callArgs[1]).to.have.property('presentation_definition');
     });
 
-    it('should create OpenID4VP URL without request_uri_method (GET default)', async () => {
+    it('should create mdoc-openid4vp URL without request_uri_method (GET default)', async () => {
       const response = await request(app)
         .get('/mdl/generateVPRequest')
         .expect(200);
 
-      expect(response.body.deepLink).to.include('openid4vp://');
+      expect(response.body.deepLink).to.include('mdoc-openid4vp://');
       expect(response.body.deepLink).to.include('request_uri=');
       expect(response.body.deepLink).to.include('client_id=');
       expect(response.body.deepLink).to.not.include('request_uri_method=');
+    });
+
+    it('should allow openid4vp:// interop via invocation_scheme query param', async () => {
+      const response = await request(app)
+        .get('/mdl/generateVPRequest')
+        .query({ invocation_scheme: 'openid4vp' })
+        .expect(200);
+
+      expect(response.body.deepLink).to.include('openid4vp://');
+      expect(response.body).to.not.have.property('invocationScheme');
     });
   });
 

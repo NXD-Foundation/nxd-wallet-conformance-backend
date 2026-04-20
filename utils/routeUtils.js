@@ -230,6 +230,25 @@ export function getCredentialOfferSchemeFromRequest(req) {
   return URL_SCHEMES.STANDARD;
 }
 
+/**
+ * Wallet invocation scheme for ISO/IEC 18013-7 remote mdoc (RFC002, VP-CHECK-13).
+ * Defaults to `mdoc-openid4vp://`. Pass `invocation_scheme=openid4vp` for generic OpenID4VP interop.
+ *
+ * @param {string|null|undefined} raw - Query/body value (e.g. from `req.query.invocation_scheme`)
+ * @returns {"mdoc-openid4vp"|"openid4vp"}
+ */
+export function resolveMdocInvocationScheme(raw) {
+  if (raw == null || raw === "") {
+    return "mdoc-openid4vp";
+  }
+  const s = String(raw).trim().toLowerCase().replace(/:\/?\/?$/, "");
+  if (s === "openid4vp") return "openid4vp";
+  if (s === "mdoc-openid4vp" || s === "mdoc_openid4vp") return "mdoc-openid4vp";
+  throw new Error(
+    `Invalid invocation_scheme for mDL. Received: '${raw}', expected 'mdoc-openid4vp' or 'openid4vp'`
+  );
+}
+
 export const ERROR_MESSAGES = {
   // Common errors
   SESSION_CREATION_FAILED: "Failed to create session",
@@ -1479,6 +1498,7 @@ export async function generateVPRequest(params) {
     cs03Oob = false,
     cs03CallbackToken = null,
     verifierInfo = CONFIG.DEFAULT_VERIFIER_INFO,
+    invocationScheme = "openid4vp",
   } = params;
 
   await logInfo(sessionId, "Starting VP request generation in routeUtils", {
@@ -1490,7 +1510,8 @@ export async function generateVPRequest(params) {
     cs03Signing,
     cs03Oob,
     usePostMethod,
-    routePath
+    routePath,
+    invocationScheme,
   });
 
   const nonce = generateNonce(CONFIG.DEFAULT_NONCE_LENGTH);
@@ -1586,17 +1607,25 @@ export async function generateVPRequest(params) {
 
   // Create OpenID4VP request URL
   const requestUri = `${serverURL}${routePath}/${sessionId}`;
-  const vpRequest = createOpenID4VPRequestUrl(requestUri, clientId, usePostMethod);
+  const vpRequest = createOpenID4VPRequestUrl(requestUri, clientId, usePostMethod, {
+    scheme: invocationScheme,
+  });
   
   await logDebug(sessionId, "Created OpenID4VP request URL", {
     requestUri,
+    invocationScheme,
     vpRequest: vpRequest.substring(0, 100) + "..."
   });
 
   // Generate QR code
   const qrCode = await generateQRCode(vpRequest, sessionId);
 
-  const response = createVPRequestResponse(qrCode, vpRequest, sessionId);
+  const response = {
+    ...createVPRequestResponse(qrCode, vpRequest, sessionId),
+    ...(invocationScheme && invocationScheme !== "openid4vp"
+      ? { invocationScheme }
+      : {}),
+  };
   await logInfo(sessionId, "VP request generation completed successfully", {
     hasQrCode: !!response.qr,
     deepLinkLength: response.deepLink?.length
@@ -1734,15 +1763,29 @@ export function createTransactionData(presentationDefinitionOrDcqlQuery) {
 }
 
 /**
- * Create an OpenID4VP request URL
- * @param {string} requestUri - The request URI
- * @param {string} clientId - The client ID
- * @param {boolean} usePostMethod - Whether to use POST method
- * @returns {string} - The OpenID4VP request URL
+ * Create a wallet invocation URL for OpenID4VP (same-device).
+ * @param {string} requestUri - Absolute `request_uri` the wallet will fetch
+ * @param {string} clientId - Verifier `client_id`
+ * @param {boolean} usePostMethod - Append `request_uri_method=post` when true
+ * @param {{ scheme?: string }} [options] - `scheme`: `openid4vp` (default) or `mdoc-openid4vp` (ISO mdoc track)
+ * @returns {string}
  */
-export function createOpenID4VPRequestUrl(requestUri, clientId, usePostMethod = false) {
-  const baseUrl = `openid4vp://?request_uri=${encodeURIComponent(requestUri)}&client_id=${encodeURIComponent(clientId)}`;
-  return usePostMethod ? `${baseUrl}&request_uri_method=post` : baseUrl;
+export function createOpenID4VPRequestUrl(requestUri, clientId, usePostMethod = false, options = {}) {
+  const rawScheme = options.scheme != null ? String(options.scheme) : "openid4vp";
+  const normalized = rawScheme.trim().toLowerCase().replace(/:\/?\/?$/, "");
+  let schemeName;
+  if (normalized === "openid4vp") {
+    schemeName = "openid4vp";
+  } else if (normalized === "mdoc-openid4vp" || normalized === "mdoc_openid4vp") {
+    schemeName = "mdoc-openid4vp";
+  } else {
+    throw new Error(
+      `Unsupported OpenID4VP wallet invocation scheme: '${options.scheme}'. Expected 'openid4vp' or 'mdoc-openid4vp'.`
+    );
+  }
+  const query = `?request_uri=${encodeURIComponent(requestUri)}&client_id=${encodeURIComponent(clientId)}`;
+  const withMethod = usePostMethod ? `${query}&request_uri_method=post` : query;
+  return `${schemeName}://${withMethod}`;
 }
 
 /**
