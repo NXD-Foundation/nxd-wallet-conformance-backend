@@ -108,8 +108,10 @@ export const CLIENT_METADATA = {
   },
 };
 
-function isVerifierConfigPath(clientMetadataPath) {
-  return path.basename(clientMetadataPath || "") === "verifier-config.json";
+/** Primary + mDL verifier client-metadata JSON filenames (receive client_metadata_uri). */
+function isVerifierConfigBundlePath(clientMetadataPath) {
+  const b = path.basename(clientMetadataPath || "");
+  return b === "verifier-config.json" || b === "verifier-config-mdl.json";
 }
 
 export function hasEncryptionJwk(clientMetadata) {
@@ -142,6 +144,121 @@ export function validateVerifierEncryptionConfig(clientMetadata, clientMetadataP
   }
 }
 
+/** Well-known path for RFC002 §8.4 OpenID Verifier metadata. */
+export const OPENID_VERIFIER_METADATA_WELL_KNOWN_PATH =
+  "/.well-known/openid-verifier-metadata";
+
+/**
+ * Add {@link OPENID_VERIFIER_METADATA_WELL_KNOWN_PATH} URL so wallets can fetch published verifier metadata.
+ * @param {object} metadata - Parsed verifier client metadata object
+ * @param {string} [serverURL] - Verifier base URL (trailing slash stripped)
+ * @returns {object}
+ */
+export function attachVerifierClientMetadataUri(metadata, serverURL = SERVER_URL) {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return metadata;
+  }
+  const base = String(serverURL ?? SERVER_URL).replace(/\/$/, "");
+  return {
+    ...metadata,
+    client_metadata_uri: `${base}${OPENID_VERIFIER_METADATA_WELL_KNOWN_PATH}`,
+  };
+}
+
+function stripPrivateJwkMaterial(jwk) {
+  if (!jwk || typeof jwk !== "object" || Array.isArray(jwk)) return jwk;
+  const out = { ...jwk };
+  for (const sk of ["d", "p", "q", "dp", "dq", "qi", "oth"]) {
+    if (sk in out) delete out[sk];
+  }
+  return out;
+}
+
+function stripPrivateJwksKeys(keys) {
+  if (!Array.isArray(keys)) return [];
+  return keys.map(stripPrivateJwkMaterial);
+}
+
+function collectVerifierMetadataSigningJwks() {
+  const candidates = [
+    { rel: "x509/client_certificate.crt", kid: "verifier-x509-leaf" },
+    { rel: "public-key.pem", kid: "verifier-pem-spki" },
+  ];
+  const out = [];
+  for (const { rel, kid } of candidates) {
+    try {
+      const abs = path.resolve(process.cwd(), rel);
+      if (!fs.existsSync(abs)) continue;
+      const pem = fs.readFileSync(abs, "utf8");
+      const jwk = createPublicKey(pem).export({ format: "jwk" });
+      out.push(
+        stripPrivateJwkMaterial({
+          ...jwk,
+          kid,
+          use: "sig",
+          alg: "ES256",
+        })
+      );
+    } catch {
+      /* optional material */
+    }
+  }
+  return out;
+}
+
+function mergeVerifierPublicJwks(encKeys, signingKeys) {
+  const byKid = new Map();
+  for (const k of encKeys) {
+    if (!k || typeof k !== "object") continue;
+    const kid =
+      typeof k.kid === "string" && k.kid ? k.kid : `_anon_${byKid.size}`;
+    if (!byKid.has(kid)) byKid.set(kid, stripPrivateJwkMaterial(k));
+  }
+  for (const k of signingKeys) {
+    if (!k?.kid) continue;
+    if (!byKid.has(k.kid)) byKid.set(k.kid, k);
+  }
+  return [...byKid.values()];
+}
+
+/**
+ * RFC002 §8.4 — merged verifier metadata: `data/verifier-config.json` fields (minus inline jwks)
+ * plus `verifier_info` from {@link loadVerifierInfo} and a merged JWKS (encryption keys + public signing keys only).
+ *
+ * @param {{ serverURL?: string; verifierConfigPath?: string }} [options]
+ * @returns {Record<string, unknown>}
+ */
+export function buildOpenIdVerifierMetadataDocument(options = {}) {
+  const verifierConfigPath =
+    options.verifierConfigPath ||
+    path.join(process.cwd(), "data/verifier-config.json");
+  const raw = JSON.parse(fs.readFileSync(verifierConfigPath, "utf8"));
+  validateVerifierEncryptionConfig(raw, verifierConfigPath);
+
+  const { jwks: fileJwks, ...configRest } = raw;
+  const encKeys = stripPrivateJwksKeys(fileJwks?.keys || []);
+  const signingKeys = collectVerifierMetadataSigningJwks();
+  const keys = mergeVerifierPublicJwks(encKeys, signingKeys);
+  const verifierInfo = loadVerifierInfo() || {};
+
+  return {
+    ...configRest,
+    verifier_info: verifierInfo,
+    jwks: { keys },
+  };
+}
+
+/**
+ * Load primary verifier-config.json, validate encryption material, attach client_metadata_uri.
+ * @param {string} [serverURL]
+ */
+export function loadVerifierClientMetadataForRequests(serverURL = SERVER_URL) {
+  const clientMetadataPath = path.join(process.cwd(), "data/verifier-config.json");
+  const clientMetadata = JSON.parse(fs.readFileSync(clientMetadataPath, "utf8"));
+  validateVerifierEncryptionConfig(clientMetadata, clientMetadataPath);
+  return attachVerifierClientMetadataUri(clientMetadata, serverURL);
+}
+
 export function resolveVerifierResponseMode(rawResponseMode, strictDefault = false) {
   return rawResponseMode || (strictDefault ? "direct_post.jwt" : CONFIG.DEFAULT_RESPONSE_MODE);
 }
@@ -158,6 +275,8 @@ export const URL_SCHEMES = {
   /** RFC001 §5 / §7.1 SHALL 13 — ETSI TS 119 472-3 same-device wallet invocation */
   EU_EAA: "eu-eaa-offer://",
   OPENID4VP: "openid4vp://",
+  /** RFC002 / ETSI — same-device authorization request (VP-CHECK-17) */
+  EU_EAAP: "eu-eaap://",
 };
 
 /**
@@ -246,6 +365,27 @@ export function resolveMdocInvocationScheme(raw) {
   if (s === "mdoc-openid4vp" || s === "mdoc_openid4vp") return "mdoc-openid4vp";
   throw new Error(
     `Invalid invocation_scheme for mDL. Received: '${raw}', expected 'mdoc-openid4vp' or 'openid4vp'`
+  );
+}
+
+/**
+ * Same-device wallet URL scheme for PID / non-mDL OpenID4VP requests.
+ * When `etsiProfile` is true (GET `/vp/request?profile=etsi`), defaults to {@link URL_SCHEMES.EU_EAAP}
+ * per ETSI-aligned authorization-endpoint invocation (VP-CHECK-17). Use `openid4vp` explicitly for generic interop.
+ *
+ * @param {string|null|undefined} raw - `invocation_scheme` or `scheme` query value
+ * @param {boolean} [etsiProfile=false] - Whether the request uses `profile=etsi`
+ * @returns {"openid4vp"|"eu-eaap"}
+ */
+export function resolvePidVpInvocationScheme(raw, etsiProfile = false) {
+  if (raw == null || String(raw).trim() === "") {
+    return etsiProfile ? "eu-eaap" : "openid4vp";
+  }
+  const s = String(raw).trim().toLowerCase().replace(/:\/?\/?$/, "");
+  if (s === "openid4vp") return "openid4vp";
+  if (s === "eu-eaap" || s === "eu_eaap") return "eu-eaap";
+  throw new Error(
+    `Invalid invocation_scheme for this VP request. Received: '${raw}', expected 'openid4vp' or 'eu-eaap'`
   );
 }
 
@@ -718,7 +858,7 @@ export function processCs03PresentationResponse(vpTokenRaw, options = {}) {
   if (vpTokenRaw === undefined || vpTokenRaw === null) {
     return {
       ok: false,
-      error: "invalid_request",
+      error: "malformed_response",
       error_description: "vp_token required for CS-03 signing flow",
     };
   }
@@ -728,7 +868,7 @@ export function processCs03PresentationResponse(vpTokenRaw, options = {}) {
     if (!vpTokenRaw.trim().startsWith("{")) {
       return {
         ok: false,
-        error: "invalid_request",
+        error: "malformed_response",
         error_description: "vp_token must be a JSON object for CS-03",
       };
     }
@@ -737,7 +877,7 @@ export function processCs03PresentationResponse(vpTokenRaw, options = {}) {
     } catch (e) {
       return {
         ok: false,
-        error: "invalid_request",
+        error: "malformed_response",
         error_description: `vp_token JSON parse failed: ${e.message}`,
       };
     }
@@ -746,7 +886,7 @@ export function processCs03PresentationResponse(vpTokenRaw, options = {}) {
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     return {
       ok: false,
-      error: "invalid_request",
+      error: "malformed_response",
       error_description: "vp_token must be a JSON object for CS-03",
     };
   }
@@ -757,7 +897,7 @@ export function processCs03PresentationResponse(vpTokenRaw, options = {}) {
   if (unexpectedIds.length > 0) {
     return {
       ok: false,
-      error: "invalid_request",
+      error: "malformed_response",
       error_description: `vp_token contains unexpected credential ids for CS-03: ${unexpectedIds.join(", ")}`,
     };
   }
@@ -766,7 +906,7 @@ export function processCs03PresentationResponse(vpTokenRaw, options = {}) {
   if (missingIds.length > 0) {
     return {
       ok: false,
-      error: "invalid_request",
+      error: "malformed_response",
       error_description: `vp_token missing expected credential ids for CS-03: ${missingIds.join(", ")}`,
     };
   }
@@ -777,7 +917,7 @@ export function processCs03PresentationResponse(vpTokenRaw, options = {}) {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
       return {
         ok: false,
-        error: "invalid_request",
+        error: "malformed_response",
         error_description: `CS-03 credential response for '${credId}' must be a JSON object`,
       };
     }
@@ -789,7 +929,7 @@ export function processCs03PresentationResponse(vpTokenRaw, options = {}) {
       if (!isEmptyObject) {
         return {
           ok: false,
-          error: "invalid_request",
+          error: "malformed_response",
           error_description: `CS-03 credential response for '${credId}' must be empty when responseURI is used`,
         };
       }
@@ -803,7 +943,7 @@ export function processCs03PresentationResponse(vpTokenRaw, options = {}) {
     if (!hasQes) {
       return {
         ok: false,
-        error: "invalid_request",
+        error: "malformed_response",
         error_description: `CS-03 credential response for '${credId}' must include qes when responseURI is not used`,
       };
     }
@@ -812,7 +952,7 @@ export function processCs03PresentationResponse(vpTokenRaw, options = {}) {
     if (!qesValidation.ok) {
       return {
         ok: false,
-        error: "invalid_request",
+        error: "malformed_response",
         error_description: `Invalid qes response for '${credId}': ${qesValidation.error}`,
       };
     }
@@ -1359,6 +1499,67 @@ export const createErrorResponse = (error, description, status = 500, sessionId 
 };
 
 /**
+ * RFC002 §8.3.4 — verifier-facing error codes (OpenID4VP presentation error taxonomy).
+ * Replaces ad-hoc verifier codes (`invalid_request`, `verification_failed`, `claims_mismatch`).
+ */
+export const VerifierRfc002Errors = Object.freeze({
+  INVALID_PRESENTATION: "invalid_presentation",
+  MALFORMED_RESPONSE: "malformed_response",
+  USER_CANCELLATION: "user_cancellation",
+  EXPIRED_REQUEST: "expired_request",
+  UNSUPPORTED_CREDENTIAL_FORMAT: "unsupported_credential_format",
+  MISSING_REQUIRED_PROOF: "missing_required_proof",
+  FAILED_CORRELATION: "failed_correlation",
+  FAILED_VALIDATION: "failed_validation",
+  SERVER_ERROR: "server_error",
+});
+
+/**
+ * @param {string} errorCode
+ * @param {string} errorDescription
+ * @param {Record<string, unknown>} [extra] — e.g. `{ sub_error: "claims_mismatch" }` for failed_validation
+ * @returns {Record<string, unknown>}
+ */
+export function verifierRfc002ErrorBody(errorCode, errorDescription, extra = {}) {
+  const body = {
+    error: errorCode,
+    error_description: errorDescription == null ? "" : String(errorDescription),
+    ...extra,
+  };
+  for (const k of Object.keys(body)) {
+    if (body[k] === undefined) delete body[k];
+  }
+  return body;
+}
+
+/**
+ * Send a §8.3.4-shaped JSON error from verifier presentation endpoints.
+ * @param {import("express").Response} res
+ * @param {number} httpStatus
+ * @param {string} errorCode — use {@link VerifierRfc002Errors}
+ * @param {string} errorDescription
+ * @param {Record<string, unknown>} [extra]
+ */
+export function sendVerifierRfc002Error(res, httpStatus, errorCode, errorDescription, extra = {}) {
+  res.status(httpStatus).json(verifierRfc002ErrorBody(errorCode, errorDescription, extra));
+}
+
+/**
+ * Relay wallet-reported OAuth-style errors without remapping (interop).
+ * @param {import("express").Response} res
+ * @param {number} httpStatus
+ * @param {string} walletError
+ * @param {string} [walletDescription]
+ */
+export function sendVerifierWalletReportedError(res, httpStatus, walletError, walletDescription) {
+  const body = { error: String(walletError) };
+  if (walletDescription != null && String(walletDescription) !== "") {
+    body.error_description = String(walletDescription);
+  }
+  res.status(httpStatus).json(body);
+}
+
+/**
  * Handle route errors consistently
  * @param {Error} error - Error object
  * @param {string} context - Error context for logging
@@ -1445,12 +1646,13 @@ export function loadConfigurationFiles(presentationDefPath, clientMetadataPath, 
     const presentationDefinition = JSON.parse(
       fs.readFileSync(presentationDefPath, "utf-8")
     );
-    const clientMetadata = JSON.parse(
+    let clientMetadata = JSON.parse(
       fs.readFileSync(clientMetadataPath, "utf-8")
     );
 
-    if (isVerifierConfigPath(clientMetadataPath)) {
+    if (isVerifierConfigBundlePath(clientMetadataPath)) {
       validateVerifierEncryptionConfig(clientMetadata, clientMetadataPath);
+      clientMetadata = attachVerifierClientMetadataUri(clientMetadata);
     }
 
     const result = {
@@ -1635,6 +1837,44 @@ export async function generateVPRequest(params) {
 }
 
 /**
+ * When request_uri handling has a client_id but Redis session does not, merge it so
+ * direct_post / direct_post.jwt can enforce SD-JWT key-binding `aud`.
+ *
+ * @param {object|null|undefined} vpSession
+ * @param {string|null|undefined} clientId
+ * @returns {{ vpSession: object, didPatch: boolean }}
+ */
+export function patchVpSessionClientIdIfMissing(vpSession, clientId) {
+  if (!vpSession || typeof vpSession !== "object") {
+    return { vpSession, didPatch: false };
+  }
+  if (
+    clientId != null &&
+    String(clientId).trim() !== "" &&
+    (vpSession.client_id == null || String(vpSession.client_id).trim() === "")
+  ) {
+    return { vpSession: { ...vpSession, client_id: clientId }, didPatch: true };
+  }
+  return { vpSession, didPatch: false };
+}
+
+/**
+ * Normalized VP session document written to Redis (pending state).
+ *
+ * @param {string} sessionId
+ * @param {object} sessionData
+ * @returns {object}
+ */
+export function buildVpSessionRecordForStore(sessionId, sessionData) {
+  return {
+    uuid: sessionId,
+    status: CONFIG.SESSION_STATUS.PENDING,
+    claims: null,
+    ...sessionData,
+  };
+}
+
+/**
  * Helper function to process VP Request
  * @param {Object} params - Parameters for VP request processing
  * @returns {Promise<Object>} - The result object with JWT or error
@@ -1661,7 +1901,7 @@ export async function processVPRequest(params) {
 
   try {
     await logDebug(sessionId, "Retrieving VP session data");
-    const vpSession = await getVPSession(sessionId);
+    let vpSession = await getVPSession(sessionId);
 
     if (!vpSession) {
       await logError(sessionId, "VP session not found", {
@@ -1669,6 +1909,17 @@ export async function processVPRequest(params) {
         error: CONFIG.ERROR_MESSAGES.INVALID_SESSION
       });
       return { error: CONFIG.ERROR_MESSAGES.INVALID_SESSION, status: 400 };
+    }
+
+    // Persist verifier client_id on the session when the request_uri caller supplies it but
+    // the stored session predates client_id (or was created without it). Enables SD-JWT KB-JWT aud checks.
+    const patched = patchVpSessionClientIdIfMissing(vpSession, clientId);
+    if (patched.didPatch) {
+      vpSession = patched.vpSession;
+      await storeVPSession(sessionId, vpSession);
+      await logDebug(sessionId, "Patched VP session with client_id from request_uri context", {
+        clientId,
+      });
     }
     
     await logInfo(sessionId, "VP session retrieved successfully", {
@@ -1767,7 +2018,7 @@ export function createTransactionData(presentationDefinitionOrDcqlQuery) {
  * @param {string} requestUri - Absolute `request_uri` the wallet will fetch
  * @param {string} clientId - Verifier `client_id`
  * @param {boolean} usePostMethod - Append `request_uri_method=post` when true
- * @param {{ scheme?: string }} [options] - `scheme`: `openid4vp` (default) or `mdoc-openid4vp` (ISO mdoc track)
+ * @param {{ scheme?: string }} [options] - `scheme`: `openid4vp` (default), `mdoc-openid4vp` (ISO mdoc track), or `eu-eaap` (ETSI same-device, VP-CHECK-17)
  * @returns {string}
  */
 export function createOpenID4VPRequestUrl(requestUri, clientId, usePostMethod = false, options = {}) {
@@ -1778,9 +2029,11 @@ export function createOpenID4VPRequestUrl(requestUri, clientId, usePostMethod = 
     schemeName = "openid4vp";
   } else if (normalized === "mdoc-openid4vp" || normalized === "mdoc_openid4vp") {
     schemeName = "mdoc-openid4vp";
+  } else if (normalized === "eu-eaap" || normalized === "eu_eaap") {
+    schemeName = "eu-eaap";
   } else {
     throw new Error(
-      `Unsupported OpenID4VP wallet invocation scheme: '${options.scheme}'. Expected 'openid4vp' or 'mdoc-openid4vp'.`
+      `Unsupported OpenID4VP wallet invocation scheme: '${options.scheme}'. Expected 'openid4vp', 'mdoc-openid4vp', or 'eu-eaap'.`
     );
   }
   const query = `?request_uri=${encodeURIComponent(requestUri)}&client_id=${encodeURIComponent(clientId)}`;
@@ -1798,18 +2051,14 @@ export async function storeVPSessionData(sessionId, sessionData) {
   try {
     await logDebug(sessionId, "Storing VP session data", {
       hasNonce: !!sessionData.nonce,
+      hasClientId: !!(sessionData.client_id != null && String(sessionData.client_id).trim() !== ""),
       hasPresentationDefinition: !!sessionData.presentation_definition,
       hasDcqlQuery: !!sessionData.dcql_query,
       hasTransactionData: !!sessionData.transaction_data,
       responseMode: sessionData.response_mode
     });
     
-    await storeVPSession(sessionId, {
-      uuid: sessionId,
-      status: CONFIG.SESSION_STATUS.PENDING,
-      claims: null,
-      ...sessionData,
-    });
+    await storeVPSession(sessionId, buildVpSessionRecordForStore(sessionId, sessionData));
     
     await logInfo(sessionId, "VP session data stored successfully");
   } catch (error) {

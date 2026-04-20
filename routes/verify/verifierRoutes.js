@@ -23,7 +23,6 @@ import qr from "qr-image";
 import imageDataURI from "image-data-uri";
 import { streamToBuffer } from "@jorgeferrero/stream-to-buffer";
 import jwt from "jsonwebtoken";
-import TimedArray from "../../utils/timedArray.js";
 
 import { 
   getVPSession, 
@@ -43,11 +42,18 @@ import didJwkRouter from "./didJwkRoutes.js";
 import { verifyMdlToken, validateMdlClaims } from "../../utils/mdlVerification.js";
 import base64url from "base64url";
 import { encode as encodeCbor } from 'cbor-x';
-import { processCs03PresentationResponse } from "../../utils/routeUtils.js";
+import {
+  processCs03PresentationResponse,
+  loadVerifierClientMetadataForRequests,
+  sendVerifierRfc002Error,
+  sendVerifierWalletReportedError,
+  VerifierRfc002Errors as VErr,
+} from "../../utils/routeUtils.js";
 import {
   summarizeCs03ValidationForLog,
   validateCs03CredentialResponses,
 } from "../../utils/cs03Validation.js";
+import { evaluateDirectPostJwtStateCorrelation } from "../../utils/vpSessionCorrelation.js";
 
 const getSessionTranscriptBytes = (
   oid4vpData,
@@ -212,10 +218,6 @@ const presentation_definition_photo_or_pid_and_std = JSON.parse(
   )
 );
 
-const client_metadata = JSON.parse(
-  fs.readFileSync("./data/verifier-config.json", "utf-8")
-);
-
 const presentation_definition_alliance_and_education_Id = JSON.parse(
   fs.readFileSync(
     "./data/presentation_definition_alliance_and_education_Id.json",
@@ -223,16 +225,10 @@ const presentation_definition_alliance_and_education_Id = JSON.parse(
   )
 );
 //
-const clientMetadata = JSON.parse(
-  fs.readFileSync("./data/verifier-config.json", "utf-8")
-);
+const clientMetadata = loadVerifierClientMetadataForRequests(serverURL);
+const client_metadata = clientMetadata;
 
 const jwks = pemToJWK(publicKeyPem, "public");
-
-let verificationSessions = []; //TODO these should be redis or something a proper cache...
-let sessions = [];
-let sessionHistory = new TimedArray(30000); //cache data for 30sec
-let verificationResultsHistory = new TimedArray(30000); //cache data for 30sec
 
 // This should be replaced with the actual trusted root certificate(s) for the mDL issuers.
 const trustedCerts = [fs.readFileSync(
@@ -301,7 +297,12 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
       if (slog) {
         try { slog("[PRESENTATION] [ERROR] VP session not found for direct_post request", { sessionId }); } catch {}
       }
-      return res.status(400).json({ error: `Session ID ${sessionId} not found.` });
+      return sendVerifierRfc002Error(
+        res,
+        400,
+        VErr.FAILED_CORRELATION,
+        `Session ID ${sessionId} not found.`,
+      );
     }
     
     if (slog) {
@@ -375,7 +376,7 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
           // Mark session as failed
           try {
             vpSession.status = "failed";
-            vpSession.error = "invalid_request";
+            vpSession.error = VErr.INVALID_PRESENTATION;
             vpSession.error_description = `Invalid vp_token format for DCQL query. When DCQL is used, vp_token MUST be a JSON object mapping credential query IDs to presentations, not a bare string. See ${specRef}`;
             await storeVPSession(sessionId, vpSession);
           } catch (storageError) {
@@ -385,10 +386,12 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
             }).catch(() => {});
           }
           
-          return res.status(400).json({ 
-            error: "invalid_request",
-            error_description: `Invalid vp_token format for DCQL query. When DCQL is used, vp_token MUST be a JSON object mapping credential query IDs to presentations, not a bare string. See ${specRef}`
-          });
+          return sendVerifierRfc002Error(
+            res,
+            400,
+            VErr.INVALID_PRESENTATION,
+            `Invalid vp_token format for DCQL query. When DCQL is used, vp_token MUST be a JSON object mapping credential query IDs to presentations, not a bare string. See ${specRef}`,
+          );
         }
       }
       
@@ -411,7 +414,7 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
         // Mark session as failed
         try {
           vpSession.status = "failed";
-          vpSession.error = "invalid_request";
+          vpSession.error = VErr.INVALID_PRESENTATION;
           vpSession.error_description = `Invalid vp_token format for DCQL query. When DCQL is used, vp_token MUST be a JSON object mapping credential query IDs to presentations. Received: ${received}. See ${specRef}`;
           await storeVPSession(sessionId, vpSession);
         } catch (storageError) {
@@ -421,10 +424,12 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
           }).catch(() => {});
         }
         
-        return res.status(400).json({ 
-          error: "invalid_request",
-          error_description: `Invalid vp_token format for DCQL query. When DCQL is used, vp_token MUST be a JSON object mapping credential query IDs to presentations. Received: ${received}. See ${specRef}`
-        });
+        return sendVerifierRfc002Error(
+          res,
+          400,
+          VErr.INVALID_PRESENTATION,
+          `Invalid vp_token format for DCQL query. When DCQL is used, vp_token MUST be a JSON object mapping credential query IDs to presentations. Received: ${received}. See ${specRef}`,
+        );
       }
       
       // Additional validation: check that the object keys match credential query IDs
@@ -474,7 +479,7 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
           // Mark session as failed
           try {
             vpSession.status = "failed";
-            vpSession.error = "invalid_request";
+            vpSession.error = VErr.MALFORMED_RESPONSE;
             vpSession.error_description = withSpecRef(
               `No vp_token found in the request body. Received: ${received}, expected: vp_token string`,
               SPEC_REFS.VP_CREDENTIAL_RESPONSE
@@ -486,12 +491,15 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
               stack: storageError.stack
             }).catch(() => {});
           }
-          return res.status(400).json({
-            error: withSpecRef(
+          return sendVerifierRfc002Error(
+            res,
+            400,
+            VErr.MALFORMED_RESPONSE,
+            withSpecRef(
               `No vp_token found in the request body. Received: ${received}, expected: vp_token string`,
               SPEC_REFS.VP_CREDENTIAL_RESPONSE
             ),
-          });
+          );
         }
         
         // Handle DCQL object format: vp_token is object e.g. {"example_credential_id": ["eyJ..."]}
@@ -550,7 +558,7 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
           // Mark session as failed
           try {
             vpSession.status = "failed";
-            vpSession.error = "verification_failed";
+            vpSession.error = VErr.FAILED_VALIDATION;
             vpSession.error_description = `mDL verification failed. Received: ${mdocResult.error}, expected: valid mDL token`;
             await storeVPSession(sessionId, vpSession);
           } catch (storageError) {
@@ -559,10 +567,14 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
               stack: storageError.stack
             }).catch(() => {});
           }
-          return res.status(400).json({ 
-            error: `mDL verification failed. Received: ${mdocResult.error}, expected: valid mDL token`,
-            details: mdocResult.details 
-          });
+          return sendVerifierRfc002Error(
+            res,
+            400,
+            VErr.FAILED_VALIDATION,
+            `mDL verification failed. Received: ${mdocResult.error}, expected: valid mDL token${
+              mdocResult.details ? ` (${JSON.stringify(mdocResult.details)})` : ""
+            }`,
+          );
         }
         
         await logInfo(sessionId, "mDL verification successful", {
@@ -584,7 +596,7 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
           // Mark session as failed
           try {
             vpSession.status = "failed";
-            vpSession.error = "claims_mismatch";
+            vpSession.error = VErr.FAILED_VALIDATION;
             vpSession.error_description = `mDL claims mismatch. Received: [${receivedClaims.join(', ')}], expected: [${JSON.stringify(requestedClaims)}]`;
             await storeVPSession(sessionId, vpSession);
           } catch (storageError) {
@@ -593,11 +605,13 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
               stack: storageError.stack
             }).catch(() => {});
           }
-          return res.status(400).json({
-            error: `mDL claims mismatch. Received: [${receivedClaims.join(', ')}], expected: [${JSON.stringify(requestedClaims)}]`,
-            requested: vpSession.sdsRequested,
-            received: Object.keys(claims)
-          });
+          return sendVerifierRfc002Error(
+            res,
+            400,
+            VErr.FAILED_VALIDATION,
+            `mDL claims mismatch. Received: [${receivedClaims.join(', ')}], expected: [${JSON.stringify(requestedClaims)}]`,
+            { sub_error: "claims_mismatch" },
+          );
         }
         
         await logDebug(sessionId, "mDL claims validation successful", {
@@ -636,7 +650,12 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
             stack: storageError.stack
           }).catch(() => {});
         }
-        return res.status(400).json({ error: `mDL verification failed: ${error.message}` });
+        return sendVerifierRfc002Error(
+          res,
+          400,
+          VErr.FAILED_VALIDATION,
+          `mDL verification failed: ${error.message}`,
+        );
       }
     }
 
@@ -675,14 +694,16 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
             received,
             expected: "encrypted JWT string in response parameter"
           });
-          return res.status(400).json({ 
-            error: withSpecRef(
+          return sendVerifierRfc002Error(
+            res,
+            400,
+            VErr.MALFORMED_RESPONSE,
+            withSpecRef(
               `No encrypted JWT found in HAIP dc_api.jwt response. Received: ${received}, expected: encrypted JWT string in response parameter`,
               SPEC_REFS.VP_DC_API_JWT,
               SPEC_REFS.VP_RESPONSE_PARAMS
-            ), 
-            note: "In HAIP dc_api.jwt, the response parameter should contain an encrypted JWT"
-          });
+            ),
+          );
         }
 
         // Decrypt the JWT using X509 EC private key
@@ -703,13 +724,15 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
             error: decryptError.message,
             stack: decryptError.stack
           });
-          return res.status(400).json({ 
-            error: withSpecRef(
-              "Failed to decrypt HAIP dc_api.jwt response",
+          return sendVerifierRfc002Error(
+            res,
+            400,
+            VErr.MALFORMED_RESPONSE,
+            withSpecRef(
+              `Failed to decrypt HAIP dc_api.jwt response: ${decryptError.message}`,
               SPEC_REFS.VP_DC_API_JWT
-            ), 
-            details: decryptError.message 
-          });
+            ),
+          );
         }
 
         // Extract VP token from decrypted response
@@ -733,14 +756,16 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
             expected: "object/string with vp_token or response property",
             decryptedResponse: decryptedResponse
           });
-          return res.status(400).json({ 
-            error: withSpecRef(
+          return sendVerifierRfc002Error(
+            res,
+            400,
+            VErr.MALFORMED_RESPONSE,
+            withSpecRef(
               `No VP token found in decrypted HAIP dc_api.jwt response. Received: ${received}, expected: object/string with vp_token or response property`,
               SPEC_REFS.VP_DC_API_JWT,
               SPEC_REFS.VP_CREDENTIAL_RESPONSE
-            ), 
-            decryptedResponse: decryptedResponse
-          });
+            ),
+          );
         }
 
         await logDebug(sessionId, "HAIP dc_api.jwt extracted vpToken", {
@@ -768,13 +793,16 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
               valueWasArray: Array.isArray(raw)
             });
           } else {
-            return res.status(400).json({ 
-              error: withSpecRef(
+            return sendVerifierRfc002Error(
+              res,
+              400,
+              VErr.INVALID_PRESENTATION,
+              withSpecRef(
                 "No credentials found in HAIP dc_api.jwt mdoc response",
                 SPEC_REFS.VP_DC_API_JWT,
                 SPEC_REFS.VP_CREDENTIAL_RESPONSE
-              ) 
-            });
+              ),
+            );
           }
         } else {
           // If vpToken is already a string, use it directly
@@ -783,15 +811,16 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
 
         if (!mdocData || typeof mdocData !== 'string') {
           const received = !mdocData ? "null/undefined" : typeof mdocData;
-          return res.status(400).json({ 
-            error: withSpecRef(
+          return sendVerifierRfc002Error(
+            res,
+            400,
+            VErr.UNSUPPORTED_CREDENTIAL_FORMAT,
+            withSpecRef(
               `Invalid mdoc data in HAIP dc_api.jwt response. Received: ${received}, expected: non-empty string`,
               SPEC_REFS.VP_DC_API_JWT,
               SPEC_REFS.VP_CREDENTIAL_RESPONSE
             ),
-            receivedType: typeof mdocData,
-            vpTokenType: typeof vpToken
-          });
+          );
         }
 
         await logDebug(sessionId, "Processing mdoc data from HAIP dc_api.jwt", {
@@ -817,10 +846,14 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
             details: mdocResult.details,
             documentType
           });
-          return res.status(400).json({ 
-            error: `mDL verification failed. Received: ${mdocResult.error}, expected: valid mDL token`,
-            details: mdocResult.details 
-          });
+          return sendVerifierRfc002Error(
+            res,
+            400,
+            VErr.FAILED_VALIDATION,
+            `mDL verification failed. Received: ${mdocResult.error}, expected: valid mDL token${
+              mdocResult.details ? ` (${JSON.stringify(mdocResult.details)})` : ""
+            }`,
+          );
         }
 
         const claims = mdocResult.claims;
@@ -835,11 +868,13 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
             requested: vpSession.sdsRequested,
             received: Object.keys(claims)
           });
-          return res.status(400).json({
-            error: `mDL claims mismatch. Received: [${receivedClaims.join(', ')}], expected: [${JSON.stringify(requestedClaims)}]`,
-            requested: vpSession.sdsRequested,
-            received: Object.keys(claims)
-          });
+          return sendVerifierRfc002Error(
+            res,
+            400,
+            VErr.FAILED_VALIDATION,
+            `mDL claims mismatch. Received: [${receivedClaims.join(', ')}], expected: [${JSON.stringify(requestedClaims)}]`,
+            { sub_error: "claims_mismatch" },
+          );
         }
 
 
@@ -860,12 +895,15 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
           error: error.message,
           stack: error.stack
         });
-        return res.status(400).json({
-          error: withSpecRef(
+        return sendVerifierRfc002Error(
+          res,
+          400,
+          VErr.FAILED_VALIDATION,
+          withSpecRef(
             `HAIP dc_api.jwt processing failed: ${error.message}`,
             SPEC_REFS.VP_DC_API_JWT
           ),
-        });
+        );
       }
     }
     // Handle direct_post.jwt response mode
@@ -888,7 +926,12 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
           error: req.body.error,
           error_description: req.body.error_description
         });
-        return res.status(400).json({ error: req.body.error, error_description: req.body.error_description });
+        return sendVerifierWalletReportedError(
+          res,
+          400,
+          req.body.error,
+          req.body.error_description,
+        );
       }
 
       // According to OpenID4VP spec, direct_post.jwt sends response in 'response' parameter
@@ -900,13 +943,16 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
           received,
           expected: "response parameter with JWT string"
         });
-        return res.status(400).json({
-          error: withSpecRef(
+        return sendVerifierRfc002Error(
+          res,
+          400,
+          VErr.MALFORMED_RESPONSE,
+          withSpecRef(
             `No 'response' parameter in direct_post.jwt response. Received: ${received}, expected: response parameter with JWT string`,
             SPEC_REFS.VP_RESPONSE_MODE_DIRECT_POST_JWT,
             SPEC_REFS.VP_RESPONSE_PARAMS
           ),
-        });
+        );
       }
       
       await logDebug(sessionId, "JWT response received", {
@@ -919,7 +965,7 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
         let decodedVpToken;
         let primaryVpJwt;
         let decryptedResponseNonce; // Nonce from decrypted response payload (VP 1.0)
-        let outerJwtPayload; // The outer Authorization Response JWT payload
+        let outerAuthorizationResponseState = null; // state from outer response JWT / JWE payload (or form)
 
         // Check if it's encrypted (JWE has 5 parts)
         if (jwtResponse.split('.').length === 5) {
@@ -936,6 +982,13 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
             await logInfo(sessionId, "Processing JWT string from JWE (per OpenID4VP spec)");
             const decodedPayload = jwt.decode(decrypted);
             vpToken = decodedPayload?.vp_token;
+
+            if (
+              decodedPayload?.state != null &&
+              String(decodedPayload.state).trim() !== ""
+            ) {
+              outerAuthorizationResponseState = String(decodedPayload.state);
+            }
             
             // In VP 1.0, nonce may be in the decoded JWT payload itself
             if (decodedPayload?.nonce && typeof decodedPayload.nonce === 'string') {
@@ -948,13 +1001,16 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
             if (!vpToken) {
               const received = decodedPayload?.vp_token === undefined ? "vp_token missing in payload" : `vp_token is ${typeof decodedPayload?.vp_token}`;
               console.log(`No VP token in decrypted JWT response. Received: ${received}, expected: vp_token string in JWT payload`);
-              return res.status(400).json({
-                error: withSpecRef(
+              return sendVerifierRfc002Error(
+                res,
+                400,
+                VErr.MALFORMED_RESPONSE,
+                withSpecRef(
                   `No VP token in decrypted JWT response. Received: ${received}, expected: vp_token string in JWT payload`,
                   SPEC_REFS.VP_RESPONSE_MODE_DIRECT_POST_JWT,
                   SPEC_REFS.VP_CREDENTIAL_RESPONSE
                 ),
-              });
+              );
             }
             
             // Validate vp_token format when DCQL is used (for direct_post.jwt with JWE)
@@ -977,10 +1033,12 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
                   dcqlCredentialIds: vpSession.dcql_query.credentials.map(c => c.id).filter(Boolean)
                 });
                 
-                return res.status(400).json({ 
-                  error: "invalid_request",
-                  error_description: `Invalid vp_token format for DCQL query. When DCQL is used, vp_token MUST be a JSON object mapping credential query IDs to presentations. Received: ${received}. See ${specRef}`
-                });
+                return sendVerifierRfc002Error(
+                  res,
+                  400,
+                  VErr.INVALID_PRESENTATION,
+                  `Invalid vp_token format for DCQL query. When DCQL is used, vp_token MUST be a JSON object mapping credential query IDs to presentations. Received: ${received}. See ${specRef}`,
+                );
               }
             }
             
@@ -1036,10 +1094,12 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
                   dcqlCredentialIds: vpSession.dcql_query.credentials.map(c => c.id).filter(Boolean)
                 });
                 
-                return res.status(400).json({ 
-                  error: "invalid_request",
-                  error_description: `Invalid vp_token format for DCQL query. When DCQL is used, vp_token MUST be a JSON object mapping credential query IDs to presentations. Received: ${received}. See ${specRef}`
-                });
+                return sendVerifierRfc002Error(
+                  res,
+                  400,
+                  VErr.INVALID_PRESENTATION,
+                  `Invalid vp_token format for DCQL query. When DCQL is used, vp_token MUST be a JSON object mapping credential query IDs to presentations. Received: ${received}. See ${specRef}`,
+                );
               }
             }
             // await logDebug(sessionId, "vp_token object received", {
@@ -1057,37 +1117,28 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
               // Store for later nonce verification
               decryptedResponseNonce = decrypted.nonce;
             }
-            
-            // VP 1.0: For encrypted responses, state acts as the correlation mechanism
-            // The wallet includes state in the encrypted payload for verification
-            if (decrypted.state && typeof decrypted.state === 'string') {
+
+            if (
+              decrypted.state != null &&
+              String(decrypted.state).trim() !== ""
+            ) {
+              outerAuthorizationResponseState = String(decrypted.state);
               await logDebug(sessionId, "Found state in decrypted response payload (VP 1.0)", {
-                state: decrypted.state
+                state: outerAuthorizationResponseState
               });
-              // Verify state matches the session
-              if (vpSession.state && decrypted.state !== vpSession.state) {
-                await logError(sessionId, "State mismatch in encrypted response", {
-                  received: decrypted.state,
-                  expected: vpSession.state
-                });
-                return res.status(400).json({
-                  error: withSpecRef(
-                    `State mismatch in encrypted response. Received: '${decrypted.state}', expected: '${vpSession.state}'`,
-                    SPEC_REFS.VP_STATE,
-                    SPEC_REFS.VP_RESPONSE_MODE_DIRECT_POST_JWT
-                  ),
-                });
-              }
             }
           } else {
             const received = decrypted ? `decrypted object without vp_token (keys: ${Object.keys(decrypted).join(', ')})` : "decryption failed";
-            return res.status(400).json({
-              error: withSpecRef(
+            return sendVerifierRfc002Error(
+              res,
+              400,
+              VErr.MALFORMED_RESPONSE,
+              withSpecRef(
                 `Failed to decrypt JWE response or no vp_token found. Received: ${received}, expected: decrypted object with vp_token property`,
                 SPEC_REFS.VP_RESPONSE_MODE_DIRECT_POST_JWT,
                 SPEC_REFS.VP_CREDENTIAL_RESPONSE
               ),
-            });
+            );
           }
 
           await logInfo(sessionId, "Extracted vp_token for processing");
@@ -1190,6 +1241,13 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
           // If not encrypted, just verify the signed JWT
           const decodedJWT = jwt.decode(jwtResponse);
 
+          if (
+            decodedJWT?.state != null &&
+            String(decodedJWT.state).trim() !== ""
+          ) {
+            outerAuthorizationResponseState = String(decodedJWT.state);
+          }
+
           // Extract VP token from the JWT payload
           vpToken = decodedJWT?.vp_token;
           if (!vpToken) {
@@ -1198,13 +1256,16 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
               received,
               expected: "vp_token string in JWT payload"
             });
-            return res.status(400).json({
-              error: withSpecRef(
+            return sendVerifierRfc002Error(
+              res,
+              400,
+              VErr.MALFORMED_RESPONSE,
+              withSpecRef(
                 `No VP token in JWT response. Received: ${received}, expected: vp_token string in JWT payload`,
                 SPEC_REFS.VP_RESPONSE_MODE_DIRECT_POST_JWT,
                 SPEC_REFS.VP_CREDENTIAL_RESPONSE
               ),
-            });
+            );
           }
           if (typeof vpToken === 'string') {
             primaryVpJwt = vpToken;
@@ -1226,6 +1287,39 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
           claimsFromExtraction = result.extractedClaims;
         jwtFromKeybind = result.keybindJwt;
         sdJwtForKeybind = result.sdJwtForKeybind || sdJwtForKeybind;
+        }
+
+        // Correlation: state MUST match session when the auth request bound a state (all direct_post.jwt branches)
+        const stateEval = evaluateDirectPostJwtStateCorrelation({
+          formStateRaw: req.body?.state,
+          outerJwtStateRaw: outerAuthorizationResponseState,
+          sessionStateRaw: vpSession.state,
+        });
+        if (!stateEval.ok) {
+          await logError(sessionId, "direct_post.jwt state correlation failed", {
+            error: stateEval.error,
+            specRef: SPEC_REFS.VP_STATE,
+          });
+          try {
+            vpSession.status = "failed";
+            vpSession.error = stateEval.sessionError;
+            vpSession.error_description = `${stateEval.sessionErrorDescription} See ${SPEC_REFS.VP_STATE}`;
+            await storeVPSession(sessionId, vpSession);
+          } catch (storageError) {
+            await logError(sessionId, "Failed to update session after direct_post.jwt state error", {
+              error: storageError.message,
+            }).catch(() => {});
+          }
+          return sendVerifierRfc002Error(
+            res,
+            400,
+            VErr.FAILED_CORRELATION,
+            withSpecRef(
+              stateEval.error,
+              SPEC_REFS.VP_STATE,
+              SPEC_REFS.VP_RESPONSE_MODE_DIRECT_POST_JWT
+            ),
+          );
         }
 
         // Verify nonce
@@ -1309,15 +1403,18 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
           // Mark session as failed
           try {
             vpSession.status = "failed";
-            vpSession.error = "invalid_request";
+            vpSession.error = VErr.FAILED_CORRELATION;
             vpSession.error_description = `submitted nonce not found in vp_token. Received: ${received}, expected: nonce in SD-JWT key-binding JWT per OpenID4VP 1.0 spec. See ${SPEC_REFS.VP_NONCE}`;
             await storeVPSession(sessionId, vpSession);
           } catch (storageError) {
             console.error("Failed to update session status after nonce missing error:", storageError);
           }
-          return res.status(400).json({ 
-            error: `submitted nonce not found in vp_token. Received: ${received}, expected: nonce in SD-JWT key-binding JWT per OpenID4VP 1.0 spec. See ${SPEC_REFS.VP_NONCE}` 
-          });
+          return sendVerifierRfc002Error(
+            res,
+            400,
+            VErr.FAILED_CORRELATION,
+            `submitted nonce not found in vp_token. Received: ${received}, expected: nonce in SD-JWT key-binding JWT per OpenID4VP 1.0 spec. See ${SPEC_REFS.VP_NONCE}`,
+          );
         }
         
         if (vpSession.nonce != submittedNonce) {
@@ -1325,7 +1422,7 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
           // Mark session as failed
           try {
             vpSession.status = "failed";
-            vpSession.error = "invalid_nonce";
+            vpSession.error = VErr.FAILED_CORRELATION;
             vpSession.error_description = `submitted nonce doesn't match the auth request one. Received: '${submittedNonce}', expected: '${vpSession.nonce}'. See ${SPEC_REFS.VP_NONCE}`;
             await storeVPSession(sessionId, vpSession);
           } catch (storageError) {
@@ -1334,7 +1431,12 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
               stack: storageError.stack
             }).catch(() => {});
           }
-          return res.status(400).json({ error: `submitted nonce doesn't match the auth request one. Received: '${submittedNonce}', expected: '${vpSession.nonce}'. See ${SPEC_REFS.VP_NONCE}` });
+          return sendVerifierRfc002Error(
+            res,
+            400,
+            VErr.FAILED_CORRELATION,
+            `submitted nonce doesn't match the auth request one. Received: '${submittedNonce}', expected: '${vpSession.nonce}'. See ${SPEC_REFS.VP_NONCE}`,
+          );
         }
 
         // Verify audience if key-binding JWT provided
@@ -1348,7 +1450,7 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
             // Mark session as failed
             try {
               vpSession.status = "failed";
-              vpSession.error = "invalid_audience";
+              vpSession.error = VErr.FAILED_CORRELATION;
               vpSession.error_description = `aud claim does not match verifier client_id. Received: '${jwtFromKeybind.payload.aud}', expected: '${vpSession.client_id}'. See ${SPEC_REFS.VP_CREDENTIAL_RESPONSE}`;
               await storeVPSession(sessionId, vpSession);
             } catch (storageError) {
@@ -1357,7 +1459,12 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
                 stack: storageError.stack
               }).catch(() => {});
             }
-            return res.status(400).json({ error: `aud claim does not match verifier client_id. Received: '${jwtFromKeybind.payload.aud}', expected: '${vpSession.client_id}'. See ${SPEC_REFS.VP_CREDENTIAL_RESPONSE}` });
+            return sendVerifierRfc002Error(
+              res,
+              400,
+              VErr.FAILED_CORRELATION,
+              `aud claim does not match verifier client_id. Received: '${jwtFromKeybind.payload.aud}', expected: '${vpSession.client_id}'. See ${SPEC_REFS.VP_CREDENTIAL_RESPONSE}`,
+            );
           }
         }
 
@@ -1376,7 +1483,7 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
             });
             try {
               vpSession.status = "failed";
-              vpSession.error = "invalid_key_binding_jwt";
+              vpSession.error = VErr.MISSING_REQUIRED_PROOF;
               vpSession.error_description = `Key Binding JWT for SD-JWT is missing required sd_hash claim. See ${SPEC_REFS.SD_JWT_KEY_BINDING}`;
               await storeVPSession(sessionId, vpSession);
             } catch (storageError) {
@@ -1385,9 +1492,12 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
                 stack: storageError.stack
               }).catch(() => {});
             }
-            return res.status(400).json({
-              error: `Key Binding JWT for SD-JWT is missing required sd_hash claim. See ${SPEC_REFS.SD_JWT_KEY_BINDING}`
-            });
+            return sendVerifierRfc002Error(
+              res,
+              400,
+              VErr.MISSING_REQUIRED_PROOF,
+              `Key Binding JWT for SD-JWT is missing required sd_hash claim. See ${SPEC_REFS.SD_JWT_KEY_BINDING}`,
+            );
           }
 
           if (sdJwtForKeybind) {
@@ -1403,7 +1513,7 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
               });
               try {
                 vpSession.status = "failed";
-                vpSession.error = "invalid_key_binding_jwt";
+                vpSession.error = VErr.FAILED_VALIDATION;
                 vpSession.error_description = `Key Binding JWT sd_hash does not match presented SD-JWT. See ${SPEC_REFS.SD_JWT_KEY_BINDING}`;
                 await storeVPSession(sessionId, vpSession);
               } catch (storageError) {
@@ -1412,9 +1522,13 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
                   stack: storageError.stack
                 }).catch(() => {});
               }
-              return res.status(400).json({
-                error: `Key Binding JWT sd_hash does not match presented SD-JWT. See ${SPEC_REFS.SD_JWT_KEY_BINDING}`
-              });
+              return sendVerifierRfc002Error(
+                res,
+                400,
+                VErr.FAILED_VALIDATION,
+                `Key Binding JWT sd_hash does not match presented SD-JWT. See ${SPEC_REFS.SD_JWT_KEY_BINDING}`,
+                { sub_error: "sd_hash_mismatch" },
+              );
             }
 
             await logDebug(sessionId, "SD-JWT Key Binding JWT sd_hash verified successfully", {
@@ -1438,7 +1552,7 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
           // Mark session as failed
           try {
             vpSession.status = "failed";
-            vpSession.error = "claims_mismatch";
+            vpSession.error = VErr.FAILED_VALIDATION;
             vpSession.error_description = `Claims mismatch. Received: ${receivedClaims}, expected: ${requestedClaims}`;
             await storeVPSession(sessionId, vpSession);
           } catch (storageError) {
@@ -1447,9 +1561,13 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
               stack: storageError.stack
             }).catch(() => {});
           }
-          return res.status(400).json({
-            error: `Claims mismatch. Received: ${receivedClaims}, expected: ${requestedClaims}`,
-          });
+          return sendVerifierRfc002Error(
+            res,
+            400,
+            VErr.FAILED_VALIDATION,
+            `Claims mismatch. Received: ${receivedClaims}, expected: ${requestedClaims}`,
+            { sub_error: "claims_mismatch" },
+          );
         }
 
         vpSession.status = "success";
@@ -1468,9 +1586,12 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
           error: error.message,
           stack: error.stack
         });
-        return res.status(400).json({
-          error: withSpecRef("Invalid JWT response", SPEC_REFS.VP_RESPONSE_MODE_DIRECT_POST_JWT),
-        });
+        return sendVerifierRfc002Error(
+          res,
+          400,
+          VErr.MALFORMED_RESPONSE,
+          withSpecRef("Invalid JWT response", SPEC_REFS.VP_RESPONSE_MODE_DIRECT_POST_JWT),
+        );
       }
     } 
     // Handle regular direct_post response mode
@@ -1486,7 +1607,12 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
             error: req.body.error,
             error_description: req.body.error_description
           });
-          return res.status(400).json({ error: req.body.error, error_description: req.body.error_description });
+          return sendVerifierWalletReportedError(
+            res,
+            400,
+            req.body.error,
+            req.body.error_description,
+          );
         }
 
         // Enforce state parameter presence and matching
@@ -1501,7 +1627,7 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
           // Mark session as failed
           try {
             vpSession.status = "failed";
-            vpSession.error = "invalid_request";
+            vpSession.error = VErr.FAILED_CORRELATION;
             vpSession.error_description = `state parameter missing. Received: ${received}, expected: state parameter string. See ${SPEC_REFS.VP_STATE}`;
             await storeVPSession(sessionId, vpSession);
           } catch (storageError) {
@@ -1510,7 +1636,12 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
               stack: storageError.stack
             }).catch(() => {});
           }
-          return res.status(400).json({ error: `state parameter missing. Received: ${received}, expected: state parameter string. See ${SPEC_REFS.VP_STATE}` });
+          return sendVerifierRfc002Error(
+            res,
+            400,
+            VErr.FAILED_CORRELATION,
+            `state parameter missing. Received: ${received}, expected: state parameter string. See ${SPEC_REFS.VP_STATE}`,
+          );
         }
         if (submittedState !== vpSession.state) {
           await logError(sessionId, "state mismatch in direct_post", {
@@ -1521,7 +1652,7 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
           // Mark session as failed
           try {
             vpSession.status = "failed";
-            vpSession.error = "invalid_state";
+            vpSession.error = VErr.FAILED_CORRELATION;
             vpSession.error_description = `state mismatch. Received: '${submittedState}', expected: '${vpSession.state}'. See ${SPEC_REFS.VP_STATE}`;
             await storeVPSession(sessionId, vpSession);
           } catch (storageError) {
@@ -1530,7 +1661,12 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
               stack: storageError.stack
             }).catch(() => {});
           }
-          return res.status(400).json({ error: `state mismatch. Received: '${submittedState}', expected: '${vpSession.state}'. See ${SPEC_REFS.VP_STATE}` });
+          return sendVerifierRfc002Error(
+            res,
+            400,
+            VErr.FAILED_CORRELATION,
+            `state mismatch. Received: '${submittedState}', expected: '${vpSession.state}'. See ${SPEC_REFS.VP_STATE}`,
+          );
         }
 
         // CS-03 (CSC qesRequest): capture VP credential response shape per WE BUILD spec §8.2
@@ -1580,10 +1716,12 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
               vpSession.error_description = cs03Result.error_description;
               await storeVPSession(sessionId, vpSession);
             } catch (_) {}
-            return res.status(400).json({
-              error: cs03Result.error,
-              error_description: cs03Result.error_description,
-            });
+            return sendVerifierRfc002Error(
+              res,
+              400,
+              cs03Result.error,
+              cs03Result.error_description,
+            );
           }
           if (vpSession.cs03_oob && !vpSession.qes_oob_response) {
             await logError(sessionId, "CS-03 OOB direct_post received before qes callback artifact", {
@@ -1591,14 +1729,16 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
             }).catch(() => {});
             try {
               vpSession.status = "failed";
-              vpSession.error = "invalid_request";
+              vpSession.error = VErr.MALFORMED_RESPONSE;
               vpSession.error_description = "CS-03 out-of-band response missing signed artifact callback";
               await storeVPSession(sessionId, vpSession);
             } catch (_) {}
-            return res.status(400).json({
-              error: "invalid_request",
-              error_description: "CS-03 out-of-band response missing signed artifact callback",
-            });
+            return sendVerifierRfc002Error(
+              res,
+              400,
+              VErr.MALFORMED_RESPONSE,
+              "CS-03 out-of-band response missing signed artifact callback",
+            );
           }
           const qesArtifactsToValidate =
             cs03Result.qes_combined?.oob ||
@@ -1635,15 +1775,17 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
             }).catch(() => {});
             try {
               vpSession.status = "failed";
-              vpSession.error = "invalid_request";
+              vpSession.error = VErr.FAILED_VALIDATION;
               vpSession.error_description = "CS-03 signed artifact validation failed";
               vpSession.cs03_validation = artifactValidation;
               await storeVPSession(sessionId, vpSession);
             } catch (_) {}
-            return res.status(400).json({
-              error: "invalid_request",
-              error_description: "CS-03 signed artifact validation failed",
-            });
+            return sendVerifierRfc002Error(
+              res,
+              400,
+              VErr.FAILED_VALIDATION,
+              "CS-03 signed artifact validation failed",
+            );
           }
           vpSession.qes = cs03Result.qes;
           if (cs03Result.qes_combined) {
@@ -1740,7 +1882,12 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
           error: error.message,
           stack: error.stack
         });
-        return res.status(400).json({ error: error.message });
+        return sendVerifierRfc002Error(
+          res,
+          400,
+          VErr.FAILED_VALIDATION,
+          error.message,
+        );
       }
       const vpToken = req.body["vp_token"];
 
@@ -1953,7 +2100,12 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
           hasKeybindJwt: !!jwtFromKeybind,
           vpTokenPreview: vpToken ? vpToken.substring(0, 100) : null
         });
-        return res.status(400).json({ error: `submitted nonce not found in vp_token. Received: ${received}, expected: nonce in key-binding JWT or VP token payload. See ${SPEC_REFS.VP_NONCE}` });
+        return sendVerifierRfc002Error(
+          res,
+          400,
+          VErr.FAILED_CORRELATION,
+          `submitted nonce not found in vp_token. Received: ${received}, expected: nonce in key-binding JWT or VP token payload. See ${SPEC_REFS.VP_NONCE}`,
+        );
       }
         
         await logDebug(sessionId, "Nonce found in VP token", {
@@ -1971,7 +2123,7 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
         // Mark session as failed
         try {
           vpSession.status = "failed";
-          vpSession.error = "invalid_nonce";
+          vpSession.error = VErr.FAILED_CORRELATION;
           vpSession.error_description = `submitted nonce doesn't match the auth request one. Received: '${submittedNonce}', expected: '${vpSession.nonce}'. See ${SPEC_REFS.VP_NONCE}`;
           await storeVPSession(sessionId, vpSession);
         } catch (storageError) {
@@ -1980,7 +2132,12 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
             stack: storageError.stack
           }).catch(() => {});
         }
-        return res.status(400).json({ error: `submitted nonce doesn't match the auth request one. Received: '${submittedNonce}', expected: '${vpSession.nonce}'. See ${SPEC_REFS.VP_NONCE}` });
+        return sendVerifierRfc002Error(
+          res,
+          400,
+          VErr.FAILED_CORRELATION,
+          `submitted nonce doesn't match the auth request one. Received: '${submittedNonce}', expected: '${vpSession.nonce}'. See ${SPEC_REFS.VP_NONCE}`,
+        );
       }
       
       // Verify audience if key-binding JWT provided
@@ -1994,7 +2151,7 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
           // Mark session as failed
           try {
             vpSession.status = "failed";
-            vpSession.error = "invalid_audience";
+            vpSession.error = VErr.FAILED_CORRELATION;
             vpSession.error_description = `aud claim does not match verifier client_id. Received: '${jwtFromKeybind.payload.aud}', expected: '${vpSession.client_id}'. See ${SPEC_REFS.VP_CREDENTIAL_RESPONSE}`;
             await storeVPSession(sessionId, vpSession);
           } catch (storageError) {
@@ -2003,7 +2160,12 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
               stack: storageError.stack
             }).catch(() => {});
           }
-          return res.status(400).json({ error: `aud claim does not match verifier client_id. Received: '${jwtFromKeybind.payload.aud}', expected: '${vpSession.client_id}'. See ${SPEC_REFS.VP_CREDENTIAL_RESPONSE}` });
+          return sendVerifierRfc002Error(
+            res,
+            400,
+            VErr.FAILED_CORRELATION,
+            `aud claim does not match verifier client_id. Received: '${jwtFromKeybind.payload.aud}', expected: '${vpSession.client_id}'. See ${SPEC_REFS.VP_CREDENTIAL_RESPONSE}`,
+          );
         }
       }
 
@@ -2015,7 +2177,7 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
         // Mark session as failed
         try {
           vpSession.status = "failed";
-          vpSession.error = "claims_mismatch";
+          vpSession.error = VErr.FAILED_VALIDATION;
           vpSession.error_description = `Claims mismatch. Received: ${receivedClaims}, expected: ${requestedClaims}`;
           await storeVPSession(sessionId, vpSession);
         } catch (storageError) {
@@ -2024,9 +2186,13 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
             stack: storageError.stack
           }).catch(() => {});
         }
-        return res.status(400).json({
-          error: `Claims mismatch. Received: ${receivedClaims}, expected: ${requestedClaims}`,
-        });
+        return sendVerifierRfc002Error(
+          res,
+          400,
+          VErr.FAILED_VALIDATION,
+          `Claims mismatch. Received: ${receivedClaims}, expected: ${requestedClaims}`,
+          { sub_error: "claims_mismatch" },
+        );
       }
 
       vpSession.status = "success";
@@ -2065,7 +2231,12 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
         stack: storageError.stack
       }).catch(() => {});
     }
-    return res.status(400).json({ error: error.message });
+    return sendVerifierRfc002Error(
+      res,
+      500,
+      VErr.SERVER_ERROR,
+      error.message,
+    );
   }
 });
 
@@ -2081,7 +2252,7 @@ verifierRouter.get("/generateVPRequest-jwt", async (req, res) => {
   const nonce = generateNonce(16);
 
   let request_uri = serverURL + "/vpRequestJwt/" + stateParam;
-  const response_uri = serverURL + "/direct_post_jwt"; //not used
+  const response_uri = `${serverURL}/direct_post/${stateParam}`;
 
   const vpRequest = buildVP(
     serverURL,
@@ -2168,7 +2339,7 @@ verifierRouter.get("/vp-request/:type", async (req, res) => {
   });
 
   let request_uri = `${serverURL}/vpRequest/${type}/${stateParam}`;
-  const response_uri = `${serverURL}/direct_post_jwt`; // not used
+  const response_uri = `${serverURL}/direct_post/${stateParam}`;
 
   const vpRequest = buildVP(
     serverURL,
@@ -2305,99 +2476,6 @@ verifierRouter.get("/vpRequest/:type/:id", async (req, res) => {
   res.type("application/oauth-authz-req+jwt").send(vpRequestJWT);
 });
 
-verifierRouter.post("/direct_post_jwt/:id", async (req, res) => {
-  const sessionId = req.params.id;
-  const jwtVp = req.body.vp_token;
-  
-  await logInfo(sessionId, "Received direct_post JWT VP", {
-    endpoint: "/direct_post_jwt/:id",
-    sessionId,
-    hasVpToken: !!jwtVp
-  });
-  
-  // Log received request
-  if (!jwtVp) {
-    const received = req.body.vp_token === undefined ? "vp_token missing" : `vp_token is ${typeof req.body.vp_token}`;
-    await logError(sessionId, "No VP token provided in direct_post_jwt request", {
-      received,
-      expected: "vp_token JWT string"
-    });
-    return res.sendStatus(400); // Bad Request
-  }
-  let decodedWithHeader;
-  try {
-    decodedWithHeader = jwt.decode(jwtVp, { complete: true });
-  } catch (error) {
-    await logError(sessionId, "Failed to decode JWT in direct_post_jwt", {
-      error: error.message,
-      stack: error.stack
-    });
-    return res.sendStatus(400); // Bad Request due to invalid JWT
-  }
-  const credentialsJwtArray =
-    decodedWithHeader?.payload?.vp?.verifiableCredential;
-  if (!credentialsJwtArray) {
-    const received = !decodedWithHeader?.payload ? "no payload" : !decodedWithHeader?.payload?.vp ? "no vp claim" : !decodedWithHeader?.payload?.vp?.verifiableCredential ? "no verifiableCredential array" : "unknown";
-    await logError(sessionId, "Invalid JWT structure in direct_post_jwt", {
-      received,
-      expected: "JWT with payload.vp.verifiableCredential array",
-      hasPayload: !!decodedWithHeader?.payload,
-      hasVp: !!decodedWithHeader?.payload?.vp
-    });
-    return res.sendStatus(400); // Bad Request
-  }
-  
-  await logDebug(sessionId, "JWT decoded successfully", {
-    credentialsCount: credentialsJwtArray?.length
-  });
-  // Convert credentials to claims
-  let claims;
-  try {
-    await logDebug(sessionId, "Converting credentials to claims", {
-      credentialsCount: credentialsJwtArray?.length,
-      credentialTypes: credentialsJwtArray?.map(c => typeof c)
-    });
-    claims = await flattenCredentialsToClaims(credentialsJwtArray, sessionId);
-    await logDebug(sessionId, "Claims conversion completed", {
-      claimsCount: Object.keys(claims || {}).length
-    });
-    if (!claims) {
-      throw new Error("Claims conversion returned null or undefined.");
-    }
-  } catch (error) {
-    await logError(sessionId, "Error processing claims in direct_post_jwt", {
-      error: error.message,
-      stack: error.stack
-    });
-    return res.sendStatus(500); // Internal Server Error
-  }
-  // Update session status
-  const index = sessions.indexOf(sessionId);
-  await logDebug(sessionId, "Looking up session index", {
-    index,
-    sessionId
-  });
-
-  if (index === -1) {
-    await logError(sessionId, "Session ID not found in direct_post_jwt", {
-      received: `sessionId '${sessionId}' not in sessions array`,
-      expected: "valid session ID",
-      sessionId
-    });
-    return res.sendStatus(404); // Not Found
-  }
-  // Log successful verification
-  verificationSessions[index].status = "success";
-  verificationSessions[index].claims = claims;
-
-  await logInfo(sessionId, "direct_post_jwt verification completed successfully", {
-    status: "success",
-    claimsCount: Object.keys(claims || {}).length
-  });
-  
-  res.sendStatus(200); // OK
-});
-
 verifierRouter.get(["/verificationStatus"], async (req, res) => {
   let sessionId = req.query.sessionId;
   await logInfo(sessionId, "Checking verification status", {
@@ -2405,11 +2483,8 @@ verifierRouter.get(["/verificationStatus"], async (req, res) => {
     sessionId
   });
   
-  // let index = sessions.indexOf(sessionId); // sessions.indexOf(sessionId+""); //
   const vpSession = await getVPSession(sessionId);
 
-  // console.log("index is");
-  // console.log(index);
   let result = null;
   if (vpSession) {
     let status = vpSession.status;
@@ -2420,15 +2495,7 @@ verifierRouter.get(["/verificationStatus"], async (req, res) => {
     
     if (status === "success") {
       result = vpSession.claims;
-      // sessions.splice(index, 1);
-      // verificationSessions.splice(index, 1);
-      // sessionHistory.addElement(sessionId);
-      // verificationResultsHistory.addElement(result);
     }
-    // console.log(`new sessions`);
-    // console.log(sessions);
-    // console.log("new session statuses");
-    // console.log(issuanceResults);
     res.json({
       status: status,
       reason: "ok",
@@ -2455,7 +2522,6 @@ verifierRouter.get(["/verificationStatusHistory"], async (req, res) => {
   });
   
   const vpSession = await getVPSession(sessionId);
-  // let index = sessionHistory.getCurrentArray().indexOf(sessionId);
   if (vpSession) {
     await logInfo(sessionId, "Verification status history retrieved", {
       status: vpSession.status
@@ -2503,38 +2569,6 @@ function buildVP(
   // presentation_definition;
 
   return result;
-}
-
-async function flattenCredentialsToClaims(credentials, sessionId = null) {
-  if (sessionId) {
-    await logDebug(sessionId, "Flattening credentials to claims", {
-      credentialsCount: credentials?.length
-    });
-  }
-  
-  let claimsResult = {};
-  credentials.forEach((credentialJwt) => {
-    let decodedCredential = jwt.decode(credentialJwt, {
-      complete: true,
-    });
-    if (decodedCredential) {
-      let claims = decodedCredential.payload.vc.credentialSubject;
-      if (sessionId) {
-        logDebug(sessionId, "Decoded credential claims", {
-          claims: Object.keys(claims)
-        }).catch(err => console.error("Failed to log credential claims:", err));
-      }
-      claimsResult = { ...claimsResult, ...claims };
-    }
-  });
-  
-  if (sessionId) {
-    await logInfo(sessionId, "Claims flattening completed", {
-      totalClaimsCount: Object.keys(claimsResult).length
-    });
-  }
-  
-  return claimsResult;
 }
 
 function getPresentationDefinitionFromCredType(type) {

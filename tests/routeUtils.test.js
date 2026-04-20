@@ -6,6 +6,8 @@ import {
   resolveCredentialOfferUrlScheme,
   getCredentialOfferSchemeFromRequest,
   getPublicIssuerBaseUrl,
+  createOpenID4VPRequestUrl,
+  resolvePidVpInvocationScheme,
 } from '../utils/routeUtils.js';
 
 describe('Route Utils', () => {
@@ -222,6 +224,53 @@ describe('Route Utils', () => {
         body: { offer_scheme: 'eu-eaa' },
       };
       expect(getCredentialOfferSchemeFromRequest(req)).to.equal(URL_SCHEMES.EU_EAA);
+    });
+  });
+
+  describe('createOpenID4VPRequestUrl (VP-CHECK-17 eu-eaap)', () => {
+    const uri = 'https://rp.example/vp/x509VPrequest/s1';
+    const clientId = 'x509_hash:abc';
+
+    it('builds eu-eaap:// with the same query shape as openid4vp', () => {
+      const eu = createOpenID4VPRequestUrl(uri, clientId, false, { scheme: 'eu-eaap' });
+      const oi = createOpenID4VPRequestUrl(uri, clientId, false, { scheme: 'openid4vp' });
+      expect(eu.startsWith('eu-eaap://?')).to.be.true;
+      expect(eu.replace(/^eu-eaap:/, 'openid4vp:')).to.equal(oi);
+    });
+
+    it('accepts eu_eaap and request_uri_method=post', () => {
+      const u = createOpenID4VPRequestUrl(uri, clientId, true, { scheme: 'eu_eaap' });
+      expect(u).to.include('request_uri_method=post');
+      expect(u.startsWith('eu-eaap://?')).to.be.true;
+    });
+
+    it('rejects unknown schemes', () => {
+      expect(() =>
+        createOpenID4VPRequestUrl(uri, clientId, false, { scheme: 'unknown' }),
+      ).to.throw(/eu-eaap/);
+    });
+  });
+
+  describe('resolvePidVpInvocationScheme (ETSI PID default)', () => {
+    it('defaults to openid4vp when not ETSI profile', () => {
+      expect(resolvePidVpInvocationScheme(undefined, false)).to.equal('openid4vp');
+      expect(resolvePidVpInvocationScheme('', false)).to.equal('openid4vp');
+    });
+
+    it('defaults to eu-eaap when ETSI profile', () => {
+      expect(resolvePidVpInvocationScheme(undefined, true)).to.equal('eu-eaap');
+    });
+
+    it('allows explicit openid4vp on ETSI profile', () => {
+      expect(resolvePidVpInvocationScheme('openid4vp', true)).to.equal('openid4vp');
+    });
+
+    it('allows explicit eu-eaap off ETSI profile', () => {
+      expect(resolvePidVpInvocationScheme('eu-eaap', false)).to.equal('eu-eaap');
+    });
+
+    it('rejects invalid values', () => {
+      expect(() => resolvePidVpInvocationScheme('mdoc-openid4vp', false)).to.throw();
     });
   });
 }); 

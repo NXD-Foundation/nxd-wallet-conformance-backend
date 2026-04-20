@@ -19,6 +19,8 @@ import {
   resolveVerifierResponseMode,
   resolveVerifierInfoFromRequest,
   resolveMdocInvocationScheme,
+  resolvePidVpInvocationScheme,
+  loadVerifierClientMetadataForRequests,
 } from "../../utils/routeUtils.js";
 import {
   logInfo,
@@ -56,7 +58,23 @@ vpStandardRouter.use((req, res, next) => {
  * - response_mode: direct_post | direct_post.jwt
  * - tx_data: true | false
  * - invocation_scheme: mdoc-openid4vp | openid4vp (only for credential_profile=mdl; default mdoc-openid4vp per RFC002)
+ * - scheme: alias of invocation_scheme for PID flows (e.g. scheme=eu-eaap, VP-CHECK-17)
+ * - profile=etsi: defaults same-device deep link to eu-eaap:// (override with invocation_scheme=openid4vp)
  */
+vpStandardRouter.get("/vp/etsi/same-device", (req, res) => {
+  const merged = { ...req.query, profile: "etsi" };
+  const usp = new URLSearchParams();
+  for (const [key, val] of Object.entries(merged)) {
+    if (val === undefined || val === null) continue;
+    const parts = Array.isArray(val) ? val : [val];
+    for (const item of parts) {
+      if (item === undefined || item === null) continue;
+      usp.append(key, String(item));
+    }
+  }
+  res.redirect(302, `/vp/request?${usp.toString()}`);
+});
+
 vpStandardRouter.get("/vp/request", async (req, res) => {
   let sessionId;
   let requestId = null;
@@ -69,6 +87,7 @@ vpStandardRouter.get("/vp/request", async (req, res) => {
 
     const profile = req.query.profile || "dcql";
     const isRfc002Profile = profile === "etsi" || profile === "rfc002";
+    const isEtsiProfile = profile === "etsi";
     const defaultX509ClientIdScheme = isRfc002Profile ? "x509_hash" : "x509_san_dns";
     const rawClientIdScheme = req.query.client_id_scheme || "x509";
     const clientIdScheme =
@@ -124,14 +143,17 @@ vpStandardRouter.get("/vp/request", async (req, res) => {
     }
 
     // Load client metadata
-    const clientMetadata = JSON.parse(
-      fs.readFileSync("./data/verifier-config.json", "utf-8")
-    );
+    const clientMetadata = loadVerifierClientMetadataForRequests(CONFIG.SERVER_URL);
     const verifierInfo = resolveVerifierInfoFromRequest(req);
+    const rawPidInvocation =
+      req.query.invocation_scheme != null &&
+      String(req.query.invocation_scheme).trim() !== ""
+        ? req.query.invocation_scheme
+        : req.query.scheme;
     const invocationScheme =
       credentialProfile === "mdl"
         ? resolveMdocInvocationScheme(req.query.invocation_scheme)
-        : "openid4vp";
+        : resolvePidVpInvocationScheme(rawPidInvocation, isEtsiProfile);
 
     // Determine client ID, private key, and kid based on client_id_scheme
     let clientId;
@@ -229,9 +251,7 @@ vpStandardRouter
       requestId = logHttpRequest(slog, "POST", `/vp/x509VPrequest/${sessionId}`, req.headers, req.body);
       try { slog("[VERIFIER] [START] Processing POST x509 VP request", { hasWalletNonce: !!walletNonce, hasWalletMetadata: !!walletMetadata }); } catch {}
 
-      const clientMetadata = JSON.parse(
-        fs.readFileSync("./data/verifier-config.json", "utf-8")
-      );
+      const clientMetadata = loadVerifierClientMetadataForRequests(CONFIG.SERVER_URL);
 
       const result = await processVPRequest({
         sessionId,
@@ -281,9 +301,7 @@ vpStandardRouter
       requestId = logHttpRequest(slog, "GET", `/vp/x509VPrequest/${sessionId}`, req.headers, req.query);
       try { slog("[VERIFIER] [START] Processing GET x509 VP request"); } catch {}
 
-      const clientMetadata = JSON.parse(
-        fs.readFileSync("./data/verifier-config.json", "utf-8")
-      );
+      const clientMetadata = loadVerifierClientMetadataForRequests(CONFIG.SERVER_URL);
 
       const result = await processVPRequest({
         sessionId,
@@ -339,9 +357,7 @@ vpStandardRouter
       requestId = logHttpRequest(slog, "POST", `/vp/didVPrequest/${sessionId}`, req.headers, req.body);
       try { slog("[VERIFIER] [START] Processing POST did:web VP request", { clientId: client_id, kid, hasWalletNonce: !!walletNonce, hasWalletMetadata: !!walletMetadata }); } catch {}
 
-      const clientMetadata = JSON.parse(
-        fs.readFileSync("./data/verifier-config.json", "utf-8")
-      );
+      const clientMetadata = loadVerifierClientMetadataForRequests(CONFIG.SERVER_URL);
       const privateKey = fs.readFileSync(
         "./didjwks/did_private_pkcs8.key",
         "utf8"
@@ -396,9 +412,7 @@ vpStandardRouter
       requestId = logHttpRequest(slog, "GET", `/vp/didVPrequest/${sessionId}`, req.headers, req.query);
       try { slog("[VERIFIER] [START] Processing GET did:web VP request", { clientId: client_id, kid }); } catch {}
 
-      const clientMetadata = JSON.parse(
-        fs.readFileSync("./data/verifier-config.json", "utf-8")
-      );
+      const clientMetadata = loadVerifierClientMetadataForRequests(CONFIG.SERVER_URL);
       const privateKey = fs.readFileSync(
         "./didjwks/did_private_pkcs8.key",
         "utf8"
@@ -464,9 +478,7 @@ vpStandardRouter
       requestId = logHttpRequest(slog, "POST", `/vp/didJwkVPrequest/${sessionId}`, req.headers, req.body);
       try { slog("[VERIFIER] [START] Processing POST did:jwk VP request", { clientId: client_id, kid, hasWalletNonce: !!walletNonce, hasWalletMetadata: !!walletMetadata }); } catch {}
 
-      const clientMetadata = JSON.parse(
-        fs.readFileSync("./data/verifier-config.json", "utf-8")
-      );
+      const clientMetadata = loadVerifierClientMetadataForRequests(CONFIG.SERVER_URL);
 
       const result = await processVPRequest({
         sessionId,
@@ -522,9 +534,7 @@ vpStandardRouter
       requestId = logHttpRequest(slog, "GET", `/vp/didJwkVPrequest/${sessionId}`, req.headers, req.query);
       try { slog("[VERIFIER] [START] Processing GET did:jwk VP request", { clientId: client_id, kid }); } catch {}
 
-      const clientMetadata = JSON.parse(
-        fs.readFileSync("./data/verifier-config.json", "utf-8")
-      );
+      const clientMetadata = loadVerifierClientMetadataForRequests(CONFIG.SERVER_URL);
 
       const result = await processVPRequest({
         sessionId,

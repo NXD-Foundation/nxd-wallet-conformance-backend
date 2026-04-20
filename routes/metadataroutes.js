@@ -3,11 +3,13 @@ import fs from "fs";
 import * as jose from "jose";
 import { pemToJWK } from "../utils/cryptoUtils.js";
 import { pemToBase64Der } from "../utils/sdjwtUtils.js";
-import { PROXY_PATH } from "../utils/routeUtils.js";
+import {
+  PROXY_PATH,
+  buildOpenIdVerifierMetadataDocument,
+  getPublicIssuerBaseUrl,
+} from "../utils/routeUtils.js";
 import { buildIssuerInfo } from "../utils/issuerInfo.js";
 const metadataRouter = express.Router();
-
-const serverURL = process.env.SERVER_URL || "http://localhost:3000";
 
 const privateKey = fs.readFileSync("./private-key.pem", "utf-8");
 const publicKeyPem = fs.readFileSync("./public-key.pem", "utf-8");
@@ -77,6 +79,7 @@ metadataRouter.get(
     "/openid-credential-issuer/:suffix(*)",
   ],
   async (req, res) => {
+    const serverURL = getPublicIssuerBaseUrl(req);
     const rawSuffix = req.params?.suffix || "";
     const normalizedSuffix = rawSuffix.replace(/^\/+/, "");
 
@@ -132,6 +135,23 @@ metadataRouter.get(
 );
 
 /**
+ * OpenID Verifier metadata (RFC002 §8.4)
+ */
+metadataRouter.get("/.well-known/openid-verifier-metadata", (req, res) => {
+  try {
+    const serverURL = getPublicIssuerBaseUrl(req);
+    const doc = buildOpenIdVerifierMetadataDocument({ serverURL });
+    res.type("application/json").json(doc);
+  } catch (err) {
+    console.error("[openid-verifier-metadata]", err?.message || err);
+    res.status(500).type("application/json").json({
+      error: "server_error",
+      error_description: err?.message || "Failed to build verifier metadata",
+    });
+  }
+});
+
+/**
  * Authorization Server Metadata
  */
 metadataRouter.get(
@@ -142,6 +162,7 @@ metadataRouter.get(
     "/oauth-authorization-server/rfc-issuer", //this is required in case the issuer is behind a reverse proxy: see https://www.rfc-editor.org/rfc/rfc8414.html
   ],
   async (req, res) => {
+    const serverURL = getPublicIssuerBaseUrl(req);
     oauthConfig.issuer = serverURL;
     oauthConfig.authorization_endpoint = serverURL + "/authorize";
     oauthConfig.pushed_authorization_request_endpoint = serverURL + "/par";
@@ -180,6 +201,7 @@ which contains the Issuer's public keys. The value of this field MUST be a JSON 
   */
   
   async (req, res) => {
+    const serverURL = getPublicIssuerBaseUrl(req);
     const metadata ={
       issuer: serverURL,
       jwks : {

@@ -19,6 +19,8 @@ import {
   encodeCs03TransactionData,
   validateCs03QesResponse,
   validateCs03ResponseUriAlignment,
+  sendVerifierRfc002Error,
+  VerifierRfc002Errors as VErr,
 } from "../../utils/routeUtils.js";
 import {
   summarizeCs03ValidationForLog,
@@ -424,7 +426,12 @@ x509Router.get("/cs03-document", (req, res) => {
       try {
         docSlog?.("[VERIFIER] CS-03 sample PDF send failed", { error: err.message });
       } catch {}
-      res.status(404).json({ error: "cs03-sample.pdf missing (see data/cs03-sample.pdf)" });
+      sendVerifierRfc002Error(
+        res,
+        404,
+        VErr.MALFORMED_RESPONSE,
+        "cs03-sample.pdf missing (see data/cs03-sample.pdf)",
+      );
     } else if (!err) {
       try {
         docSlog?.("[VERIFIER] CS-03 sample PDF served OK", {});
@@ -464,7 +471,7 @@ x509Router.post(
             error: "session not found",
           });
         }
-        return res.status(404).json({ error: "session not found" });
+        return sendVerifierRfc002Error(res, 404, VErr.FAILED_CORRELATION, "session not found");
       }
       if (!vpSession.cs03_signing || !vpSession.cs03_oob) {
         try {
@@ -478,7 +485,12 @@ x509Router.post(
             error: "not CS-03 OOB session",
           });
         }
-        return res.status(400).json({ error: "session is not configured for CS-03 out-of-band response" });
+        return sendVerifierRfc002Error(
+          res,
+          400,
+          VErr.MALFORMED_RESPONSE,
+          "session is not configured for CS-03 out-of-band response",
+        );
       }
       if (!vpSession.cs03_callback_token || req.query.callback_token !== vpSession.cs03_callback_token) {
         try {
@@ -491,7 +503,7 @@ x509Router.post(
             error: "invalid callback token",
           });
         }
-        return res.status(403).json({ error: "invalid callback token" });
+        return sendVerifierRfc002Error(res, 403, VErr.FAILED_CORRELATION, "invalid callback token");
       }
       const qesValidation = validateCs03QesResponse(req.body);
       if (!qesValidation.ok) {
@@ -505,7 +517,12 @@ x509Router.post(
             error: qesValidation.error,
           });
         }
-        return res.status(400).json({ error: "invalid_request", error_description: qesValidation.error });
+        return sendVerifierRfc002Error(
+          res,
+          400,
+          VErr.MALFORMED_RESPONSE,
+          qesValidation.error,
+        );
       }
       const artifactValidation = await validateCs03CredentialResponses({
         qesByCredentialId: {
@@ -526,11 +543,12 @@ x509Router.post(
             validation: artifactValidationSummary,
           });
         }
-        return res.status(400).json({
-          error: "invalid_request",
-          error_description: "CS-03 signed artifact validation failed",
-          validation: artifactValidationSummary,
-        });
+        return sendVerifierRfc002Error(
+          res,
+          400,
+          VErr.FAILED_VALIDATION,
+          "CS-03 signed artifact validation failed",
+        );
       }
       vpSession.qes_oob_response = {
         [CS03_SIGNING_CREDENTIAL_ID]: req.body,
@@ -570,7 +588,7 @@ x509Router.post(
           });
         } catch {}
       }
-      res.status(500).json({ error: e.message });
+      sendVerifierRfc002Error(res, 500, VErr.SERVER_ERROR, e.message);
     }
   }
 );

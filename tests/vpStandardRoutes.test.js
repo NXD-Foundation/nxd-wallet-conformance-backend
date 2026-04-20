@@ -1,6 +1,7 @@
 import { expect } from 'chai';
 import request from 'supertest';
 import express from 'express';
+import vpStandardRouter from '../routes/verify/vpStandardRoutes.js';
 
 const app = express();
 app.use(express.json());
@@ -57,5 +58,34 @@ describe('VP Standard Routes', () => {
       .expect(200);
 
     expect(response.body).to.have.property('response_mode', 'direct_post');
+  });
+});
+
+describe('VP Standard Routes — ETSI same-device entry', () => {
+  const routerApp = express();
+  routerApp.use('/', vpStandardRouter);
+
+  it('GET /vp/etsi/same-device redirects to /vp/request with profile=etsi', async () => {
+    const res = await request(routerApp)
+      .get('/vp/etsi/same-device')
+      .query({ credential_profile: 'pid', client_id_scheme: 'x509' });
+
+    expect(res.status).to.equal(302);
+    const loc = res.headers.location;
+    expect(loc).to.match(/^\/vp\/request\?/);
+    const qs = new URLSearchParams(loc.replace(/^\/vp\/request\?/, ''));
+    expect(qs.get('profile')).to.equal('etsi');
+    expect(qs.get('credential_profile')).to.equal('pid');
+  });
+
+  it('forces profile=etsi even if query tries to override', async () => {
+    const res = await request(routerApp)
+      .get('/vp/etsi/same-device')
+      .query({ profile: 'dcql' });
+
+    expect(res.status).to.equal(302);
+    const loc = res.headers.location;
+    const qs = new URLSearchParams(loc.replace(/^\/vp\/request\?/, ''));
+    expect(qs.get('profile')).to.equal('etsi');
   });
 });

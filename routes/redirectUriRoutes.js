@@ -5,6 +5,7 @@ import qr from "qr-image";
 import imageDataURI from "image-data-uri";
 import { streamToBuffer } from "@jorgeferrero/stream-to-buffer";
 import { generateNonce } from "../utils/cryptoUtils.js";
+import { loadVerifierClientMetadataForRequests } from "../utils/routeUtils.js";
 import { buildVPbyValue } from "../utils/tokenUtils.js";
 import { getSDsFromPresentationDef } from "../utils/vpHeplers.js";
 import { getVPSession, storeVPSession } from "../services/cacheServiceRedis.js";
@@ -16,9 +17,7 @@ const serverURL = process.env.SERVER_URL || "http://localhost:3000";
 const proxyPath = process.env.PROXY_PATH || null;
 
 // Load Verifier Configuration / Client Metadata
-const clientMetadata = JSON.parse(
-  fs.readFileSync("./data/verifier-config.json", "utf-8")
-);
+const clientMetadata = loadVerifierClientMetadataForRequests(serverURL);
 
 // Load presentation definitions
 const presentation_definition_sdJwt = JSON.parse(
