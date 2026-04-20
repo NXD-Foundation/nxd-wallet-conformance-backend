@@ -10,6 +10,7 @@ import {
   createTransactionData,
   createErrorResponse,
   resolveVerifierX509ClientId,
+  resolveVerifierResponseMode,
   resolveVerifierInfoFromRequest,
   parseCs03Query,
   CS03_DCQL_QUERY,
@@ -136,7 +137,7 @@ x509Router.get("/generateVPRequest", async (req, res) => {
   let requestId = null;
   
   try {
-    const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
+    const responseMode = resolveVerifierResponseMode(req.query.response_mode, true);
     const jarAlg = req.query.jar_alg || CONFIG.DEFAULT_JAR_ALG;
     const clientId = resolveVerifierX509ClientId(req.query.client_id_scheme, { responseMode, jarAlg });
     const effectiveVerifierInfo = resolveVerifierInfoFromRequest(req, verifierInfo);
@@ -180,7 +181,7 @@ x509Router.get("/generateVPRequestGet", async (req, res) => {
   let requestId = null;
   
   try {
-    const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
+    const responseMode = resolveVerifierResponseMode(req.query.response_mode, true);
     const jarAlg = req.query.jar_alg || CONFIG.DEFAULT_JAR_ALG;
     const clientId = resolveVerifierX509ClientId(req.query.client_id_scheme, { responseMode, jarAlg });
     const effectiveVerifierInfo = resolveVerifierInfoFromRequest(req, verifierInfo);
@@ -224,7 +225,7 @@ x509Router.get("/generateVPRequestDCQL", async (req, res) => {
   let requestId = null;
   
   try {
-    const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
+    const responseMode = resolveVerifierResponseMode(req.query.response_mode, true);
     const jarAlg = req.query.jar_alg || CONFIG.DEFAULT_JAR_ALG;
     const clientId = resolveVerifierX509ClientId(req.query.client_id_scheme, { responseMode, jarAlg });
     const effectiveVerifierInfo = resolveVerifierInfoFromRequest(req, verifierInfo);
@@ -280,7 +281,7 @@ x509Router.get("/generateVPRequestDCQLGET", async (req, res) => {
   let requestId = null;
   
   try {
-    const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
+    const responseMode = resolveVerifierResponseMode(req.query.response_mode, true);
     const jarAlg = req.query.jar_alg || CONFIG.DEFAULT_JAR_ALG;
     const clientId = resolveVerifierX509ClientId(req.query.client_id_scheme, { responseMode, jarAlg });
     const effectiveVerifierInfo = resolveVerifierInfoFromRequest(req, verifierInfo);
@@ -336,7 +337,7 @@ x509Router.get("/generateVPRequestTransaction", async (req, res) => {
   let requestId = null;
   
   try {
-    const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
+    const responseMode = resolveVerifierResponseMode(req.query.response_mode, true);
     const jarAlg = req.query.jar_alg || CONFIG.DEFAULT_JAR_ALG;
     const clientId = resolveVerifierX509ClientId(req.query.client_id_scheme, { responseMode, jarAlg });
     const effectiveVerifierInfo = resolveVerifierInfoFromRequest(req, verifierInfo);
@@ -585,7 +586,7 @@ x509Router
     let requestId = null;
     
     try {
-      const responseMode = req.body.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
+      const responseMode = resolveVerifierResponseMode(req.body.response_mode, true);
       const jarAlg = req.query.jar_alg || CONFIG.DEFAULT_JAR_ALG;
       const clientId = resolveVerifierX509ClientId(req.query.client_id_scheme, { responseMode, jarAlg });
       const effectiveVerifierInfo = resolveVerifierInfoFromRequest(req, verifierInfo);
@@ -646,7 +647,7 @@ x509Router
     let requestId = null;
     
     try {
-      const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
+      const responseMode = resolveVerifierResponseMode(req.query.response_mode, true);
       const jarAlg = req.query.jar_alg || CONFIG.DEFAULT_JAR_ALG;
       const clientId = resolveVerifierX509ClientId(req.query.client_id_scheme, { responseMode, jarAlg });
       const effectiveVerifierInfo = resolveVerifierInfoFromRequest(req, verifierInfo);

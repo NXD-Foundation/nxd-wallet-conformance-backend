@@ -34,6 +34,7 @@ const mockVpHelpers = {
 
 // Mock streamToBuffer function
 const mockStreamToBuffer = sinon.stub().resolves(Buffer.from('mock-buffer'));
+const STRICT_DEFAULT_RESPONSE_MODE = 'direct_post.jwt';
 
 const X509_SAN_DNS_CLIENT_ID = 'x509_san_dns:dss.aegean.gr';
 const X509_HASH_CLIENT_ID = (() => {
@@ -70,7 +71,7 @@ const testRouter = express.Router();
 testRouter.get('/generateVPRequest', async (req, res) => {
   try {
     const uuid = req.query.sessionId || 'test-uuid-123';
-    const responseMode = req.query.response_mode || 'direct_post';
+    const responseMode = req.query.response_mode || STRICT_DEFAULT_RESPONSE_MODE;
     const jarAlg = req.query.jar_alg || 'ES256';
     const nonce = mockCryptoUtils.generateNonce(16);
     const client_id = resolveClientId(req.query.client_id_scheme, jarAlg);
@@ -136,7 +137,7 @@ testRouter.get('/generateVPRequest', async (req, res) => {
 testRouter.get('/generateVPRequestGet', async (req, res) => {
   try {
     const uuid = req.query.sessionId || 'test-uuid-123';
-    const responseMode = req.query.response_mode || 'direct_post';
+    const responseMode = req.query.response_mode || STRICT_DEFAULT_RESPONSE_MODE;
     const jarAlg = req.query.jar_alg || 'ES256';
     const nonce = mockCryptoUtils.generateNonce(16);
     const client_id = resolveClientId(req.query.client_id_scheme, jarAlg);
@@ -184,7 +185,7 @@ testRouter.get('/generateVPRequestDCQL', async (req, res) => {
   try {
     const uuid = req.query.sessionId || 'test-uuid-123';
     const nonce = mockCryptoUtils.generateNonce(16);
-    const responseMode = req.query.response_mode || 'direct_post';
+    const responseMode = req.query.response_mode || STRICT_DEFAULT_RESPONSE_MODE;
     const jarAlg = req.query.jar_alg || 'ES256';
     const client_id = resolveClientId(req.query.client_id_scheme, jarAlg);
 
@@ -262,7 +263,7 @@ testRouter.get('/generateVPRequestDCQLGET', async (req, res) => {
   try {
     const uuid = req.query.sessionId || 'test-uuid-123';
     const nonce = mockCryptoUtils.generateNonce(16);
-    const responseMode = req.query.response_mode || 'direct_post';
+    const responseMode = req.query.response_mode || STRICT_DEFAULT_RESPONSE_MODE;
     const jarAlg = req.query.jar_alg || 'ES256';
     const client_id = resolveClientId(req.query.client_id_scheme, jarAlg);
 
@@ -325,7 +326,7 @@ testRouter.get('/generateVPRequestTransaction', async (req, res) => {
   try {
     const uuid = req.query.sessionId || 'test-uuid-123';
     const nonce = mockCryptoUtils.generateNonce(16);
-    const responseMode = req.query.response_mode || 'direct_post';
+    const responseMode = req.query.response_mode || STRICT_DEFAULT_RESPONSE_MODE;
     const jarAlg = req.query.jar_alg || 'ES256';
     const client_id = resolveClientId(req.query.client_id_scheme, jarAlg);
 
@@ -453,7 +454,7 @@ testRouter.route('/x509VPrequest/:id')
     try {
       const uuid = req.params.id;
       const { wallet_nonce, wallet_metadata } = req.body;
-      const responseMode = req.body.response_mode || 'direct_post';
+      const responseMode = req.body.response_mode || STRICT_DEFAULT_RESPONSE_MODE;
       const jarAlg = req.query.jar_alg || 'ES256';
       const client_id = resolveClientId(req.query.client_id_scheme, jarAlg);
 
@@ -470,7 +471,7 @@ testRouter.route('/x509VPrequest/:id')
   .get(async (req, res) => {
     try {
       const uuid = req.params.id;
-      const responseMode = req.query.response_mode || 'direct_post';
+      const responseMode = req.query.response_mode || STRICT_DEFAULT_RESPONSE_MODE;
       const jarAlg = req.query.jar_alg || 'ES256';
       const client_id = resolveClientId(req.query.client_id_scheme, jarAlg);
       const result = await generateX509VPRequest(uuid, { test: 'metadata' }, 'http://localhost:3000', undefined, undefined, client_id);
@@ -530,6 +531,8 @@ describe('X509 Routes', () => {
       expect(response.body.deepLink).to.not.include('redirect_uri=');
       // For x509 tests the client_id is not DID-based; skip strict scheme check here.
       expect(response.body.deepLink).to.not.include('client_id_scheme=');
+      const storedSession = mockCacheService.storeVPSession.getCall(0).args[1];
+      expect(storedSession).to.have.property('response_mode', STRICT_DEFAULT_RESPONSE_MODE);
     });
 
     it('should generate VP request with custom sessionId', async () => {
@@ -553,6 +556,8 @@ describe('X509 Routes', () => {
       expect(response.body).to.have.property('deepLink');
       expect(response.body.deepLink).to.not.include('redirect_uri=');
       expect(response.body.deepLink).to.not.include('client_id_scheme=');
+      const storedSession = mockCacheService.storeVPSession.getCall(0).args[1];
+      expect(storedSession).to.have.property('response_mode', 'direct_post');
     });
 
     it('should call buildVpRequestJWT with correct parameters', async () => {
@@ -565,6 +570,7 @@ describe('X509 Routes', () => {
       expect(callArgs[0]).to.equal(X509_HASH_CLIENT_ID); // client_id
       expect(callArgs[1]).to.include('/direct_post/'); // response_uri
       expect(callArgs[2]).to.be.an('object'); // presentation_definition
+      expect(callArgs[11]).to.equal(STRICT_DEFAULT_RESPONSE_MODE);
     });
 
     it('should keep x509_san_dns when legacy client_id_scheme override is provided', async () => {

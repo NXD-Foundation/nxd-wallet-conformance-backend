@@ -179,6 +179,47 @@ describe('Verifier X509 client_id defaults', () => {
     assert.deepStrictEqual(cfg.client_id_schemes_supported, ['x509_hash', 'x509_san_dns']);
   });
 
+  it('verifier-config must include an encryption JWK for direct_post.jwt', () => {
+    const cfg = JSON.parse(fs.readFileSync('./data/verifier-config.json', 'utf-8'));
+    assert.ok(Array.isArray(cfg.jwks?.keys) && cfg.jwks.keys.length > 0, 'verifier-config.jwks.keys required');
+    assert.ok(cfg.jwks.keys.some((jwk) => jwk?.use === 'enc'), 'verifier-config must include an enc JWK');
+  });
+
+  it('loadConfigurationFiles must fail fast when verifier-config lacks an encryption JWK', async () => {
+    const rt = await import('../utils/routeUtils.js');
+    fs.mkdirSync('/tmp/rfc002-no-enc', { recursive: true });
+    const tempVerifierConfigPath = '/tmp/rfc002-no-enc/verifier-config.json';
+    fs.writeFileSync(
+      tempVerifierConfigPath,
+      JSON.stringify({
+        client_id: 'x509_hash:test',
+        jwks: {
+          keys: [
+            {
+              kty: 'EC',
+              crv: 'P-256',
+              x: 'abc',
+              y: 'def',
+              use: 'sig'
+            }
+          ]
+        }
+      })
+    );
+
+    assert.throws(
+      () => rt.loadConfigurationFiles('./data/presentation_definition_pid.json', tempVerifierConfigPath),
+      /Failed to read configuration file/
+    );
+  });
+
+  it('resolveVerifierResponseMode must default strict routes to direct_post.jwt while keeping legacy direct_post overrides', async () => {
+    const rt = await import('../utils/routeUtils.js');
+    assert.strictEqual(rt.resolveVerifierResponseMode(undefined, true), 'direct_post.jwt');
+    assert.strictEqual(rt.resolveVerifierResponseMode('direct_post', true), 'direct_post');
+    assert.strictEqual(rt.resolveVerifierResponseMode(undefined, false), rt.CONFIG.DEFAULT_RESPONSE_MODE);
+  });
+
   it('verifier-info config must publish the RFC002 verifier_info fields', () => {
     const verifierInfo = JSON.parse(fs.readFileSync('./data/verifier-info.json', 'utf-8'));
 

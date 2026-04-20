@@ -9,6 +9,7 @@ import {
   handleSessionCreation,
   createErrorResponse,
   resolveVerifierX509ClientId,
+  resolveVerifierResponseMode,
   resolveVerifierInfoFromRequest,
 } from "../../utils/routeUtils.js";
 import {
@@ -52,7 +53,7 @@ const { clientMetadata: clientMetadataMDL } = loadConfigurationFiles(
 mdlRouter.get("/generateVPRequest", async (req, res) => {
   try {
     const sessionId = req.query.sessionId || uuidv4();
-    const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
+    const responseMode = resolveVerifierResponseMode(req.query.response_mode, true);
     const jarAlg = req.query.jar_alg || CONFIG.DEFAULT_JAR_ALG;
     const clientId = resolveVerifierX509ClientId(req.query.client_id_scheme, { responseMode, jarAlg });
     const effectiveVerifierInfo = resolveVerifierInfoFromRequest(req, verifierInfo);
@@ -104,7 +105,7 @@ mdlRouter
     try {
       const sessionId = req.params.id;
       const { wallet_nonce: walletNonce, wallet_metadata: walletMetadata } = req.body;
-      const responseMode = req.body.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
+      const responseMode = resolveVerifierResponseMode(req.body.response_mode, true);
       const jarAlg = req.query.jar_alg || CONFIG.DEFAULT_JAR_ALG;
       const clientId = resolveVerifierX509ClientId(req.query.client_id_scheme, { responseMode, jarAlg });
       const effectiveVerifierInfo = resolveVerifierInfoFromRequest(req, verifierInfo);
@@ -175,7 +176,7 @@ mdlRouter
   .get(async (req, res) => {
     let sessionId = req.params.id;
     try {
-      const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
+      const responseMode = resolveVerifierResponseMode(req.query.response_mode, true);
       const jarAlg = req.query.jar_alg || CONFIG.DEFAULT_JAR_ALG;
       const clientId = resolveVerifierX509ClientId(req.query.client_id_scheme, { responseMode, jarAlg });
       const effectiveVerifierInfo = resolveVerifierInfoFromRequest(req, verifierInfo);
@@ -188,7 +189,7 @@ mdlRouter
       // Handle case where no session ID is provided
       if (!sessionId) {
         sessionId = req.query.sessionId || uuidv4();
-        const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
+        const responseMode = resolveVerifierResponseMode(req.query.response_mode, true);
         await logInfo(sessionId, "Creating new session for mDL request", {
           clientId,
           sessionId,
@@ -204,7 +205,7 @@ mdlRouter
         await logInfo(sessionId, "No existing session found, creating new one", {
           sessionId
         });
-        const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
+        const responseMode = resolveVerifierResponseMode(req.query.response_mode, true);
         await handleSessionCreation(sessionId, presentationDefinitionMdl, responseMode, clientId, effectiveVerifierInfo, jarAlg);
         await logInfo(sessionId, "New mDL session created", {
           sessionId

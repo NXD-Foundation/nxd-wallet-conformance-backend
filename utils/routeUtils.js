@@ -108,6 +108,44 @@ export const CLIENT_METADATA = {
   },
 };
 
+function isVerifierConfigPath(clientMetadataPath) {
+  return path.basename(clientMetadataPath || "") === "verifier-config.json";
+}
+
+export function hasEncryptionJwk(clientMetadata) {
+  const keys = clientMetadata?.jwks?.keys;
+  if (!Array.isArray(keys)) {
+    return false;
+  }
+
+  return keys.some((jwk) => {
+    if (!jwk || typeof jwk !== "object") {
+      return false;
+    }
+    const declaredUse = typeof jwk.use === "string" ? jwk.use.toLowerCase() : "";
+    const keyOps = Array.isArray(jwk.key_ops) ? jwk.key_ops : [];
+    return (
+      declaredUse === "enc" ||
+      keyOps.includes("deriveKey") ||
+      keyOps.includes("deriveBits") ||
+      keyOps.includes("unwrapKey") ||
+      keyOps.includes("decrypt")
+    );
+  });
+}
+
+export function validateVerifierEncryptionConfig(clientMetadata, clientMetadataPath = "./data/verifier-config.json") {
+  if (!hasEncryptionJwk(clientMetadata)) {
+    throw new Error(
+      `Verifier metadata at ${clientMetadataPath} must contain at least one encryption JWK for direct_post.jwt`
+    );
+  }
+}
+
+export function resolveVerifierResponseMode(rawResponseMode, strictDefault = false) {
+  return rawResponseMode || (strictDefault ? "direct_post.jwt" : CONFIG.DEFAULT_RESPONSE_MODE);
+}
+
 export const TX_CODE_CONFIG = {
   length: 4,
   input_mode: "numeric",
@@ -1391,6 +1429,10 @@ export function loadConfigurationFiles(presentationDefPath, clientMetadataPath, 
     const clientMetadata = JSON.parse(
       fs.readFileSync(clientMetadataPath, "utf-8")
     );
+
+    if (isVerifierConfigPath(clientMetadataPath)) {
+      validateVerifierEncryptionConfig(clientMetadata, clientMetadataPath);
+    }
 
     const result = {
       presentationDefinition,

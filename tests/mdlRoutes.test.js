@@ -34,6 +34,7 @@ const mockVpHelpers = {
 
 // Mock streamToBuffer function
 const mockStreamToBuffer = sinon.stub().resolves(Buffer.from('mock-buffer'));
+const STRICT_DEFAULT_RESPONSE_MODE = 'direct_post.jwt';
 
 const X509_SAN_DNS_CLIENT_ID = 'x509_san_dns:dss.aegean.gr';
 const X509_HASH_CLIENT_ID = (() => {
@@ -70,7 +71,7 @@ const testRouter = express.Router();
 testRouter.get('/generateVPRequest', async (req, res) => {
   try {
     const uuid = req.query.sessionId || 'test-uuid-123';
-    const responseMode = req.query.response_mode || 'direct_post';
+    const responseMode = req.query.response_mode || STRICT_DEFAULT_RESPONSE_MODE;
     const jarAlg = req.query.jar_alg || 'ES256';
     const nonce = mockCryptoUtils.generateNonce(16);
     const client_id = resolveClientId(req.query.client_id_scheme, jarAlg);
@@ -174,7 +175,7 @@ testRouter.route('/VPrequest/:id')
       let uuid = req.params.id;
       if (!uuid) {
         uuid = req.query.sessionId || 'test-uuid-123';
-        const responseMode = req.query.response_mode || 'direct_post';
+        const responseMode = req.query.response_mode || STRICT_DEFAULT_RESPONSE_MODE;
         const jarAlg = req.query.jar_alg || 'ES256';
         const nonce = mockCryptoUtils.generateNonce(16);
 
@@ -196,7 +197,7 @@ testRouter.route('/VPrequest/:id')
         // Only create a new session if this is not a test for missing session
         // Check if the UUID contains 'invalid' to determine if this is a missing session test
         if (uuid && !uuid.includes('invalid')) {
-          const responseMode = req.query.response_mode || 'direct_post';
+          const responseMode = req.query.response_mode || STRICT_DEFAULT_RESPONSE_MODE;
           const jarAlg = req.query.jar_alg || 'ES256';
           const nonce = mockCryptoUtils.generateNonce(16);
 
@@ -360,6 +361,8 @@ describe('MDL Routes', () => {
       expect(response.body.deepLink).to.not.include('redirect_uri=');
       expect(response.body.deepLink).to.include(`client_id=${encodeURIComponent(X509_HASH_CLIENT_ID)}`);
       expect(response.body.deepLink).to.not.include('client_id_scheme=');
+      const storedSession = mockCacheService.storeVPSession.getCall(0).args[1];
+      expect(storedSession).to.have.property('response_mode', STRICT_DEFAULT_RESPONSE_MODE);
     });
 
     it('should generate VP request with custom sessionId', async () => {
@@ -384,6 +387,8 @@ describe('MDL Routes', () => {
       expect(response.body.deepLink).to.not.include('redirect_uri=');
       expect(response.body.deepLink).to.include(`client_id=${encodeURIComponent(X509_HASH_CLIENT_ID)}`);
       expect(response.body.deepLink).to.not.include('client_id_scheme=');
+      const storedSession = mockCacheService.storeVPSession.getCall(0).args[1];
+      expect(storedSession).to.have.property('response_mode', 'direct_post');
     });
 
     it('should store session with mDL presentation definition', async () => {

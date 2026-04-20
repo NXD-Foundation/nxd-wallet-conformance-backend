@@ -16,6 +16,7 @@ import {
   createErrorResponse,
   bindSessionLoggingContext,
   resolveVerifierX509ClientId,
+  resolveVerifierResponseMode,
   resolveVerifierInfoFromRequest,
 } from "../../utils/routeUtils.js";
 import {
@@ -72,7 +73,7 @@ vpStandardRouter.get("/vp/request", async (req, res) => {
       rawClientIdScheme === "x509" ? defaultX509ClientIdScheme : rawClientIdScheme;
     const credentialProfile = req.query.credential_profile || "pid";
     const requestUriMethod = req.query.request_uri_method || "post";
-    const responseMode = req.query.response_mode || "direct_post";
+    const responseMode = resolveVerifierResponseMode(req.query.response_mode, isRfc002Profile);
     const jarAlg = req.query.jar_alg || CONFIG.DEFAULT_JAR_ALG;
     const txData = req.query.tx_data === "true";
 
