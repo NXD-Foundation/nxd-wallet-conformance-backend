@@ -8,6 +8,8 @@ import qr from 'qr-image';
 import imageDataURI from 'image-data-uri';
 import { streamToBuffer } from '@jorgeferrero/stream-to-buffer';
 import { v4 as uuidv4 } from 'uuid';
+import { createHash } from 'crypto';
+import base64url from 'base64url';
 
 // Create Express app
 const app = express();
@@ -32,6 +34,20 @@ const mockVpHelpers = {
 // Mock streamToBuffer function
 const mockStreamToBuffer = sinon.stub().resolves(Buffer.from('mock-buffer'));
 
+const X509_SAN_DNS_CLIENT_ID = 'x509_san_dns:dss.aegean.gr';
+const X509_HASH_CLIENT_ID = (() => {
+  const pem = fs.readFileSync('./x509/client_certificate.crt', 'utf8')
+    .replace('-----BEGIN CERTIFICATE-----', '')
+    .replace('-----END CERTIFICATE-----', '')
+    .replace(/\s+/g, '');
+  const der = Buffer.from(pem, 'base64');
+  return `x509_hash:${base64url.encode(createHash('sha256').update(der).digest())}`;
+})();
+
+function resolveClientId(clientIdScheme) {
+  return clientIdScheme === 'x509_san_dns' ? X509_SAN_DNS_CLIENT_ID : X509_HASH_CLIENT_ID;
+}
+
 // Create a test router that mimics the actual mdlRoutes behavior
 const testRouter = express.Router();
 
@@ -41,9 +57,9 @@ testRouter.get('/generateVPRequest', async (req, res) => {
     const uuid = req.query.sessionId || 'test-uuid-123';
     const responseMode = req.query.response_mode || 'direct_post';
     const nonce = mockCryptoUtils.generateNonce(16);
+    const client_id = resolveClientId(req.query.client_id_scheme);
 
     const response_uri = `http://localhost:3000/direct_post/${uuid}`;
-    const client_id = 'decentralized_identifier:did:web:localhost:3000';
 
     // Store session data
     await mockCacheService.storeVPSession(uuid, {
@@ -51,6 +67,7 @@ testRouter.get('/generateVPRequest', async (req, res) => {
       status: 'pending',
       claims: null,
       presentation_definition: { test: 'mdl_definition' },
+      client_id,
       nonce: nonce,
       sdsRequested: mockVpHelpers.getSDsFromPresentationDef({ test: 'mdl_definition' }),
       response_mode: responseMode,
@@ -83,7 +100,7 @@ testRouter.get('/generateVPRequest', async (req, res) => {
 });
 
 // Helper function to process VP Request
-async function generateX509MDLVPRequest(uuid, clientMetadata, serverURL, wallet_nonce, wallet_metadata) {
+async function generateX509MDLVPRequest(uuid, clientMetadata, serverURL, wallet_nonce, wallet_metadata, client_id = X509_HASH_CLIENT_ID) {
   const vpSession = await mockCacheService.getVPSession(uuid);
 
   if (!vpSession) {
@@ -91,7 +108,6 @@ async function generateX509MDLVPRequest(uuid, clientMetadata, serverURL, wallet_
   }
 
   const response_uri = `${serverURL}/direct_post/${uuid}`;
-  const client_id = 'x509_san_dns:dss.aegean.gr';
 
   const vpRequestJWT = await mockCryptoUtils.buildVpRequestJWT(
     client_id,
@@ -121,8 +137,9 @@ testRouter.route('/VPrequest/:id')
     try {
       const uuid = req.params.id;
       const { wallet_nonce, wallet_metadata } = req.body;
+      const client_id = resolveClientId(req.query.client_id_scheme);
 
-      const result = await generateX509MDLVPRequest(uuid, { test: 'metadata' }, 'http://localhost:3000', wallet_nonce, wallet_metadata);
+      const result = await generateX509MDLVPRequest(uuid, { test: 'metadata' }, 'http://localhost:3000', wallet_nonce, wallet_metadata, client_id);
 
       if (result.error) {
         return res.status(result.status).json({ error: result.error });
@@ -145,6 +162,7 @@ testRouter.route('/VPrequest/:id')
           status: 'pending',
           claims: null,
           presentation_definition: { test: 'mdl_definition' },
+          client_id: resolveClientId(req.query.client_id_scheme),
           nonce: nonce,
           sdsRequested: mockVpHelpers.getSDsFromPresentationDef({ test: 'mdl_definition' }),
           response_mode: responseMode,
@@ -164,6 +182,7 @@ testRouter.route('/VPrequest/:id')
             status: 'pending',
             claims: null,
             presentation_definition: { test: 'mdl_definition' },
+            client_id: resolveClientId(req.query.client_id_scheme),
             nonce: nonce,
             sdsRequested: mockVpHelpers.getSDsFromPresentationDef({ test: 'mdl_definition' }),
             response_mode: responseMode,
@@ -175,6 +194,7 @@ testRouter.route('/VPrequest/:id')
             status: 'pending',
             claims: null,
             presentation_definition: { test: 'mdl_definition' },
+            client_id: resolveClientId(req.query.client_id_scheme),
             nonce: nonce,
             sdsRequested: mockVpHelpers.getSDsFromPresentationDef({ test: 'mdl_definition' }),
             response_mode: responseMode,
@@ -182,7 +202,8 @@ testRouter.route('/VPrequest/:id')
         }
       }
 
-      const result = await generateX509MDLVPRequest(uuid, { test: 'metadata' }, 'http://localhost:3000');
+      const client_id = resolveClientId(req.query.client_id_scheme);
+      const result = await generateX509MDLVPRequest(uuid, { test: 'metadata' }, 'http://localhost:3000', undefined, undefined, client_id);
 
       if (result.error) {
         return res.status(result.status).json({ error: result.error });
@@ -228,6 +249,7 @@ testRouter.get('/VPrequest/dcapi/:id', async (req, res) => {
       uuid: uuid,
       status: 'pending',
       claims: null,
+      client_id: X509_HASH_CLIENT_ID,
       nonce: nonce,
       state: state,
       dcql_query: dcql_query,
@@ -249,7 +271,7 @@ testRouter.get('/VPrequest/dcapi/:id', async (req, res) => {
       response_mode: responseMode,
     });
 
-    const result = await generateX509MDLVPRequest(uuid, clientMetadata, 'http://localhost:3000');
+    const result = await generateX509MDLVPRequest(uuid, clientMetadata, 'http://localhost:3000', undefined, undefined, X509_HASH_CLIENT_ID);
 
     if (result.error) {
       return res.status(result.status).json({ error: result.error });
@@ -308,7 +330,7 @@ describe('MDL Routes', () => {
       expect(response.body).to.have.property('sessionId');
       expect(response.body.sessionId).to.equal('test-uuid-123');
       expect(response.body.deepLink).to.not.include('redirect_uri=');
-      expect(response.body.deepLink).to.include('client_id=decentralized_identifier%3Adid%3Aweb%3A');
+      expect(response.body.deepLink).to.include(`client_id=${encodeURIComponent(X509_HASH_CLIENT_ID)}`);
       expect(response.body.deepLink).to.not.include('client_id_scheme=');
     });
 
@@ -332,7 +354,7 @@ describe('MDL Routes', () => {
       expect(response.body).to.have.property('qr');
       expect(response.body).to.have.property('deepLink');
       expect(response.body.deepLink).to.not.include('redirect_uri=');
-      expect(response.body.deepLink).to.include('client_id=decentralized_identifier%3Adid%3Aweb%3A');
+      expect(response.body.deepLink).to.include(`client_id=${encodeURIComponent(X509_HASH_CLIENT_ID)}`);
       expect(response.body.deepLink).to.not.include('client_id_scheme=');
     });
 
@@ -401,9 +423,25 @@ describe('MDL Routes', () => {
 
       expect(mockCryptoUtils.buildVpRequestJWT.called).to.be.true;
       const callArgs = mockCryptoUtils.buildVpRequestJWT.getCall(0).args;
-      expect(callArgs[0]).to.equal('x509_san_dns:dss.aegean.gr'); // client_id
+      expect(callArgs[0]).to.equal(X509_HASH_CLIENT_ID); // client_id
       expect(callArgs[13]).to.equal('wallet-nonce'); // wallet_nonce parameter
       expect(callArgs[14]).to.equal('wallet-metadata'); // wallet_metadata parameter
+    });
+
+    it('should allow x509_san_dns override for legacy mDL interop', async () => {
+      mockCacheService.getVPSession.resolves({
+        uuid: 'test-session',
+        nonce: 'test-nonce',
+        presentation_definition: { test: 'mdl_definition' }
+      });
+
+      await request(app)
+        .post('/mdl/VPrequest/test-session')
+        .query({ client_id_scheme: 'x509_san_dns' })
+        .expect(200);
+
+      const callArgs = mockCryptoUtils.buildVpRequestJWT.getCall(0).args;
+      expect(callArgs[0]).to.equal(X509_SAN_DNS_CLIENT_ID);
     });
 
     it('should call buildVpRequestJWT with Digital Credentials API audience', async () => {

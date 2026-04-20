@@ -1,5 +1,7 @@
 import { strict as assert } from 'assert';
 import fs from 'fs';
+import { createHash } from 'crypto';
+import base64url from 'base64url';
 import { getSDsFromPresentationDef } from '../utils/vpHeplers.js';
 
 describe('Presentation Definition Utilities', () => {
@@ -122,5 +124,40 @@ describe('Presentation Definition (PE) structure - OID4VP v1.0', () => {
     const fm = rt.CLIENT_METADATA?.vp_formats_supported?.['dc+sd-jwt'];
     assert.ok(fm && Array.isArray(fm['sd-jwt_alg_values']) && fm['sd-jwt_alg_values'].length > 0, 'CLIENT_METADATA.vp_formats_supported.dc+sd-jwt.sd-jwt_alg_values required');
     assert.ok(fm && Array.isArray(fm['kb-jwt_alg_values']) && fm['kb-jwt_alg_values'].length > 0, 'CLIENT_METADATA.vp_formats_supported.dc+sd-jwt.kb-jwt_alg_values required');
+  });
+});
+
+describe('Verifier X509 client_id defaults', () => {
+  function computeExpectedX509HashClientId() {
+    const pem = fs.readFileSync('./x509/client_certificate.crt', 'utf8')
+      .replace('-----BEGIN CERTIFICATE-----', '')
+      .replace('-----END CERTIFICATE-----', '')
+      .replace(/\s+/g, '');
+    const der = Buffer.from(pem, 'base64');
+    return `x509_hash:${base64url.encode(createHash('sha256').update(der).digest())}`;
+  }
+
+  it('CONFIG.ETSI_CLIENT_ID must be the leaf-cert SHA-256 x509_hash value', async () => {
+    const rt = await import('../utils/routeUtils.js');
+    assert.strictEqual(rt.CONFIG.ETSI_CLIENT_ID, computeExpectedX509HashClientId());
+  });
+
+  it('resolveVerifierX509ClientId must default to x509_hash for x509-ish inputs', async () => {
+    const rt = await import('../utils/routeUtils.js');
+    const expected = computeExpectedX509HashClientId();
+    assert.strictEqual(rt.resolveVerifierX509ClientId(), expected);
+    assert.strictEqual(rt.resolveVerifierX509ClientId('x509_hash'), expected);
+    assert.strictEqual(rt.resolveVerifierX509ClientId('x509'), expected);
+  });
+
+  it('resolveVerifierX509ClientId must keep x509_san_dns as an explicit legacy override', async () => {
+    const rt = await import('../utils/routeUtils.js');
+    assert.strictEqual(rt.resolveVerifierX509ClientId('x509_san_dns'), rt.CONFIG.CLIENT_ID);
+  });
+
+  it('verifier-config must publish x509_hash as default client_id and advertise both supported schemes', () => {
+    const cfg = JSON.parse(fs.readFileSync('./data/verifier-config.json', 'utf-8'));
+    assert.strictEqual(cfg.client_id, computeExpectedX509HashClientId());
+    assert.deepStrictEqual(cfg.client_id_schemes_supported, ['x509_hash', 'x509_san_dns']);
   });
 });

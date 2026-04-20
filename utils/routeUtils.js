@@ -213,12 +213,48 @@ export const ERROR_MESSAGES = {
   NO_JWT_PRESENTED: "no jwt presented",
 };
 
+function getLeafCertificateDer(certificatePath = "./x509/client_certificate.crt") {
+  const certificatePem = fs.readFileSync(certificatePath, "utf8");
+  const certificateBase64 = certificatePem
+    .replace("-----BEGIN CERTIFICATE-----", "")
+    .replace("-----END CERTIFICATE-----", "")
+    .replace(/\s+/g, "");
+  return Buffer.from(certificateBase64, "base64");
+}
+
+export function computeX509HashClientId(certificatePath = "./x509/client_certificate.crt") {
+  const certDer = getLeafCertificateDer(certificatePath);
+  const hash = createHash("sha256").update(certDer).digest();
+  return `x509_hash:${base64url.encode(hash)}`;
+}
+
+export function resolveVerifierX509ClientId(clientIdScheme = "x509_hash") {
+  const normalizedScheme = typeof clientIdScheme === "string"
+    ? clientIdScheme.trim().toLowerCase()
+    : "x509_hash";
+
+  if (normalizedScheme === "" || normalizedScheme === "x509_hash" || normalizedScheme === "x509") {
+    return CONFIG.ETSI_CLIENT_ID;
+  }
+
+  if (normalizedScheme === "x509_san_dns") {
+    return CONFIG.CLIENT_ID;
+  }
+
+  throw new Error(
+    `Invalid x509 client_id_scheme. Received: '${clientIdScheme}', expected: 'x509_hash', 'x509_san_dns', or 'x509'`
+  );
+}
+
 // Configuration constants for x509 routes
 export const CONFIG = {
   SERVER_URL: process.env.SERVER_URL || "http://localhost:3000",
   get CLIENT_ID() {
     const hostname = new URL(this.SERVER_URL).hostname;
     return `x509_san_dns:${hostname}`;
+  },
+  get ETSI_CLIENT_ID() {
+    return computeX509HashClientId();
   },
   get VERIFIER_ATTESTATION_CLIENT_ID() {
     const hostname = new URL(this.SERVER_URL).hostname;
@@ -1239,6 +1275,7 @@ export async function generateVPRequest(params) {
 
   // Prepare session data
   const sessionData = {
+    client_id: clientId,
     nonce,
     response_mode: responseMode,
     state,
@@ -1373,6 +1410,7 @@ export async function processVPRequest(params) {
     }
     
     await logInfo(sessionId, "VP session retrieved successfully", {
+      clientId: vpSession.client_id || clientId || null,
       hasNonce: !!vpSession.nonce,
       hasPresentationDefinition: !!vpSession.presentation_definition,
       hasDcqlQuery: !!vpSession.dcql_query,
@@ -1381,14 +1419,16 @@ export async function processVPRequest(params) {
     });
 
     const responseUri = `${serverURL}/direct_post/${sessionId}`;
+    const effectiveClientId = vpSession.client_id || clientId;
     
     await logDebug(sessionId, "Building VP request JWT", {
+      clientId: effectiveClientId,
       responseUri,
       responseMode: vpSession.response_mode
     });
 
     const vpRequestJWT = await buildVpRequestJWT(
-      clientId,
+      effectiveClientId,
       responseUri,
       vpSession.presentation_definition,
       null, // privateKey - only used for verifier_attestation scheme
@@ -1526,8 +1566,9 @@ export function createVPRequestResponse(qrCode, deepLink, sessionId) {
  * @param {string} responseMode - The response mode
  * @returns {Promise<void>}
  */
-export async function handleSessionCreation(sessionId, presentationDefinition, responseMode) {
+export async function handleSessionCreation(sessionId, presentationDefinition, responseMode, clientId = null) {
   await logInfo(sessionId, "Creating new VP session", {
+    clientId,
     responseMode,
     hasPresentation: !!presentationDefinition
   });
@@ -1541,6 +1582,7 @@ export async function handleSessionCreation(sessionId, presentationDefinition, r
   });
 
   await storeVPSessionData(sessionId, {
+    client_id: clientId,
     presentation_definition: presentationDefinition,
     nonce,
     state,

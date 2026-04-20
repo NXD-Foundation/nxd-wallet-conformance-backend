@@ -8,6 +8,7 @@ import {
   processVPRequest,
   handleSessionCreation,
   createErrorResponse,
+  resolveVerifierX509ClientId,
 } from "../../utils/routeUtils.js";
 import {
   logInfo,
@@ -51,10 +52,12 @@ mdlRouter.get("/generateVPRequest", async (req, res) => {
   try {
     const sessionId = req.query.sessionId || uuidv4();
     const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
+    const clientId = resolveVerifierX509ClientId(req.query.client_id_scheme);
     
     await logInfo(sessionId, "Starting mDL VP request generation", {
       endpoint: "/generateVPRequest",
       responseMode,
+      clientId,
       sessionId
     });
 
@@ -63,7 +66,7 @@ mdlRouter.get("/generateVPRequest", async (req, res) => {
       responseMode,
       // presentationDefinition: presentationDefinitionMdl,
 
-      clientId: CONFIG.CLIENT_ID,
+      clientId,
       clientMetadata,
       kid: null,
       serverURL: CONFIG.SERVER_URL,
@@ -97,9 +100,11 @@ mdlRouter
     try {
       const sessionId = req.params.id;
       const { wallet_nonce: walletNonce, wallet_metadata: walletMetadata } = req.body;
+      const clientId = resolveVerifierX509ClientId(req.query.client_id_scheme);
 
       await logInfo(sessionId, "Processing POST mDL VP request", {
         endpoint: "POST /VPrequest/:id",
+        clientId,
         hasWalletNonce: !!walletNonce,
         hasWalletMetadata: !!walletMetadata
       });
@@ -115,7 +120,7 @@ mdlRouter
         sessionId,
         clientMetadata,
         serverURL: CONFIG.SERVER_URL,
-        clientId: CONFIG.CLIENT_ID,
+        clientId,
         kid: null,
         walletNonce,
         walletMetadata,
@@ -162,8 +167,10 @@ mdlRouter
   .get(async (req, res) => {
     let sessionId = req.params.id;
     try {
+      const clientId = resolveVerifierX509ClientId(req.query.client_id_scheme);
       await logInfo(sessionId, "Processing GET mDL VP request", {
         endpoint: "GET /VPrequest/:id",
+        clientId,
         hasSessionId: !!sessionId
       });
       
@@ -172,10 +179,11 @@ mdlRouter
         sessionId = req.query.sessionId || uuidv4();
         const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
         await logInfo(sessionId, "Creating new session for mDL request", {
+          clientId,
           sessionId,
           responseMode
         });
-        await handleSessionCreation(sessionId, presentationDefinitionMdl, responseMode);
+        await handleSessionCreation(sessionId, presentationDefinitionMdl, responseMode, clientId);
       }
 
       // Check if session exists, create new one if not
@@ -186,7 +194,7 @@ mdlRouter
           sessionId
         });
         const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
-        await handleSessionCreation(sessionId, presentationDefinitionMdl, responseMode);
+        await handleSessionCreation(sessionId, presentationDefinitionMdl, responseMode, clientId);
         await logInfo(sessionId, "New mDL session created", {
           sessionId
         });
@@ -196,7 +204,7 @@ mdlRouter
         sessionId,
         clientMetadata,
         serverURL: CONFIG.SERVER_URL,
-        clientId: CONFIG.CLIENT_ID,
+        clientId,
         kid: null,
       });
 
@@ -230,9 +238,11 @@ mdlRouter.get("/VPrequest/dcapi/:id", async (req, res) => {
   try {
     const sessionId = req.params.id;
     const responseMode = "dc_api.jwt";
+    const clientId = resolveVerifierX509ClientId(req.query.client_id_scheme);
     
     await logInfo(sessionId, "Processing mDL DC API request", {
       endpoint: "/VPrequest/dcapi/:id",
+      clientId,
       responseMode,
       sessionId
     });
@@ -248,6 +258,7 @@ mdlRouter.get("/VPrequest/dcapi/:id", async (req, res) => {
 
     // Store session data with DCQL query and state
     await storeVPSessionData(sessionId, {
+      client_id: clientId,
       nonce,
       state,
       dcql_query: DEFAULT_MDL_DCQL_QUERY,
@@ -265,7 +276,7 @@ mdlRouter.get("/VPrequest/dcapi/:id", async (req, res) => {
       sessionId,
       clientMetadata: clientMetadataMDL,
       serverURL: CONFIG.SERVER_URL,
-      clientId: CONFIG.CLIENT_ID,
+      clientId,
       kid: null,
       audience: "https://self-issued.me/v2", // DC API audience
     });

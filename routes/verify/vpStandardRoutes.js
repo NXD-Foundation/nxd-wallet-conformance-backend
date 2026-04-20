@@ -15,6 +15,7 @@ import {
   createTransactionData,
   createErrorResponse,
   bindSessionLoggingContext,
+  resolveVerifierX509ClientId,
 } from "../../utils/routeUtils.js";
 import {
   logInfo,
@@ -62,8 +63,12 @@ vpStandardRouter.get("/vp/request", async (req, res) => {
     const slog = makeSessionLogger(sessionId);
     bindSessionLoggingContext(req, res, sessionId);
 
-    const clientIdScheme = req.query.client_id_scheme || "x509";
     const profile = req.query.profile || "dcql";
+    const isRfc002Profile = profile === "etsi" || profile === "rfc002";
+    const defaultX509ClientIdScheme = isRfc002Profile ? "x509_hash" : "x509_san_dns";
+    const rawClientIdScheme = req.query.client_id_scheme || "x509";
+    const clientIdScheme =
+      rawClientIdScheme === "x509" ? defaultX509ClientIdScheme : rawClientIdScheme;
     const credentialProfile = req.query.credential_profile || "pid";
     const requestUriMethod = req.query.request_uri_method || "post";
     const responseMode = req.query.response_mode || "direct_post";
@@ -124,8 +129,8 @@ vpStandardRouter.get("/vp/request", async (req, res) => {
     let kid = null;
     let routePath;
 
-    if (clientIdScheme === "x509") {
-      clientId = CONFIG.CLIENT_ID; // "x509_san_dns:dss.aegean.gr"
+    if (clientIdScheme === "x509_hash" || clientIdScheme === "x509_san_dns") {
+      clientId = resolveVerifierX509ClientId(clientIdScheme);
       routePath = "/vp/x509VPrequest";
     } else if (clientIdScheme === "did:web") {
       const didIdentifiers = generateDidIdentifiers(CONFIG.SERVER_URL);
@@ -143,7 +148,7 @@ vpStandardRouter.get("/vp/request", async (req, res) => {
       routePath = "/vp/didJwkVPrequest";
     } else {
       throw new Error(
-        `Invalid client_id_scheme. Received: '${clientIdScheme}', expected: 'x509', 'did:web', or 'did:jwk'`
+        `Invalid client_id_scheme. Received: '${rawClientIdScheme}', expected: 'x509', 'x509_hash', 'x509_san_dns', 'did:web', or 'did:jwk'`
       );
     }
 
@@ -216,7 +221,7 @@ vpStandardRouter
         sessionId,
         clientMetadata,
         serverURL: CONFIG.SERVER_URL,
-        clientId: CONFIG.CLIENT_ID,
+        clientId: resolveVerifierX509ClientId(req.query.client_id_scheme || "x509_hash"),
         kid: null,
         walletNonce,
         walletMetadata,
@@ -264,7 +269,7 @@ vpStandardRouter
         sessionId,
         clientMetadata,
         serverURL: CONFIG.SERVER_URL,
-        clientId: CONFIG.CLIENT_ID,
+        clientId: resolveVerifierX509ClientId(req.query.client_id_scheme || "x509_hash"),
         kid: null,
       });
 
@@ -529,5 +534,4 @@ vpStandardRouter
   });
 
 export default vpStandardRouter;
-
 

@@ -294,6 +294,7 @@ All items use the chosen scope:
   - `routes/verify/x509Routes.js` — both GET and POST `request_uri_method` branches.
   - `routes/verify/vpStandardRoutes.js` when `profile=etsi`/`rfc002`.
   - `routes/verify/mdlRoutes.js` when the track is ISO mdoc.
+- Explicitly exclude CS-03 verifier flows from this item. They are out of scope for RFC002 and remain on the legacy `x509_san_dns` path unless separately profiled.
 - Legacy `x509_san_dns` remains reachable via `?client_id_scheme=x509_san_dns`.
 - Update `data/verifier-config.json` with `client_id_schemes_supported: ["x509_hash","x509_san_dns"]` and set `client_id` to the `x509_hash:` value.
 - **Satisfies:** `VP-CHECK-02`; closes the ETSI `client_id` gap in §8.2.2.

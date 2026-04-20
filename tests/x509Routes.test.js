@@ -8,6 +8,8 @@ import qr from 'qr-image';
 import imageDataURI from 'image-data-uri';
 import { streamToBuffer } from '@jorgeferrero/stream-to-buffer';
 import { v4 as uuidv4 } from 'uuid';
+import { createHash } from 'crypto';
+import base64url from 'base64url';
 
 // Create Express app
 const app = express();
@@ -32,6 +34,20 @@ const mockVpHelpers = {
 // Mock streamToBuffer function
 const mockStreamToBuffer = sinon.stub().resolves(Buffer.from('mock-buffer'));
 
+const X509_SAN_DNS_CLIENT_ID = 'x509_san_dns:dss.aegean.gr';
+const X509_HASH_CLIENT_ID = (() => {
+  const pem = fs.readFileSync('./x509/client_certificate.crt', 'utf8')
+    .replace('-----BEGIN CERTIFICATE-----', '')
+    .replace('-----END CERTIFICATE-----', '')
+    .replace(/\s+/g, '');
+  const der = Buffer.from(pem, 'base64');
+  return `x509_hash:${base64url.encode(createHash('sha256').update(der).digest())}`;
+})();
+
+function resolveClientId(clientIdScheme) {
+  return clientIdScheme === 'x509_san_dns' ? X509_SAN_DNS_CLIENT_ID : X509_HASH_CLIENT_ID;
+}
+
 // Create a test router that mimics the actual x509Routes behavior
 const testRouter = express.Router();
 
@@ -41,9 +57,9 @@ testRouter.get('/generateVPRequest', async (req, res) => {
     const uuid = req.query.sessionId || 'test-uuid-123';
     const responseMode = req.query.response_mode || 'direct_post';
     const nonce = mockCryptoUtils.generateNonce(16);
+    const client_id = resolveClientId(req.query.client_id_scheme);
 
     const response_uri = `http://localhost:3000/direct_post/${uuid}`;
-    const client_id = 'x509_san_dns:dss.aegean.gr';
 
     // Store session data
     await mockCacheService.storeVPSession(uuid, {
@@ -51,6 +67,7 @@ testRouter.get('/generateVPRequest', async (req, res) => {
       status: 'pending',
       claims: null,
       presentation_definition: { test: 'definition' },
+      client_id,
       nonce: nonce,
       sdsRequested: mockVpHelpers.getSDsFromPresentationDef({ test: 'definition' }),
       response_mode: responseMode
@@ -104,15 +121,16 @@ testRouter.get('/generateVPRequestGet', async (req, res) => {
     const uuid = req.query.sessionId || 'test-uuid-123';
     const responseMode = req.query.response_mode || 'direct_post';
     const nonce = mockCryptoUtils.generateNonce(16);
+    const client_id = resolveClientId(req.query.client_id_scheme);
 
     const response_uri = `http://localhost:3000/direct_post/${uuid}`;
-    const client_id = 'x509_san_dns:dss.aegean.gr';
 
     await mockCacheService.storeVPSession(uuid, {
       uuid: uuid,
       status: 'pending',
       claims: null,
       presentation_definition: { test: 'definition' },
+      client_id,
       nonce: nonce,
       sdsRequested: mockVpHelpers.getSDsFromPresentationDef({ test: 'definition' }),
       response_mode: responseMode
@@ -148,9 +166,9 @@ testRouter.get('/generateVPRequestDCQL', async (req, res) => {
     const uuid = req.query.sessionId || 'test-uuid-123';
     const nonce = mockCryptoUtils.generateNonce(16);
     const responseMode = req.query.response_mode || 'direct_post';
+    const client_id = resolveClientId(req.query.client_id_scheme);
 
     const response_uri = `http://localhost:3000/direct_post/${uuid}`;
-    const client_id = 'x509_san_dns:dss.aegean.gr';
 
     const dcql_query = {
       credentials: [
@@ -174,6 +192,7 @@ testRouter.get('/generateVPRequestDCQL', async (req, res) => {
       status: 'pending',
       claims: null,
       dcql_query: dcql_query,
+      client_id,
       nonce: nonce,
       response_mode: responseMode
     });
@@ -223,9 +242,9 @@ testRouter.get('/generateVPRequestDCQLGET', async (req, res) => {
     const uuid = req.query.sessionId || 'test-uuid-123';
     const nonce = mockCryptoUtils.generateNonce(16);
     const responseMode = req.query.response_mode || 'direct_post';
+    const client_id = resolveClientId(req.query.client_id_scheme);
 
     const response_uri = `http://localhost:3000/direct_post/${uuid}`;
-    const client_id = 'x509_san_dns:dss.aegean.gr';
 
     const dcql_query = {
       credentials: [
@@ -249,6 +268,7 @@ testRouter.get('/generateVPRequestDCQLGET', async (req, res) => {
       status: 'pending',
       claims: null,
       dcql_query: dcql_query,
+      client_id,
       nonce: nonce,
       response_mode: responseMode
     });
@@ -283,9 +303,9 @@ testRouter.get('/generateVPRequestTransaction', async (req, res) => {
     const uuid = req.query.sessionId || 'test-uuid-123';
     const nonce = mockCryptoUtils.generateNonce(16);
     const responseMode = req.query.response_mode || 'direct_post';
+    const client_id = resolveClientId(req.query.client_id_scheme);
 
     const response_uri = `http://localhost:3000/direct_post/${uuid}`;
-    const client_id = 'x509_san_dns:dss.aegean.gr';
 
     const presentation_definition = { test: 'definition' };
     const credentialIds = ['test-descriptor-1', 'test-descriptor-2'];
@@ -321,6 +341,7 @@ testRouter.get('/generateVPRequestTransaction', async (req, res) => {
       status: 'pending',
       claims: null,
       presentation_definition: presentation_definition,
+      client_id,
       nonce: nonce,
       transaction_data: [base64UrlEncodedTxData],
       response_mode: responseMode,
@@ -367,7 +388,7 @@ testRouter.get('/generateVPRequestTransaction', async (req, res) => {
 });
 
 // Helper function to process VP Request
-async function generateX509VPRequest(uuid, clientMetadata, serverURL, wallet_nonce, wallet_metadata) {
+async function generateX509VPRequest(uuid, clientMetadata, serverURL, wallet_nonce, wallet_metadata, client_id = X509_HASH_CLIENT_ID) {
   const vpSession = await mockCacheService.getVPSession(uuid);
 
   if (!vpSession) {
@@ -375,7 +396,6 @@ async function generateX509VPRequest(uuid, clientMetadata, serverURL, wallet_non
   }
 
   const response_uri = `${serverURL}/direct_post/${uuid}`;
-  const client_id = 'x509_san_dns:dss.aegean.gr';
   
   const vpRequestJWT = await mockCryptoUtils.buildVpRequestJWT(
     client_id,
@@ -404,8 +424,9 @@ testRouter.route('/x509VPrequest/:id')
     try {
       const uuid = req.params.id;
       const { wallet_nonce, wallet_metadata } = req.body;
+      const client_id = resolveClientId(req.query.client_id_scheme);
 
-      const result = await generateX509VPRequest(uuid, { test: 'metadata' }, 'http://localhost:3000', wallet_nonce, wallet_metadata);
+      const result = await generateX509VPRequest(uuid, { test: 'metadata' }, 'http://localhost:3000', wallet_nonce, wallet_metadata, client_id);
 
       if (result.error) {
         return res.status(result.status).json({ error: result.error });
@@ -418,7 +439,8 @@ testRouter.route('/x509VPrequest/:id')
   .get(async (req, res) => {
     try {
       const uuid = req.params.id;
-      const result = await generateX509VPRequest(uuid, { test: 'metadata' }, 'http://localhost:3000');
+      const client_id = resolveClientId(req.query.client_id_scheme);
+      const result = await generateX509VPRequest(uuid, { test: 'metadata' }, 'http://localhost:3000', undefined, undefined, client_id);
 
       if (result.error) {
         return res.status(result.status).json({ error: result.error });
@@ -507,9 +529,19 @@ describe('X509 Routes', () => {
 
       expect(mockCryptoUtils.buildVpRequestJWT.called).to.be.true;
       const callArgs = mockCryptoUtils.buildVpRequestJWT.getCall(0).args;
-      expect(callArgs[0]).to.equal('x509_san_dns:dss.aegean.gr'); // client_id
+      expect(callArgs[0]).to.equal(X509_HASH_CLIENT_ID); // client_id
       expect(callArgs[1]).to.include('/direct_post/'); // response_uri
       expect(callArgs[2]).to.be.an('object'); // presentation_definition
+    });
+
+    it('should keep x509_san_dns when legacy client_id_scheme override is provided', async () => {
+      await request(app)
+        .get('/x509/generateVPRequest')
+        .query({ client_id_scheme: 'x509_san_dns' })
+        .expect(200);
+
+      const callArgs = mockCryptoUtils.buildVpRequestJWT.getCall(0).args;
+      expect(callArgs[0]).to.equal(X509_SAN_DNS_CLIENT_ID);
     });
   });
 
