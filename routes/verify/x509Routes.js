@@ -10,6 +10,7 @@ import {
   createTransactionData,
   createErrorResponse,
   resolveVerifierX509ClientId,
+  resolveVerifierInfoFromRequest,
   parseCs03Query,
   CS03_DCQL_QUERY,
   CS03_SIGNING_CREDENTIAL_ID,
@@ -121,7 +122,7 @@ x509Router.use((req, res, next) => {
 });
 
 // Load configuration files
-const { presentationDefinition, clientMetadata } = loadConfigurationFiles(
+const { presentationDefinition, clientMetadata, verifierInfo } = loadConfigurationFiles(
   "./data/presentation_definition_pid.json",
   "./data/verifier-config.json"
 );
@@ -137,7 +138,8 @@ x509Router.get("/generateVPRequest", async (req, res) => {
   try {
     const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
     const jarAlg = req.query.jar_alg || CONFIG.DEFAULT_JAR_ALG;
-    const clientId = resolveVerifierX509ClientId(req.query.client_id_scheme);
+    const clientId = resolveVerifierX509ClientId(req.query.client_id_scheme, { responseMode, jarAlg });
+    const effectiveVerifierInfo = resolveVerifierInfoFromRequest(req, verifierInfo);
     
     requestId = logHttpRequest(slog, "GET", "/generateVPRequest", req.headers, req.query);
     try { slog("[VERIFIER] [START] VP request generation", { responseMode, jarAlg, clientId }); } catch {}
@@ -149,6 +151,7 @@ x509Router.get("/generateVPRequest", async (req, res) => {
       presentationDefinition,
       clientId,
       clientMetadata,
+      verifierInfo: effectiveVerifierInfo,
       kid: null,
       serverURL: CONFIG.SERVER_URL,
       usePostMethod: true,
@@ -179,7 +182,8 @@ x509Router.get("/generateVPRequestGet", async (req, res) => {
   try {
     const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
     const jarAlg = req.query.jar_alg || CONFIG.DEFAULT_JAR_ALG;
-    const clientId = resolveVerifierX509ClientId(req.query.client_id_scheme);
+    const clientId = resolveVerifierX509ClientId(req.query.client_id_scheme, { responseMode, jarAlg });
+    const effectiveVerifierInfo = resolveVerifierInfoFromRequest(req, verifierInfo);
     
     requestId = logHttpRequest(slog, "GET", "/generateVPRequestGet", req.headers, req.query);
     try { slog("[VERIFIER] [START] VP request generation (GET method)", { responseMode, jarAlg, clientId }); } catch {}
@@ -191,6 +195,7 @@ x509Router.get("/generateVPRequestGet", async (req, res) => {
       presentationDefinition,
       clientId,
       clientMetadata,
+      verifierInfo: effectiveVerifierInfo,
       kid: null,
       serverURL: CONFIG.SERVER_URL,
       usePostMethod: false,
@@ -221,7 +226,8 @@ x509Router.get("/generateVPRequestDCQL", async (req, res) => {
   try {
     const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
     const jarAlg = req.query.jar_alg || CONFIG.DEFAULT_JAR_ALG;
-    const clientId = resolveVerifierX509ClientId(req.query.client_id_scheme);
+    const clientId = resolveVerifierX509ClientId(req.query.client_id_scheme, { responseMode, jarAlg });
+    const effectiveVerifierInfo = resolveVerifierInfoFromRequest(req, verifierInfo);
     
     requestId = logHttpRequest(slog, "GET", "/generateVPRequestDCQL", req.headers, req.query);
     try { slog("[VERIFIER] [START] VP request generation with DCQL", { responseMode, jarAlg, clientId }); } catch {}
@@ -234,6 +240,7 @@ x509Router.get("/generateVPRequestDCQL", async (req, res) => {
       presentationDefinition: null,
       clientId,
       clientMetadata,
+      verifierInfo: effectiveVerifierInfo,
       kid: null,
       serverURL: CONFIG.SERVER_URL,
       dcqlQuery: cs03.dcqlQuery ?? DEFAULT_DCQL_QUERY,
@@ -275,7 +282,8 @@ x509Router.get("/generateVPRequestDCQLGET", async (req, res) => {
   try {
     const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
     const jarAlg = req.query.jar_alg || CONFIG.DEFAULT_JAR_ALG;
-    const clientId = resolveVerifierX509ClientId(req.query.client_id_scheme);
+    const clientId = resolveVerifierX509ClientId(req.query.client_id_scheme, { responseMode, jarAlg });
+    const effectiveVerifierInfo = resolveVerifierInfoFromRequest(req, verifierInfo);
     
     requestId = logHttpRequest(slog, "GET", "/generateVPRequestDCQLGET", req.headers, req.query);
     try { slog("[VERIFIER] [START] VP request generation with DCQL (GET method)", { responseMode, jarAlg, clientId }); } catch {}
@@ -288,6 +296,7 @@ x509Router.get("/generateVPRequestDCQLGET", async (req, res) => {
       presentationDefinition: null,
       clientId,
       clientMetadata,
+      verifierInfo: effectiveVerifierInfo,
       kid: null,
       serverURL: CONFIG.SERVER_URL,
       dcqlQuery: cs03.dcqlQuery ?? DEFAULT_DCQL_QUERY,
@@ -329,7 +338,8 @@ x509Router.get("/generateVPRequestTransaction", async (req, res) => {
   try {
     const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
     const jarAlg = req.query.jar_alg || CONFIG.DEFAULT_JAR_ALG;
-    const clientId = resolveVerifierX509ClientId(req.query.client_id_scheme);
+    const clientId = resolveVerifierX509ClientId(req.query.client_id_scheme, { responseMode, jarAlg });
+    const effectiveVerifierInfo = resolveVerifierInfoFromRequest(req, verifierInfo);
     
     requestId = logHttpRequest(slog, "GET", "/generateVPRequestTransaction", req.headers, req.query);
     try { slog("[VERIFIER] [START] VP request generation with transaction data", { responseMode, jarAlg, clientId }); } catch {}
@@ -364,6 +374,7 @@ x509Router.get("/generateVPRequestTransaction", async (req, res) => {
       presentationDefinition: null,
       clientId,
       clientMetadata,
+      verifierInfo: effectiveVerifierInfo,
       kid: null,
       serverURL: CONFIG.SERVER_URL,
       dcqlQuery: dcqlForTx,
@@ -574,7 +585,10 @@ x509Router
     let requestId = null;
     
     try {
-      const clientId = resolveVerifierX509ClientId(req.query.client_id_scheme);
+      const responseMode = req.body.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
+      const jarAlg = req.query.jar_alg || CONFIG.DEFAULT_JAR_ALG;
+      const clientId = resolveVerifierX509ClientId(req.query.client_id_scheme, { responseMode, jarAlg });
+      const effectiveVerifierInfo = resolveVerifierInfoFromRequest(req, verifierInfo);
       const { wallet_nonce: walletNonce, wallet_metadata: walletMetadata } = req.body;
 
       requestId = logHttpRequest(slog, "POST", `/x509VPrequest/${sessionId}`, req.headers, req.body);
@@ -585,6 +599,7 @@ x509Router
         clientMetadata,
         serverURL: CONFIG.SERVER_URL,
         clientId,
+        verifierInfo: effectiveVerifierInfo,
         kid: null,
         walletNonce,
         walletMetadata,
@@ -631,7 +646,10 @@ x509Router
     let requestId = null;
     
     try {
-      const clientId = resolveVerifierX509ClientId(req.query.client_id_scheme);
+      const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
+      const jarAlg = req.query.jar_alg || CONFIG.DEFAULT_JAR_ALG;
+      const clientId = resolveVerifierX509ClientId(req.query.client_id_scheme, { responseMode, jarAlg });
+      const effectiveVerifierInfo = resolveVerifierInfoFromRequest(req, verifierInfo);
       requestId = logHttpRequest(slog, "GET", `/x509VPrequest/${sessionId}`, req.headers, req.query);
       try { slog("[VERIFIER] [START] Processing GET x509 VP request", { clientId }); } catch {}
       
@@ -640,6 +658,7 @@ x509Router
         clientMetadata,
         serverURL: CONFIG.SERVER_URL,
         clientId,
+        verifierInfo: effectiveVerifierInfo,
         kid: null,
       });
 

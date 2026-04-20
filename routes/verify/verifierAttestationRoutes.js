@@ -9,6 +9,7 @@ import {
   processVPRequest,
   createTransactionData,
   createErrorResponse,
+  resolveVerifierInfoFromRequest,
 } from "../../utils/routeUtils.js";
 import {
   logInfo,
@@ -36,7 +37,7 @@ vAttestationRouter.use((req, res, next) => {
 });
 
 // Load configuration files
-const { presentationDefinition, clientMetadata } = loadConfigurationFiles(
+const { presentationDefinition, clientMetadata, verifierInfo } = loadConfigurationFiles(
   "./data/presentation_definition_pid.json",
   "./data/verifier-config.json"
 );
@@ -48,6 +49,7 @@ vAttestationRouter.get("/va/generateVPRequest", async (req, res) => {
   try {
     const sessionId = req.query.sessionId || uuidv4();
     const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
+    const effectiveVerifierInfo = resolveVerifierInfoFromRequest(req, verifierInfo);
     
     await logInfo(sessionId, "Starting VP request generation", { 
       endpoint: "/generateVPRequest", 
@@ -60,6 +62,7 @@ vAttestationRouter.get("/va/generateVPRequest", async (req, res) => {
       presentationDefinition,
       clientId: CONFIG.VERIFIER_ATTESTATION_CLIENT_ID,
       clientMetadata,
+      verifierInfo: effectiveVerifierInfo,
       kid: null,
       serverURL: CONFIG.SERVER_URL,
       usePostMethod: true,
@@ -82,6 +85,7 @@ vAttestationRouter.get("/va/generateVPRequestGet", async (req, res) => {
   try {
     const sessionId = req.query.sessionId || uuidv4();
     const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
+    const effectiveVerifierInfo = resolveVerifierInfoFromRequest(req, verifierInfo);
     
     await logInfo(sessionId, "Starting VP request generation (GET method)", { 
       endpoint: "/generateVPRequestGet", 
@@ -94,6 +98,7 @@ vAttestationRouter.get("/va/generateVPRequestGet", async (req, res) => {
       presentationDefinition,
       clientId: CONFIG.VERIFIER_ATTESTATION_CLIENT_ID,
       clientMetadata,
+      verifierInfo: effectiveVerifierInfo,
       kid: null,
       serverURL: CONFIG.SERVER_URL,
       usePostMethod: false,
@@ -116,6 +121,7 @@ vAttestationRouter.get("/va/generateVPRequestDCQL", async (req, res) => {
   try {
     const sessionId = req.query.sessionId || uuidv4();
     const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
+    const effectiveVerifierInfo = resolveVerifierInfoFromRequest(req, verifierInfo);
     
     await logInfo(sessionId, "Starting VP request generation with DCQL", { 
       endpoint: "/generateVPRequestDCQL", 
@@ -128,6 +134,7 @@ vAttestationRouter.get("/va/generateVPRequestDCQL", async (req, res) => {
       presentationDefinition: null,
       clientId: CONFIG.VERIFIER_ATTESTATION_CLIENT_ID,
       clientMetadata,
+      verifierInfo: effectiveVerifierInfo,
       kid: null,
       serverURL: CONFIG.SERVER_URL,
       dcqlQuery: DEFAULT_DCQL_QUERY,
@@ -151,6 +158,7 @@ vAttestationRouter.get("/va/generateVPRequestDCQLGET", async (req, res) => {
   try {
     const sessionId = req.query.sessionId || uuidv4();
     const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
+    const effectiveVerifierInfo = resolveVerifierInfoFromRequest(req, verifierInfo);
     
     await logInfo(sessionId, "Starting VP request generation with DCQL (GET method)", { 
       endpoint: "/generateVPRequestDCQLGET", 
@@ -163,6 +171,7 @@ vAttestationRouter.get("/va/generateVPRequestDCQLGET", async (req, res) => {
       presentationDefinition: null,
       clientId: CONFIG.VERIFIER_ATTESTATION_CLIENT_ID,
       clientMetadata,
+      verifierInfo: effectiveVerifierInfo,
       kid: null,
       serverURL: CONFIG.SERVER_URL,
       dcqlQuery: DEFAULT_DCQL_QUERY,
@@ -186,6 +195,7 @@ vAttestationRouter.get("/va/generateVPRequestTransaction", async (req, res) => {
   try {
     const sessionId = req.query.sessionId || uuidv4();
     const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
+    const effectiveVerifierInfo = resolveVerifierInfoFromRequest(req, verifierInfo);
     
     await logInfo(sessionId, "Starting VP request generation with transaction data", { 
       endpoint: "/generateVPRequestTransaction", 
@@ -202,6 +212,7 @@ vAttestationRouter.get("/va/generateVPRequestTransaction", async (req, res) => {
       presentationDefinition: null,
       clientId: CONFIG.VERIFIER_ATTESTATION_CLIENT_ID,
       clientMetadata,
+      verifierInfo: effectiveVerifierInfo,
       kid: null,
       serverURL: CONFIG.SERVER_URL,
       dcqlQuery: DEFAULT_DCQL_QUERY,
@@ -228,6 +239,7 @@ vAttestationRouter
     const sessionId = req.params.id;
     try {
       const { wallet_nonce: walletNonce, wallet_metadata: walletMetadata } = req.body;
+      const effectiveVerifierInfo = resolveVerifierInfoFromRequest(req, verifierInfo);
 
       await logInfo(sessionId, "Processing POST VP request", {
         endpoint: "POST /verifierAttestationVPrequest/:id",
@@ -247,6 +259,7 @@ vAttestationRouter
         clientMetadata,
         serverURL: CONFIG.SERVER_URL,
         clientId: CONFIG.VERIFIER_ATTESTATION_CLIENT_ID,
+        verifierInfo: effectiveVerifierInfo,
         kid: null,
         walletNonce,
         walletMetadata,
@@ -292,6 +305,7 @@ vAttestationRouter
   .get(async (req, res) => {
     try {
       const sessionId = req.params.id;
+      const effectiveVerifierInfo = resolveVerifierInfoFromRequest(req, verifierInfo);
 
       await logInfo(sessionId, "Processing GET VP request", {
         endpoint: "GET /verifierAttestationVPrequest/:id"
@@ -301,6 +315,7 @@ vAttestationRouter
         clientMetadata,
         serverURL: CONFIG.SERVER_URL,
         clientId: CONFIG.VERIFIER_ATTESTATION_CLIENT_ID,
+        verifierInfo: effectiveVerifierInfo,
         kid: null,
       });
 

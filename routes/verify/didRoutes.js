@@ -10,6 +10,7 @@ import {
   processVPRequest,
   createTransactionData,
   createErrorResponse,
+  resolveVerifierInfoFromRequest,
 } from "../../utils/routeUtils.js";
 import {
   logInfo,
@@ -37,7 +38,7 @@ didRouter.use((req, res, next) => {
 });
 
 // Load configuration files
-const { presentationDefinition, clientMetadata, privateKey } = loadConfigurationFiles(
+const { presentationDefinition, clientMetadata, privateKey, verifierInfo } = loadConfigurationFiles(
   "./data/presentation_definition_pid.json",
   "./data/verifier-config.json",
   "./didjwks/did_private_pkcs8.key"
@@ -54,6 +55,7 @@ didRouter.get("/generateVPRequest", async (req, res) => {
   try {
     const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
     const { client_id, kid } = generateDidIdentifiers(CONFIG.SERVER_URL);
+    const effectiveVerifierInfo = resolveVerifierInfoFromRequest(req, verifierInfo);
     
     requestId = logHttpRequest(slog, "GET", "/generateVPRequest", req.headers, req.query);
     try { slog("[VERIFIER] [START] DID VP request generation", { responseMode, clientId: client_id, kid }); } catch {}
@@ -65,6 +67,7 @@ didRouter.get("/generateVPRequest", async (req, res) => {
       clientId: client_id,
       privateKey,
       clientMetadata,
+      verifierInfo: effectiveVerifierInfo,
       kid,
       serverURL: CONFIG.SERVER_URL,
       usePostMethod: true,
@@ -95,6 +98,7 @@ didRouter.get("/generateVPRequestGET", async (req, res) => {
   try {
     const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
     const { client_id, kid } = generateDidIdentifiers(CONFIG.SERVER_URL);
+    const effectiveVerifierInfo = resolveVerifierInfoFromRequest(req, verifierInfo);
     
     requestId = logHttpRequest(slog, "GET", "/generateVPRequestGET", req.headers, req.query);
     try { slog("[VERIFIER] [START] DID VP request generation (GET method)", { responseMode, clientId: client_id, kid }); } catch {}
@@ -106,6 +110,7 @@ didRouter.get("/generateVPRequestGET", async (req, res) => {
       clientId: client_id,
       privateKey,
       clientMetadata,
+      verifierInfo: effectiveVerifierInfo,
       kid,
       serverURL: CONFIG.SERVER_URL,
       dcqlQuery: DEFAULT_DCQL_QUERY,
@@ -137,6 +142,7 @@ didRouter.get("/generateVPRequestDCQL", async (req, res) => {
   try {
     const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
     const { client_id, kid } = generateDidIdentifiers(CONFIG.SERVER_URL);
+    const effectiveVerifierInfo = resolveVerifierInfoFromRequest(req, verifierInfo);
     
     requestId = logHttpRequest(slog, "GET", "/generateVPRequestDCQL", req.headers, req.query);
     try { slog("[VERIFIER] [START] DID VP request generation with DCQL", { responseMode, clientId: client_id, kid }); } catch {}
@@ -148,6 +154,7 @@ didRouter.get("/generateVPRequestDCQL", async (req, res) => {
       clientId: client_id,
       privateKey,
       clientMetadata,
+      verifierInfo: effectiveVerifierInfo,
       kid,
       serverURL: CONFIG.SERVER_URL,
       dcqlQuery: DEFAULT_DCQL_QUERY,
@@ -179,6 +186,7 @@ didRouter.get("/generateVPRequestTransaction", async (req, res) => {
   try {
     const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
     const { client_id, kid } = generateDidIdentifiers(CONFIG.SERVER_URL);
+    const effectiveVerifierInfo = resolveVerifierInfoFromRequest(req, verifierInfo);
     
     requestId = logHttpRequest(slog, "GET", "/generateVPRequestTransaction", req.headers, req.query);
     try { slog("[VERIFIER] [START] DID VP request generation with transaction data", { responseMode, clientId: client_id, kid }); } catch {}
@@ -194,6 +202,7 @@ didRouter.get("/generateVPRequestTransaction", async (req, res) => {
       clientId: client_id,
       privateKey,
       clientMetadata,
+      verifierInfo: effectiveVerifierInfo,
       kid,
       serverURL: CONFIG.SERVER_URL,
       transactionData: base64UrlEncodedTxData,
@@ -227,6 +236,7 @@ didRouter
     try {
       const { client_id, kid } = generateDidIdentifiers(CONFIG.SERVER_URL);
       const { wallet_nonce: walletNonce, wallet_metadata: walletMetadata } = req.body;
+      const effectiveVerifierInfo = resolveVerifierInfoFromRequest(req, verifierInfo);
 
       requestId = logHttpRequest(slog, "POST", `/VPrequest/${sessionId}`, req.headers, req.body);
       try { slog("[VERIFIER] [START] Processing POST DID VP request", { clientId: client_id, kid, hasWalletNonce: !!walletNonce, hasWalletMetadata: !!walletMetadata }); } catch {}
@@ -236,6 +246,7 @@ didRouter
         clientMetadata,
         serverURL: CONFIG.SERVER_URL,
         clientId: client_id,
+        verifierInfo: effectiveVerifierInfo,
         privateKey,
         kid,
         walletNonce,
@@ -284,6 +295,7 @@ didRouter
     
     try {
       const { client_id, kid } = generateDidIdentifiers(CONFIG.SERVER_URL);
+      const effectiveVerifierInfo = resolveVerifierInfoFromRequest(req, verifierInfo);
       
       requestId = logHttpRequest(slog, "GET", `/VPrequest/${sessionId}`, req.headers, req.query);
       try { slog("[VERIFIER] [START] Processing GET DID VP request", { clientId: client_id, kid }); } catch {}
@@ -293,6 +305,7 @@ didRouter
         clientMetadata,
         serverURL: CONFIG.SERVER_URL,
         clientId: client_id,
+        verifierInfo: effectiveVerifierInfo,
         privateKey,
         kid,
       });

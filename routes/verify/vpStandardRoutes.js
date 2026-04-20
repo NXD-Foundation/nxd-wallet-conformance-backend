@@ -16,6 +16,7 @@ import {
   createErrorResponse,
   bindSessionLoggingContext,
   resolveVerifierX509ClientId,
+  resolveVerifierInfoFromRequest,
 } from "../../utils/routeUtils.js";
 import {
   logInfo,
@@ -72,6 +73,7 @@ vpStandardRouter.get("/vp/request", async (req, res) => {
     const credentialProfile = req.query.credential_profile || "pid";
     const requestUriMethod = req.query.request_uri_method || "post";
     const responseMode = req.query.response_mode || "direct_post";
+    const jarAlg = req.query.jar_alg || CONFIG.DEFAULT_JAR_ALG;
     const txData = req.query.tx_data === "true";
 
     requestId = logHttpRequest(slog, "GET", "/vp/request", req.headers, req.query);
@@ -122,6 +124,7 @@ vpStandardRouter.get("/vp/request", async (req, res) => {
     const clientMetadata = JSON.parse(
       fs.readFileSync("./data/verifier-config.json", "utf-8")
     );
+    const verifierInfo = resolveVerifierInfoFromRequest(req);
 
     // Determine client ID, private key, and kid based on client_id_scheme
     let clientId;
@@ -130,7 +133,7 @@ vpStandardRouter.get("/vp/request", async (req, res) => {
     let routePath;
 
     if (clientIdScheme === "x509_hash" || clientIdScheme === "x509_san_dns") {
-      clientId = resolveVerifierX509ClientId(clientIdScheme);
+      clientId = resolveVerifierX509ClientId(clientIdScheme, { responseMode, jarAlg });
       routePath = "/vp/x509VPrequest";
     } else if (clientIdScheme === "did:web") {
       const didIdentifiers = generateDidIdentifiers(CONFIG.SERVER_URL);
@@ -170,7 +173,9 @@ vpStandardRouter.get("/vp/request", async (req, res) => {
       clientId,
       privateKey,
       clientMetadata,
+      verifierInfo,
       kid,
+      jarAlg,
       serverURL: CONFIG.SERVER_URL,
       dcqlQuery,
       transactionData,
@@ -209,6 +214,9 @@ vpStandardRouter
     try {
       const { wallet_nonce: walletNonce, wallet_metadata: walletMetadata } =
         req.body;
+      const verifierInfo = resolveVerifierInfoFromRequest(req);
+      const responseMode = req.body.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
+      const jarAlg = req.query.jar_alg || CONFIG.DEFAULT_JAR_ALG;
 
       requestId = logHttpRequest(slog, "POST", `/vp/x509VPrequest/${sessionId}`, req.headers, req.body);
       try { slog("[VERIFIER] [START] Processing POST x509 VP request", { hasWalletNonce: !!walletNonce, hasWalletMetadata: !!walletMetadata }); } catch {}
@@ -221,7 +229,8 @@ vpStandardRouter
         sessionId,
         clientMetadata,
         serverURL: CONFIG.SERVER_URL,
-        clientId: resolveVerifierX509ClientId(req.query.client_id_scheme || "x509_hash"),
+        clientId: resolveVerifierX509ClientId(req.query.client_id_scheme || "x509_hash", { responseMode, jarAlg }),
+        verifierInfo,
         kid: null,
         walletNonce,
         walletMetadata,
@@ -258,6 +267,9 @@ vpStandardRouter
     let requestId = null;
     
     try {
+      const verifierInfo = resolveVerifierInfoFromRequest(req);
+      const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
+      const jarAlg = req.query.jar_alg || CONFIG.DEFAULT_JAR_ALG;
       requestId = logHttpRequest(slog, "GET", `/vp/x509VPrequest/${sessionId}`, req.headers, req.query);
       try { slog("[VERIFIER] [START] Processing GET x509 VP request"); } catch {}
 
@@ -269,7 +281,8 @@ vpStandardRouter
         sessionId,
         clientMetadata,
         serverURL: CONFIG.SERVER_URL,
-        clientId: resolveVerifierX509ClientId(req.query.client_id_scheme || "x509_hash"),
+        clientId: resolveVerifierX509ClientId(req.query.client_id_scheme || "x509_hash", { responseMode, jarAlg }),
+        verifierInfo,
         kid: null,
       });
 
@@ -313,6 +326,7 @@ vpStandardRouter
       const { client_id, kid } = generateDidIdentifiers(CONFIG.SERVER_URL);
       const { wallet_nonce: walletNonce, wallet_metadata: walletMetadata } =
         req.body;
+      const verifierInfo = resolveVerifierInfoFromRequest(req);
 
       requestId = logHttpRequest(slog, "POST", `/vp/didVPrequest/${sessionId}`, req.headers, req.body);
       try { slog("[VERIFIER] [START] Processing POST did:web VP request", { clientId: client_id, kid, hasWalletNonce: !!walletNonce, hasWalletMetadata: !!walletMetadata }); } catch {}
@@ -330,6 +344,7 @@ vpStandardRouter
         clientMetadata,
         serverURL: CONFIG.SERVER_URL,
         clientId: client_id,
+        verifierInfo,
         privateKey,
         kid,
         walletNonce,
@@ -368,6 +383,7 @@ vpStandardRouter
     
     try {
       const { client_id, kid } = generateDidIdentifiers(CONFIG.SERVER_URL);
+      const verifierInfo = resolveVerifierInfoFromRequest(req);
 
       requestId = logHttpRequest(slog, "GET", `/vp/didVPrequest/${sessionId}`, req.headers, req.query);
       try { slog("[VERIFIER] [START] Processing GET did:web VP request", { clientId: client_id, kid }); } catch {}
@@ -385,6 +401,7 @@ vpStandardRouter
         clientMetadata,
         serverURL: CONFIG.SERVER_URL,
         clientId: client_id,
+        verifierInfo,
         privateKey,
         kid,
       });
@@ -434,6 +451,7 @@ vpStandardRouter
       const { client_id, kid } = generateDidJwkIdentifiers(didJwkIdentifier);
       const { wallet_nonce: walletNonce, wallet_metadata: walletMetadata } =
         req.body;
+      const verifierInfo = resolveVerifierInfoFromRequest(req);
 
       requestId = logHttpRequest(slog, "POST", `/vp/didJwkVPrequest/${sessionId}`, req.headers, req.body);
       try { slog("[VERIFIER] [START] Processing POST did:jwk VP request", { clientId: client_id, kid, hasWalletNonce: !!walletNonce, hasWalletMetadata: !!walletMetadata }); } catch {}
@@ -447,6 +465,7 @@ vpStandardRouter
         clientMetadata,
         serverURL: CONFIG.SERVER_URL,
         clientId: client_id,
+        verifierInfo,
         privateKey: didJwkPrivateKey,
         kid,
         walletNonce,
@@ -490,6 +509,7 @@ vpStandardRouter
       );
       const didJwkIdentifier = generateDidJwkIdentifier(didJwkPrivateKey);
       const { client_id, kid } = generateDidJwkIdentifiers(didJwkIdentifier);
+      const verifierInfo = resolveVerifierInfoFromRequest(req);
 
       requestId = logHttpRequest(slog, "GET", `/vp/didJwkVPrequest/${sessionId}`, req.headers, req.query);
       try { slog("[VERIFIER] [START] Processing GET did:jwk VP request", { clientId: client_id, kid }); } catch {}
@@ -503,6 +523,7 @@ vpStandardRouter
         clientMetadata,
         serverURL: CONFIG.SERVER_URL,
         clientId: client_id,
+        verifierInfo,
         privateKey: didJwkPrivateKey,
         kid,
       });
@@ -534,4 +555,3 @@ vpStandardRouter
   });
 
 export default vpStandardRouter;
-

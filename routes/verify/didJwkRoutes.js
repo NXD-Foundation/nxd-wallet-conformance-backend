@@ -11,6 +11,7 @@ import {
   processVPRequest,
   createTransactionData,
   createErrorResponse,
+  resolveVerifierInfoFromRequest,
 } from "../../utils/routeUtils.js";
 import {
   logInfo,
@@ -38,7 +39,7 @@ didJwkRouter.use((req, res, next) => {
 });
 
 // Load configuration files and generate DID JWK identifier
-const { presentationDefinition, clientMetadata, privateKey } = loadConfigurationFiles(
+const { presentationDefinition, clientMetadata, privateKey, verifierInfo } = loadConfigurationFiles(
   "./data/presentation_definition_pid.json",
   "./data/verifier-config.json",
   "./didjwks/did_private_pkcs8.key"
@@ -57,6 +58,7 @@ didJwkRouter.get("/generateVPRequest", async (req, res) => {
   try {
     const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
     const { client_id, kid } = generateDidJwkIdentifiers(didJwkIdentifier);
+    const effectiveVerifierInfo = resolveVerifierInfoFromRequest(req, verifierInfo);
     
     requestId = logHttpRequest(slog, "GET", "/generateVPRequest", req.headers, req.query);
     try { slog("[VERIFIER] [START] DID JWK VP request generation", { responseMode, clientId: client_id, kid }); } catch {}
@@ -66,9 +68,10 @@ didJwkRouter.get("/generateVPRequest", async (req, res) => {
       responseMode,
       presentationDefinition: null,
       clientId: client_id,
-    privateKey,
-    clientMetadata,
-    kid,
+      privateKey,
+      clientMetadata,
+      verifierInfo: effectiveVerifierInfo,
+      kid,
       serverURL: CONFIG.SERVER_URL,
       dcqlQuery: DEFAULT_DCQL_QUERY,
       usePostMethod: true,
@@ -99,6 +102,7 @@ didJwkRouter.get("/generateVPRequestGET", async (req, res) => {
   try {
     const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
     const { client_id, kid } = generateDidJwkIdentifiers(didJwkIdentifier);
+    const effectiveVerifierInfo = resolveVerifierInfoFromRequest(req, verifierInfo);
     
     requestId = logHttpRequest(slog, "GET", "/generateVPRequestGET", req.headers, req.query);
     try { slog("[VERIFIER] [START] DID JWK VP request generation (GET method)", { responseMode, clientId: client_id, kid }); } catch {}
@@ -110,6 +114,7 @@ didJwkRouter.get("/generateVPRequestGET", async (req, res) => {
       clientId: client_id,
       privateKey,
       clientMetadata,
+      verifierInfo: effectiveVerifierInfo,
       kid,
       serverURL: CONFIG.SERVER_URL,
       dcqlQuery: DEFAULT_DCQL_QUERY,
@@ -141,6 +146,7 @@ didJwkRouter.get("/generateVPRequestDCQL", async (req, res) => {
   try {
     const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
     const { client_id, kid } = generateDidJwkIdentifiers(didJwkIdentifier);
+    const effectiveVerifierInfo = resolveVerifierInfoFromRequest(req, verifierInfo);
     
     requestId = logHttpRequest(slog, "GET", "/generateVPRequestDCQL", req.headers, req.query);
     try { slog("[VERIFIER] [START] DID JWK VP request generation with DCQL", { responseMode, clientId: client_id, kid }); } catch {}
@@ -150,9 +156,10 @@ didJwkRouter.get("/generateVPRequestDCQL", async (req, res) => {
       responseMode,
       presentationDefinition: null,
       clientId: client_id,
-    privateKey,
-    clientMetadata,
-    kid,
+      privateKey,
+      clientMetadata,
+      verifierInfo: effectiveVerifierInfo,
+      kid,
       serverURL: CONFIG.SERVER_URL,
       dcqlQuery: DEFAULT_DCQL_QUERY,
       usePostMethod: true,
@@ -183,6 +190,7 @@ didJwkRouter.get("/generateVPRequestDCQLGET", async (req, res) => {
   try {
     const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
     const { client_id, kid } = generateDidJwkIdentifiers(didJwkIdentifier);
+    const effectiveVerifierInfo = resolveVerifierInfoFromRequest(req, verifierInfo);
     
     requestId = logHttpRequest(slog, "GET", "/generateVPRequestDCQLGET", req.headers, req.query);
     try { slog("[VERIFIER] [START] DID JWK VP request generation with DCQL (GET method)", { responseMode, clientId: client_id, kid }); } catch {}
@@ -194,6 +202,7 @@ didJwkRouter.get("/generateVPRequestDCQLGET", async (req, res) => {
       clientId: client_id,
       privateKey,
       clientMetadata,
+      verifierInfo: effectiveVerifierInfo,
       kid,
       serverURL: CONFIG.SERVER_URL,
       dcqlQuery: DEFAULT_DCQL_QUERY,
@@ -225,6 +234,7 @@ didJwkRouter.get("/generateVPRequestTransaction", async (req, res) => {
   try {
     const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
     const { client_id, kid } = generateDidJwkIdentifiers(didJwkIdentifier);
+    const effectiveVerifierInfo = resolveVerifierInfoFromRequest(req, verifierInfo);
     
     requestId = logHttpRequest(slog, "GET", "/generateVPRequestTransaction", req.headers, req.query);
     try { slog("[VERIFIER] [START] DID JWK VP request generation with transaction data", { responseMode, clientId: client_id, kid }); } catch {}
@@ -238,9 +248,10 @@ didJwkRouter.get("/generateVPRequestTransaction", async (req, res) => {
       responseMode,
       presentationDefinition: null,
       clientId: client_id,
-    privateKey,
-    clientMetadata,
-    kid,
+      privateKey,
+      clientMetadata,
+      verifierInfo: effectiveVerifierInfo,
+      kid,
       serverURL: CONFIG.SERVER_URL,
       dcqlQuery: DEFAULT_DCQL_QUERY,
       transactionData: base64UrlEncodedTxData,
@@ -274,6 +285,7 @@ didJwkRouter
     try {
       const { client_id, kid } = generateDidJwkIdentifiers(didJwkIdentifier);
       const { wallet_nonce: walletNonce, wallet_metadata: walletMetadata } = req.body;
+      const effectiveVerifierInfo = resolveVerifierInfoFromRequest(req, verifierInfo);
 
       requestId = logHttpRequest(slog, "POST", `/didJwkVPrequest/${sessionId}`, req.headers, req.body);
       try { slog("[VERIFIER] [START] Processing POST DID JWK VP request", { clientId: client_id, kid, hasWalletNonce: !!walletNonce, hasWalletMetadata: !!walletMetadata }); } catch {}
@@ -283,7 +295,8 @@ didJwkRouter
         clientMetadata,
         serverURL: CONFIG.SERVER_URL,
         clientId: client_id,
-      privateKey,
+        verifierInfo: effectiveVerifierInfo,
+        privateKey,
         kid,
         walletNonce,
         walletMetadata,
@@ -331,6 +344,7 @@ didJwkRouter
     
     try {
       const { client_id, kid } = generateDidJwkIdentifiers(didJwkIdentifier);
+      const effectiveVerifierInfo = resolveVerifierInfoFromRequest(req, verifierInfo);
       
       requestId = logHttpRequest(slog, "GET", `/didJwkVPrequest/${sessionId}`, req.headers, req.query);
       try { slog("[VERIFIER] [START] Processing GET DID JWK VP request", { clientId: client_id, kid }); } catch {}
@@ -340,6 +354,7 @@ didJwkRouter
         clientMetadata,
         serverURL: CONFIG.SERVER_URL,
         clientId: client_id,
+        verifierInfo: effectiveVerifierInfo,
         privateKey,
         kid,
       });

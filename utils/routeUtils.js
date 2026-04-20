@@ -1,4 +1,5 @@
 import fs from "fs";
+import { execSync } from "child_process";
 import { v4 as uuidv4 } from "uuid";
 import qr from "qr-image";
 import imageDataURI from "image-data-uri";
@@ -213,6 +214,137 @@ export const ERROR_MESSAGES = {
   NO_JWT_PRESENTED: "no jwt presented",
 };
 
+const VERIFIER_INFO_KEYS = [
+  "verifier_id",
+  "service_description",
+  "rp_registrar_uri",
+  "registration_certificate",
+  "intended_use",
+  "purpose",
+  "privacy_policy_uri",
+];
+
+function cloneJsonValue(value) {
+  return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
+}
+
+function normalizeVerifierInfo(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return null;
+  }
+
+  const normalized = {};
+  for (const key of VERIFIER_INFO_KEYS) {
+    const value = input[key];
+    if (value === undefined || value === null || value === "") continue;
+    if (key === "registration_certificate" && typeof value === "string") {
+      const trimmed = value.trim();
+      if (trimmed.startsWith("[")) {
+        normalized[key] = JSON.parse(trimmed);
+      } else {
+        normalized[key] = [trimmed];
+      }
+      continue;
+    }
+    normalized[key] = cloneJsonValue(value);
+  }
+
+  return Object.keys(normalized).length > 0 ? normalized : null;
+}
+
+function parseVerifierInfoValue(rawValue) {
+  if (!rawValue) return null;
+
+  if (typeof rawValue === "object" && !Array.isArray(rawValue)) {
+    return normalizeVerifierInfo(rawValue);
+  }
+
+  if (typeof rawValue !== "string") {
+    throw new Error("Invalid verifier_info override. Expected a JSON object or JSON string.");
+  }
+
+  const trimmed = rawValue.trim();
+  if (trimmed === "") return null;
+
+  let parsed;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch (error) {
+    throw new Error(`Invalid verifier_info JSON: ${error.message}`);
+  }
+
+  return normalizeVerifierInfo(parsed);
+}
+
+export function loadVerifierInfo(verifierInfoPath = "./data/verifier-info.json") {
+  try {
+    if (!fs.existsSync(verifierInfoPath)) {
+      return null;
+    }
+
+    const parsed = JSON.parse(fs.readFileSync(verifierInfoPath, "utf-8"));
+    return normalizeVerifierInfo(parsed);
+  } catch (error) {
+    logUtilityError("loadVerifierInfo", error, {
+      verifierInfoPath,
+    });
+    throw new Error(CONFIG.ERROR_MESSAGES.FILE_READ_ERROR);
+  }
+}
+
+export function resolveVerifierInfo(override = null, baseVerifierInfo = null) {
+  const normalizedBase = normalizeVerifierInfo(baseVerifierInfo) || null;
+  const normalizedOverride = normalizeVerifierInfo(override) || null;
+
+  if (!normalizedBase && !normalizedOverride) {
+    return null;
+  }
+
+  return {
+    ...(normalizedBase || {}),
+    ...(normalizedOverride || {}),
+  };
+}
+
+export function resolveVerifierInfoFromRequest(req, baseVerifierInfo = null) {
+  const sources = [];
+  if (req?.query && typeof req.query === "object") {
+    sources.push(req.query);
+  }
+  if (req?.body && typeof req.body === "object" && !Array.isArray(req.body)) {
+    sources.push(req.body);
+  }
+
+  let override = null;
+
+  for (const source of sources) {
+    const explicit = parseVerifierInfoValue(source.verifier_info);
+    if (explicit) {
+      override = {
+        ...(override || {}),
+        ...explicit,
+      };
+    }
+
+    const fieldOverrides = {};
+    for (const key of VERIFIER_INFO_KEYS) {
+      if (source[key] !== undefined && source[key] !== null && source[key] !== "") {
+        fieldOverrides[key] = source[key];
+      }
+    }
+
+    const normalizedFields = normalizeVerifierInfo(fieldOverrides);
+    if (normalizedFields) {
+      override = {
+        ...(override || {}),
+        ...normalizedFields,
+      };
+    }
+  }
+
+  return resolveVerifierInfo(override, baseVerifierInfo);
+}
+
 function getLeafCertificateDer(certificatePath = "./x509/client_certificate.crt") {
   const certificatePem = fs.readFileSync(certificatePath, "utf8");
   const certificateBase64 = certificatePem
@@ -222,19 +354,67 @@ function getLeafCertificateDer(certificatePath = "./x509/client_certificate.crt"
   return Buffer.from(certificateBase64, "base64");
 }
 
-export function computeX509HashClientId(certificatePath = "./x509/client_certificate.crt") {
-  const certDer = getLeafCertificateDer(certificatePath);
+function extractCertificateChainFromPem(certPem) {
+  const certMatches = certPem.match(
+    /-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g
+  );
+
+  if (!certMatches || certMatches.length === 0) {
+    throw new Error("No certificates found in PEM data");
+  }
+
+  return certMatches.map((cert) =>
+    cert
+      .replace("-----BEGIN CERTIFICATE-----", "")
+      .replace("-----END CERTIFICATE-----", "")
+      .replace(/\s+/g, "")
+  );
+}
+
+function getVerifierSigningCertificateChain({
+  responseMode = CONFIG.DEFAULT_RESPONSE_MODE,
+  jarAlg = CONFIG.DEFAULT_JAR_ALG,
+} = {}) {
+  const normalizedJarAlg = typeof jarAlg === "string" ? jarAlg.trim().toUpperCase() : CONFIG.DEFAULT_JAR_ALG;
+  const useP12 =
+    responseMode === "dc_api.jwt" ||
+    responseMode === "dc_api" ||
+    normalizedJarAlg === "ES256";
+
+  if (useP12) {
+    const p12Path = path.resolve(process.cwd(), "certs", "WE-BUILD-Verifier.p12");
+    const passphrase = process.env.WEBUILD_P12_PASSWORD || "webuild";
+    const envWithPass = { ...process.env, WEBUILD_P12_PASS: passphrase };
+    const certPem = execSync(
+      `openssl pkcs12 -in "${p12Path}" -nokeys -passin env:WEBUILD_P12_PASS`,
+      { encoding: "utf8", maxBuffer: 64 * 1024, env: envWithPass }
+    );
+    return extractCertificateChainFromPem(certPem);
+  }
+
+  const certPem = fs.readFileSync("./x509/client_certificate.crt", "utf8");
+  return extractCertificateChainFromPem(certPem);
+}
+
+export function computeX509HashClientId(optionsOrPath = null) {
+  let certDer;
+  if (typeof optionsOrPath === "string") {
+    certDer = getLeafCertificateDer(optionsOrPath);
+  } else {
+    const certChain = getVerifierSigningCertificateChain(optionsOrPath || {});
+    certDer = Buffer.from(certChain[0], "base64");
+  }
   const hash = createHash("sha256").update(certDer).digest();
   return `x509_hash:${base64url.encode(hash)}`;
 }
 
-export function resolveVerifierX509ClientId(clientIdScheme = "x509_hash") {
+export function resolveVerifierX509ClientId(clientIdScheme = "x509_hash", options = {}) {
   const normalizedScheme = typeof clientIdScheme === "string"
     ? clientIdScheme.trim().toLowerCase()
     : "x509_hash";
 
   if (normalizedScheme === "" || normalizedScheme === "x509_hash" || normalizedScheme === "x509") {
-    return CONFIG.ETSI_CLIENT_ID;
+    return computeX509HashClientId(options);
   }
 
   if (normalizedScheme === "x509_san_dns") {
@@ -254,11 +434,17 @@ export const CONFIG = {
     return `x509_san_dns:${hostname}`;
   },
   get ETSI_CLIENT_ID() {
-    return computeX509HashClientId();
+    return computeX509HashClientId({
+      responseMode: this.DEFAULT_RESPONSE_MODE,
+      jarAlg: this.DEFAULT_JAR_ALG,
+    });
   },
   get VERIFIER_ATTESTATION_CLIENT_ID() {
     const hostname = new URL(this.SERVER_URL).hostname;
     return `verifier_attestation:${hostname}`;
+  },
+  get DEFAULT_VERIFIER_INFO() {
+    return loadVerifierInfo();
   },
   DEFAULT_RESPONSE_MODE: "direct_post",
   // Default JAR signature algorithm for VP requests (x509 flows)
@@ -1209,6 +1395,7 @@ export function loadConfigurationFiles(presentationDefPath, clientMetadataPath, 
     const result = {
       presentationDefinition,
       clientMetadata,
+      verifierInfo: loadVerifierInfo(),
     };
 
     if (privateKeyPath) {
@@ -1249,6 +1436,7 @@ export async function generateVPRequest(params) {
     cs03Signing = false,
     cs03Oob = false,
     cs03CallbackToken = null,
+    verifierInfo = CONFIG.DEFAULT_VERIFIER_INFO,
   } = params;
 
   await logInfo(sessionId, "Starting VP request generation in routeUtils", {
@@ -1276,6 +1464,7 @@ export async function generateVPRequest(params) {
   // Prepare session data
   const sessionData = {
     client_id: clientId,
+    verifier_info: verifierInfo || null,
     nonce,
     response_mode: responseMode,
     state,
@@ -1348,7 +1537,8 @@ export async function generateVPRequest(params) {
     undefined,
     undefined,
     state,
-    jarAlg || CONFIG.DEFAULT_JAR_ALG
+    jarAlg || CONFIG.DEFAULT_JAR_ALG,
+    verifierInfo
   );
   await logInfo(sessionId, "VP request JWT built successfully");
 
@@ -1388,6 +1578,7 @@ export async function processVPRequest(params) {
     audience,
     walletNonce,
     walletMetadata,
+    verifierInfo = CONFIG.DEFAULT_VERIFIER_INFO,
   } = params;
 
   await logInfo(sessionId, "Starting VP request processing in routeUtils", {
@@ -1420,6 +1611,7 @@ export async function processVPRequest(params) {
 
     const responseUri = `${serverURL}/direct_post/${sessionId}`;
     const effectiveClientId = vpSession.client_id || clientId;
+    const effectiveVerifierInfo = vpSession.verifier_info || verifierInfo || null;
     
     await logDebug(sessionId, "Building VP request JWT", {
       clientId: effectiveClientId,
@@ -1445,7 +1637,8 @@ export async function processVPRequest(params) {
       walletMetadata,
       null, // va_jwt - Verifier Attestation JWT (not used in response processing)
       vpSession.state,
-      vpSession.jar_alg || CONFIG.DEFAULT_JAR_ALG
+      vpSession.jar_alg || CONFIG.DEFAULT_JAR_ALG,
+      effectiveVerifierInfo
     );
     
     await logInfo(sessionId, "VP request JWT built successfully", {
@@ -1566,7 +1759,14 @@ export function createVPRequestResponse(qrCode, deepLink, sessionId) {
  * @param {string} responseMode - The response mode
  * @returns {Promise<void>}
  */
-export async function handleSessionCreation(sessionId, presentationDefinition, responseMode, clientId = null) {
+export async function handleSessionCreation(
+  sessionId,
+  presentationDefinition,
+  responseMode,
+  clientId = null,
+  verifierInfo = CONFIG.DEFAULT_VERIFIER_INFO,
+  jarAlg = CONFIG.DEFAULT_JAR_ALG
+) {
   await logInfo(sessionId, "Creating new VP session", {
     clientId,
     responseMode,
@@ -1583,11 +1783,13 @@ export async function handleSessionCreation(sessionId, presentationDefinition, r
 
   await storeVPSessionData(sessionId, {
     client_id: clientId,
+    verifier_info: verifierInfo || null,
     presentation_definition: presentationDefinition,
     nonce,
     state,
     sdsRequested: getSDsFromPresentationDef(presentationDefinition),
     response_mode: responseMode,
+    jar_alg: jarAlg || CONFIG.DEFAULT_JAR_ALG,
   });
   
   await logInfo(sessionId, "VP session created successfully");

@@ -76,6 +76,31 @@ function loadVerifierP12() {
   }
 }
 
+function cloneVerifierInfo(verifierInfo) {
+  if (!verifierInfo || typeof verifierInfo !== "object" || Array.isArray(verifierInfo)) {
+    return null;
+  }
+
+  return JSON.parse(JSON.stringify(verifierInfo));
+}
+
+function attachRuntimeVerifierInfo(jwtPayload, verifierInfo, certChain = null) {
+  const normalizedVerifierInfo = cloneVerifierInfo(verifierInfo);
+  if (!normalizedVerifierInfo) {
+    return;
+  }
+
+  if (Array.isArray(certChain) && certChain.length > 0) {
+    normalizedVerifierInfo.registration_certificate = certChain;
+  } else {
+    delete normalizedVerifierInfo.registration_certificate;
+  }
+
+  if (Object.keys(normalizedVerifierInfo).length > 0) {
+    jwtPayload.verifier_info = normalizedVerifierInfo;
+  }
+}
+
 export function pemToJWK(pem, keyType) {
   let key;
   let jwk;
@@ -262,7 +287,8 @@ export async function buildVpRequestJWT(
   wallet_metadata = null,
   va_jwt = null, // Optional Verifier Attestation JWT for verifier_attestation scheme
   state = null, // Add state parameter (last param to match test ordering)
-  jar_alg = null // Optional JAR signature algorithm override (e.g., 'ES256') for x509 schemes
+  jar_alg = null, // Optional JAR signature algorithm override (e.g., 'ES256') for x509 schemes
+  verifier_info = null // Optional verifier registration information for RFC002 / ETSI-aligned flows
 ) {
   if (!nonce) nonce = generateNonce(16);
   if (!state) {
@@ -426,6 +452,7 @@ export async function buildVpRequestJWT(
   if (response_mode === "dc_api.jwt" || response_mode === "dc_api") {
     // Use WE-BUILD Verifier P12 certificate for Digital Credentials API
     const { privateKeyPkcs8, certChain } = loadVerifierP12();
+    attachRuntimeVerifierInfo(jwtPayload, verifier_info, certChain);
 
     const header = {
       alg: "ES256",
@@ -458,6 +485,7 @@ export async function buildVpRequestJWT(
         .replace(/\s+/g, "");
       certChain = [certBase64];
     }
+    attachRuntimeVerifierInfo(jwtPayload, verifier_info, certChain);
 
     const header = {
       alg: useEs256 ? "ES256" : "RS256",
@@ -487,6 +515,7 @@ export async function buildVpRequestJWT(
         .replace(/\s+/g, "");
       certChain = [certBase64];
     }
+    attachRuntimeVerifierInfo(jwtPayload, verifier_info, certChain);
     
     // For x509_hash, we need the leaf certificate (first in chain) for hash calculation
     const leafCertBase64 = certChain[0];
@@ -510,6 +539,7 @@ export async function buildVpRequestJWT(
       .setProtectedHeader(header)
       .sign(await jose.importPKCS8(privateKey, useEs256 ? "ES256" : "RS256"));
   } else if (effectiveClientId.startsWith("did:")) {
+    attachRuntimeVerifierInfo(jwtPayload, verifier_info);
     // Check if this is a did:jwk identifier
     if (effectiveClientId.startsWith("did:jwk:")) {
       // Load private key from file for DID JWK

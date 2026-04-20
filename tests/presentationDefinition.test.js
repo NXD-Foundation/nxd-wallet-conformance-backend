@@ -1,8 +1,30 @@
 import { strict as assert } from 'assert';
 import fs from 'fs';
+import { execSync } from 'child_process';
 import { createHash } from 'crypto';
 import base64url from 'base64url';
+import jwt from 'jsonwebtoken';
 import { getSDsFromPresentationDef } from '../utils/vpHeplers.js';
+
+function readPemBody(path) {
+  return fs.readFileSync(path, 'utf8')
+    .replace(/-----BEGIN CERTIFICATE-----/g, '')
+    .replace(/-----END CERTIFICATE-----/g, '')
+    .replace(/\s+/g, '');
+}
+
+function readP12LeafCertBody() {
+  const envWithPass = { ...process.env, WEBUILD_P12_PASS: process.env.WEBUILD_P12_PASSWORD || 'webuild' };
+  const certPem = execSync(
+    'openssl pkcs12 -in "certs/WE-BUILD-Verifier.p12" -nokeys -passin env:WEBUILD_P12_PASS',
+    { encoding: 'utf8', maxBuffer: 64 * 1024, env: envWithPass }
+  );
+  const matches = certPem.match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g);
+  return matches[0]
+    .replace(/-----BEGIN CERTIFICATE-----/g, '')
+    .replace(/-----END CERTIFICATE-----/g, '')
+    .replace(/\s+/g, '');
+}
 
 describe('Presentation Definition Utilities', () => {
   it('should extract Selective Disclosure fields from presentation_definition_mdl.json', () => {
@@ -129,11 +151,7 @@ describe('Presentation Definition (PE) structure - OID4VP v1.0', () => {
 
 describe('Verifier X509 client_id defaults', () => {
   function computeExpectedX509HashClientId() {
-    const pem = fs.readFileSync('./x509/client_certificate.crt', 'utf8')
-      .replace('-----BEGIN CERTIFICATE-----', '')
-      .replace('-----END CERTIFICATE-----', '')
-      .replace(/\s+/g, '');
-    const der = Buffer.from(pem, 'base64');
+    const der = Buffer.from(readP12LeafCertBody(), 'base64');
     return `x509_hash:${base64url.encode(createHash('sha256').update(der).digest())}`;
   }
 
@@ -159,5 +177,131 @@ describe('Verifier X509 client_id defaults', () => {
     const cfg = JSON.parse(fs.readFileSync('./data/verifier-config.json', 'utf-8'));
     assert.strictEqual(cfg.client_id, computeExpectedX509HashClientId());
     assert.deepStrictEqual(cfg.client_id_schemes_supported, ['x509_hash', 'x509_san_dns']);
+  });
+
+  it('verifier-info config must publish the RFC002 verifier_info fields', () => {
+    const verifierInfo = JSON.parse(fs.readFileSync('./data/verifier-info.json', 'utf-8'));
+
+    assert.equal(typeof verifierInfo.verifier_id, 'string');
+    assert.equal(typeof verifierInfo.service_description, 'string');
+    assert.equal(typeof verifierInfo.rp_registrar_uri, 'string');
+    assert.equal(typeof verifierInfo.intended_use, 'string');
+    assert.equal(typeof verifierInfo.purpose, 'string');
+    assert.equal(typeof verifierInfo.privacy_policy_uri, 'string');
+    assert.ok(!('registration_certificate' in verifierInfo), 'registration_certificate should be derived at runtime from the active signing certificate');
+  });
+
+  it('resolveVerifierInfoFromRequest must merge request overrides onto configured defaults', async () => {
+    const rt = await import('../utils/routeUtils.js');
+    const resolved = rt.resolveVerifierInfoFromRequest(
+      {
+        query: {
+          verifier_info: JSON.stringify({
+            purpose: 'Custom policy purpose',
+            intended_use: 'custom_use'
+          })
+        },
+        body: {
+          privacy_policy_uri: 'https://override.example/privacy'
+        }
+      },
+      rt.loadVerifierInfo()
+    );
+
+    assert.equal(resolved.purpose, 'Custom policy purpose');
+    assert.equal(resolved.intended_use, 'custom_use');
+    assert.equal(resolved.privacy_policy_uri, 'https://override.example/privacy');
+    assert.equal(resolved.verifier_id, 'dss.aegean.gr');
+    assert.ok(!('registration_certificate' in resolved));
+  });
+
+  it('buildVpRequestJWT must emit verifier_info with the active RS256 signing certificate', async () => {
+    const rt = await import('../utils/routeUtils.js');
+    const cryptoUtils = await import('../utils/cryptoUtils.js');
+    const verifierInfo = rt.loadVerifierInfo();
+    const rs256ClientId = rt.computeX509HashClientId('./x509/client_certificate.crt');
+    const dcqlQuery = {
+      credentials: [
+        {
+          id: 'pid',
+          format: 'dc+sd-jwt',
+          meta: { vct_values: ['urn:eu.europa.ec.eudi:pid:1'] }
+        }
+      ]
+    };
+
+    const token = await cryptoUtils.buildVpRequestJWT(
+      rs256ClientId,
+      'http://localhost:3000/direct_post/test-session',
+      null,
+      null,
+      rt.CLIENT_METADATA,
+      null,
+      'http://localhost:3000',
+      'vp_token',
+      'test-nonce',
+      dcqlQuery,
+      null,
+      'direct_post',
+      undefined,
+      null,
+      null,
+      null,
+      'test-state',
+      'RS256',
+      verifierInfo
+    );
+
+    const payload = jwt.decode(token);
+    assert.deepStrictEqual(payload.verifier_info, {
+      ...verifierInfo,
+      registration_certificate: [readPemBody('./x509/client_certificate.crt')]
+    });
+    assert.equal(payload.client_id, rs256ClientId);
+  });
+
+  it('buildVpRequestJWT must emit verifier_info with the active ES256 signing certificate chain', async () => {
+    const rt = await import('../utils/routeUtils.js');
+    const cryptoUtils = await import('../utils/cryptoUtils.js');
+    const verifierInfo = rt.loadVerifierInfo();
+    const dcqlQuery = {
+      credentials: [
+        {
+          id: 'pid',
+          format: 'dc+sd-jwt',
+          meta: { vct_values: ['urn:eu.europa.ec.eudi:pid:1'] }
+        }
+      ]
+    };
+
+    const token = await cryptoUtils.buildVpRequestJWT(
+      rt.CONFIG.ETSI_CLIENT_ID,
+      'http://localhost:3000/direct_post/test-session',
+      null,
+      null,
+      rt.CLIENT_METADATA,
+      null,
+      'http://localhost:3000',
+      'vp_token',
+      'test-nonce',
+      dcqlQuery,
+      null,
+      'direct_post',
+      undefined,
+      null,
+      null,
+      null,
+      'test-state',
+      'ES256',
+      verifierInfo
+    );
+
+    const payload = jwt.decode(token);
+    const header = jwt.decode(token, { complete: true }).header;
+    assert.equal(header.alg, 'ES256');
+    assert.deepStrictEqual(payload.verifier_info, {
+      ...verifierInfo,
+      registration_certificate: header.x5c
+    });
   });
 });

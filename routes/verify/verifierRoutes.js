@@ -2202,15 +2202,25 @@ verifierRouter.get("/vp-request/:type", async (req, res) => {
   });
 });
 
+// Deprecated legacy VP request builder route.
+// Keep behavior stable for now; RFC002-aligned flows should use the dedicated
+// shared verifier routes instead, and this endpoint can be cleaned up later.
 verifierRouter.get("/vpRequest/:type/:id", async (req, res) => {
   const { type, id } = req.params;
   const uuid = id ? id : uuidv4();
   
+  res.set("Deprecation", "true");
+  res.set("Warning", '299 - "Deprecated endpoint: use RFC002-aligned verifier routes instead"');
+
   await logInfo(uuid, "Processing VP request by type and ID", {
     endpoint: "/vpRequest/:type/:id",
     type,
     id,
     uuid
+  });
+  await logWarn(uuid, "Deprecated verifier route invoked", {
+    endpoint: "/vpRequest/:type/:id",
+    replacement: "Use RFC002-aligned shared verifier routes",
   });
   
   const state = generateNonce(16);

@@ -9,6 +9,7 @@ import {
   handleSessionCreation,
   createErrorResponse,
   resolveVerifierX509ClientId,
+  resolveVerifierInfoFromRequest,
 } from "../../utils/routeUtils.js";
 import {
   logInfo,
@@ -35,7 +36,7 @@ mdlRouter.use((req, res, next) => {
 });
 
 // Load configuration files
-const { presentationDefinition: presentationDefinitionMdl, clientMetadata } = loadConfigurationFiles(
+const { presentationDefinition: presentationDefinitionMdl, clientMetadata, verifierInfo } = loadConfigurationFiles(
   "./data/presentation_definition_mdl.json",
   "./data/verifier-config.json"
 );
@@ -52,7 +53,9 @@ mdlRouter.get("/generateVPRequest", async (req, res) => {
   try {
     const sessionId = req.query.sessionId || uuidv4();
     const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
-    const clientId = resolveVerifierX509ClientId(req.query.client_id_scheme);
+    const jarAlg = req.query.jar_alg || CONFIG.DEFAULT_JAR_ALG;
+    const clientId = resolveVerifierX509ClientId(req.query.client_id_scheme, { responseMode, jarAlg });
+    const effectiveVerifierInfo = resolveVerifierInfoFromRequest(req, verifierInfo);
     
     await logInfo(sessionId, "Starting mDL VP request generation", {
       endpoint: "/generateVPRequest",
@@ -68,6 +71,7 @@ mdlRouter.get("/generateVPRequest", async (req, res) => {
 
       clientId,
       clientMetadata,
+      verifierInfo: effectiveVerifierInfo,
       kid: null,
       serverURL: CONFIG.SERVER_URL,
       dcqlQuery: DEFAULT_MDL_DCQL_QUERY,
@@ -100,7 +104,10 @@ mdlRouter
     try {
       const sessionId = req.params.id;
       const { wallet_nonce: walletNonce, wallet_metadata: walletMetadata } = req.body;
-      const clientId = resolveVerifierX509ClientId(req.query.client_id_scheme);
+      const responseMode = req.body.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
+      const jarAlg = req.query.jar_alg || CONFIG.DEFAULT_JAR_ALG;
+      const clientId = resolveVerifierX509ClientId(req.query.client_id_scheme, { responseMode, jarAlg });
+      const effectiveVerifierInfo = resolveVerifierInfoFromRequest(req, verifierInfo);
 
       await logInfo(sessionId, "Processing POST mDL VP request", {
         endpoint: "POST /VPrequest/:id",
@@ -121,6 +128,7 @@ mdlRouter
         clientMetadata,
         serverURL: CONFIG.SERVER_URL,
         clientId,
+        verifierInfo: effectiveVerifierInfo,
         kid: null,
         walletNonce,
         walletMetadata,
@@ -167,7 +175,10 @@ mdlRouter
   .get(async (req, res) => {
     let sessionId = req.params.id;
     try {
-      const clientId = resolveVerifierX509ClientId(req.query.client_id_scheme);
+      const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
+      const jarAlg = req.query.jar_alg || CONFIG.DEFAULT_JAR_ALG;
+      const clientId = resolveVerifierX509ClientId(req.query.client_id_scheme, { responseMode, jarAlg });
+      const effectiveVerifierInfo = resolveVerifierInfoFromRequest(req, verifierInfo);
       await logInfo(sessionId, "Processing GET mDL VP request", {
         endpoint: "GET /VPrequest/:id",
         clientId,
@@ -183,7 +194,7 @@ mdlRouter
           sessionId,
           responseMode
         });
-        await handleSessionCreation(sessionId, presentationDefinitionMdl, responseMode, clientId);
+        await handleSessionCreation(sessionId, presentationDefinitionMdl, responseMode, clientId, effectiveVerifierInfo, jarAlg);
       }
 
       // Check if session exists, create new one if not
@@ -194,7 +205,7 @@ mdlRouter
           sessionId
         });
         const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
-        await handleSessionCreation(sessionId, presentationDefinitionMdl, responseMode, clientId);
+        await handleSessionCreation(sessionId, presentationDefinitionMdl, responseMode, clientId, effectiveVerifierInfo, jarAlg);
         await logInfo(sessionId, "New mDL session created", {
           sessionId
         });
@@ -205,6 +216,7 @@ mdlRouter
         clientMetadata,
         serverURL: CONFIG.SERVER_URL,
         clientId,
+        verifierInfo: effectiveVerifierInfo,
         kid: null,
       });
 
@@ -238,7 +250,9 @@ mdlRouter.get("/VPrequest/dcapi/:id", async (req, res) => {
   try {
     const sessionId = req.params.id;
     const responseMode = "dc_api.jwt";
-    const clientId = resolveVerifierX509ClientId(req.query.client_id_scheme);
+    const jarAlg = req.query.jar_alg || CONFIG.DEFAULT_JAR_ALG;
+    const clientId = resolveVerifierX509ClientId(req.query.client_id_scheme, { responseMode, jarAlg });
+    const effectiveVerifierInfo = resolveVerifierInfoFromRequest(req, verifierInfo);
     
     await logInfo(sessionId, "Processing mDL DC API request", {
       endpoint: "/VPrequest/dcapi/:id",
@@ -259,6 +273,7 @@ mdlRouter.get("/VPrequest/dcapi/:id", async (req, res) => {
     // Store session data with DCQL query and state
     await storeVPSessionData(sessionId, {
       client_id: clientId,
+      verifier_info: effectiveVerifierInfo,
       nonce,
       state,
       dcql_query: DEFAULT_MDL_DCQL_QUERY,
@@ -277,6 +292,7 @@ mdlRouter.get("/VPrequest/dcapi/:id", async (req, res) => {
       clientMetadata: clientMetadataMDL,
       serverURL: CONFIG.SERVER_URL,
       clientId,
+      verifierInfo: effectiveVerifierInfo,
       kid: null,
       audience: "https://self-issued.me/v2", // DC API audience
     });

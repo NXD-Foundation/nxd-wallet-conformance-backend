@@ -4,6 +4,7 @@ import request from 'supertest';
 import express from 'express';
 import sinon from 'sinon';
 import fs from 'fs';
+import { execSync } from 'child_process';
 import qr from 'qr-image';
 import imageDataURI from 'image-data-uri';
 import { streamToBuffer } from '@jorgeferrero/stream-to-buffer';
@@ -36,6 +37,19 @@ const mockStreamToBuffer = sinon.stub().resolves(Buffer.from('mock-buffer'));
 
 const X509_SAN_DNS_CLIENT_ID = 'x509_san_dns:dss.aegean.gr';
 const X509_HASH_CLIENT_ID = (() => {
+  const envWithPass = { ...process.env, WEBUILD_P12_PASS: process.env.WEBUILD_P12_PASSWORD || 'webuild' };
+  const certPem = execSync(
+    'openssl pkcs12 -in "certs/WE-BUILD-Verifier.p12" -nokeys -passin env:WEBUILD_P12_PASS',
+    { encoding: 'utf8', maxBuffer: 64 * 1024, env: envWithPass }
+  );
+  const pem = certPem.match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/)[0]
+    .replace('-----BEGIN CERTIFICATE-----', '')
+    .replace('-----END CERTIFICATE-----', '')
+    .replace(/\s+/g, '');
+  const der = Buffer.from(pem, 'base64');
+  return `x509_hash:${base64url.encode(createHash('sha256').update(der).digest())}`;
+})();
+const X509_HASH_RS256_CLIENT_ID = (() => {
   const pem = fs.readFileSync('./x509/client_certificate.crt', 'utf8')
     .replace('-----BEGIN CERTIFICATE-----', '')
     .replace('-----END CERTIFICATE-----', '')
@@ -44,8 +58,9 @@ const X509_HASH_CLIENT_ID = (() => {
   return `x509_hash:${base64url.encode(createHash('sha256').update(der).digest())}`;
 })();
 
-function resolveClientId(clientIdScheme) {
-  return clientIdScheme === 'x509_san_dns' ? X509_SAN_DNS_CLIENT_ID : X509_HASH_CLIENT_ID;
+function resolveClientId(clientIdScheme, jarAlg = 'ES256') {
+  if (clientIdScheme === 'x509_san_dns') return X509_SAN_DNS_CLIENT_ID;
+  return String(jarAlg).toUpperCase() === 'RS256' ? X509_HASH_RS256_CLIENT_ID : X509_HASH_CLIENT_ID;
 }
 
 // Create a test router that mimics the actual mdlRoutes behavior
@@ -56,8 +71,9 @@ testRouter.get('/generateVPRequest', async (req, res) => {
   try {
     const uuid = req.query.sessionId || 'test-uuid-123';
     const responseMode = req.query.response_mode || 'direct_post';
+    const jarAlg = req.query.jar_alg || 'ES256';
     const nonce = mockCryptoUtils.generateNonce(16);
-    const client_id = resolveClientId(req.query.client_id_scheme);
+    const client_id = resolveClientId(req.query.client_id_scheme, jarAlg);
 
     const response_uri = `http://localhost:3000/direct_post/${uuid}`;
 
@@ -71,6 +87,7 @@ testRouter.get('/generateVPRequest', async (req, res) => {
       nonce: nonce,
       sdsRequested: mockVpHelpers.getSDsFromPresentationDef({ test: 'mdl_definition' }),
       response_mode: responseMode,
+      jar_alg: jarAlg,
     });
 
     // Create the openid4vp:// URL (GET method, no request_uri_method)
@@ -108,9 +125,10 @@ async function generateX509MDLVPRequest(uuid, clientMetadata, serverURL, wallet_
   }
 
   const response_uri = `${serverURL}/direct_post/${uuid}`;
+  const effectiveClientId = vpSession.client_id || client_id;
 
   const vpRequestJWT = await mockCryptoUtils.buildVpRequestJWT(
-    client_id,
+    effectiveClientId,
     response_uri,
     vpSession.presentation_definition,
     null, // privateKey
@@ -125,7 +143,9 @@ async function generateX509MDLVPRequest(uuid, clientMetadata, serverURL, wallet_
     'https://self-issued.me/v2', // audience for Digital Credentials API
     wallet_nonce,
     wallet_metadata,
-    vpSession.state // Pass state from session
+    null,
+    vpSession.state,
+    vpSession.jar_alg
   );
 
   return { jwt: vpRequestJWT, status: 200 };
@@ -155,6 +175,7 @@ testRouter.route('/VPrequest/:id')
       if (!uuid) {
         uuid = req.query.sessionId || 'test-uuid-123';
         const responseMode = req.query.response_mode || 'direct_post';
+        const jarAlg = req.query.jar_alg || 'ES256';
         const nonce = mockCryptoUtils.generateNonce(16);
 
         await mockCacheService.storeVPSession(uuid, {
@@ -162,10 +183,11 @@ testRouter.route('/VPrequest/:id')
           status: 'pending',
           claims: null,
           presentation_definition: { test: 'mdl_definition' },
-          client_id: resolveClientId(req.query.client_id_scheme),
+          client_id: resolveClientId(req.query.client_id_scheme, jarAlg),
           nonce: nonce,
           sdsRequested: mockVpHelpers.getSDsFromPresentationDef({ test: 'mdl_definition' }),
           response_mode: responseMode,
+          jar_alg: jarAlg,
         });
       }
 
@@ -175,6 +197,7 @@ testRouter.route('/VPrequest/:id')
         // Check if the UUID contains 'invalid' to determine if this is a missing session test
         if (uuid && !uuid.includes('invalid')) {
           const responseMode = req.query.response_mode || 'direct_post';
+          const jarAlg = req.query.jar_alg || 'ES256';
           const nonce = mockCryptoUtils.generateNonce(16);
 
           await mockCacheService.storeVPSession(uuid, {
@@ -182,10 +205,11 @@ testRouter.route('/VPrequest/:id')
             status: 'pending',
             claims: null,
             presentation_definition: { test: 'mdl_definition' },
-            client_id: resolveClientId(req.query.client_id_scheme),
+            client_id: resolveClientId(req.query.client_id_scheme, jarAlg),
             nonce: nonce,
             sdsRequested: mockVpHelpers.getSDsFromPresentationDef({ test: 'mdl_definition' }),
             response_mode: responseMode,
+            jar_alg: jarAlg,
           });
           
           // Update the mock to return the session we just created
@@ -194,15 +218,17 @@ testRouter.route('/VPrequest/:id')
             status: 'pending',
             claims: null,
             presentation_definition: { test: 'mdl_definition' },
-            client_id: resolveClientId(req.query.client_id_scheme),
+            client_id: resolveClientId(req.query.client_id_scheme, jarAlg),
             nonce: nonce,
             sdsRequested: mockVpHelpers.getSDsFromPresentationDef({ test: 'mdl_definition' }),
             response_mode: responseMode,
+            jar_alg: jarAlg,
           });
         }
       }
 
-      const client_id = resolveClientId(req.query.client_id_scheme);
+      const jarAlg = req.query.jar_alg || 'ES256';
+      const client_id = resolveClientId(req.query.client_id_scheme, jarAlg);
       const result = await generateX509MDLVPRequest(uuid, { test: 'metadata' }, 'http://localhost:3000', undefined, undefined, client_id);
 
       if (result.error) {
@@ -242,6 +268,7 @@ testRouter.get('/VPrequest/dcapi/:id', async (req, res) => {
     };
 
     const responseMode = 'dc_api.jwt';
+    const jarAlg = 'ES256';
     const nonce = mockCryptoUtils.generateNonce(16);
     const state = mockCryptoUtils.generateNonce(16);
 
@@ -255,6 +282,7 @@ testRouter.get('/VPrequest/dcapi/:id', async (req, res) => {
       dcql_query: dcql_query,
       sdsRequested: mockVpHelpers.getSDsFromPresentationDef({ test: 'mdl_definition' }),
       response_mode: responseMode,
+      jar_alg: jarAlg,
     });
 
     const clientMetadata = { test: 'mdl_metadata' };
@@ -491,6 +519,33 @@ describe('MDL Routes', () => {
       expect(response.text).to.equal('mock-jwt-token');
     });
 
+    it('should persist jar_alg on direct session creation and rebuild with the matching RS256 x509_hash', async () => {
+      mockCacheService.getVPSession.onFirstCall().resolves(null);
+      mockCacheService.getVPSession.onSecondCall().resolves({
+        uuid: 'rs256-session',
+        nonce: 'test-nonce-123',
+        state: 'test-nonce-123',
+        presentation_definition: { test: 'mdl_definition' },
+        client_id: X509_HASH_RS256_CLIENT_ID,
+        response_mode: 'direct_post',
+        jar_alg: 'RS256'
+      });
+
+      await request(app)
+        .get('/mdl/VPrequest/rs256-session')
+        .query({ jar_alg: 'RS256' })
+        .expect(200);
+
+      expect(mockCacheService.storeVPSession.called).to.be.true;
+      const storedSession = mockCacheService.storeVPSession.getCall(0).args[1];
+      expect(storedSession).to.have.property('jar_alg', 'RS256');
+      expect(storedSession).to.have.property('client_id', X509_HASH_RS256_CLIENT_ID);
+
+      const callArgs = mockCryptoUtils.buildVpRequestJWT.getCall(0).args;
+      expect(callArgs[0]).to.equal(X509_HASH_RS256_CLIENT_ID);
+      expect(callArgs[17]).to.equal('RS256');
+    });
+
     it('should handle missing session', async () => {
       // Reset the mock to return null for this specific test
       mockCacheService.getVPSession.reset();
@@ -566,7 +621,7 @@ describe('MDL Routes', () => {
       expect(mockCryptoUtils.buildVpRequestJWT.called).to.be.true;
       const callArgs = mockCryptoUtils.buildVpRequestJWT.getCall(0).args;
       expect(callArgs[9]).to.have.property('credentials'); // dcql_query parameter
-      expect(callArgs[15]).to.equal('test-nonce-123'); // state parameter
+      expect(callArgs[16]).to.equal('test-nonce-123'); // state parameter
     });
 
     it('should use mDL-specific client metadata', async () => {
