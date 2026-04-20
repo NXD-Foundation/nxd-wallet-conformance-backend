@@ -1,454 +1,431 @@
-# RFC002 Verifier Compliance Review
+# RFC002 Verifier Compliance Review & Alignment Backlog
 
-Reviewed against `~/Downloads/RFC002 (1).md` on 2026-04-16.
+Reviewed against `~/Downloads/RFC002 (1).md`.  
+Initial review: 2026-04-16. Revalidated and merged with alignment backlog: 2026-04-20.
 
-Scope of this review:
-- Verifier-side behavior only.
-- Current implementation only.
-- Focus on RFC sections 1-11, with emphasis on verifier obligations in Sections 6-10.
+Scope of this document:
 
-## Executive Summary
+- Verifier-side behaviour only.
+- Current implementation on `main`.
+- Combined output: compliance findings (Part A) + prioritised alignment backlog (Part B).
+- RFC-check IDs follow RFC002 §11.2 (`VP-CHECK-NN`) and §7.2 (`APT-PRES-VER-*`).
 
-The verifier implementation is materially closer to RFC compliance than the issuer side. It already supports:
-- signed request-object generation
-- `request_uri`-based OpenID4VP requests
-- same-device and cross-device OpenID4VP invocation patterns
-- `direct_post`, `direct_post.jwt`, and `dc_api.jwt` style response handling
-- state and nonce correlation checks
-- SD-JWT key-binding `aud` and `sd_hash` validation
-- DCQL request generation and DCQL-shaped response checks
-- mdoc request generation and mdoc response parsing
-- encrypted response handling for `direct_post.jwt` and `dc_api.jwt`
+Scoping decisions that shape the backlog:
 
-The main compliance gaps are:
-- the verifier defaults to `x509_san_dns:` client identifiers, while RFC002 requires `x509_hash` for the ETSI-aligned scope
-- the request objects do not appear to carry RFC-required ETSI `verifier_info`
-- the verifier metadata/config does not publish `verifier_info`-style structured verifier data
-- the codebase does not implement the RFC’s `eu-eaap://` same-device ETSI invocation
-- the mdoc path does not actually validate ISO `SessionTranscript` / handover binding even though helper code exists
-- the mdoc flow does not use `mdoc-openid4vp://`
-- some older verifier routes still use legacy/non-DCQL or weaker processing paths
+- **ISO/IEC 18013-7 mdoc track** is scoped to **structural and invocation conformance only** in this round. Full cryptographic `SessionTranscript` / `IssuerAuth` / `DeviceAuth` validation is explicitly deferred and tracked under "Future work" (Part B §4).
+- **RFC002-strict becomes the default** on the primary x509 and standardized verifier routes. Legacy behaviour (`x509_san_dns`, unsigned `direct_post`) stays reachable as opt-in query parameters for interop testing.
+- The legacy `/direct_post_jwt/:id` response route is **consolidated** into `/direct_post/:id` rather than hardened in place.
 
-Overall assessment:
-- Baseline OpenID4VP verifier: mostly there
-- RFC002 verifier compliance: partial to good, depending on track
-- SD-JWT VC track: partially aligned, with ETSI-profile gaps
-- ISO/IEC 18013-7 remote mdoc track: only partially aligned
+---
 
-## Section-by-Section Review
+## Part A — Revalidated Compliance Review
 
-### 1. Introduction
+### A.0 Executive summary
 
-Assessment: Informational only.
+The verifier implementation is materially closer to RFC002 conformance than the issuer side. What is already correct:
 
-Implementation status:
-- The verifier clearly targets OpenID4VP presentation and verification flows across multiple request-generation schemes and response modes [routes/verify/x509Routes.js](/home/ni/code/js/rfc-issuer-v1/routes/verify/x509Routes.js:131), [routes/verify/verifierRoutes.js](/home/ni/code/js/rfc-issuer-v1/routes/verify/verifierRoutes.js:228)
+- Signed request-object generation (JAR) with `typ: oauth-authz-req+jwt`.
+- `request_uri`-based invocation, both GET and POST (`request_uri_method`).
+- Same-device and cross-device invocation patterns for the generic OpenID4VP / SD-JWT flows.
+- `direct_post`, `direct_post.jwt`, and `dc_api.jwt` response-mode handling.
+- `direct_post` state correlation and SD-JWT `nonce` / `sd_hash` validation on the modern `/direct_post/:id` path.
+- DCQL-based request generation.
+- Encrypted response decryption for `direct_post.jwt` and `dc_api.jwt` using the verifier JWKS.
 
-### 2. Scope
+The material gaps against RFC002 are:
 
-Assessment: Broadly aligned with verifier-side scope.
+1. `client_id` defaults to `x509_san_dns:` everywhere; RFC002 ETSI-aligned scope requires `x509_hash:`.
+2. `verifier_info` is never emitted in request objects, and there is no structured source for it.
+3. There is no `mdoc-openid4vp://` invocation scheme; the mdoc route still emits `openid4vp://`.
+4. There is no `eu-eaap://` same-device invocation scheme.
+5. The mdoc response path decodes CBOR and filters claims but performs **no cryptographic validation at all** — no `IssuerAuth` (MSO), no `DeviceAuth`, no `SessionTranscript` reconstruction. (This was labelled "partial" in the previous review; it is more accurately "absent".)
+6. `ETSI mandatory encrypted response` is not the default on the ETSI-aligned routes.
+7. Legacy `/direct_post_jwt/:id` route bypasses the strong validation stack used by `/direct_post/:id`.
+8. The main session helpers do **not** persist `client_id`, so SD-JWT `aud` validation is skipped on most routeUtils-based flows even though the response handler has a conditional check for it.
+9. `direct_post.jwt` correlation is only partial: `state` is checked for one encrypted-payload branch, but not consistently across the unencrypted and encrypted-JWT-string branches.
+10. Several verifier routes still pass `presentation_definition` into `buildVpRequestJWT()`, but that builder now rejects PEX entirely; these branches are stale and in some cases runtime-broken, not merely dead code.
+11. No dedicated verifier-metadata publication endpoint.
+12. Error-response taxonomy does not follow RFC002 §8.3.4's codes.
 
-Implemented:
-- verifier request construction
-- verifier-side response validation
-- same-device and cross-device flow support
-- SD-JWT presentation handling
-- mdoc request/response handling
+Overall assessment by track:
 
-Notes:
-- The repo contains several verifier variants and some legacy routes. Not all of them line up equally well with the RFC002 baseline.
+- Baseline OpenID4VP verifier: partial but workable on the DCQL-based paths.
+- RFC002 SD-JWT / ETSI-aligned verifier: partial — blockers are (1), (2), (6), (8), (9).
+- RFC002 ISO/IEC 18013-7 remote mdoc verifier: structurally partial, cryptographically non-conformant.
 
-### 3. Normative Language
+### A.1 Section-by-section
 
-Assessment: Informational only.
+#### §1–§4 Introduction, Scope, Roles
 
-### 4. Roles and Components
+Informational. Verifier code surface is split across
+`routes/verify/verifierRoutes.js`, `routes/verify/x509Routes.js`, `routes/verify/mdlRoutes.js`,
+`routes/verify/vpStandardRoutes.js`, `utils/routeUtils.js`, `utils/cryptoUtils.js`,
+`utils/mdlVerification.js`, and configuration in `data/verifier-config.json`.
 
-Assessment: Informational/model section.
+#### §5 Protocol overview
 
-Implementation mapping:
-- verifier backend behavior is mainly in [routes/verify/verifierRoutes.js](/home/ni/code/js/rfc-issuer-v1/routes/verify/verifierRoutes.js:253), [routes/verify/x509Routes.js](/home/ni/code/js/rfc-issuer-v1/routes/verify/x509Routes.js:131), [utils/routeUtils.js](/home/ni/code/js/rfc-issuer-v1/utils/routeUtils.js:1208)
-
-### 5. Protocol Overview
-
-Assessment: Partially aligned.
+Partially aligned.
 
 Implemented:
-- signed request-object generation via `buildVpRequestJWT()` [utils/cryptoUtils.js](/home/ni/code/js/rfc-issuer-v1/utils/cryptoUtils.js:313)
-- `request_uri`-based invocation URL generation [utils/routeUtils.js](/home/ni/code/js/rfc-issuer-v1/utils/routeUtils.js:1182), [utils/routeUtils.js](/home/ni/code/js/rfc-issuer-v1/utils/routeUtils.js:1327)
-- SD-JWT validation paths including nonce, audience, and `sd_hash` [routes/verify/verifierRoutes.js](/home/ni/code/js/rfc-issuer-v1/routes/verify/verifierRoutes.js:1492), [routes/verify/verifierRoutes.js](/home/ni/code/js/rfc-issuer-v1/routes/verify/verifierRoutes.js:1986), [routes/verify/verifierRoutes.js](/home/ni/code/js/rfc-issuer-v1/routes/verify/verifierRoutes.js:1364)
-- encrypted response handling for `direct_post.jwt` and `dc_api.jwt` [routes/verify/verifierRoutes.js](/home/ni/code/js/rfc-issuer-v1/routes/verify/verifierRoutes.js:924), [routes/verify/verifierRoutes.js](/home/ni/code/js/rfc-issuer-v1/routes/verify/verifierRoutes.js:656)
-- mdoc/DCQL request generation [routes/verify/mdlRoutes.js](/home/ni/code/js/rfc-issuer-v1/routes/verify/mdlRoutes.js:61)
 
-Missing/wrong:
-- ETSI-aligned `client_id` requirement is not the default. The main x509 verifier config uses `x509_san_dns:${hostname}`, not `x509_hash:...` [utils/routeUtils.js](/home/ni/code/js/rfc-issuer-v1/utils/routeUtils.js:103).
-- `verifier_info` is required by RFC002 for ETSI-aligned requests, but it is not present in the request-object payload construction path [utils/cryptoUtils.js](/home/ni/code/js/rfc-issuer-v1/utils/cryptoUtils.js:313).
-- mdoc same-device invocation should use `mdoc-openid4vp://`, but the shared request URL helper emits `openid4vp://` [utils/routeUtils.js](/home/ni/code/js/rfc-issuer-v1/utils/routeUtils.js:1327), including the mdoc route [routes/verify/mdlRoutes.js](/home/ni/code/js/rfc-issuer-v1/routes/verify/mdlRoutes.js:61).
-- mdoc `SessionTranscript`/handover cryptographic validation is not actually enforced in the mdoc verifier path. Helper code exists, but the active verification path only decodes CBOR and checks extracted claims [utils/mdlVerification.js](/home/ni/code/js/rfc-issuer-v1/utils/mdlVerification.js:1), [utils/mdlVerification.js](/home/ni/code/js/rfc-issuer-v1/utils/mdlVerification.js:248).
+- Signed request-object generation via `buildVpRequestJWT()` — `utils/cryptoUtils.js:313`.
+- `request_uri`-based invocation URL generation — `utils/routeUtils.js:1182`, `:1327`.
+- SD-JWT validation paths including `nonce` and `sd_hash` — `routes/verify/verifierRoutes.js:1234`, `:1264`, `:1364`, `:1986`.
+- Encrypted response handling — `routes/verify/verifierRoutes.js:656`, `:924`.
+- mdoc/DCQL request generation — `routes/verify/mdlRoutes.js:61`.
 
-### 6. High-Level Flows
+Wrong / missing:
 
-#### 6.1 Same-Device Presentation Flow
+- ETSI-aligned `client_id` requirement is not the default. `CONFIG.CLIENT_ID` is set to `x509_san_dns:${hostname}` in `utils/routeUtils.js:217`.
+- `verifier_info` is not present anywhere in the request payload construction — `utils/cryptoUtils.js:313–659`.
+- The shared request URL helper emits `openid4vp://` only — `utils/routeUtils.js:1468`. The mdoc route uses the same helper — `routes/verify/mdlRoutes.js:61`.
+- Active mdoc verification only decodes CBOR and filters claims — `utils/mdlVerification.js:15–207`.
+- `storeVPSessionData()` and `handleSessionCreation()` do not persist `client_id`, so the later `aud` check guarded by `vpSession.client_id` is usually skipped on the primary verifier flows — `utils/routeUtils.js:1244–1293`, `:1529–1544`, `routes/verify/verifierRoutes.js:1341`, `:1987`.
+- Several request-generation routes still supply `presentation_definition`, but `buildVpRequestJWT()` now throws when PEX is passed — `utils/cryptoUtils.js:358`, `routes/verify/x509Routes.js:143`, `routes/verify/didRoutes.js:61`, `routes/verify/didJwkRoutes.js:64`, `routes/verify/vpStandardRoutes.js:161`.
 
-##### 6.1.1 Presentation Request Creation
+New finding (refinement over initial review):
 
-Assessment: Mostly aligned.
+- `buildVpRequestJWT` hard-codes `jwtPayload.aud = "https://self-issued.me/v2"` at `utils/cryptoUtils.js:339`, discarding the `audience` argument callers pass in. This is not the main RFC002 blocker, but the current API is misleading and should either document that constant explicitly or stop accepting an unused override parameter.
 
-Implemented:
-- request generation stores session-bound `nonce`, `state`, response mode, and either DCQL or presentation definition data [utils/routeUtils.js](/home/ni/code/js/rfc-issuer-v1/utils/routeUtils.js:1094)
-- request-object JWT is signed and exposed via `request_uri` endpoints [utils/routeUtils.js](/home/ni/code/js/rfc-issuer-v1/utils/routeUtils.js:1160), [utils/routeUtils.js](/home/ni/code/js/rfc-issuer-v1/utils/routeUtils.js:1208)
+#### §6 High-level flows
 
-Missing/wrong:
-- the request-object payload does not carry RFC-required ETSI `verifier_info`
-- for ETSI scope, RFC requires `client_id` with `x509_hash`; the main route uses `x509_san_dns`
+##### 6.1.1 Presentation Request Creation — mostly aligned
 
-##### 6.1.2 Wallet Invocation
+Request generation stores session-bound `nonce`, `state`, `response_mode`, and DCQL — `utils/routeUtils.js:1198–1293`. JAR is signed and exposed via `request_uri` — `:1295–1327`.
 
-Assessment: Partial.
+Gaps: ETSI-aligned `client_id` and `verifier_info`. The shared session helper also fails to persist `client_id`, which weakens later response-time audience validation.
 
-Implemented:
-- `openid4vp://` invocation URLs with `request_uri` [utils/routeUtils.js](/home/ni/code/js/rfc-issuer-v1/utils/routeUtils.js:1327)
-- GET and POST `request_uri_method` variants [routes/verify/x509Routes.js](/home/ni/code/js/rfc-issuer-v1/routes/verify/x509Routes.js:143), [routes/verify/x509Routes.js](/home/ni/code/js/rfc-issuer-v1/routes/verify/x509Routes.js:184)
+##### 6.1.2 Wallet Invocation — partial
 
-Missing/wrong:
-- no `eu-eaap://` support found for ETSI authorization-endpoint invocation
-- no `mdoc-openid4vp://` support for ISO remote mdoc
+Implemented: `openid4vp://?request_uri=...&client_id=...` + QR — `utils/routeUtils.js:1191`, `:1327`. GET / POST `request_uri_method` variants in `routes/verify/x509Routes.js:143`, `:184`.
 
-##### 6.1.3 Wallet Validation
+Missing: `mdoc-openid4vp://`, `eu-eaap://`.
 
-Assessment: Wallet-side.
+##### 6.1.6 Presentation Submission — aligned
 
-No verifier finding.
+Multiple `direct_post*` endpoints exist — `routes/verify/verifierRoutes.js:253`, `:2298`.
 
-##### 6.1.4 Holder Consent
+##### 6.1.7 Result Handling — broadly aligned
 
-Assessment: Wallet-side.
-
-No verifier finding.
-
-##### 6.1.5 Presentation Generation
-
-Assessment: Wallet-side.
-
-No verifier finding.
-
-##### 6.1.6 Presentation Submission
-
-Assessment: Aligned.
-
-Implemented:
-- direct post response endpoints for multiple modes [routes/verify/verifierRoutes.js](/home/ni/code/js/rfc-issuer-v1/routes/verify/verifierRoutes.js:253), [routes/verify/verifierRoutes.js](/home/ni/code/js/rfc-issuer-v1/routes/verify/verifierRoutes.js:2298)
-
-##### 6.1.7 Result Handling
-
-Assessment: Broadly aligned.
-
-Implemented:
-- success/failure is persisted in session state and returned clearly in many flows [routes/verify/verifierRoutes.js](/home/ni/code/js/rfc-issuer-v1/routes/verify/verifierRoutes.js:1455), [routes/verify/verifierRoutes.js](/home/ni/code/js/rfc-issuer-v1/routes/verify/verifierRoutes.js:1652)
-
-Gap:
-- outcome handling is not uniform across all older routes; for example, `/direct_post_jwt/:id` still uses legacy in-memory session arrays rather than the Redis-backed session model [routes/verify/verifierRoutes.js](/home/ni/code/js/rfc-issuer-v1/routes/verify/verifierRoutes.js:2365)
-
-#### 6.2 Cross-Device Presentation Flow
-
-Assessment: Broadly aligned for SD-JWT track.
-
-Implemented:
-- QR/deep-link request generation for verifier requests [utils/routeUtils.js](/home/ni/code/js/rfc-issuer-v1/utils/routeUtils.js:1191)
-
-Missing/wrong:
-- RFC002 excludes cross-device ISO mdoc. The codebase does not clearly separate the mdoc track from generic invocation mechanics, which risks profile ambiguity.
-
-### 7. Normative Requirements
-
-#### 7.1 Wallet Requirements
-
-Assessment: Wallet-side, not reviewed here.
-
-#### 7.2 Verifier Requirements
-
-Assessment: Partially aligned.
-
-Met:
-- OpenID4VP request/response handling is present
-- same-device and cross-device non-API-mediated support exists
-- requests include anti-replay state and nonce
-- response endpoint exists
-- received responses are validated before success
-- request-response correlation is enforced
-- SD-JWT audience and `sd_hash` validation are implemented
-- transaction data is stored with session and validated in request construction [utils/cryptoUtils.js](/home/ni/code/js/rfc-issuer-v1/utils/cryptoUtils.js:370)
-
-Missing/wrong:
-- `APT-PRES-VER-13` signed request objects: implemented
-- `APT-PRES-VER-14` structured verifier metadata including `verifier_info`: not implemented in the request payload path
-- ETSI `client_id` prefix requirement is not met by default
-- `APT-PRES-VER-MDOC-03` request available via `request_uri`: implemented
-- `APT-PRES-VER-MDOC-04` include inputs needed for `SessionTranscript`: partial only
-- `APT-PRES-VER-MDOC-10` reconstruct and validate `SessionTranscript`: not implemented in the active mdoc verification logic
-
-### 8. Interface Definitions
-
-#### 8.1 Wallet Invocation Interface
-
-Assessment: Partial.
-
-Implemented:
-- `openid4vp://?request_uri=...&client_id=...` deep links [utils/routeUtils.js](/home/ni/code/js/rfc-issuer-v1/utils/routeUtils.js:1327)
-- QR generation for these links [utils/routeUtils.js](/home/ni/code/js/rfc-issuer-v1/utils/routeUtils.js:1191)
-
-Missing/wrong:
-- RFC002 says `mdoc-openid4vp://` SHALL be used for ISO remote mdoc; not implemented
-- RFC002 says `eu-eaap://` SHOULD be supported in ETSI same-device flows; not implemented
-
-#### 8.2 Presentation Request Interface
-
-Assessment: Partially aligned.
-
-Implemented:
-- request object includes `client_id`, `nonce`, `state`, `response_mode`, `response_uri`, `aud`, and either `dcql_query` or transaction data [utils/cryptoUtils.js](/home/ni/code/js/rfc-issuer-v1/utils/cryptoUtils.js:313)
-- request object is integrity protected with JOSE signing [utils/cryptoUtils.js](/home/ni/code/js/rfc-issuer-v1/utils/cryptoUtils.js:426)
-- `x509_hash` is supported by the signing code path when the caller chooses that client ID [utils/cryptoUtils.js](/home/ni/code/js/rfc-issuer-v1/utils/cryptoUtils.js:471)
-
-Missing/wrong:
-- main x509 flow does not actually use `x509_hash`; it uses `x509_san_dns` [utils/routeUtils.js](/home/ni/code/js/rfc-issuer-v1/utils/routeUtils.js:106), [routes/verify/x509Routes.js](/home/ni/code/js/rfc-issuer-v1/routes/verify/x509Routes.js:148)
-- no `verifier_info` field in generated request objects
-- verifier metadata/config does not include structured `verifier_info` registrar/registration data [data/verifier-config.json](/home/ni/code/js/rfc-issuer-v1/data/verifier-config.json:1)
-- the RFC allows credential-query parameters; the implementation has standardized on DCQL and explicitly rejects Presentation Exchange input in `buildVpRequestJWT()` [utils/cryptoUtils.js](/home/ni/code/js/rfc-issuer-v1/utils/cryptoUtils.js:358)
-
-#### 8.2.1 Baseline structural requirements
-
-Assessment: Partial.
-
-Met:
-- verifier identifier
-- response destination
-- nonce/state validity context
-- request object integrity
-
-Missing:
-- user-displayable structured verifier info beyond `client_metadata`
-- privacy-policy reference in request payload
-- purpose information in `verifier_info`
-
-#### 8.2.2 ETSI-aligned request-object requirements
-
-Assessment: Not compliant as written.
-
-Met:
-- signed request object
-- `client_metadata` included for non-redirect URI schemes [utils/cryptoUtils.js](/home/ni/code/js/rfc-issuer-v1/utils/cryptoUtils.js:321)
-
-Missing/wrong:
-- `client_id` SHALL use `x509_hash` for ETSI-aligned scope, but the main x509 flow uses `x509_san_dns`
-- `verifier_info` not included
-- registrar/registry/verifier-certificate material not carried in `verifier_info`
-
-#### 8.2.3 Credential-format considerations
-
-Assessment: Mostly aligned.
-
-Implemented:
-- SD-JWT/DCQL support
-- mdoc/DCQL support
-- transaction-data binding for CSC/CS-03 style flows
-
-#### 8.2.3.1 ISO/IEC 18013-7 remote mdoc request requirements
-
-Assessment: Only partially aligned.
-
-Met:
-- mdoc request uses DCQL query with `format: "mso_mdoc"` [utils/routeUtils.js](/home/ni/code/js/rfc-issuer-v1/utils/routeUtils.js:478), [routes/verify/mdlRoutes.js](/home/ni/code/js/rfc-issuer-v1/routes/verify/mdlRoutes.js:70)
-- request is exposed by `request_uri` [routes/verify/mdlRoutes.js](/home/ni/code/js/rfc-issuer-v1/routes/verify/mdlRoutes.js:95)
-
-Missing/wrong:
-- no `mdoc-openid4vp://` invocation
-- no explicit `verifier_info`
-- no real ISO `SessionTranscript` enforcement in validation
-
-#### 8.2.4 Request validation expectations
-
-Assessment: Wallet-side.
-
-No verifier finding.
-
-#### 8.2.5 ISO/IEC 18013-7 session binding
-
-Assessment: Not implemented as required.
-
-Evidence:
-- helper to compute session transcript exists [utils/mdlVerification.js](/home/ni/code/js/rfc-issuer-v1/utils/mdlVerification.js:248)
-- alternate helper exists in verifier route [routes/verify/verifierRoutes.js](/home/ni/code/js/rfc-issuer-v1/routes/verify/verifierRoutes.js:52)
-- active mdoc verification does not reconstruct and verify the transcript; it decodes the `DeviceResponse`, extracts claims, and checks requested fields only [utils/mdlVerification.js](/home/ni/code/js/rfc-issuer-v1/utils/mdlVerification.js:1)
-- device nonce extraction is a placeholder returning `null` [utils/mdlVerification.js](/home/ni/code/js/rfc-issuer-v1/utils/mdlVerification.js:266)
-
-#### 8.3 Presentation Response Interface
-
-Assessment: Broadly aligned.
-
-Implemented:
-- `direct_post` with `state` and `vp_token`
-- `direct_post.jwt` with `response` JWT/JWE parameter
-- `dc_api.jwt` handling
-- DCQL response-shape checks
-
-#### 8.3.1 Baseline response requirements
-
-Assessment: Mostly aligned.
-
-Implemented:
-- state correlation in `direct_post` [routes/verify/verifierRoutes.js](/home/ni/code/js/rfc-issuer-v1/routes/verify/verifierRoutes.js:1492)
-- nonce correlation [routes/verify/verifierRoutes.js](/home/ni/code/js/rfc-issuer-v1/routes/verify/verifierRoutes.js:1748)
-- audience check for SD-JWT key binding [routes/verify/verifierRoutes.js](/home/ni/code/js/rfc-issuer-v1/routes/verify/verifierRoutes.js:1986)
-- only requested claims are accepted in some flows through `hasOnlyAllowedFields()` / `validateMdlClaims()` [routes/verify/verifierRoutes.js](/home/ni/code/js/rfc-issuer-v1/routes/verify/verifierRoutes.js:1434), [routes/verify/verifierRoutes.js](/home/ni/code/js/rfc-issuer-v1/routes/verify/verifierRoutes.js:828)
-
-Gap:
-- `/direct_post_jwt/:id` legacy route does not enforce the richer correlation and proof-validation logic used by the main `/direct_post/:id` path [routes/verify/verifierRoutes.js](/home/ni/code/js/rfc-issuer-v1/routes/verify/verifierRoutes.js:2298)
-
-#### 8.3.2 ETSI-aligned response protection
-
-Assessment: Partially aligned.
-
-Implemented:
-- encrypted response handling for `direct_post.jwt` JWE [routes/verify/verifierRoutes.js](/home/ni/code/js/rfc-issuer-v1/routes/verify/verifierRoutes.js:924)
-- encrypted response handling for `dc_api.jwt` [routes/verify/verifierRoutes.js](/home/ni/code/js/rfc-issuer-v1/routes/verify/verifierRoutes.js:656)
-- verifier metadata advertises encryption support [data/verifier-config.json](/home/ni/code/js/rfc-issuer-v1/data/verifier-config.json:21)
-
-Missing/wrong:
-- RFC text says encrypted responses are mandatory in ETSI-aligned scope, but verifier request generation still defaults to `direct_post` in several routes [utils/routeUtils.js](/home/ni/code/js/rfc-issuer-v1/utils/routeUtils.js:114), [routes/verify/x509Routes.js](/home/ni/code/js/rfc-issuer-v1/routes/verify/x509Routes.js:137)
-
-#### 8.3.3 Credential-format considerations
-
-Assessment: Mostly aligned for SD-JWT; partial for mdoc.
-
-Met:
-- SD-JWT key-binding `aud` and `sd_hash` checks [routes/verify/verifierRoutes.js](/home/ni/code/js/rfc-issuer-v1/routes/verify/verifierRoutes.js:1340), [routes/verify/verifierRoutes.js](/home/ni/code/js/rfc-issuer-v1/routes/verify/verifierRoutes.js:1364)
-
-Gap:
-- mdoc validation is structural/claim-based, not full ISO-bound validation.
-
-#### 8.3.3.1 ISO/IEC 18013-7 remote mdoc response requirements
-
-Assessment: Only partially aligned.
-
-Met:
-- verifier expects a base64url CBOR-like `vp_token` and decodes it [utils/mdlVerification.js](/home/ni/code/js/rfc-issuer-v1/utils/mdlVerification.js:74)
-- document structure and docType presence are checked [utils/mdlVerification.js](/home/ni/code/js/rfc-issuer-v1/utils/mdlVerification.js:96)
-- claims are filtered against requested fields [routes/verify/verifierRoutes.js](/home/ni/code/js/rfc-issuer-v1/routes/verify/verifierRoutes.js:828)
-
-Missing/wrong:
-- no actual `DeviceResponse` cryptographic validation against reconstructed `SessionTranscript`
-- no handover consistency validation
-- no device nonce extraction/validation
-- no explicit document type match against the request beyond generic `docType` presence and downstream field checks
-
-#### 8.3.4 Error responses
-
-Assessment: Implemented well enough.
-
-### 8.4 Verifier Metadata Interface
-
-Assessment: Partially aligned.
-
-Implemented:
-- local verifier config contains supported formats and encryption keys [data/verifier-config.json](/home/ni/code/js/rfc-issuer-v1/data/verifier-config.json:1)
-
-Missing/wrong:
-- no dedicated published verifier metadata interface/endpoint was found
-- no published `verifier_info`
-
-### 9. Privacy and Security Considerations
-
-Assessment: Mixed.
-
-Strengths:
-- state and nonce are enforced in the main direct-post paths
-- SD-JWT `aud` and `sd_hash` are verified
-- encrypted responses are supported
-- transaction data is bound to session state
+Modern path persists outcome in session — `routes/verify/verifierRoutes.js:1455`, `:1652`.
 
 Gaps:
-- ETSI mandatory encrypted mode is not the default request mode
-- mdoc session-binding and replay-resistance are incomplete because `SessionTranscript` is not validated
-- older `/direct_post_jwt/:id` path does not apply the same security checks as the main modern path
 
-### 10. Conformance
+- `/direct_post_jwt/:id` uses a legacy in-memory session array and does not run the same checks — `routes/verify/verifierRoutes.js:2298–2383`.
+- `direct_post.jwt` does not enforce `state` uniformly across all branches. It checks `state` for one encrypted-payload-object path (`routes/verify/verifierRoutes.js:1059–1079`), but not for the unencrypted JWT branch or the encrypted-JWT-string branch.
 
-Assessment:
-- SD-JWT verifier conformance: partial
-- ISO mdoc verifier conformance: partial, but not enough for a strong RFC002 track claim
+##### 6.2 Cross-Device Presentation Flow — broadly aligned for SD-JWT
 
-Reason:
-- several SHALL-level ETSI requirements are missing (`x509_hash`, `verifier_info`, `eu-eaap://`)
-- several SHALL-level ISO mdoc requirements are missing (`mdoc-openid4vp://`, `SessionTranscript` reconstruction and validation)
+Gap: mdoc track is not clearly separated from generic invocation mechanics. RFC002 excludes cross-device ISO mdoc, so the generic route should not advertise an `mso_mdoc` presentation over cross-device.
 
-### 11. Wallet-Under-Test Conformance Catalogue and Deployed Test Matrix
+#### §7.2 Verifier Requirements
 
-Assessment: The current verifier can likely support a large subset of this matrix, especially:
-- `VP-CHECK-01`
-- `VP-CHECK-05`
-- `VP-CHECK-06`
-- `VP-CHECK-07`
-- `VP-CHECK-08`
-- `VP-CHECK-09`
-- `VP-CHECK-10`
-- `VP-CHECK-12`
+Met:
 
-Checks at clear risk:
-- `VP-CHECK-02` ETSI verifier identification, because default `client_id` is `x509_san_dns`, not `x509_hash`
-- `VP-CHECK-04` structured verifier-information processing, because `verifier_info` is not implemented
-- `VP-CHECK-11` mdoc `DeviceResponse` validation, because ISO session-binding validation is incomplete
-- `VP-CHECK-13` ISO mdoc invocation method, because `mdoc-openid4vp://` is not implemented
-- `VP-CHECK-15` ISO `SessionTranscript` binding, because helpers exist but active validation does not enforce it
-- `VP-CHECK-17` `eu-eaap://`, not implemented
-- `VP-CHECK-18` remote verifier registration information transport, because `verifier_info` is absent
+- OpenID4VP request / response handling.
+- Response endpoint.
+- Signed request objects.
+- `request_uri` support.
+- Transaction-data binding in request construction — `utils/cryptoUtils.js:370`.
 
-## Missing or Omitted Checks
+Missing / wrong:
 
-These are the main verifier-side checks or requirements from RFC002 that are currently omitted or insufficient:
+- `APT-PRES-VER-08` / `APT-PRES-VER-09` — validation is only **partial** on the modern SD-JWT path: `direct_post` has strong `state` correlation, but `direct_post.jwt` has only partial `state` correlation; `sd_hash` is enforced, but `aud` is checked only when `vpSession.client_id` is present, which the primary session helper does not store.
+- `APT-PRES-VER-14` — structured verifier metadata including `verifier_info`: **not implemented**.
+- ETSI `client_id` prefix (`x509_hash`): **not met by default**.
+- `APT-PRES-VER-MDOC-04` — inputs needed for `SessionTranscript`: **partial** (client_id and response_uri flow through, but `mdoc_generated_nonce` / wallet nonce extraction is a stub).
+- `APT-PRES-VER-MDOC-10` — reconstruct and validate `SessionTranscript`: **not implemented in the active path**.
 
-1. Use `x509_hash` as the verifier `client_id` for ETSI-aligned flows by default.
-2. Include RFC-required ETSI `verifier_info` in request objects.
-3. Carry registrar/registration-certificate material in `verifier_info` when ETSI profile expects it.
-4. Publish or expose structured verifier metadata beyond local config files.
-5. Support `eu-eaap://` for ETSI same-device authorization-endpoint invocation.
-6. Support `mdoc-openid4vp://` for ISO remote mdoc same-device invocation.
-7. Reconstruct and validate `SessionTranscript` for mdoc responses.
-8. Validate handover consistency for mdoc responses.
-9. Extract and validate device nonce / ISO session-binding inputs for mdoc.
-10. Make encrypted response modes the default for ETSI-aligned verifier flows if strict profile conformance is the goal.
-11. Remove or harden legacy verifier paths that bypass the stronger modern validation stack.
-12. Add explicit `verifier_info`/privacy-policy/purpose fields so wallet UX can display transparent verifier context per RFC text.
+#### §8 Interface definitions
 
-## Backlog for Alignment Planning
+##### 8.1 Wallet Invocation Interface — partial
 
-### Critical
+Implemented: `openid4vp://` + QR. Missing: `mdoc-openid4vp://` (SHALL for ISO remote mdoc), `eu-eaap://` (SHOULD for ETSI same-device).
 
-1. Switch ETSI-aligned x509 verifier flows from `x509_san_dns` to `x509_hash`.
-2. Add `verifier_info` to request objects and populate it from structured config.
-3. Implement real ISO mdoc `SessionTranscript` reconstruction and verification.
-4. Implement `mdoc-openid4vp://` invocation for ISO remote mdoc.
+##### 8.2 Presentation Request Interface — partially aligned
 
-### High
+Implemented: `client_id`, `nonce`, `state`, `response_mode`, `response_uri`, `aud`, DCQL, transaction data — `utils/cryptoUtils.js:313`. Integrity protection — `:426`. `x509_hash` support path exists — `:471`.
 
-1. Add `eu-eaap://` support for ETSI same-device flows.
-2. Make encrypted response modes the default for ETSI-aligned routes.
-3. Unify verifier response handling so legacy `/direct_post_jwt/:id` no longer skips the stronger validation stack.
-4. Publish a verifier metadata interface if the deployment profile expects discoverable verifier metadata.
+Missing / wrong:
 
-### Medium
+- Main x509 flow uses `x509_san_dns` — `utils/routeUtils.js:217`, `routes/verify/x509Routes.js:148`.
+- No `verifier_info` field.
+- `data/verifier-config.json` carries no structured registrar data.
+- Several routes still pass `presentation_definition` even though the shared JAR builder rejects PEX (`utils/cryptoUtils.js:358`). In `vpStandardRoutes.js` this is stale code; in some legacy generate-request routes it is a real runtime breakage.
 
-1. Add explicit privacy-policy and purpose information into structured verifier request data.
-2. Separate “strict RFC002/ETSI mode” from “interop/legacy mode” in routes and docs.
-3. Tighten mdoc document-type and requested-element consistency checks against stored request context.
+##### 8.2.1 Baseline structural requirements — partial
+
+Met: verifier identifier, response destination, nonce/state, integrity.
+
+Missing: user-displayable structured verifier info beyond `client_metadata`, privacy-policy reference, purpose.
+
+##### 8.2.2 ETSI-aligned request-object requirements — not compliant
+
+Met: signed JAR, `client_metadata` present for non-redirect schemes — `utils/cryptoUtils.js:321`.
+
+Missing: `x509_hash` default, `verifier_info`, registrar/registration-certificate material.
+
+##### 8.2.3 Credential-format considerations — mostly aligned
+
+Met: SD-JWT + DCQL, `mso_mdoc` + DCQL, transaction-data binding for CS-03.
+
+##### 8.2.3.1 ISO/IEC 18013-7 remote mdoc request — only partially aligned
+
+Met: DCQL with `format: "mso_mdoc"` — `utils/routeUtils.js:478`, `routes/verify/mdlRoutes.js:70`; request exposed by `request_uri` — `:95`.
+
+Missing: `mdoc-openid4vp://`, `verifier_info`, real `SessionTranscript` enforcement.
+
+##### 8.2.5 ISO/IEC 18013-7 session binding — not implemented as required
+
+- `getSessionTranscriptBytes` helper exists — `utils/mdlVerification.js:248`, duplicated at `routes/verify/verifierRoutes.js:52`.
+- Active verification does not reconstruct or verify the transcript — `utils/mdlVerification.js:15–207`.
+- `extractDeviceNonce` is a placeholder returning `null` — `utils/mdlVerification.js:266`.
+- No `IssuerAuth` (MSO COSE_Sign1) verification.
+- No `DeviceAuth` signature / MAC verification.
+
+##### 8.3 Presentation Response Interface — broadly aligned
+
+Implemented: `direct_post` with `state`, `direct_post.jwt` with `response`, `dc_api.jwt`, DCQL-shape checks.
+
+##### 8.3.1 Baseline response requirements — mostly aligned
+
+Met: `direct_post` state correlation, SD-JWT nonce checks, SD-JWT `sd_hash` checks, and claim filtering on the modern path — `routes/verify/verifierRoutes.js:1234–1417`, `:1492–2006`.
+
+Gaps:
+
+- `direct_post.jwt` state handling is incomplete.
+- SD-JWT `aud` checking is conditional on `vpSession.client_id` and therefore skipped on most routeUtils-based flows.
+- `/direct_post_jwt/:id` — `routes/verify/verifierRoutes.js:2298` — does not enforce the richer correlation and proof-validation logic.
+
+##### 8.3.2 ETSI-aligned response protection — partially aligned
+
+Implemented: `direct_post.jwt` JWE decryption — `:924`; `dc_api.jwt` handling — `:656`; verifier metadata advertises encryption support — `data/verifier-config.json:21`.
+
+Missing: encrypted responses mandatory under ETSI, but the generator defaults to `direct_post` in several routes — `utils/routeUtils.js:114`, `routes/verify/x509Routes.js:137`.
+
+##### 8.3.3 Credential-format considerations — mostly aligned for SD-JWT, partial for mdoc
+
+SD-JWT key-binding `sd_hash` checks are implemented. `aud` checks exist in code but are only effective when `vpSession.client_id` has been stored up front.
+
+Gap: mdoc validation is structural only.
+
+##### 8.3.3.1 ISO/IEC 18013-7 remote mdoc response — only partially aligned
+
+Met: base64url CBOR decode — `utils/mdlVerification.js:74`; doc structure / docType presence — `:96`; claim filtering — `routes/verify/verifierRoutes.js:828`.
+
+Missing: `DeviceResponse` cryptographic validation, `SessionTranscript` binding, device nonce extraction, strict `docType` match against the stored request.
+
+##### 8.3.4 Error responses — partial
+
+The RFC defines a machine-readable code taxonomy (`invalid_presentation`, `malformed_response`, `user_cancellation`, `expired_request`, `unsupported_credential_format`, `missing_required_proof`, `failed_correlation`, `failed_validation`). The verifier returns ad-hoc codes (`invalid_request`, `verification_failed`, `claims_mismatch`, `server_error`). Minor but visible to conformance testing.
+
+##### 8.4 Verifier Metadata Interface — partially aligned
+
+Local `client_metadata` supplied inline in the JAR and declared in `data/verifier-config.json:1`. No dedicated published endpoint (e.g. `/.well-known/openid-verifier-metadata`), no published `verifier_info`.
+
+#### §9 Privacy and Security Considerations
+
+Strengths: `direct_post` `state` correlation is enforced, SD-JWT `nonce` / `sd_hash` are enforced on the modern path, encrypted responses are supported, and transaction data is bound to session state.
+
+Gaps: ETSI mandatory encrypted mode not default; mdoc session-binding & replay-resistance absent; `direct_post.jwt` correlation is incomplete; `/direct_post_jwt/:id` bypasses modern checks.
+
+#### §10 Conformance
+
+- SD-JWT verifier: partial — blocked by `x509_hash`, `verifier_info`, encrypted-by-default, and incomplete response correlation / audience validation on the main flows.
+- ISO mdoc verifier: structural only — blocked by `mdoc-openid4vp://` and (out of scope this round) cryptographic `SessionTranscript` validation.
+
+### A.2 RFC002 §11.2 deployed-test-matrix mapping
+
+| Check | RFC text | Current status |
+| --- | --- | --- |
+| `VP-CHECK-01` | Request resolution and processing | Partial — `request_uri` resolution is implemented, but several legacy PEX-based request generators are stale/broken because the shared JAR builder rejects `presentation_definition`. |
+| `VP-CHECK-02` | ETSI-aligned verifier identification | Partial — `x509_hash` signing path exists, but the default and primary x509 routes still use `x509_san_dns`. |
+| `VP-CHECK-03` | Signed Request Object validation | Yes on the verifier-generation side — signed JARs are produced for the x509 / DID-based flows. |
+| `VP-CHECK-04` | Structured verifier-information processing | No — `verifier_info` is not emitted and there is no structured verifier-info source file. |
+| `VP-CHECK-05` | DCQL request satisfaction | Broadly yes — DCQL request generation is implemented for SD-JWT and mdoc tracks. |
+| `VP-CHECK-06` | Response correlation | Partial — `direct_post` enforces `state`, but `direct_post.jwt` does not enforce it consistently across all branches. |
+| `VP-CHECK-07` | Nonce binding | Partial — nonce checks exist for SD-JWT, but the ISO mdoc handover / transcript correlation is absent. |
+| `VP-CHECK-08` | SD-JWT proof-binding validation | Partial — `sd_hash` and nonce are checked, but `aud` validation is skipped on most primary flows because `client_id` is not stored in the session. |
+| `VP-CHECK-09` | Encrypted response handling | Partial — `direct_post.jwt` / `dc_api.jwt` decryption works, but encrypted response is not the default ETSI-aligned route behavior. |
+| `VP-CHECK-10` | Transaction-data binding | Yes — transaction data is bound into the request/session flow and validated structurally. |
+| `VP-CHECK-11` | mdoc `DeviceResponse` validation | No — the active path decodes and filters claims but does not perform ISO cryptographic validation. |
+| `VP-CHECK-12` | Request-URI retrieval | Yes — both GET and POST `request_uri_method` variants are implemented. |
+| `VP-CHECK-13` | ISO mdoc invocation method | No — `mdoc-openid4vp://` is not implemented. |
+| `VP-CHECK-14` | ISO mdoc request structure | Partial — DCQL `mso_mdoc` requests include `format` and `doctype_value`, but the surrounding ISO-specific verifier-info and track separation are incomplete. |
+| `VP-CHECK-15` | ISO `SessionTranscript` binding | No — not reconstructed or validated. |
+| `VP-CHECK-16` | ISO mdoc encrypted response | Partial — encrypted response modes are supported, but not defaulted or consistently shaped as an ISO-specific path. |
+| `VP-CHECK-17` | ETSI authorization-endpoint invocation | No — `eu-eaap://` is not implemented. |
+| `VP-CHECK-18` | Remote verifier registration information transport | No — no `verifier_info`, no registration material transport. |
+
+### A.3 Findings added during revalidation (not in the prior review)
+
+1. The previous `VP-CHECK` table did not follow RFC002 §11.2 numbering. This revision corrects the mapping to the actual RFC check IDs and descriptions.
+2. The main session helpers do not persist `client_id`, so SD-JWT `aud` validation is often skipped in the primary x509 / mdl / standardized flows.
+3. `direct_post.jwt` state correlation is partial, not full: one encrypted branch checks it, the others do not.
+4. Several `presentation_definition` request-generation branches are now stale or broken because `buildVpRequestJWT()` rejects PEX input.
+5. `/direct_post_jwt/:id` is not just inconsistent — it can bypass `nonce` / `state` / `sd_hash` checks entirely.
+6. No dedicated verifier-metadata publication endpoint.
+7. RFC002 §8.3.4 error-code taxonomy is not followed.
+8. `data/verifier-config-mdl.json` exists but is only wired into a single DC API mdl route; track separation is ad-hoc.
+9. The mdoc cryptographic gap is wider than "partial": there is **no** `IssuerAuth` / `DeviceAuth` / `SessionTranscript` validation at all today.
+
+### A.4 What the prior review got slightly wrong or imprecise
+
+- "SD-JWT `aud` validation implemented" was too strong. The code path exists, but because `vpSession.client_id` is usually absent on the primary flows, the effective status is **partial**.
+- "`presentation_definition` branches are dead code" was too soft. Some of those branches are stale; some are now runtime-broken because the shared JAR builder rejects PEX input.
+- The old `VP-CHECK` table did not use RFC002 §11.2's actual check numbering and descriptions. The corrected mapping is in A.2.
+
+---
+
+## Part B — Alignment Backlog
+
+All items use the chosen scope:
+
+- ISO mdoc = **structural + invocation only**.
+- RFC002-strict = **default** on primary x509 + standardized routes; legacy = opt-in.
+- `/direct_post_jwt/:id` = **remove / consolidate**, not harden.
+
+### B.1 P0 — blockers for any RFC002 conformance claim
+
+#### P0-1 — Default `client_id_scheme = x509_hash` on ETSI-aligned routes
+
+- Add `CONFIG.ETSI_CLIENT_ID` (or rename `CONFIG.CLIENT_ID`) that computes `x509_hash:<b64url(SHA-256(leafDer))>` on startup. Logic already present at `utils/cryptoUtils.js:491–496` — hoist it into `utils/routeUtils.js`.
+- Primary flows become RFC002-strict by default:
+  - `routes/verify/x509Routes.js` — both GET and POST `request_uri_method` branches.
+  - `routes/verify/vpStandardRoutes.js` when `profile=etsi`/`rfc002`.
+  - `routes/verify/mdlRoutes.js` when the track is ISO mdoc.
+- Legacy `x509_san_dns` remains reachable via `?client_id_scheme=x509_san_dns`.
+- Update `data/verifier-config.json` with `client_id_schemes_supported: ["x509_hash","x509_san_dns"]` and set `client_id` to the `x509_hash:` value.
+- **Satisfies:** `VP-CHECK-02`; closes the ETSI `client_id` gap in §8.2.2.
+
+#### P0-2 — Emit `verifier_info` in the signed request object
+
+- New config file `data/verifier-info.json` (mirrors the pattern of `data/issuer-registration.json` on the VCI side) with:
+  - `verifier_id` (e.g. DNS or legal-entity identifier)
+  - `service_description`
+  - `rp_registrar_uri` (stub URL acceptable for now)
+  - `registration_certificate` (x5c of the verifier signing cert, or placeholder)
+  - `intended_use`
+  - `purpose`
+  - `privacy_policy_uri`
+- Extend `buildVpRequestJWT` to accept `verifier_info` and include it in the JAR payload — `utils/cryptoUtils.js:313–355`.
+- Populate from config by default; allow per-request override through `routes/verify/*`.
+- **Satisfies:** `APT-PRES-VER-14`, `VP-CHECK-04`, `VP-CHECK-18`; closes §8.2.1 and §8.2.2 gaps.
+
+#### P0-3 — Encrypted response default on ETSI-aligned routes
+
+- Flip RFC002-strict routes from `response_mode: "direct_post"` default to `"direct_post.jwt"`.
+- Leave `direct_post` available through `?response_mode=direct_post` for interop / legacy.
+- Fail fast at startup if `data/verifier-config.json` does not contain an `enc` JWK.
+- **Satisfies:** `VP-CHECK-09`; closes §8.3.2.
+
+#### P0-4 — ISO mdoc invocation via `mdoc-openid4vp://`
+
+- Parameterise `createOpenID4VPRequestUrl(..., { scheme })` in `utils/routeUtils.js:1468`.
+- `routes/verify/mdlRoutes.js` uses `scheme: "mdoc-openid4vp"` by default for same-device; `openid4vp` stays available via query param for interop.
+- Update QR rendering and any wallet-selector copy.
+- **Satisfies:** `VP-CHECK-13`; closes the invocation gap in §8.1 / §8.2.3.1.
+
+#### P0-5 — Consolidate `/direct_post_jwt/:id` into `/direct_post/:id`
+
+- Remove `/direct_post_jwt/:id` — `routes/verify/verifierRoutes.js:2298` (plus its session storage at `:2365`).
+- Ensure any callers that pointed at it now target `/direct_post/:id`, then remove the bypass path entirely.
+- Remove the legacy in-memory session array; session state goes through the existing Redis-backed store.
+- **Satisfies:** §8.3.1 gap; closes the privacy/security concern in §9.
+
+#### P0-6 — Fix response-correlation data on the modern path
+
+- Persist `client_id` in `storeVPSessionData()` / `handleSessionCreation()` so the existing SD-JWT `aud` check becomes effective on the primary x509 / mdl / standardized flows.
+- Make `direct_post.jwt` enforce `state` consistently across the encrypted-object, encrypted-JWT-string, and unencrypted-JWT branches.
+- Re-run the `direct_post` / `direct_post.jwt` tests after the session-shape change.
+- **Satisfies:** `APT-PRES-VER-08`, `APT-PRES-VER-09`, `VP-CHECK-06`, `VP-CHECK-08`.
+
+### B.2 P1 — strong alignment / publishable claim
+
+#### P1-1 — `eu-eaap://` same-device invocation (SHOULD)
+
+- Add a `scheme: "eu-eaap"` branch to `createOpenID4VPRequestUrl`.
+- Expose on ETSI-aligned same-device flow (either through `?scheme=eu-eaap` or through a dedicated `/vp/etsi/same-device` endpoint depending on UX).
+- **Satisfies:** `VP-CHECK-17`.
+
+#### P1-2 — Published verifier-metadata endpoint
+
+- Add `GET /.well-known/openid-verifier-metadata` returning a merged document of `data/verifier-config.json` + `data/verifier-info.json` + JWKS (public keys only).
+- Reference the endpoint from `client_metadata` where relevant.
+- **Satisfies:** §8.4.
+
+#### P1-3 — `aptitude-vp.yml` deployed-test matrix + initiation doc
+
+- Create `aptitude-vp.yml` mirroring the shape of `aptitude-vci.yml`, with one row per `VP-001…VP-007`.
+- Create `docs/rfc002-vp-test-case-initiation.md` mirroring `docs/rfc001-vci-test-case-initiation.md`.
+- Each `VP-NNN` row maps to a concrete URL on this verifier with all query params pre-filled (track, client_id_scheme, response_mode, request_uri_method, scheme).
+- **Satisfies:** §11.2 deployed-test matrix obligation.
+
+#### P1-4 — Normalise verifier error codes to RFC §8.3.4
+
+- Centralise all `res.status(4xx).json({ error: "..." })` call sites into a single helper in `utils/routeUtils.js`.
+- Map existing codes:
+  - `invalid_request` → `malformed_response` or `invalid_presentation` depending on source.
+  - `verification_failed` → `failed_validation`.
+  - `claims_mismatch` → `failed_validation` with a sub-reason.
+  - `server_error` → stays.
+- Add `failed_correlation`, `missing_required_proof`, `expired_request`, `user_cancellation`, `unsupported_credential_format` where relevant.
+- **Satisfies:** §8.3.4.
+
+### B.3 P2 — hygiene / polish
+
+#### P2-1 — Remove `presentation_definition_*.json` loaders
+
+- Delete or refactor the PEX-loading branches in `routes/verify/vpStandardRoutes.js` and the legacy generate-request routes, since the shared JAR builder rejects PEX input (`utils/cryptoUtils.js:358`).
+- Remove associated fixture files under `data/` if unused elsewhere.
+
+#### P2-2 — Name the `self-issued.me/v2` override and stop clobbering `audience`
+
+- Introduce `DC_API_SELF_ISSUED_AUDIENCE = "https://self-issued.me/v2"` in `utils/cryptoUtils.js`.
+- Either document that this constant is intentionally authoritative for VP requests, or remove the misleading `audience` parameter from callers. The current issue is clarity, not a proven RFC002 conformance failure.
+- Add a code comment citing OpenID4VP §5.10.1.
+- Covers line `utils/cryptoUtils.js:339`.
+
+#### P2-3 — Tighten mdoc structural checks against stored request context
+
+- In `utils/mdlVerification.js::validateMdlClaims`, check `document.docType` against the `doctype_value` set in the stored DCQL query.
+- Reject disclosed namespaces/elements that were not requested (currently only the inverse direction is checked).
+- **Satisfies:** `APT-PRES-VER-MDOC-07`, `APT-PRES-VER-MDOC-08` at the structural level.
+
+#### P2-4 — Track-aware loading of `data/verifier-config*.json`
+
+- Load `verifier-config.json` for SD-JWT track and `verifier-config-mdl.json` (renamed: `verifier-config-mdoc.json`) for the ISO mdoc track at the route entry point, instead of only for the one DC API mdl endpoint.
+
+### B.4 Future work (explicitly out of scope this round)
+
+These items would be required for a full RFC002 ISO mdoc conformance claim but are parked for a future cycle:
+
+- **F-1** COSE_Sign1 verification of `issuerSigned.issuerAuth` (MSO) against a configured issuer trust list, including decoding the MSO and checking `valueDigests` against disclosed elements.
+- **F-2** Reconstruct `SessionTranscript` = `[null, null, ["OpenID4VPHandover", client_id, response_uri, mdoc_generated_nonce, nonce]]` (or the v1.0 equivalent) and verify `deviceAuth` (`deviceSignature` or `deviceMac`) against it.
+- **F-3** Wire `mdoc_generated_nonce` (from JWE `apu`/`apv` or `wallet_metadata.mdoc_generated_nonce`) and `wallet_nonce` through the transcript.
+- **F-4** Replace the placeholder `extractDeviceNonce` — `utils/mdlVerification.js:266` — with a real extractor.
+- **F-5** Trust-framework / trusted-list processing for `registration_certificate` in `verifier_info`.
+
+Until F-1…F-5 land, the verifier explicitly documents that the ISO mdoc track is **invocation-and-structural conformant but not cryptographically binding**.
+
+### B.5 Suggested order of execution
+
+1. P0-1 + P0-2 + P0-3 together in a single branch (they all touch `buildVpRequestJWT` + `CONFIG` + the x509/standardized routes).
+2. P0-4 (small, self-contained).
+3. P0-5 + P0-6 together (remove the legacy bypass and fix the surviving path's session correlation).
+4. P1-3 (the deployed-test matrix) — once P0 is in, the matrix reflects the new default behaviour.
+5. P1-2 (metadata endpoint) once `verifier_info` shape is stable from P0-2.
+6. P1-1, P1-4, and all P2 items in any order.
+7. Future work (F-1…F-5) tracked separately.
+
+---
 
 ## Bottom Line
 
-The verifier implementation is stronger than the issuer implementation and already enforces several important response-side checks correctly.
+After P0 lands, the verifier can credibly claim:
 
-If you want a strict summary:
-- baseline OpenID4VP verifier: mostly there
-- RFC002 SD-JWT verifier compliance: partial, with good foundations
-- RFC002 ETSI-aligned verifier compliance: not yet
-- RFC002 ISO/IEC 18013-7 remote mdoc verifier compliance: not yet
+- Baseline OpenID4VP verifier: compliant on the maintained DCQL-based paths.
+- RFC002 SD-JWT / ETSI-aligned verifier: compliant.
+- RFC002 ISO/IEC 18013-7 remote mdoc verifier: **invocation and structurally** compliant; cryptographic `SessionTranscript` / `IssuerAuth` / `DeviceAuth` validation is explicitly deferred to future work.
 
+After P1 lands, the verifier additionally has a published metadata endpoint and a deployed-test matrix (`aptitude-vp.yml`) suitable for plugging into the APTITUDE conformance harness.
