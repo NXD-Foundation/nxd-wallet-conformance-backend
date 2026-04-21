@@ -2277,13 +2277,27 @@ describe('OIDC4VCI V1.0 - Format-Specific Requirements', () => {
         .to.be.an('array')
         .that.is.not.empty;
 
-      const [namespaceGroup] = pidMdocConfig.credential_metadata.claims;
-      expect(namespaceGroup.path).to.deep.equal(['urn:eu.europa.ec.eudi:pid:1']);
-      expect(namespaceGroup.path[0]).to.not.equal('urn:eu.europa.ec.eudi:pid:1:mso_mdoc');
-
-      namespaceGroup.claims.forEach((claim) => {
-        expect(claim.path).to.be.an('array').with.length(1);
+      pidMdocConfig.credential_metadata.claims.forEach((claim) => {
+        expect(claim.path).to.be.an('array').with.length.of.at.least(2);
+        expect(claim.path[0]).to.equal('urn:eu.europa.ec.eudi:pid:1');
+        expect(claim.path[0]).to.not.equal('urn:eu.europa.ec.eudi:pid:1:mso_mdoc');
+        expect(claim.path[1]).to.be.a('string').and.not.empty;
       });
+    });
+
+    it('uses the PID document identifier as doctype for PID mso_mdoc metadata', async () => {
+      const response = await request(app)
+        .get('/.well-known/openid-credential-issuer')
+        .expect(200);
+
+      const pidMdocConfig =
+        response.body.credential_configurations_supported[
+          'urn:eu.europa.ec.eudi:pid:1:mso_mdoc'
+        ];
+
+      expect(pidMdocConfig).to.exist;
+      expect(pidMdocConfig.doctype).to.equal('urn:eu.europa.ec.eudi:pid:1');
+      expect(pidMdocConfig.doctype).to.not.equal('urn:eu.europa.ec.eudi:pid:1:mso_mdoc');
     });
 
     it('SHOULD support ISO 18013-5 mDL doctype', async () => {

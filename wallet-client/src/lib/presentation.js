@@ -859,8 +859,15 @@ export async function performPresentation(
         slog("[present] docType", { docType, selectedType });
       } catch {}
 
-      // Build proper DeviceResponse for presentation
-      vpToken = await buildMdocPresentation(vpToken, { docType });
+      // Build a proper DeviceResponse bound to the OpenID4VP session transcript.
+      vpToken = await buildMdocPresentation(vpToken, {
+        docType,
+        clientId,
+        responseUri,
+        verifierGeneratedNonce: nonce,
+        devicePrivateJwk: stored?.keyBinding?.privateJwk || privateJwk,
+        presentationDefinition,
+      });
       console.log("[present] Built DeviceResponse, length:", vpToken.length);
       try {
         slog("[present] DeviceResponse built", { length: vpToken.length });

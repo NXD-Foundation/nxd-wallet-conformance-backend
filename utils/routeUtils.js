@@ -487,7 +487,7 @@ export const DEFAULT_MDL_DCQL_QUERY = {
       format: "mso_mdoc",
       id: "cred1",
       meta: {
-        doctype_value: "urn:eu.europa.ec.eudi:pid:1:mso_mdoc",
+        doctype_value: "urn:eu.europa.ec.eudi:pid:1",
       },
     },
   ],
