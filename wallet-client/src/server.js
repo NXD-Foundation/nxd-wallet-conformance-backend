@@ -1,12 +1,22 @@
 import express from "express";
 import fetch from "node-fetch";
 import { generateDidJwkFromPrivateJwk, ensureOrCreateEcKeyPair, createPkcePair, createDPoP } from "./lib/crypto.js";
-import { resolveAttestationForEndpoint } from "./lib/walletProviderIdentity.js";
+import {
+  resolveAttestationForEndpoint,
+  rotateWalletProviderKeyPair,
+  shouldRetryTokenExchangeAfterRotatingWalletProviderKey,
+} from "./lib/walletProviderIdentity.js";
 import { resolveDeviceKeyPath, resolveAttestDeviceKeyPaths } from "./lib/deviceKeyPaths.js";
 import { buildCredentialRequestProofs, redactProofsForLog } from "./lib/credentialRequestProofs.js";
 import { normalizeCredentialOfferDeepLink } from "./lib/credentialOfferScheme.js";
 import { performPresentation, resolveDeepLinkFromEndpoint } from "./lib/presentation.js";
-import { storeWalletCredentialByType, walletRedisClient, appendWalletLog, getWalletLogs } from "./lib/cache.js";
+import {
+  storeWalletCredentialByType,
+  walletRedisClient,
+  appendWalletLog,
+  getWalletLogs,
+  ensureWalletRedisConnected,
+} from "./lib/cache.js";
 import {
   extractNotificationId,
   resolveNotificationEndpoint,
@@ -16,6 +26,7 @@ import {
   prepareCredentialResponseEncryption,
   parseCredentialResponsePayload,
 } from "./lib/credentialResponseEncryption.js";
+import { parseIssuerMetadataHttpResponse } from "./lib/issuerMetadataFetch.js";
 import {
   getNextPollDelayMs,
   resolveDeferredPollResult,
@@ -225,7 +236,7 @@ app.post("/issue", async (req, res) => {
       pollIntervalMs: req.body.pollIntervalMs,
       userPin: req.body.pin, // Pass the pin directly
     });
-    return res.json(result);
+    return res.json(attachIssuerMetadataWalletHarness(issuerMeta, result));
   } catch (e) {
     await logError(req.body.sessionId, "[/issue] error:", e);
     return res.status(500).json({ error: "server_error", error_description: e.message || String(e) });
@@ -263,6 +274,7 @@ app.get("/session-status/:sessionId", async (req, res) => {
     }
 
     const key = `wallet:test-session:${sessionId}`;
+    await ensureWalletRedisConnected();
     const sessionData = await walletRedisClient.get(key);
     
     if (!sessionData) {
@@ -297,6 +309,8 @@ async function handleWalletTestSession(req, res, issuanceOpts = {}) {
   const key = `wallet:test-session:${sessionId}`;
   const ttlInSeconds = parseInt(process.env.WALLET_TEST_SESSION_TTL || "86400");
 
+  await ensureWalletRedisConnected();
+
   async function setStatus(status, extra) {
     const payload = { sessionId, status, ...(extra || {}), updatedAt: new Date().toISOString() };
     try { await walletRedisClient.setEx(key, ttlInSeconds, JSON.stringify(payload)); } catch (e) { await logError(sessionId, "[session-flow] Redis set error", e); }
@@ -309,7 +323,7 @@ async function handleWalletTestSession(req, res, issuanceOpts = {}) {
 
   try {
     // VP request (generic OpenID4VP or ISO mdoc track mdoc-openid4vp://)
-    if (/^(?:openid4vp|mdoc-openid4vp):\/\//.test(deepLink)) {
+    if (/^(?:openid4vp|mdoc-openid4vp|eu-eaap):\/\//.test(deepLink)) {
       const verifierBase = (req.body.verifier || "http://localhost:3000").replace(/\/$/, "");
       const result = await performPresentation({ deepLink, verifierBase, credentialType: req.body.credential, keyPath: req.body.keyPath }, sessionId);
       if (result?.status === "error") {
@@ -368,7 +382,10 @@ async function handleWalletTestSession(req, res, issuanceOpts = {}) {
             proofMode,
             attestKeyCount,
           }, sessionId);
-          const okPayload = await setStatus("ok", { result });
+          const okPayload = await setStatus("ok", {
+            result,
+            ...issuerMetadataWalletSessionExtra(issuerMeta),
+          });
           return res.json(okPayload);
         } catch (err) {
           const failed = await setStatus("failed", { error: err.message || String(err) });
@@ -394,7 +411,10 @@ async function handleWalletTestSession(req, res, issuanceOpts = {}) {
             proofMode,
             attestKeyCount,
           }, sessionId);
-          const okPayload = await setStatus("ok", { result });
+          const okPayload = await setStatus("ok", {
+            result,
+            ...issuerMetadataWalletSessionExtra(issuerMeta),
+          });
           return res.json(okPayload);
         } catch (err) {
           const failed = await setStatus("failed", { error: err.message || String(err) });
@@ -502,7 +522,7 @@ app.post("/issue-codeflow", async (req, res) => {
       pollTimeoutMs: req.body.pollTimeoutMs,
       pollIntervalMs: req.body.pollIntervalMs,
     });
-    return res.json(result);
+    return res.json(attachIssuerMetadataWalletHarness(issuerMeta, result));
   } catch (e) {
     await logError(req.body.sessionId, "[/issue-codeflow] error:", e);
     return res.status(500).json({ error: "server_error", error_description: e.message || String(e) });
@@ -587,6 +607,22 @@ function pickConfigurationId(offer, requestedId) {
   return ids.length > 0 ? ids[0] : undefined;
 }
 
+/** RFC001 P2-W-5: expose signed issuer metadata `issuer_info.registration_certificate` for test harnesses. */
+function attachIssuerMetadataWalletHarness(issuerMeta, result) {
+  const dbg = issuerMeta?._walletIssuerMetadataDebug;
+  if (!dbg) return result;
+  if (result != null && typeof result === "object" && !Array.isArray(result)) {
+    return { ...result, issuerMetadataWallet: dbg };
+  }
+  return { issuerMetadataWallet: dbg, result };
+}
+
+function issuerMetadataWalletSessionExtra(issuerMeta) {
+  const dbg = issuerMeta?._walletIssuerMetadataDebug;
+  if (!dbg) return {};
+  return { issuerMetadataWallet: dbg };
+}
+
 async function discoverIssuerMetadata(credentialIssuerBase, logSessionId) {
   const slog = logSessionId ? makeSessionLogger(logSessionId) : (() => {});
   const base = credentialIssuerBase.replace(/\/$/, "");
@@ -612,7 +648,20 @@ async function discoverIssuerMetadata(credentialIssuerBase, logSessionId) {
     try {
       const res = await fetch(url);
       console.log("[issuer-meta]", url, "->", res.status); try { slog("[issuer-meta] fetch", { url, status: res.status }); } catch {}
-      if (res.ok) { meta = await res.json(); console.log("[issuer-meta] selected:", url); break; }
+      if (res.ok) {
+        const { meta: parsedMeta, debug } = await parseIssuerMetadataHttpResponse(res);
+        meta = parsedMeta;
+        if (debug) {
+          meta._walletIssuerMetadataDebug = debug;
+          try {
+            slog("[issuer-meta] signed JWT issuer metadata verified", {
+              hasRegCert: debug.issuer_info_registration_certificate != null,
+            });
+          } catch {}
+        }
+        console.log("[issuer-meta] selected:", url);
+        break;
+      }
       lastErr = res.status;
     } catch (e) { lastErr = e.message || String(e); }
   }
@@ -1010,43 +1059,12 @@ async function runPreAuthorizedIssuance(
   console.log("[preauth] tokenEndpoint=", tokenEndpoint); try { slog("[preauth] tokenEndpoint", { tokenEndpoint }); } catch {}
   console.log("[preauth] requesting token..."); try { slog("[preauth] requesting token"); } catch {}
   
-  // Generate DPoP (Demonstrating Proof-of-Possession) for token request; retain keys for /credential when token is DPoP-bound
+  // Token exchange (RFC001 §7.3 SHOULD: on WIA-related 400, rotate WP key and retry once)
   let dpopJwt = null;
   let dpopPrivateJwk = null;
   let dpopPublicJwk = null;
-  try {
-    const dpopKeys = await ensureOrCreateEcKeyPair(deviceKeyPath, "ES256");
-    dpopPrivateJwk = dpopKeys.privateJwk;
-    dpopPublicJwk = dpopKeys.publicJwk;
-    dpopJwt = await createDPoP({
-      privateJwk: dpopPrivateJwk,
-      publicJwk: dpopPublicJwk,
-      htu: tokenEndpoint,
-      htm: "POST",
-      alg: "ES256"
-    });
-    console.log("[preauth] DPoP generated for token request"); try { slog("[preauth] DPoP generated", { hasDPoP: !!dpopJwt }); } catch {}
-  } catch (dpopError) {
-    // RFC001 §7.4 / RFC 9449: DPoP is mandatory at the token endpoint; the issuer
-    // will reject the exchange with 400 invalid_dpop_proof if this header is missing.
-    console.warn("[preauth] Failed to generate DPoP (token exchange will be rejected by the issuer):", dpopError?.message); try { slog("[preauth] DPoP generation failed", { error: dpopError?.message }); } catch {}
-  }
-  
-  // OAuth client attestation (RFC001) + jwt-bearer client_assertion fallback — Wallet Provider key, not proof key
   let wiaJwt = null;
   let oauthClientAttestationHeaders = {};
-  try {
-    const att = await resolveAttestationForEndpoint({
-      endpointAudience: tokenEndpoint,
-      authorizationServerIssuer,
-    });
-    wiaJwt = att.clientAssertionJwt;
-    oauthClientAttestationHeaders = att.oauthHeaders;
-    console.log("[preauth] OAuth client attestation ready for token request"); try { slog("[preauth] OAuth client attestation", { hasClientAssertion: !!wiaJwt }); } catch {}
-  } catch (attError) {
-    console.warn("[preauth] Failed to resolve OAuth client attestation:", attError?.message); try { slog("[preauth] attestation failed", { error: attError?.message }); } catch {}
-  }
-  
   const tokenAuthzDetails = [
     {
       type: "openid_credential",
@@ -1054,28 +1072,71 @@ async function runPreAuthorizedIssuance(
       ...(issuerMeta?.credential_issuer ? { locations: [issuerMeta.credential_issuer] } : {}),
     },
   ];
-  const tokenPayload = {
-    grant_type: "urn:ietf:params:oauth:grant-type:pre-authorized_code",
-    "pre-authorized_code": preAuthorizedCode,
-    ...(txCode ? { tx_code: txCode } : {}),
-    authorization_details: JSON.stringify(tokenAuthzDetails),
-    ...(wiaJwt ? { client_assertion: wiaJwt, client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer" } : {}),
-  };
-  const tokenRes = await httpPostForm(tokenEndpoint, tokenPayload, logSessionId, dpopJwt, oauthClientAttestationHeaders);
-  console.log("[preauth] tokenRes.status=", tokenRes.status); 
-  try { slog("[preauth] tokenRes.status", { status: tokenRes.status }); } catch {}
-  console.log("[preauth] tokenRes.headers:", Object.fromEntries(tokenRes.headers.entries())); 
-  try { slog("[preauth] tokenRes.headers", { headers: Object.fromEntries(tokenRes.headers.entries()) }); } catch {}
-  
-  const tokenResponseText = await tokenRes.text().catch(() => "");
-  console.log("[preauth] tokenRes.body length:", tokenResponseText.length); 
-  try { slog("[preauth] tokenRes.body", { length: tokenResponseText.length }); } catch {}
-  
-  if (!tokenRes.ok) {
-    console.error("[preauth] token error", tokenRes.status, tokenResponseText);
+  let tokenRes;
+  let tokenResponseText = "";
+  for (let tokenAttempt = 0; tokenAttempt < 2; tokenAttempt++) {
+    try {
+      const dpopKeys = await ensureOrCreateEcKeyPair(deviceKeyPath, "ES256");
+      dpopPrivateJwk = dpopKeys.privateJwk;
+      dpopPublicJwk = dpopKeys.publicJwk;
+      dpopJwt = await createDPoP({
+        privateJwk: dpopPrivateJwk,
+        publicJwk: dpopPublicJwk,
+        htu: tokenEndpoint,
+        htm: "POST",
+        alg: "ES256",
+      });
+      console.log("[preauth] DPoP generated for token request"); try { slog("[preauth] DPoP generated", { hasDPoP: !!dpopJwt }); } catch {}
+    } catch (dpopError) {
+      console.warn("[preauth] Failed to generate DPoP (token exchange will be rejected by the issuer):", dpopError?.message); try { slog("[preauth] DPoP generation failed", { error: dpopError?.message }); } catch {}
+    }
+    try {
+      const att = await resolveAttestationForEndpoint({
+        endpointAudience: tokenEndpoint,
+        authorizationServerIssuer,
+      });
+      wiaJwt = att.clientAssertionJwt;
+      oauthClientAttestationHeaders = att.oauthHeaders;
+      console.log("[preauth] OAuth client attestation ready for token request"); try { slog("[preauth] OAuth client attestation", { hasClientAssertion: !!wiaJwt }); } catch {}
+    } catch (attError) {
+      console.warn("[preauth] Failed to resolve OAuth client attestation:", attError?.message); try { slog("[preauth] attestation failed", { error: attError?.message }); } catch {}
+    }
+    const tokenPayload = {
+      grant_type: "urn:ietf:params:oauth:grant-type:pre-authorized_code",
+      "pre-authorized_code": preAuthorizedCode,
+      ...(txCode ? { tx_code: txCode } : {}),
+      authorization_details: JSON.stringify(tokenAuthzDetails),
+      ...(wiaJwt ? { client_assertion: wiaJwt, client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer" } : {}),
+    };
+    tokenRes = await httpPostForm(tokenEndpoint, tokenPayload, logSessionId, dpopJwt, oauthClientAttestationHeaders);
+    console.log("[preauth] tokenRes.status=", tokenRes.status);
+    try { slog("[preauth] tokenRes.status", { status: tokenRes.status, attempt: tokenAttempt }); } catch {}
+    console.log("[preauth] tokenRes.headers:", Object.fromEntries(tokenRes.headers.entries()));
+    try { slog("[preauth] tokenRes.headers", { headers: Object.fromEntries(tokenRes.headers.entries()) }); } catch {}
+    tokenResponseText = await tokenRes.text().catch(() => "");
+    console.log("[preauth] tokenRes.body length:", tokenResponseText.length);
+    try { slog("[preauth] tokenRes.body", { length: tokenResponseText.length }); } catch {}
+    if (tokenRes.ok) break;
     let err = {};
     try { err = JSON.parse(tokenResponseText); } catch {}
-    console.error("[preauth] token error parsed:", JSON.stringify(err, null, 2)); 
+    if (
+      tokenAttempt === 0 &&
+      shouldRetryTokenExchangeAfterRotatingWalletProviderKey(tokenRes.status, err)
+    ) {
+      try {
+        const didRotate = await rotateWalletProviderKeyPair();
+        if (didRotate) {
+          console.log("[preauth] Rotated wallet provider key after WIA-related token error; retrying token once");
+          try { slog("[preauth] token retry after WP key rotation"); } catch {}
+          continue;
+        }
+      } catch (rotErr) {
+        console.warn("[preauth] Wallet provider key rotation failed:", rotErr?.message);
+        try { slog("[preauth] WP rotation failed", { error: rotErr?.message }); } catch {}
+      }
+    }
+    console.error("[preauth] token error", tokenRes.status, tokenResponseText);
+    console.error("[preauth] token error parsed:", JSON.stringify(err, null, 2));
     try { slog("[preauth] token error", { status: tokenRes.status, err, body: tokenResponseText }); } catch {}
     throw new Error(`token_error ${tokenRes.status}: ${JSON.stringify(err)}`);
   }
@@ -1604,7 +1665,7 @@ async function runAuthorizationCodeIssuance(
     const redirectPayload = safeParseJson(bodyText);
     console.log("[codeflow] parsed redirect payload:", redirectPayload); try { slog("[codeflow] parsed redirect payload", { payload: redirectPayload }); } catch {}
     if (redirectPayload?.redirect_uri) redirectUrl = redirectPayload.redirect_uri;
-    else if (/^(?:openid4vp|mdoc-openid4vp):\/\//.test(String(bodyText).trim()))
+    else if (/^(?:openid4vp|mdoc-openid4vp|eu-eaap):\/\//.test(String(bodyText).trim()))
       redirectUrl = String(bodyText).trim();
   }
   
@@ -1630,43 +1691,12 @@ async function runAuthorizationCodeIssuance(
   console.log("[codeflow] tokenEndpoint=", tokenEndpoint); try { slog("[codeflow] tokenEndpoint", { tokenEndpoint }); } catch {}
   console.log("[codeflow] requesting token..."); try { slog("[codeflow] requesting token"); } catch {}
   
-  // Generate DPoP for token request; retain keys for /credential when token is DPoP-bound
+  const codeflowAsIssuer = deriveAuthorizationServerIssuer(tokenEndpoint, authorizationServerIssuer);
   let dpopJwt = null;
   let dpopPrivateJwk = null;
   let dpopPublicJwk = null;
-  try {
-    const dpopKeys = await ensureOrCreateEcKeyPair(deviceKeyPath, "ES256");
-    dpopPrivateJwk = dpopKeys.privateJwk;
-    dpopPublicJwk = dpopKeys.publicJwk;
-    dpopJwt = await createDPoP({
-      privateJwk: dpopPrivateJwk,
-      publicJwk: dpopPublicJwk,
-      htu: tokenEndpoint,
-      htm: "POST",
-      alg: "ES256"
-    });
-    console.log("[codeflow] DPoP generated for token request"); try { slog("[codeflow] DPoP generated", { hasDPoP: !!dpopJwt }); } catch {}
-  } catch (dpopError) {
-    // RFC001 §7.4 / RFC 9449: DPoP is mandatory at the token endpoint; the issuer
-    // will reject the exchange with 400 invalid_dpop_proof if this header is missing.
-    console.warn("[codeflow] Failed to generate DPoP (token exchange will be rejected by the issuer):", dpopError?.message); try { slog("[codeflow] DPoP generation failed", { error: dpopError?.message }); } catch {}
-  }
-  
   let wiaJwt = null;
   let oauthClientAttestationHeaders = {};
-  try {
-    const att = await resolveAttestationForEndpoint({
-      endpointAudience: tokenEndpoint,
-      authorizationServerIssuer: deriveAuthorizationServerIssuer(tokenEndpoint, authorizationServerIssuer),
-    });
-    wiaJwt = att.clientAssertionJwt;
-    oauthClientAttestationHeaders = att.oauthHeaders;
-    console.log("[codeflow] OAuth client attestation for token request"); try { slog("[codeflow] token attestation", { hasClientAssertion: !!wiaJwt }); } catch {}
-  } catch (attError) {
-    console.warn("[codeflow] Failed to resolve OAuth attestation:", attError?.message); try { slog("[codeflow] attestation failed", { error: attError?.message }); } catch {}
-  }
-  
-  // Mirror authorization_details in token request (many issuers expect it)
   const tokenAuthzDetails = [
     {
       type: "openid_credential",
@@ -1674,25 +1704,81 @@ async function runAuthorizationCodeIssuance(
       ...(issuerMeta?.credential_issuer ? { locations: [issuerMeta.credential_issuer] } : {}),
     },
   ];
-  const tokenRes = await httpPostForm(tokenEndpoint, {
-    grant_type: "authorization_code",
-    code,
-    code_verifier: codeVerifier,
-    client_id: "wallet-client",
-    redirect_uri: redirectUri,
-    authorization_details: JSON.stringify(tokenAuthzDetails),
-    ...(wiaJwt ? { client_assertion: wiaJwt, client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer" } : {}),
-  }, logSessionId, dpopJwt, oauthClientAttestationHeaders);
-  console.log("[codeflow] tokenRes.status=", tokenRes.status); try { slog("[codeflow] tokenRes.status", { status: tokenRes.status }); } catch {}
-  if (!tokenRes.ok) {
-    const text = await tokenRes.text().catch(() => "");
-    console.error("[codeflow] token error", tokenRes.status, text);
+  let tokenRes;
+  let tokenResponseTextCode = "";
+  for (let tokenAttempt = 0; tokenAttempt < 2; tokenAttempt++) {
+    try {
+      const dpopKeys = await ensureOrCreateEcKeyPair(deviceKeyPath, "ES256");
+      dpopPrivateJwk = dpopKeys.privateJwk;
+      dpopPublicJwk = dpopKeys.publicJwk;
+      dpopJwt = await createDPoP({
+        privateJwk: dpopPrivateJwk,
+        publicJwk: dpopPublicJwk,
+        htu: tokenEndpoint,
+        htm: "POST",
+        alg: "ES256",
+      });
+      console.log("[codeflow] DPoP generated for token request"); try { slog("[codeflow] DPoP generated", { hasDPoP: !!dpopJwt }); } catch {}
+    } catch (dpopError) {
+      console.warn("[codeflow] Failed to generate DPoP (token exchange will be rejected by the issuer):", dpopError?.message); try { slog("[codeflow] DPoP generation failed", { error: dpopError?.message }); } catch {}
+    }
+    try {
+      const att = await resolveAttestationForEndpoint({
+        endpointAudience: tokenEndpoint,
+        authorizationServerIssuer: codeflowAsIssuer,
+      });
+      wiaJwt = att.clientAssertionJwt;
+      oauthClientAttestationHeaders = att.oauthHeaders;
+      console.log("[codeflow] OAuth client attestation for token request"); try { slog("[codeflow] token attestation", { hasClientAssertion: !!wiaJwt }); } catch {}
+    } catch (attError) {
+      console.warn("[codeflow] Failed to resolve OAuth attestation:", attError?.message); try { slog("[codeflow] attestation failed", { error: attError?.message }); } catch {}
+    }
+    tokenRes = await httpPostForm(
+      tokenEndpoint,
+      {
+        grant_type: "authorization_code",
+        code,
+        code_verifier: codeVerifier,
+        client_id: "wallet-client",
+        redirect_uri: redirectUri,
+        authorization_details: JSON.stringify(tokenAuthzDetails),
+        ...(wiaJwt ? { client_assertion: wiaJwt, client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer" } : {}),
+      },
+      logSessionId,
+      dpopJwt,
+      oauthClientAttestationHeaders,
+    );
+    console.log("[codeflow] tokenRes.status=", tokenRes.status); try { slog("[codeflow] tokenRes.status", { status: tokenRes.status, attempt: tokenAttempt }); } catch {}
+    tokenResponseTextCode = await tokenRes.text().catch(() => "");
+    if (tokenRes.ok) break;
     let err = {};
-    try { err = JSON.parse(text); } catch {}
-    try { slog("[codeflow] token error", { status: tokenRes.status, err, body: text }); } catch {}
+    try { err = JSON.parse(tokenResponseTextCode); } catch {}
+    if (
+      tokenAttempt === 0 &&
+      shouldRetryTokenExchangeAfterRotatingWalletProviderKey(tokenRes.status, err)
+    ) {
+      try {
+        const didRotate = await rotateWalletProviderKeyPair();
+        if (didRotate) {
+          console.log("[codeflow] Rotated wallet provider key after WIA-related token error; retrying token once");
+          try { slog("[codeflow] token retry after WP key rotation"); } catch {}
+          continue;
+        }
+      } catch (rotErr) {
+        console.warn("[codeflow] Wallet provider key rotation failed:", rotErr?.message);
+        try { slog("[codeflow] WP rotation failed", { error: rotErr?.message }); } catch {}
+      }
+    }
+    console.error("[codeflow] token error", tokenRes.status, tokenResponseTextCode);
+    try { slog("[codeflow] token error", { status: tokenRes.status, err, body: tokenResponseTextCode }); } catch {}
     throw new Error(`token_error ${tokenRes.status}: ${JSON.stringify(err)}`);
   }
-  const tokenBody = await tokenRes.json();
+  let tokenBody;
+  try {
+    tokenBody = JSON.parse(tokenResponseTextCode);
+  } catch (e) {
+    throw new Error(`token_error: invalid JSON response - ${e?.message}`);
+  }
   const accessToken = tokenBody.access_token;
   let c_nonce = tokenBody.c_nonce;
   let c_nonce_expires_in = tokenBody.c_nonce_expires_in;

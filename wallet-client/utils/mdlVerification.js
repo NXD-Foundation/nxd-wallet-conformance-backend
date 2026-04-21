@@ -1,8 +1,9 @@
 import { decode } from 'cbor-x';
 import base64url from 'base64url';
 import crypto from "node:crypto";
-import { DeviceResponse } from "@animo-id/mdoc";
+import { DeviceResponse, cborEncode, DataItem } from "@animo-id/mdoc";
 import { mdocContext } from "./mdocContext.js";
+import { normalizeDcqlClaimsToSegmentLists } from "../src/lib/dcqlClaimsPaths.js";
 
 /**
  * Custom mDL verification using cbor-x decoder
@@ -258,18 +259,85 @@ export function validateMdlClaims(extractedClaims, requestedFields) {
 }
 
 /**
- * Helper function to get session transcript bytes for OID4VP
- * This is specific to OpenID4VP protocol
+ * RFC002 SessionTranscript for OpenID4VP mdoc (OID4VPHandover), CBOR-encoded for DeviceAuthentication.
+ * Shape: [null, null, ["OID4VPHandover", client_id, response_uri, mdoc_generated_nonce, verifier_nonce]]
+ *
+ * @param {{ client_id: string, response_uri: string, nonce: string }} oid4vpData
+ * @param {string} mdocGeneratedNonce
+ * @returns {Uint8Array}
  */
+/**
+ * ISO mDL docType uses issuer namespace `org.iso.18013.5.1`; EU PID docType matches its namespace URI.
+ * @param {string} docType
+ * @returns {string}
+ */
+export function defaultMdocNamespaceForDocType(docType) {
+  if (docType === "org.iso.18013.5.1.mDL") return "org.iso.18013.5.1";
+  return docType;
+}
+
+/**
+ * Map DCQL path segments to a Presentation Exchange JSONPath understood by @animo-id/mdoc
+ * (`$['namespace']['elementIdentifier']`).
+ * @param {string[]} segments
+ * @param {string} docType
+ */
+export function dcqlSegmentsToMdocPexPath(segments, docType) {
+  if (!segments?.length) return null;
+  let nameSpace;
+  let elementIdentifier;
+  if (segments.length === 1) {
+    nameSpace = defaultMdocNamespaceForDocType(docType);
+    elementIdentifier = segments[0];
+  } else {
+    nameSpace = segments[0];
+    elementIdentifier = segments[segments.length - 1];
+  }
+  return `$['${nameSpace}']['${elementIdentifier}']`;
+}
+
+/**
+ * Build a Presentation Definition so DeviceResponse.sign() runs ISO 18013-5 selective disclosure
+ * (digest-only device nameSpaces) for DCQL `credentials[].claims`.
+ *
+ * @param {string} docType — must equal input_descriptor.id for @animo-id/mdoc matching
+ * @param {{ claims?: unknown } | null | undefined} dcqlEntry
+ * @returns {object | null}
+ */
+export function presentationDefinitionFromDcqlMdocClaims(docType, dcqlEntry) {
+  const segmentLists = normalizeDcqlClaimsToSegmentLists(dcqlEntry?.claims);
+  if (segmentLists.length === 0) return null;
+  const fields = [];
+  for (const segs of segmentLists) {
+    const p = dcqlSegmentsToMdocPexPath(segs, docType);
+    if (p) fields.push({ path: [p], intent_to_retain: false });
+  }
+  if (fields.length === 0) return null;
+  return {
+    id: `dcql-mdoc-${docType}`,
+    input_descriptors: [
+      {
+        id: docType,
+        format: { mso_mdoc: { alg: ["ES256", "ES384"] } },
+        constraints: {
+          limit_disclosure: "required",
+          fields,
+        },
+      },
+    ],
+  };
+}
+
 export function getSessionTranscriptBytes(oid4vpData, mdocGeneratedNonce) {
-  const { encode: encodeCbor } = require('cbor-x');
-  return encodeCbor([
-    'OIDC4VPHandover', 
-    oid4vpData.client_id, 
-    oid4vpData.response_uri, 
-    mdocGeneratedNonce, 
-    oid4vpData.nonce
-  ]);
+  const { client_id: clientId, response_uri: responseUri, nonce: verifierNonce } =
+    oid4vpData;
+  return cborEncode(
+    DataItem.fromData([
+      null,
+      null,
+      ["OID4VPHandover", clientId, responseUri, mdocGeneratedNonce, verifierNonce],
+    ]),
+  );
 }
 
 /**
@@ -312,7 +380,7 @@ export async function extractDeviceNonce(vpTokenBase64) {
  * @param {Object} options - Presentation options
  * @param {string} options.docType - Document type (e.g., "org.iso.18013.5.1.mDL")
  * @param {Object} options.sessionTranscript - Optional session transcript for deviceAuth
- * @returns {string} Base64url encoded DeviceResponse ready for presentation
+ * @returns {Promise<{ vpToken: string, mdocGeneratedNonce: string | null }>}
  */
 export async function buildMdocPresentation(storedCredential, options = {}) {
   const { encode: encodeCbor } = await import('cbor-x');
@@ -323,6 +391,8 @@ export async function buildMdocPresentation(storedCredential, options = {}) {
     verifierGeneratedNonce,
     devicePrivateJwk,
     presentationDefinition,
+    dcqlEntry,
+    mdocGeneratedNonceOverride,
   } = options;
   
   console.log("[mdoc-present] Building DeviceResponse for presentation");
@@ -340,7 +410,7 @@ export async function buildMdocPresentation(storedCredential, options = {}) {
     if (decoded.version && decoded.documents) {
       // Already a DeviceResponse - return as-is
       console.log("[mdoc-present] Already a DeviceResponse, returning as-is");
-      return storedCredential;
+      return { vpToken: storedCredential, mdocGeneratedNonce: null };
     } else if (decoded.docType || decoded.issuerSigned) {
       // Document format
       issuerSigned = decoded.issuerSigned || decoded;
@@ -356,7 +426,10 @@ export async function buildMdocPresentation(storedCredential, options = {}) {
       // Already DeviceResponse - encode and return
       console.log("[mdoc-present] Converting DeviceResponse object to base64url");
       const encoded = encodeCbor(storedCredential);
-      return base64url.encode(Buffer.from(encoded));
+      return {
+        vpToken: base64url.encode(Buffer.from(encoded)),
+        mdocGeneratedNonce: null,
+      };
     } else if (storedCredential.docType || storedCredential.issuerSigned) {
       // Document format
       issuerSigned = storedCredential.issuerSigned || storedCredential;
@@ -387,17 +460,31 @@ export async function buildMdocPresentation(storedCredential, options = {}) {
     status: 0,
   });
 
-  const mdocGeneratedNonce = crypto.randomBytes(16).toString("base64url");
-  let builder = DeviceResponse.from(new Uint8Array(issuerSignedMdoc)).usingSessionTranscriptForOID4VP({
+  const mdocGeneratedNonce =
+    typeof mdocGeneratedNonceOverride === "string" &&
+    mdocGeneratedNonceOverride.length > 0
+      ? mdocGeneratedNonceOverride
+      : crypto.randomBytes(16).toString("base64url");
+  const sessionTranscriptBytes = getSessionTranscriptBytes(
+    {
+      client_id: clientId,
+      response_uri: responseUri,
+      nonce: verifierGeneratedNonce,
+    },
     mdocGeneratedNonce,
-    clientId,
-    responseUri,
-    verifierGeneratedNonce,
-  });
+  );
+  let builder = DeviceResponse.from(new Uint8Array(issuerSignedMdoc)).usingSessionTranscriptBytes(
+    sessionTranscriptBytes,
+  );
 
-  if (presentationDefinition) {
-    builder = builder.usingPresentationDefinition(presentationDefinition);
+  const dcqlPd = presentationDefinitionFromDcqlMdocClaims(docType, dcqlEntry);
+  const pdForSigning = dcqlPd ?? presentationDefinition;
+  if (!pdForSigning) {
+    throw new Error(
+      "mdoc presentation requires presentation_definition and/or dcql_query.credentials[].claims with at least one path",
+    );
   }
+  builder = builder.usingPresentationDefinition(pdForSigning);
 
   const signedResponse = await builder
     .authenticateWithSignature(devicePrivateJwk, "ES256")
@@ -409,7 +496,7 @@ export async function buildMdocPresentation(storedCredential, options = {}) {
 
   console.log("[mdoc-present] Encoded DeviceResponse length:", base64urlEncoded.length);
 
-  return base64urlEncoded;
+  return { vpToken: base64urlEncoded, mdocGeneratedNonce };
 }
 
 /**

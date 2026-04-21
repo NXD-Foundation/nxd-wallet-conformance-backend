@@ -49,6 +49,59 @@ export async function ensureWalletProviderKeyPair() {
 }
 
 /**
+ * RFC001 §7.3 SHOULD: fresh attestation after rejection — delete persisted WP key so the next
+ * `ensureWalletProviderKeyPair` mints a new pair for OAuth client attestation + WIA `client_assertion`.
+ * No-op when external attestation env is used (rotation would not change outbound JWTs).
+ */
+export async function rotateWalletProviderKeyPair() {
+  const ext = readExternalAttestationTokens();
+  if (ext?.clientAssertion && ext?.oauthAtt && ext?.oauthPop) {
+    return false;
+  }
+  const keyPath = process.env.WALLET_PROVIDER_KEY_PATH?.trim() || DEFAULT_PROVIDER_KEY_PATH;
+  try {
+    if (fs.existsSync(keyPath)) {
+      fs.unlinkSync(keyPath);
+    }
+  } catch (e) {
+    throw new Error(`wallet provider key rotation failed: ${e?.message || e}`);
+  }
+  await ensureWalletProviderKeyPair();
+  return true;
+}
+
+/**
+ * True when the token endpoint returned 400 `invalid_client` or `invalid_dpop_proof` and the
+ * description plausibly indicates an expired or time-invalid WIA / client attestation JWT.
+ */
+export function shouldRetryTokenExchangeAfterRotatingWalletProviderKey(httpStatus, errBody) {
+  const ext = readExternalAttestationTokens();
+  if (ext?.clientAssertion && ext?.oauthAtt && ext?.oauthPop) return false;
+  if (httpStatus !== 400) return false;
+  const code = errBody?.error;
+  if (code !== "invalid_client" && code !== "invalid_dpop_proof") return false;
+  const d = String(errBody?.error_description || "").toLowerCase();
+  const hints = [
+    "wia jwt has expired",
+    "wallet instance attestation",
+    "wia validation",
+    "invalid wallet instance attestation",
+    "jwt expired",
+    "jwt has expired",
+    "'exp'",
+    "exp claim",
+    "token expired",
+    "nbf",
+    "not yet valid",
+    "ttl (",
+    "exceeds maximum",
+    "outside the accepted time",
+    "clock",
+  ];
+  return hints.some((h) => d.includes(h));
+}
+
+/**
  * OAuth Client Attestation JWT + PoP for a given endpoint audience (token, PAR, etc.).
  * `iss` = Wallet Provider id; `sub` = wallet instance id (Redis / file).
  */

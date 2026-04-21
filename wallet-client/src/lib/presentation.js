@@ -30,6 +30,10 @@ import {
   buildOobCs03VpToken,
   sendCs03OobResponse,
 } from "./cs03.js";
+import { transactionDataBindingForSdJwtKb } from "./transactionDataKb.js";
+import { normalizeDcqlClaimsToSegmentLists } from "./dcqlClaimsPaths.js";
+
+export { normalizeDcqlClaimsToSegmentLists } from "./dcqlClaimsPaths.js";
 
 function makeSessionLogger(sessionId) {
   return function sessionLog(...args) {
@@ -97,7 +101,7 @@ function makeSessionLogger(sessionId) {
 function parseOpenId4VpDeepLink(deepLink) {
   console.log("[present] Parsing deep link:", deepLink);
   const url = new URL(deepLink);
-  const supported = new Set(["openid4vp:", "mdoc-openid4vp:"]);
+  const supported = new Set(["openid4vp:", "mdoc-openid4vp:", "eu-eaap:"]);
   if (!supported.has(url.protocol)) {
     throw new Error(`Unsupported request scheme: ${url.protocol}`);
   }
@@ -108,11 +112,40 @@ function parseOpenId4VpDeepLink(deepLink) {
   return { requestUri, clientId, method };
 }
 
-async function fetchAuthorizationRequestJwt(requestUri, method) {
+/**
+ * RFC002 §8.2 — optional `wallet_metadata` on request_uri POST.
+ * Advertises supported VP formats/response modes, mdoc handover nonce, and an encryption JWK for JAR/JWE.
+ */
+export function buildWalletMetadataForVpRequest({ publicJwk, mdocGeneratedNonce }) {
+  if (!publicJwk || typeof publicJwk !== "object") {
+    throw new Error("buildWalletMetadataForVpRequest: publicJwk is required");
+  }
+  const encKey = { ...publicJwk };
+  delete encKey.d;
+  encKey.use = "enc";
+  delete encKey.alg;
+  const meta = {
+    vp_formats_supported: ["jwt_vp", "dc+sd-jwt", "vc+sd-jwt", "mso_mdoc"],
+    vp_formats: ["jwt_vp", "dc+sd-jwt", "vc+sd-jwt", "mso_mdoc"],
+    response_modes_supported: ["direct_post", "direct_post.jwt"],
+    response_modes: ["direct_post", "direct_post.jwt"],
+    jwks: { keys: [encKey] },
+    authorization_encryption_alg_values_supported: ["ECDH-ES+A256KW"],
+    authorization_encryption_enc_values_supported: ["A256GCM"],
+  };
+  if (typeof mdocGeneratedNonce === "string" && mdocGeneratedNonce.length > 0) {
+    meta.mdoc_generated_nonce = mdocGeneratedNonce;
+  }
+  return meta;
+}
+
+async function fetchAuthorizationRequestJwt(requestUri, method, { walletMetadata } = {}) {
   if (!requestUri) throw new Error("Missing request_uri in deep link");
   if (method && method.toLowerCase() === "post") {
     const form = new URLSearchParams();
-    // Optionally include wallet hints; server tolerates empty payload
+    if (walletMetadata && typeof walletMetadata === "object") {
+      form.append("wallet_metadata", JSON.stringify(walletMetadata));
+    }
     console.log("[present] Fetching request JWT via POST:", requestUri);
     const res = await fetch(requestUri, {
       method: "POST",
@@ -816,39 +849,6 @@ function decodeDisclosureJsonFromSegment(encoded) {
   return JSON.parse(raw);
 }
 
-/**
- * DCQL claim entries use `path` as segment array (per verifier vpHeplers), JSON Pointer, or dotted string.
- * @param {unknown} claim
- * @returns {string[] | null}
- */
-function dcqlClaimEntryToSegments(claim) {
-  if (claim == null) return null;
-  if (typeof claim === "string") {
-    const p = claim.trim();
-    if (!p) return null;
-    if (p.startsWith("/")) return p.split("/").filter(Boolean);
-    if (p.includes(".")) return p.split(".").filter(Boolean);
-    return [p];
-  }
-  if (typeof claim === "object" && claim.path != null) {
-    const p = claim.path;
-    if (Array.isArray(p)) return p.filter((s) => typeof s === "string" && s.length > 0);
-    if (typeof p === "string") return dcqlClaimEntryToSegments(p);
-  }
-  return null;
-}
-
-/** @param {unknown} claims */
-export function normalizeDcqlClaimsToSegmentLists(claims) {
-  if (!Array.isArray(claims)) return [];
-  const out = [];
-  for (const c of claims) {
-    const segs = dcqlClaimEntryToSegments(c);
-    if (segs?.length) out.push(segs);
-  }
-  return out;
-}
-
 function buildAllowedDisclosureKeysFromDcql(segmentLists) {
   const keys = new Set();
   for (const segs of segmentLists) {
@@ -1204,6 +1204,8 @@ async function buildVpTokenFromPickedEntry({
   selectedType,
   dcqlEntry,
   slog,
+  authorizationRequestPayload = null,
+  mdocSessionNonce = null,
 }) {
   const { privateJwk, publicJwk, rawToken: vpToken } =
     await resolveKeysEnvelopeAndRawFromPick(stored, keyPath, pickedEntry);
@@ -1226,6 +1228,10 @@ async function buildVpTokenFromPickedEntry({
       "Unable to determine audience for key-binding JWT (missing client_id/response_uri)",
     );
   }
+  const txKb =
+    isSdJwt && authorizationRequestPayload
+      ? transactionDataBindingForSdJwtKb(authorizationRequestPayload)
+      : null;
   const kbJwt = await createProofJwt({
     privateJwk,
     publicJwk,
@@ -1234,12 +1240,15 @@ async function buildVpTokenFromPickedEntry({
     issuer: didJwk,
     typ: isSdJwt ? "kb+jwt" : "openid4vp-proof+jwt",
     sdJwt: isSdJwt ? sdJwtForPresentation : undefined,
+    transaction_data_hashes: txKb?.transaction_data_hashes,
+    transaction_data_hashes_alg: txKb?.transaction_data_hashes_alg,
   });
   try {
     slog("[present] kbJwt created", { length: kbJwt.length });
   } catch {}
 
   let out = vpToken;
+  let mdocGeneratedNonce = null;
   if (isMdoc) {
     const docType = docTypeForMdocPresentation(
       dcqlEntry,
@@ -1249,14 +1258,20 @@ async function buildVpTokenFromPickedEntry({
     try {
       slog("[present] docType", { docType, selectedType });
     } catch {}
-    out = await buildMdocPresentation(vpToken, {
+    const built = await buildMdocPresentation(vpToken, {
       docType,
       clientId,
       responseUri,
       verifierGeneratedNonce: nonce,
       devicePrivateJwk: stored?.keyBinding?.privateJwk || privateJwk,
       presentationDefinition,
+      dcqlEntry,
+      ...(mdocSessionNonce
+        ? { mdocGeneratedNonceOverride: mdocSessionNonce }
+        : {}),
     });
+    out = built.vpToken;
+    mdocGeneratedNonce = built.mdocGeneratedNonce;
   } else if (typeof vpToken === "string" && vpToken.includes("~")) {
     out = attachKbJwtToSdJwt(sdJwtForPresentation, kbJwt);
   } else {
@@ -1269,7 +1284,7 @@ async function buildVpTokenFromPickedEntry({
       nonce,
     });
   }
-  return out;
+  return { vpToken: out, mdocGeneratedNonce };
 }
 
 export async function performPresentation(
@@ -1294,7 +1309,20 @@ export async function performPresentation(
     try {
       slog("[PRESENTATION] Parsed deep link", { requestUri, clientId, method });
     } catch {}
-    requestJwt = await fetchAuthorizationRequestJwt(requestUri, method);
+    let walletMetadataForJar = null;
+    let mdocSessionNonce = null;
+    if (method && method.toLowerCase() === "post") {
+      const resolvedForMeta = resolveDeviceKeyPath(keyPath);
+      const { publicJwk } = await ensureOrCreateEcKeyPair(resolvedForMeta);
+      mdocSessionNonce = crypto.randomBytes(16).toString("base64url");
+      walletMetadataForJar = buildWalletMetadataForVpRequest({
+        publicJwk,
+        mdocGeneratedNonce: mdocSessionNonce,
+      });
+    }
+    requestJwt = await fetchAuthorizationRequestJwt(requestUri, method, {
+      walletMetadata: walletMetadataForJar,
+    });
     const verified = await verifyAuthorizationRequestJwt(requestJwt, {
       expectedClientId: clientId,
     });
@@ -1546,6 +1574,7 @@ export async function performPresentation(
     let vpTokenValue;
     let presentation_submission;
     let didJwk;
+    const mdocGeneratedNonces = [];
 
     if (hasDcql) {
       const usedConfigurationIds = new Set();
@@ -1562,19 +1591,23 @@ export async function performPresentation(
           );
         }
         usedConfigurationIds.add(found.configurationId);
-        const vpStr = await buildVpTokenFromPickedEntry({
-          stored: found.stored,
-          pickedEntry: found.pickedEntry,
-          keyPath,
-          clientId,
-          responseUri,
-          verifierBase,
-          nonce,
-          presentationDefinition,
-          selectedType: found.configurationId,
-          dcqlEntry: credQuery,
-          slog,
-        });
+        const { vpToken: vpStr, mdocGeneratedNonce: entryMdocNonce } =
+          await buildVpTokenFromPickedEntry({
+            stored: found.stored,
+            pickedEntry: found.pickedEntry,
+            keyPath,
+            clientId,
+            responseUri,
+            verifierBase,
+            nonce,
+            presentationDefinition,
+            selectedType: found.configurationId,
+            dcqlEntry: credQuery,
+            slog,
+            authorizationRequestPayload: payload,
+            mdocSessionNonce,
+          });
+        if (entryMdocNonce) mdocGeneratedNonces.push(entryMdocNonce);
         const raw = found.rawToken;
         const wantFmt = normalizeDcqlCredentialFormat(credQuery.format);
         const submissionFmt = isMdocCredential(raw)
@@ -1703,6 +1736,7 @@ export async function performPresentation(
         "Unable to determine audience for key-binding JWT (missing client_id/response_uri)",
       );
     }
+    const txKbMain = isSdJwt ? transactionDataBindingForSdJwtKb(payload) : null;
     const kbJwt = await createProofJwt({
       privateJwk,
       publicJwk,
@@ -1711,6 +1745,8 @@ export async function performPresentation(
       issuer: didJwk,
       typ: isSdJwt ? "kb+jwt" : "openid4vp-proof+jwt",
       sdJwt: isSdJwt ? vpToken : undefined,
+      transaction_data_hashes: txKbMain?.transaction_data_hashes,
+      transaction_data_hashes_alg: txKbMain?.transaction_data_hashes_alg,
     });
     console.log("[present] Built kbJwt len:", kbJwt.length);
     try {
@@ -1727,11 +1763,14 @@ export async function performPresentation(
         nonce,
         "has sd_hash:",
         !!kbPayload.sd_hash,
+        "has transaction_data_hashes:",
+        Array.isArray(kbPayload.transaction_data_hashes),
       );
       try {
         slog("[present] kbJwt payload", {
           hasNonce: !!kbPayload?.nonce,
           hasSdHash: !!kbPayload?.sd_hash,
+          hasTransactionDataHashes: Array.isArray(kbPayload?.transaction_data_hashes),
         });
       } catch {}
     } catch (e) {
@@ -1744,6 +1783,7 @@ export async function performPresentation(
     }
 
     if (isMdoc) {
+      // RFC002 transaction_data binding for mdoc is via SessionTranscript (wallet-client P2-W-3), not KB-JWT claims.
       // For mdoc, construct proper DeviceResponse structure
       console.log("[present] Processing mdoc credential for presentation");
       try {
@@ -1782,14 +1822,21 @@ export async function performPresentation(
       } catch {}
 
       // Build proper DeviceResponse for presentation
-      vpToken = await buildMdocPresentation(vpToken, {
+      const mdocBuilt = await buildMdocPresentation(vpToken, {
         docType,
         clientId,
         responseUri,
         verifierGeneratedNonce: nonce,
         devicePrivateJwk: stored?.keyBinding?.privateJwk || privateJwk,
         presentationDefinition,
+        ...(mdocSessionNonce
+          ? { mdocGeneratedNonceOverride: mdocSessionNonce }
+          : {}),
       });
+      vpToken = mdocBuilt.vpToken;
+      if (mdocBuilt.mdocGeneratedNonce) {
+        mdocGeneratedNonces.push(mdocBuilt.mdocGeneratedNonce);
+      }
       console.log("[present] Built DeviceResponse, length:", vpToken.length);
       try {
         slog("[present] DeviceResponse built", { length: vpToken.length });
@@ -1864,6 +1911,25 @@ export async function performPresentation(
 
     }
 
+    const walletMetadataStr =
+      mdocGeneratedNonces.length > 0
+        ? JSON.stringify({
+            mdoc_generated_nonce:
+              mdocGeneratedNonces.length === 1
+                ? mdocGeneratedNonces[0]
+                : mdocGeneratedNonces,
+          })
+        : null;
+    const mdocNonceForJwt =
+      mdocGeneratedNonces.length === 0
+        ? {}
+        : {
+            mdoc_generated_nonce:
+              mdocGeneratedNonces.length === 1
+                ? mdocGeneratedNonces[0]
+                : mdocGeneratedNonces,
+          };
+
     // Send the credential token (SD-JWT, mdoc DeviceResponse, or JWT VC)
     // Per OpenID4VP spec:
     // - direct_post: application/x-www-form-urlencoded with vp_token (+ optional presentation_submission)
@@ -1878,6 +1944,7 @@ export async function performPresentation(
         vp_token: vpTokenValue,
         presentation_submission, // Send as JSON string (as expected by verifier)
         ...(state ? { state } : {}),
+        ...(walletMetadataStr ? { wallet_metadata: walletMetadataStr } : {}),
       };
       console.log("[present] Using presentation_submission format");
       try {
@@ -1888,6 +1955,7 @@ export async function performPresentation(
       body = {
         vp_token: vpTokenValue,
         ...(state ? { state } : {}),
+        ...(walletMetadataStr ? { wallet_metadata: walletMetadataStr } : {}),
       };
       console.log("[present] Using direct format");
       try {
@@ -1928,6 +1996,7 @@ export async function performPresentation(
             : {}),
           ...(state ? { state } : {}),
           ...(nonce ? { nonce } : {}),
+          ...mdocNonceForJwt,
           iat: now,
           exp: now + 300,
           iss: didJwk,
@@ -2001,6 +2070,9 @@ export async function performPresentation(
         const formParams = new URLSearchParams();
         formParams.append("response", responseJwtOrJwe);
         if (state) formParams.append("state", state);
+        if (walletMetadataStr) {
+          formParams.append("wallet_metadata", walletMetadataStr);
+        }
         bodyContent = formParams.toString();
         contentType = "application/x-www-form-urlencoded";
       } catch (e) {
@@ -2025,6 +2097,9 @@ export async function performPresentation(
       }
       if (state) {
         formParams.append("state", state);
+      }
+      if (walletMetadataStr) {
+        formParams.append("wallet_metadata", walletMetadataStr);
       }
       bodyContent = formParams.toString();
       contentType = "application/x-www-form-urlencoded";
@@ -2320,7 +2395,7 @@ export async function resolveDeepLinkFromEndpoint(verifierBase, path) {
   if (body.request) {
     // No request_uri; not supported here
     throw new Error(
-      "Received inline request JWT; provide an openid4vp:// or mdoc-openid4vp:// deep link instead",
+      "Received inline request JWT; provide an openid4vp://, mdoc-openid4vp://, or eu-eaap:// deep link instead",
     );
   }
   throw new Error("Unexpected response from verifier when fetching VP request");

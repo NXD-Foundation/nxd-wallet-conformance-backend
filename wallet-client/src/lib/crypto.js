@@ -50,6 +50,8 @@ export async function createProofJwt({
   alg = "ES256",
   key_attestation = null,
   sdJwt = null,
+  transaction_data_hashes = null,
+  transaction_data_hashes_alg = null,
 }) {
   const header = { alg, typ, jwk: publicJwk };
   if (key_attestation) {
@@ -76,6 +78,13 @@ export async function createProofJwt({
     const hash = crypto.createHash("sha256").update(sdJwtBytes).digest();
     const sdHash = base64url(hash);
     payload.sd_hash = sdHash;
+  }
+
+  if (Array.isArray(transaction_data_hashes) && transaction_data_hashes.length > 0) {
+    payload.transaction_data_hashes = transaction_data_hashes;
+    if (typeof transaction_data_hashes_alg === "string" && transaction_data_hashes_alg.length > 0) {
+      payload.transaction_data_hashes_alg = transaction_data_hashes_alg;
+    }
   }
 
   const key = await importJWK(privateJwk, alg);

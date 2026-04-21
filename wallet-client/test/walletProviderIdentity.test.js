@@ -7,6 +7,8 @@ import { ensureOrCreateEcKeyPair } from "../src/lib/crypto.js";
 import {
   resolveAttestationForEndpoint,
   buildWalletUnitAttestationJwt,
+  shouldRetryTokenExchangeAfterRotatingWalletProviderKey,
+  rotateWalletProviderKeyPair,
 } from "../src/lib/walletProviderIdentity.js";
 
 describe("wallet provider identity (RFC001 iss / OAuth attestation)", () => {
@@ -74,6 +76,54 @@ describe("wallet provider identity (RFC001 iss / OAuth attestation)", () => {
     expect(h.typ).to.equal("key-attestation+jwt");
     expect(p.iss).to.equal("did:example:wallet-provider");
     expect(p.sub).to.equal("11111111-1111-1111-1111-111111111111");
+  });
+
+  it("shouldRetryTokenExchangeAfterRotatingWalletProviderKey: true for invalid_client + expired WIA description", () => {
+    expect(
+      shouldRetryTokenExchangeAfterRotatingWalletProviderKey(400, {
+        error: "invalid_client",
+        error_description: "WIA JWT has expired. See spec.",
+      }),
+    ).to.equal(true);
+    expect(
+      shouldRetryTokenExchangeAfterRotatingWalletProviderKey(400, {
+        error: "invalid_dpop_proof",
+        error_description: "OAuth pop jwt expired",
+      }),
+    ).to.equal(true);
+  });
+
+  it("shouldRetryTokenExchangeAfterRotatingWalletProviderKey: false for non-matching errors", () => {
+    expect(
+      shouldRetryTokenExchangeAfterRotatingWalletProviderKey(401, {
+        error: "invalid_client",
+        error_description: "WIA JWT has expired",
+      }),
+    ).to.equal(false);
+    expect(
+      shouldRetryTokenExchangeAfterRotatingWalletProviderKey(400, {
+        error: "invalid_grant",
+        error_description: "WIA JWT has expired",
+      }),
+    ).to.equal(false);
+    expect(
+      shouldRetryTokenExchangeAfterRotatingWalletProviderKey(400, {
+        error: "invalid_client",
+        error_description: "client_id does not match attestation sub",
+      }),
+    ).to.equal(false);
+  });
+
+  it("rotateWalletProviderKeyPair replaces persisted key material", async () => {
+    await resolveAttestationForEndpoint({
+      endpointAudience: "https://as.example/token",
+      authorizationServerIssuer: "https://as.example",
+    });
+    const j1 = JSON.parse(fs.readFileSync(tmpKey, "utf8"));
+    const rotated = await rotateWalletProviderKeyPair();
+    expect(rotated).to.equal(true);
+    const j2 = JSON.parse(fs.readFileSync(tmpKey, "utf8"));
+    expect(j2.privateJwk.x).to.not.equal(j1.privateJwk.x);
   });
 
   it("buildWalletUnitAttestationJwt: proofPublicJwks yields multiple attested_keys", async () => {

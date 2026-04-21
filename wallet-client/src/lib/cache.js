@@ -10,14 +10,24 @@ const redisUrl = process.env.WALLET_REDIS ? process.env.WALLET_REDIS : "localhos
 
 export const walletRedisClient = redis.createClient({ url: `redis://${redisUrl}` });
 
-(async () => {
-  try {
-    await walletRedisClient.connect();
-    console.log("Wallet client connected to Redis");
-  } catch (err) {
-    console.error("Wallet Redis connection error:", err);
+let redisConnectPromise = null;
+
+/** Connect on first cache use so importing this module (e.g. in tests) does not hold Redis open. */
+export async function ensureWalletRedisConnected() {
+  if (walletRedisClient.isOpen) return;
+  if (!redisConnectPromise) {
+    redisConnectPromise = (async () => {
+      try {
+        await walletRedisClient.connect();
+        console.log("Wallet client connected to Redis");
+      } catch (err) {
+        console.error("Wallet Redis connection error:", err);
+        redisConnectPromise = null;
+      }
+    })();
   }
-})();
+  await redisConnectPromise;
+}
 
 walletRedisClient.on("error", (err) => {
   console.error("Wallet Redis Client Error:", err);
@@ -39,6 +49,7 @@ export async function getOrCreateWalletInstanceId() {
   const envId = process.env.WALLET_INSTANCE_ID?.trim();
   if (envId) return envId;
 
+  await ensureWalletRedisConnected();
   try {
     const existing = await walletRedisClient.get(WALLET_INSTANCE_REDIS_KEY);
     if (existing) return existing;
@@ -69,24 +80,28 @@ function getOrCreateWalletInstanceIdFromFile() {
 
 // Store credential and key-binding material under credential type (configurationId)
 export async function storeWalletCredentialByType(configurationId, payload) {
+  await ensureWalletRedisConnected();
   const key = `wallet:credentials:${configurationId}`;
   const ttlInSeconds = parseInt(process.env.WALLET_CREDENTIAL_TTL || "86400");
   await walletRedisClient.setEx(key, ttlInSeconds, JSON.stringify(payload));
 }
 
 export async function getWalletCredentialByType(configurationId) {
+  await ensureWalletRedisConnected();
   const key = `wallet:credentials:${configurationId}`;
   const val = await walletRedisClient.get(key);
   return val ? JSON.parse(val) : null;
 }
 
 export async function listWalletCredentialTypes() {
+  await ensureWalletRedisConnected();
   const keys = await walletRedisClient.keys("wallet:credentials:*");
   return keys.map((k) => k.replace(/^wallet:credentials:/, ""));
 }
 
 // Store logs under a specific sessionId key
 export async function storeWalletLogs(sessionId, logs) {
+  await ensureWalletRedisConnected();
   const key = `wallet:logs:${sessionId}`;
   const ttlInSeconds = parseInt(process.env.WALLET_LOGS_TTL || "3600"); // Default 1 hour
   
@@ -100,6 +115,7 @@ export async function storeWalletLogs(sessionId, logs) {
 }
 
 export async function getWalletLogs(sessionId) {
+  await ensureWalletRedisConnected();
   const key = `wallet:logs:${sessionId}`;
   
   try {
@@ -139,6 +155,7 @@ export async function getWalletLogs(sessionId) {
 }
 
 export async function appendWalletLog(sessionId, logEntry) {
+  await ensureWalletRedisConnected();
   const key = `wallet:logs:${sessionId}`;
   const entryWithTimestamp = {
     ...logEntry,
@@ -220,6 +237,7 @@ export async function storeWalletPresentationSession(
   if (!sessionId) return;
   const record = buildWalletPresentationSessionRecord(payload, deepLinkClientId);
   if (!record) return;
+  await ensureWalletRedisConnected();
   const ttl = parseInt(process.env.WALLET_PRESENTATION_SESSION_TTL || "3600", 10);
   try {
     await walletRedisClient.setEx(
@@ -234,6 +252,7 @@ export async function storeWalletPresentationSession(
 
 export async function getWalletPresentationSession(sessionId) {
   if (!sessionId) return null;
+  await ensureWalletRedisConnected();
   try {
     const v = await walletRedisClient.get(walletPresentationSessionKey(sessionId));
     return v ? JSON.parse(v) : null;
