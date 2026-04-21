@@ -1,4 +1,5 @@
 import fs from "fs";
+import path from "path";
 import { importJWK, exportJWK, SignJWT, generateKeyPair } from "jose";
 import crypto from "node:crypto";
 
@@ -17,6 +18,20 @@ export async function ensureOrCreateEcKeyPair(optionalPath, alg = "ES256") {
   privateJwk.alg = alg;
   const publicJwk = await exportJWK(publicKey);
   publicJwk.alg = alg;
+
+  if (optionalPath) {
+    try {
+      fs.mkdirSync(path.dirname(optionalPath), { recursive: true });
+      fs.writeFileSync(
+        optionalPath,
+        `${JSON.stringify({ privateJwk, publicJwk }, null, 2)}\n`,
+        "utf8",
+      );
+    } catch (e) {
+      console.error("[crypto] failed to persist EC key to", optionalPath, e?.message || e);
+    }
+  }
+
   return { privateJwk, publicJwk };
 }
 
@@ -140,18 +155,10 @@ function normalizeUri(uri) {
 }
 
 /**
- * Creates a Wallet Instance Attestation (WIA) JWT
- * Based on TS3 Wallet Unit Attestation spec:
- * https://github.com/eu-digital-identity-wallet/eudi-doc-standards-and-technical-specifications/blob/main/docs/technical-specifications/ts3-wallet-unit-attestation.md
- * 
- * @param {object} options
- * @param {object} options.privateJwk - Private JWK for signing
- * @param {object} options.publicJwk - Public JWK (for header)
- * @param {string} options.issuer - Issuer identifier (typically wallet provider DID or URL)
- * @param {string} options.audience - Audience (token endpoint URL)
- * @param {string} options.alg - Signing algorithm (default: ES256)
- * @param {number} options.ttlHours - Time-to-live in hours (default: 1, max: 24)
- * @returns {Promise<string>} - Signed WIA JWT
+ * Legacy WIA-style JWT (`typ: JWT`). For RFC001 token/PAR client assertions, use
+ * {@link createOAuthClientAttestationJwt} with the wallet provider key (see `walletProviderIdentity.js`).
+ *
+ * @deprecated Prefer {@link createOAuthClientAttestationJwt} for OAuth 2.0 attestation-based client auth.
  */
 export async function createWIA({ privateJwk, publicJwk, issuer, audience, alg = "ES256", ttlHours = 1 }) {
   // Ensure TTL is less than 24 hours per spec
@@ -240,7 +247,8 @@ export async function createOAuthClientAttestationPopJwt({
  * @param {object} options
  * @param {object} options.privateJwk - Private JWK for signing
  * @param {object} options.publicJwk - Public JWK (for header)
- * @param {string} options.issuer - Issuer identifier (typically wallet provider DID or URL)
+ * @param {string} options.issuer - Issuer identifier (Wallet Provider; RFC001 §7.5)
+ * @param {string} [options.subject] - Wallet instance identifier (optional `sub` claim)
  * @param {string} options.audience - Audience (credential endpoint URL)
  * @param {object[]} options.attestedKeys - Array of attested key JWKs
  * @param {object} options.eudiWalletInfo - EUDI wallet info object with general_info and key_storage_info
@@ -253,6 +261,7 @@ export async function createWUA({
   privateJwk, 
   publicJwk, 
   issuer, 
+  subject = null,
   audience, 
   attestedKeys, 
   eudiWalletInfo,
@@ -266,6 +275,7 @@ export async function createWUA({
   const header = { alg, typ: "key-attestation+jwt", jwk: publicJwk };
   const payload = {
     iss: issuer,
+    ...(subject ? { sub: subject } : {}),
     aud: audience,
     iat: now,
     exp: exp,

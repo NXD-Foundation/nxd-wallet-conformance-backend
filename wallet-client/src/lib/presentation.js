@@ -6,16 +6,20 @@ import {
   generateDidJwkFromPrivateJwk,
   ensureOrCreateEcKeyPair,
 } from "./crypto.js";
+import { resolveDeviceKeyPath } from "./deviceKeyPaths.js";
 import {
   getWalletCredentialByType,
   listWalletCredentialTypes,
   appendWalletLog,
+  storeWalletPresentationSession,
+  getWalletPresentationSession,
 } from "./cache.js";
 import {
   buildMdocPresentation,
   isMdocCredential,
 } from "../../utils/mdlVerification.js";
 import { didKeyToJwks } from "../../utils/cryptoUtils.js";
+import { normalizeVerifierInfo } from "./verifierInfoNormalize.js";
 import {
   extractCs03Request,
   loadLocalCs03Signer,
@@ -222,13 +226,434 @@ async function verifyJwtWithDid(jwt, header, didOrIss) {
   throw lastErr || new Error("DID verification failed");
 }
 
-async function verifyAuthorizationRequestJwt(requestJwt, { expectedClientId }) {
+function throwInvalidPresentationRequest(desc) {
+  throw new Error(`invalid_request: ${desc}`);
+}
+
+/**
+ * Extract RFC002 `verifier_info` from an OpenID4VP authorization request JWT payload.
+ * Normalises the same fields as the issuer/verifier ({@link normalizeVerifierInfo}).
+ *
+ * @param {Record<string, unknown>} payload - Decoded request JWT payload
+ * @returns {Record<string, unknown> | null}
+ */
+export function parseVerifierInfo(payload) {
+  if (!payload || typeof payload !== "object") return null;
+  const raw = payload.verifier_info;
+  if (raw == null || raw === "") return null;
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (!trimmed) return null;
+    try {
+      const parsed = JSON.parse(trimmed);
+      return normalizeVerifierInfo(parsed);
+    } catch {
+      console.warn("[present] verifier_info claim is not valid JSON; ignoring");
+      return null;
+    }
+  }
+  if (typeof raw === "object" && !Array.isArray(raw)) {
+    return normalizeVerifierInfo(raw);
+  }
+  return null;
+}
+
+function attachVerifierInfoToResult(result, verifierInfo) {
+  const base =
+    result && typeof result === "object" && !Array.isArray(result)
+      ? result
+      : { outcome: result };
+  return {
+    ...base,
+    verifier_info: verifierInfo ?? null,
+  };
+}
+
+/** RFC002 §8.3.4 — wallet reports these to verifier `response_uri` on local presentation failure */
+export const WalletRfc002PresentationErrors = Object.freeze({
+  INVALID_PRESENTATION: "invalid_presentation",
+  MALFORMED_RESPONSE: "malformed_response",
+  USER_CANCELLATION: "user_cancellation",
+  EXPIRED_REQUEST: "expired_request",
+  UNSUPPORTED_CREDENTIAL_FORMAT: "unsupported_credential_format",
+  MISSING_REQUIRED_PROOF: "missing_required_proof",
+  FAILED_CORRELATION: "failed_correlation",
+  FAILED_VALIDATION: "failed_validation",
+});
+
+function decodeRequestJwtPayloadQuiet(token) {
+  if (typeof token !== "string" || !token.length) throw new Error("Invalid JWT");
+  const parts = token.split(".");
+  if (parts.length < 2) throw new Error("Invalid JWT");
+  return JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
+}
+
+function extractVerifierDeliveryContext(requestPayload) {
+  if (!requestPayload || typeof requestPayload !== "object") {
+    return { responseUri: null, state: null, responseMode: null };
+  }
+  const responseUri = requestPayload.response_uri;
+  const state = requestPayload.state ?? null;
+  let responseMode = requestPayload.response_mode || "direct_post";
+  if (responseUri && /direct_post\.jwt/i.test(String(responseUri))) {
+    responseMode = "direct_post.jwt";
+  }
+  return {
+    responseUri:
+      typeof responseUri === "string" && responseUri.length ? responseUri : null,
+    state,
+    responseMode,
+  };
+}
+
+/**
+ * Map a thrown presentation error to RFC002 §8.3.4 `error` codes for the verifier.
+ * @param {unknown} err
+ * @returns {{ code: string, description: string }}
+ */
+export function mapWalletPresentationErrorToRfc002(err) {
+  const msg = err?.message || String(err);
+  const joseCode = err && typeof err === "object" ? err.code : null;
+  if (
+    joseCode === "ERR_JWT_EXPIRED" ||
+    /jwt expired|token expired|timestamp check failed/i.test(msg)
+  ) {
+    return {
+      code: WalletRfc002PresentationErrors.EXPIRED_REQUEST,
+      description: msg,
+    };
+  }
+  if (msg.startsWith("invalid_request:")) {
+    return {
+      code: WalletRfc002PresentationErrors.MALFORMED_RESPONSE,
+      description: msg.replace(/^invalid_request:\s*/i, "").trim() || msg,
+    };
+  }
+  if (msg.includes("client_id does not match deep link")) {
+    return {
+      code: WalletRfc002PresentationErrors.FAILED_CORRELATION,
+      description: msg,
+    };
+  }
+  if (
+    msg.includes("unsupported client_id_scheme") ||
+    msg.includes("Unsupported request scheme")
+  ) {
+    return {
+      code: WalletRfc002PresentationErrors.UNSUPPORTED_CREDENTIAL_FORMAT,
+      description: msg,
+    };
+  }
+  if (msg.includes("matched no disclosures") || msg.includes("claims mismatch")) {
+    return {
+      code: WalletRfc002PresentationErrors.FAILED_VALIDATION,
+      description: msg,
+    };
+  }
+  if (
+    msg.includes("Credential not found") ||
+    msg.includes("No credentials available") ||
+    msg.includes("could not be satisfied") ||
+    msg.includes("Unable to extract presentable credential") ||
+    msg.includes("Unable to determine audience")
+  ) {
+    return {
+      code: WalletRfc002PresentationErrors.INVALID_PRESENTATION,
+      description: msg,
+    };
+  }
+  if (
+    msg.includes("Missing response_uri") ||
+    msg.includes("Missing nonce") ||
+    msg.includes("Authorization request JWT verification failed") ||
+    (/signature verification failed/i.test(msg) && /jwt|jws/i.test(msg)) ||
+    msg.includes("Authorization request JWT must be signed") ||
+    msg.includes("no verifier trust material") ||
+    msg.includes("credential_ids") ||
+    msg.includes("transaction_data") ||
+    msg.includes("dcql_query.credentials[]") ||
+    msg.includes("Auth request GET error") ||
+    msg.includes("Auth request POST error") ||
+    msg.includes("Missing request_uri")
+  ) {
+    return {
+      code: WalletRfc002PresentationErrors.MALFORMED_RESPONSE,
+      description: msg,
+    };
+  }
+  if (
+    msg.includes("DID verification failed") ||
+    msg.includes("did:jwk decode failed") ||
+    msg.includes("Unsupported DID method")
+  ) {
+    return {
+      code: WalletRfc002PresentationErrors.MALFORMED_RESPONSE,
+      description: msg,
+    };
+  }
+  if (msg.includes("Fetch VP request error") || msg.includes("Unexpected response from verifier")) {
+    return {
+      code: WalletRfc002PresentationErrors.FAILED_CORRELATION,
+      description: msg,
+    };
+  }
+  if (
+    msg.includes("missing_required_proof") ||
+    msg.includes("Missing required proof")
+  ) {
+    return {
+      code: WalletRfc002PresentationErrors.MISSING_REQUIRED_PROOF,
+      description: msg,
+    };
+  }
+  if (msg.includes("CS-03")) {
+    return {
+      code: WalletRfc002PresentationErrors.MALFORMED_RESPONSE,
+      description: msg,
+    };
+  }
+  return {
+    code: WalletRfc002PresentationErrors.INVALID_PRESENTATION,
+    description: msg,
+  };
+}
+
+function isVerifierHttpRejectionError(err) {
+  const msg = err?.message || "";
+  return /^Verifier (direct_post|response) error /i.test(msg);
+}
+
+async function postWalletErrorToResponseUri({
+  responseUri,
+  state,
+  error,
+  error_description,
+  slog,
+}) {
+  const form = new URLSearchParams();
+  form.set("error", error);
+  form.set("error_description", error_description);
+  if (state != null && state !== "") form.set("state", String(state));
+  const body = form.toString();
+  try {
+    slog("[PRESENTATION] [REQUEST] POST error to verifier response_uri", {
+      url: responseUri,
+      error,
+    });
+  } catch {}
+  const res = await fetch(responseUri, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body,
+  });
+  const resText = await res.text().catch(() => "");
+  try {
+    slog("[PRESENTATION] [RESPONSE] Verifier error-POST response", {
+      url: responseUri,
+      status: res.status,
+      body: resText?.slice(0, 500),
+    });
+  } catch {}
+  return res.status;
+}
+
+async function finalizeWalletPresentationFailure(
+  err,
+  payload,
+  parsedVerifierInfo,
+  slog,
+  logSessionId,
+) {
+  const { code, description } = mapWalletPresentationErrorToRfc002(err);
+  let persisted = null;
+  if (logSessionId) {
+    try {
+      persisted = await getWalletPresentationSession(logSessionId);
+    } catch {
+      /* ignore */
+    }
+  }
+  let ctx = extractVerifierDeliveryContext(payload);
+  if (!ctx.responseUri && persisted?.response_uri) {
+    ctx = {
+      responseUri: persisted.response_uri,
+      state: persisted.state,
+      responseMode: persisted.response_mode,
+    };
+  }
+  try {
+    slog("[PRESENTATION] [ERROR] presentation_session (Redis)", {
+      client_id: persisted?.client_id ?? null,
+      response_uri: persisted?.response_uri ?? null,
+      response_mode: persisted?.response_mode ?? null,
+    });
+  } catch {}
+  let verifier_error_delivered = false;
+  let verifier_error_post_http_status = null;
+  if (ctx.responseUri) {
+    try {
+      verifier_error_post_http_status = await postWalletErrorToResponseUri({
+        responseUri: ctx.responseUri,
+        state: ctx.state,
+        error: code,
+        error_description: description,
+        slog,
+      });
+      verifier_error_delivered = verifier_error_post_http_status != null;
+    } catch (e) {
+      try {
+        slog("[PRESENTATION] [ERROR] Failed to POST error to response_uri", {
+          error: e?.message || String(e),
+        });
+      } catch {}
+    }
+  }
+  return attachVerifierInfoToResult(
+    {
+      status: "error",
+      error: code,
+      error_description: description,
+      verifier_error_delivered,
+      ...(verifier_error_post_http_status != null
+        ? { verifier_error_post_http_status }
+        : {}),
+      ...(persisted ? { presentation_session: persisted } : {}),
+    },
+    parsedVerifierInfo,
+  );
+}
+
+/**
+ * RFC002 / OpenID4VP: `client_id` for x509_hash MUST be `x509_hash:` + base64url(SHA-256(DER(leaf))).
+ * `x5c[0]` is standard base64-encoded DER (RFC 7515).
+ */
+export function computeX509HashClientIdFromLeafX5c(x5c0) {
+  if (typeof x5c0 !== "string" || !x5c0.length) {
+    throw new Error("missing leaf x5c");
+  }
+  const der = Buffer.from(x5c0, "base64");
+  if (!der.length) {
+    throw new Error("empty certificate DER from x5c[0]");
+  }
+  const digest = crypto.createHash("sha256").update(der).digest();
+  return `x509_hash:${digest.toString("base64url")}`;
+}
+
+function x509LeafPemFromX5cFirst(x5c0) {
+  const lines = x5c0.match(/.{1,64}/g) || [];
+  return `-----BEGIN CERTIFICATE-----\n${lines.join("\n")}\n-----END CERTIFICATE-----\n`;
+}
+
+/**
+ * Prefer `client_id` prefix over `client_id_scheme` so the binding implied by the identifier wins.
+ */
+function inferPresentationClientIdScheme(payload) {
+  const cid = payload?.client_id;
+  if (typeof cid === "string") {
+    if (cid.startsWith("x509_hash:")) return "x509_hash";
+    if (cid.startsWith("x509_san_dns:")) return "x509_san_dns";
+    if (cid.startsWith("x509_san_uri:")) return "x509_san_uri";
+  }
+  const raw = payload?.client_id_scheme;
+  if (typeof raw === "string" && raw.trim()) {
+    return raw.trim().toLowerCase();
+  }
+  return null;
+}
+
+const WALLET_KNOWN_CLIENT_ID_SCHEMES = new Set([
+  "x509_hash",
+  "x509_san_dns",
+  "x509_san_uri",
+  "redirect_uri",
+]);
+
+function assertClientIdSchemeAllowedForWallet(payload) {
+  const raw = payload?.client_id_scheme;
+  if (raw == null || raw === "") return;
+  const s = String(raw).trim().toLowerCase();
+  if (WALLET_KNOWN_CLIENT_ID_SCHEMES.has(s)) return;
+  const cid = payload?.client_id;
+  if (typeof cid === "string" && cid.startsWith("did:")) return;
+  throwInvalidPresentationRequest(`unsupported client_id_scheme '${raw}'`);
+}
+
+function assertClientIdSchemeConsistentWithX509Hash(payload) {
+  const cid = payload?.client_id;
+  const raw = payload?.client_id_scheme;
+  const schemeNorm = typeof raw === "string" && raw.trim() ? String(raw).trim().toLowerCase() : "";
+
+  if (schemeNorm === "x509_hash") {
+    if (typeof cid !== "string" || !cid.startsWith("x509_hash:")) {
+      throwInvalidPresentationRequest(
+        "client_id_scheme is x509_hash but client_id is not an x509_hash identifier",
+      );
+    }
+  }
+
+  if (typeof cid === "string" && cid.startsWith("x509_hash:")) {
+    if (schemeNorm && schemeNorm !== "x509_hash") {
+      throwInvalidPresentationRequest(
+        `client_id uses x509_hash prefix but client_id_scheme is '${raw}' (expected x509_hash)`,
+      );
+    }
+  }
+}
+
+export async function verifyAuthorizationRequestJwt(requestJwt, { expectedClientId }) {
   const { header, payload } = decodeJwt(requestJwt);
   if (!header?.alg || header.alg === "none") {
     throw new Error("Authorization request JWT must be signed");
   }
   if (expectedClientId && payload?.client_id && payload.client_id !== expectedClientId) {
     throw new Error("Authorization request client_id does not match deep link client_id");
+  }
+
+  assertClientIdSchemeConsistentWithX509Hash(payload);
+
+  const inferredScheme = inferPresentationClientIdScheme(payload);
+  const isX509Hash =
+    inferredScheme === "x509_hash" ||
+    (typeof payload?.client_id === "string" && payload.client_id.startsWith("x509_hash:"));
+
+  if (isX509Hash) {
+    if (!Array.isArray(header?.x5c) || typeof header.x5c[0] !== "string" || !header.x5c[0].length) {
+      throwInvalidPresentationRequest(
+        "x509_hash authorization request requires a non-empty JOSE x5c header (leaf certificate)",
+      );
+    }
+    let expectedFromCert;
+    try {
+      expectedFromCert = computeX509HashClientIdFromLeafX5c(header.x5c[0]);
+    } catch (e) {
+      throwInvalidPresentationRequest(e?.message || "invalid x5c leaf certificate encoding");
+    }
+    if (typeof payload.client_id !== "string" || payload.client_id !== expectedFromCert) {
+      throwInvalidPresentationRequest(
+        `x509_hash client_id does not match SHA-256 hash of leaf certificate (expected ${expectedFromCert}, received ${payload.client_id})`,
+      );
+    }
+    const pem = x509LeafPemFromX5cFirst(header.x5c[0]);
+    const certKey = await importX509(pem, header.alg);
+    const verified = await jwtVerify(requestJwt, certKey, { clockTolerance: 300 });
+    return {
+      header: verified.protectedHeader || header,
+      payload: verified.payload,
+    };
+  }
+
+  assertClientIdSchemeAllowedForWallet(payload);
+
+  const looseX509 =
+    inferredScheme === "x509_san_dns" ||
+    inferredScheme === "x509_san_uri" ||
+    (typeof payload?.client_id === "string" &&
+      (payload.client_id.startsWith("x509_san_dns:") ||
+        payload.client_id.startsWith("x509_san_uri:")));
+  if (looseX509) {
+    console.warn(
+      "[present] RFC002: x509_san_dns / x509_san_uri client_id uses legacy wallet validation path; ETSI profile recommends x509_hash",
+    );
   }
 
   const metadataCandidates = [];
@@ -247,7 +672,7 @@ async function verifyAuthorizationRequestJwt(requestJwt, { expectedClientId }) {
 
   if (Array.isArray(header?.x5c) && header.x5c.length > 0) {
     verificationAttempts.push(async () => {
-      const pem = `-----BEGIN CERTIFICATE-----\n${header.x5c[0].match(/.{1,64}/g).join("\n")}\n-----END CERTIFICATE-----\n`;
+      const pem = x509LeafPemFromX5cFirst(header.x5c[0]);
       const certKey = await importX509(pem, header.alg || "ES256");
       return jwtVerify(requestJwt, certKey, { clockTolerance: 300 });
     });
@@ -265,7 +690,7 @@ async function verifyAuthorizationRequestJwt(requestJwt, { expectedClientId }) {
     }
     if (Array.isArray(metadata?.x5c) && metadata.x5c.length > 0) {
       verificationAttempts.push(async () => {
-        const pem = `-----BEGIN CERTIFICATE-----\n${metadata.x5c[0].match(/.{1,64}/g).join("\n")}\n-----END CERTIFICATE-----\n`;
+        const pem = x509LeafPemFromX5cFirst(metadata.x5c[0]);
         const certKey = await importX509(pem, header.alg || "ES256");
         return jwtVerify(requestJwt, certKey, { clockTolerance: 300 });
       });
@@ -335,6 +760,47 @@ function buildPresentationSubmission(presentationDefinition, credentialFormat) {
   return JSON.stringify(submission);
 }
 
+function vpTokenPathForDcqlId(dcqlId) {
+  if (typeof dcqlId !== "string" || !dcqlId.length) return "$.vp_token";
+  if (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(dcqlId)) return `$.vp_token.${dcqlId}`;
+  return `$['vp_token'][${JSON.stringify(dcqlId)}]`;
+}
+
+function buildPresentationSubmissionDcql(
+  presentationDefinition,
+  dcqlQuery,
+  perEntryFormats,
+) {
+  if (!presentationDefinition) return undefined;
+  const inputDescriptors = presentationDefinition.input_descriptors || [];
+  const creds = (dcqlQuery && dcqlQuery.credentials) || [];
+  if (inputDescriptors.length === creds.length && inputDescriptors.length > 0) {
+    const descriptorMap = inputDescriptors.map((d, i) => {
+      const fmt =
+        perEntryFormats[i] || inferRootFormat(presentationDefinition);
+      const submissionFmt = fmt === "jwt_vc_json" ? "jwt_vp" : fmt;
+      return {
+        id: d.id,
+        format: submissionFmt,
+        path: vpTokenPathForDcqlId(creds[i].id),
+      };
+    });
+    const submission = {
+      definition_id: presentationDefinition.id || "pd",
+      descriptor_map: descriptorMap,
+    };
+    console.log(
+      "[present] Built presentation_submission (DCQL-aware):",
+      JSON.stringify(submission, null, 2),
+    );
+    return JSON.stringify(submission);
+  }
+  const singleFmt =
+    perEntryFormats[0] || inferRootFormat(presentationDefinition);
+  const submissionFmt = singleFmt === "jwt_vc_json" ? "jwt_vp" : singleFmt;
+  return buildPresentationSubmission(presentationDefinition, submissionFmt);
+}
+
 function inferRootFormat(presentationDefinition) {
   // Infer format from presentation definition
   const fmt = presentationDefinition.format || {};
@@ -343,6 +809,116 @@ function inferRootFormat(presentationDefinition) {
   if (fmt["vc+sd-jwt"]) return "vc+sd-jwt";
   if (fmt["jwt_vc_json"]) return "jwt_vc_json";
   return "dc+sd-jwt";
+}
+
+function decodeDisclosureJsonFromSegment(encoded) {
+  const raw = Buffer.from(encoded, "base64url").toString("utf8");
+  return JSON.parse(raw);
+}
+
+/**
+ * DCQL claim entries use `path` as segment array (per verifier vpHeplers), JSON Pointer, or dotted string.
+ * @param {unknown} claim
+ * @returns {string[] | null}
+ */
+function dcqlClaimEntryToSegments(claim) {
+  if (claim == null) return null;
+  if (typeof claim === "string") {
+    const p = claim.trim();
+    if (!p) return null;
+    if (p.startsWith("/")) return p.split("/").filter(Boolean);
+    if (p.includes(".")) return p.split(".").filter(Boolean);
+    return [p];
+  }
+  if (typeof claim === "object" && claim.path != null) {
+    const p = claim.path;
+    if (Array.isArray(p)) return p.filter((s) => typeof s === "string" && s.length > 0);
+    if (typeof p === "string") return dcqlClaimEntryToSegments(p);
+  }
+  return null;
+}
+
+/** @param {unknown} claims */
+export function normalizeDcqlClaimsToSegmentLists(claims) {
+  if (!Array.isArray(claims)) return [];
+  const out = [];
+  for (const c of claims) {
+    const segs = dcqlClaimEntryToSegments(c);
+    if (segs?.length) out.push(segs);
+  }
+  return out;
+}
+
+function buildAllowedDisclosureKeysFromDcql(segmentLists) {
+  const keys = new Set();
+  for (const segs of segmentLists) {
+    for (const s of segs) {
+      if (typeof s === "string" && s.length) keys.add(s);
+    }
+  }
+  return keys;
+}
+
+/**
+ * Split SD-JWT into issuer JWT and disclosure segments. Strips a trailing KB JWT segment if present
+ * (last ~ part with three dot-separated substrings) so filtering only sees disclosures.
+ */
+function splitSdJwtJwtDisclosuresAndKb(sdJwt) {
+  let token = sdJwt;
+  while (token.endsWith("~")) token = token.slice(0, -1);
+  const parts = token.split("~");
+  const jwtPart = parts[0];
+  const tail = parts.slice(1);
+  const disclosureParts = [...tail];
+  if (disclosureParts.length > 0) {
+    const last = disclosureParts[disclosureParts.length - 1];
+    if (last.split(".").length === 3) disclosureParts.pop();
+  }
+  return { jwtPart, disclosureParts };
+}
+
+/**
+ * When DCQL `credentials[].claims` is set, keep only object-property disclosures (3-element)
+ * whose claim name appears in the allowed key set derived from those paths.
+ * Omits 2-element array disclosures when filtering is active (narrow DCQL requests).
+ * If `claims` is missing or empty, returns `sdJwt` unchanged (including any trailing KB JWT).
+ *
+ * @param {string} sdJwt
+ * @param {object | undefined} dcqlEntry - dcql_query.credentials[] element
+ */
+export function filterSdJwtDisclosuresForDcqlClaims(sdJwt, dcqlEntry) {
+  if (!sdJwt || typeof sdJwt !== "string" || !sdJwt.includes("~")) return sdJwt;
+  const segmentLists = normalizeDcqlClaimsToSegmentLists(dcqlEntry?.claims);
+  if (segmentLists.length === 0) return sdJwt;
+
+  const allowedKeys = buildAllowedDisclosureKeysFromDcql(segmentLists);
+  if (allowedKeys.size === 0) return sdJwt;
+
+  const { jwtPart, disclosureParts } = splitSdJwtJwtDisclosuresAndKb(sdJwt);
+  const kept = [jwtPart];
+  let matched = 0;
+  for (const enc of disclosureParts) {
+    if (!enc) continue;
+    try {
+      const arr = decodeDisclosureJsonFromSegment(enc);
+      if (Array.isArray(arr) && arr.length === 3 && typeof arr[1] === "string") {
+        if (allowedKeys.has(arr[1])) {
+          kept.push(enc);
+          matched++;
+        }
+      }
+    } catch {
+      // skip malformed segment
+    }
+  }
+
+  if (disclosureParts.length > 0 && matched === 0) {
+    throw new Error(
+      `DCQL claims ${JSON.stringify(dcqlEntry.claims)} matched no disclosures in the SD-JWT`,
+    );
+  }
+
+  return kept.join("~");
 }
 
 function attachKbJwtToSdJwt(sdJwt, kbJwt) {
@@ -387,6 +963,13 @@ async function buildJwtVpToken({
   return new SignJWT(payload)
     .setProtectedHeader({ alg, typ: "openid4vp+jwt", jwk: publicJwk })
     .sign(key);
+}
+
+function ecPublicJwksEqual(a, b) {
+  if (!a || !b) return false;
+  if (a.kty !== b.kty) return false;
+  if (a.crv && b.crv && a.crv !== b.crv) return false;
+  return !!(a.x && b.x && a.y && b.y && a.x === b.x && a.y === b.y);
 }
 
 function extractCredentialString(credentialEnvelope) {
@@ -468,11 +1051,229 @@ function extractCredentialString(credentialEnvelope) {
   return null;
 }
 
+/** @param {string | undefined} format */
+export function normalizeDcqlCredentialFormat(format) {
+  if (typeof format !== "string" || !format.trim()) return null;
+  const f = format.trim().toLowerCase();
+  if (f === "mso_mdoc") return "mso_mdoc";
+  if (f === "dc+sd-jwt") return "dc+sd-jwt";
+  if (f === "vc+sd-jwt") return "vc+sd-jwt";
+  if (f === "jwt_vc_json" || f === "vc+jwt") return "jwt_vc_json";
+  return f;
+}
+
+function readSdJwtVctFromRaw(rawToken) {
+  try {
+    const jws = rawToken.split("~")[0];
+    const { payload } = decodeJwt(jws);
+    return payload?.vct ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function mdocDoctypeMetaMatchesConfiguration(entry, configurationId) {
+  const dv = entry.meta?.doctype_value;
+  if (dv == null || dv === "") return true;
+  if (typeof dv !== "string") return true;
+  const stripped = dv.replace(/:mso_mdoc$/i, "").toLowerCase();
+  const cid = String(configurationId).toLowerCase();
+  if (stripped.includes(cid) || cid.includes(stripped)) return true;
+  if (stripped.includes("pid") && cid.includes("pid")) return true;
+  if (stripped.includes("mdl") && cid.includes("mdl")) return true;
+  return false;
+}
+
+/**
+ * @param {object} entry - dcql_query.credentials[]
+ * @param {string} configurationId - wallet Redis key (configuration id)
+ * @param {string} rawToken - extracted credential string
+ * @param {string} wantFmt - normalized format from {@link normalizeDcqlCredentialFormat}
+ */
+export function storedRawMatchesDcqlEntry(entry, configurationId, rawToken, wantFmt) {
+  const isMdoc = isMdocCredential(rawToken);
+  if (wantFmt === "mso_mdoc") {
+    if (!isMdoc) return false;
+    return mdocDoctypeMetaMatchesConfiguration(entry, configurationId);
+  }
+  if (wantFmt === "dc+sd-jwt" || wantFmt === "vc+sd-jwt") {
+    if (isMdoc) return false;
+    if (!rawToken.includes("~")) return false;
+    const vct = readSdJwtVctFromRaw(rawToken);
+    const vctValues = entry.meta?.vct_values;
+    if (Array.isArray(vctValues) && vctValues.length > 0) {
+      if (vct == null) return false;
+      const ok = vctValues.some(
+        (w) =>
+          typeof w === "string" &&
+          (w === vct || vct.includes(w) || w.includes(vct)),
+      );
+      if (!ok) return false;
+    }
+    return true;
+  }
+  if (wantFmt === "jwt_vc_json" || wantFmt === "jwt_vp") {
+    if (isMdoc) return false;
+    if (rawToken.includes("~")) return false;
+    return rawToken.split(".").length >= 3;
+  }
+  return false;
+}
+
+/**
+ * @returns {Promise<{ configurationId: string, stored: object, rawToken: string, pickedEntry: object } | null>}
+ */
+async function findWalletStoredForDcqlEntry(entry, usedConfigurationIds) {
+  const wantFmt = normalizeDcqlCredentialFormat(entry.format);
+  if (!wantFmt) return null;
+  const candidateTypes = await listWalletCredentialTypes();
+  for (const configurationId of candidateTypes) {
+    if (usedConfigurationIds.has(configurationId)) continue;
+    const stored = await getWalletCredentialByType(configurationId);
+    if (!stored || (!stored.credential && !(stored.multi && stored.entries?.length)))
+      continue;
+
+    const candidates = [];
+    if (stored.multi && Array.isArray(stored.entries)) {
+      for (const ent of stored.entries) {
+        const raw = extractCredentialString(ent.credential);
+        if (raw)
+          candidates.push({
+            raw,
+            pick: ent,
+          });
+      }
+    } else {
+      const raw = extractCredentialString(stored.credential);
+      if (raw)
+        candidates.push({
+          raw,
+          pick: { credential: stored.credential, keyBinding: stored.keyBinding },
+        });
+    }
+    for (const { raw, pick } of candidates) {
+      if (!storedRawMatchesDcqlEntry(entry, configurationId, raw, wantFmt)) continue;
+      return { configurationId, stored, rawToken: raw, pickedEntry: pick };
+    }
+  }
+  return null;
+}
+
+async function resolveKeysEnvelopeAndRawFromPick(stored, keyPath, pickedEntry) {
+  const resolvedDevicePath = resolveDeviceKeyPath(keyPath);
+  const { privateJwk, publicJwk } = await ensureOrCreateEcKeyPair(resolvedDevicePath);
+  let envelope = pickedEntry.credential;
+  if (stored.multi && Array.isArray(stored.entries)) {
+    const match = stored.entries.find((e) =>
+      ecPublicJwksEqual(e?.keyBinding?.publicJwk, publicJwk),
+    );
+    envelope = (match || pickedEntry).credential;
+  }
+  const rawToken = extractCredentialString(envelope);
+  return { privateJwk, publicJwk, credentialEnvelopeForVp: envelope, rawToken };
+}
+
+function docTypeForMdocPresentation(dcqlEntry, selectedType, presentationDefinition) {
+  const metaDt = dcqlEntry?.meta?.doctype_value;
+  if (typeof metaDt === "string" && metaDt.length > 0) {
+    return metaDt.replace(/:mso_mdoc$/i, "");
+  }
+  if (presentationDefinition?.input_descriptors?.[0]?.id) {
+    const descriptorId = presentationDefinition.input_descriptors[0].id;
+    if (descriptorId.includes(".") || descriptorId.includes(":")) return descriptorId;
+    if (descriptorId.includes("pid") || descriptorId.includes("PID"))
+      return "eu.europa.ec.eudi.pid.1";
+    if (descriptorId.includes("mdl") || descriptorId.includes("mDL"))
+      return "org.iso.18013.5.1.mDL";
+  }
+  return selectedType || "org.iso.18013.5.1.mDL";
+}
+
+/**
+ * Build one presentation string (SD-JWT+KB, mdoc DeviceResponse, or JWT VP) from wallet material.
+ */
+async function buildVpTokenFromPickedEntry({
+  stored,
+  pickedEntry,
+  keyPath,
+  clientId,
+  responseUri,
+  verifierBase,
+  nonce,
+  presentationDefinition,
+  selectedType,
+  dcqlEntry,
+  slog,
+}) {
+  const { privateJwk, publicJwk, rawToken: vpToken } =
+    await resolveKeysEnvelopeAndRawFromPick(stored, keyPath, pickedEntry);
+  if (!vpToken) {
+    throw new Error("Unable to extract presentable credential token from wallet cache");
+  }
+
+  const isMdoc = isMdocCredential(vpToken);
+  const isSdJwt = !isMdoc && typeof vpToken === "string" && vpToken.includes("~");
+
+  let sdJwtForPresentation = vpToken;
+  if (isSdJwt) {
+    sdJwtForPresentation = filterSdJwtDisclosuresForDcqlClaims(vpToken, dcqlEntry);
+  }
+
+  const didJwk = generateDidJwkFromPrivateJwk(publicJwk);
+  const kbAudience = clientId || responseUri || verifierBase;
+  if (!kbAudience) {
+    throw new Error(
+      "Unable to determine audience for key-binding JWT (missing client_id/response_uri)",
+    );
+  }
+  const kbJwt = await createProofJwt({
+    privateJwk,
+    publicJwk,
+    audience: kbAudience,
+    nonce,
+    issuer: didJwk,
+    typ: isSdJwt ? "kb+jwt" : "openid4vp-proof+jwt",
+    sdJwt: isSdJwt ? sdJwtForPresentation : undefined,
+  });
+  try {
+    slog("[present] kbJwt created", { length: kbJwt.length });
+  } catch {}
+
+  let out = vpToken;
+  if (isMdoc) {
+    const docType = docTypeForMdocPresentation(
+      dcqlEntry,
+      selectedType,
+      presentationDefinition,
+    );
+    try {
+      slog("[present] docType", { docType, selectedType });
+    } catch {}
+    out = await buildMdocPresentation(vpToken, { docType });
+  } else if (typeof vpToken === "string" && vpToken.includes("~")) {
+    out = attachKbJwtToSdJwt(sdJwtForPresentation, kbJwt);
+  } else {
+    out = await buildJwtVpToken({
+      credentialJwt: vpToken,
+      privateJwk,
+      publicJwk,
+      issuer: didJwk,
+      audience: kbAudience,
+      nonce,
+    });
+  }
+  return out;
+}
+
 export async function performPresentation(
   { deepLink, verifierBase, credentialType, keyPath },
   logSessionId,
 ) {
   const slog = logSessionId ? makeSessionLogger(logSessionId) : () => {};
+  let requestJwt = null;
+  let payload = null;
+  let parsedVerifierInfo = null;
+  let clientIdFromDeepLink = null;
   try {
     try {
       slog("[PRESENTATION] [START] Presentation flow", {
@@ -482,13 +1283,16 @@ export async function performPresentation(
       });
     } catch {}
     const { requestUri, clientId, method } = parseOpenId4VpDeepLink(deepLink);
+    clientIdFromDeepLink = clientId;
     try {
       slog("[PRESENTATION] Parsed deep link", { requestUri, clientId, method });
     } catch {}
-    const requestJwt = await fetchAuthorizationRequestJwt(requestUri, method);
-    const { payload } = await verifyAuthorizationRequestJwt(requestJwt, {
+    requestJwt = await fetchAuthorizationRequestJwt(requestUri, method);
+    const verified = await verifyAuthorizationRequestJwt(requestJwt, {
       expectedClientId: clientId,
     });
+    payload = verified.payload;
+    parsedVerifierInfo = parseVerifierInfo(payload);
 
     let responseMode = payload.response_mode || "direct_post";
     const responseUri = payload.response_uri; // our routes embed this
@@ -516,6 +1320,15 @@ export async function performPresentation(
         hasNonce: !!nonce,
         hasPD: !!presentationDefinition,
         state,
+      });
+    } catch {}
+
+    await storeWalletPresentationSession(logSessionId, payload, clientIdFromDeepLink);
+    try {
+      slog("[PRESENTATION] Persisted presentation session (RFC002)", {
+        client_id: payload.client_id ?? clientIdFromDeepLink,
+        response_uri: responseUri,
+        response_mode: responseMode,
       });
     } catch {}
 
@@ -581,6 +1394,21 @@ export async function performPresentation(
         }
       }
     }
+
+    const dcqlCredEntries = Array.isArray(dcqlQuery?.credentials)
+      ? dcqlQuery.credentials
+      : [];
+    if (dcqlCredEntries.length > 0) {
+      const missingId = dcqlCredEntries.some(
+        (c) => !c || typeof c.id !== "string" || !c.id.length,
+      );
+      if (missingId) {
+        throw new Error(
+          "dcql_query.credentials[] requires each entry to have a non-empty id",
+        );
+      }
+    }
+    const hasDcql = dcqlCredEntries.length > 0;
 
     if (!responseUri) throw new Error("Missing response_uri in request");
     if (!nonce) throw new Error("Missing nonce in request");
@@ -696,15 +1524,93 @@ export async function performPresentation(
         );
       }
 
-      return {
-        status: "ok",
-        mode: responseURI ? "cs03_oob" : "cs03_inline",
-        credentialIds,
-        verifierStatus: res.status,
-        response: responseBody || resText,
-      };
+      return attachVerifierInfoToResult(
+        {
+          status: "ok",
+          mode: responseURI ? "cs03_oob" : "cs03_inline",
+          credentialIds,
+          verifierStatus: res.status,
+          response: responseBody || resText,
+        },
+        parsedVerifierInfo,
+      );
     }
 
+    let vpTokenValue;
+    let presentation_submission;
+    let didJwk;
+
+    if (hasDcql) {
+      const usedConfigurationIds = new Set();
+      const vpTokenObject = {};
+      const perEntryFormats = [];
+      for (const credQuery of dcqlCredEntries) {
+        const found = await findWalletStoredForDcqlEntry(
+          credQuery,
+          usedConfigurationIds,
+        );
+        if (!found) {
+          throw new Error(
+            `DCQL credential query "${credQuery.id}" could not be satisfied: no wallet credential matches format ${credQuery.format}`,
+          );
+        }
+        usedConfigurationIds.add(found.configurationId);
+        const vpStr = await buildVpTokenFromPickedEntry({
+          stored: found.stored,
+          pickedEntry: found.pickedEntry,
+          keyPath,
+          clientId,
+          responseUri,
+          verifierBase,
+          nonce,
+          presentationDefinition,
+          selectedType: found.configurationId,
+          dcqlEntry: credQuery,
+          slog,
+        });
+        const raw = found.rawToken;
+        const wantFmt = normalizeDcqlCredentialFormat(credQuery.format);
+        const submissionFmt = isMdocCredential(raw)
+          ? "mso_mdoc"
+          : raw.includes("~")
+            ? wantFmt === "vc+sd-jwt"
+              ? "vc+sd-jwt"
+              : "dc+sd-jwt"
+            : "jwt_vp";
+        perEntryFormats.push(submissionFmt);
+        vpTokenObject[credQuery.id] = [vpStr];
+      }
+      vpTokenValue = vpTokenObject;
+      console.log("[present] Built vp_token as DCQL object (per-query VPs)", {
+        credentialIds: Object.keys(vpTokenObject),
+      });
+      try {
+        slog("[present] vp_token DCQL format", {
+          credentialIds: Object.keys(vpTokenObject),
+        });
+      } catch {}
+
+      const resolvedDevicePath = resolveDeviceKeyPath(keyPath);
+      const { publicJwk } = await ensureOrCreateEcKeyPair(resolvedDevicePath);
+      didJwk = generateDidJwkFromPrivateJwk(publicJwk);
+
+      presentation_submission = buildPresentationSubmissionDcql(
+        presentationDefinition,
+        dcqlQuery,
+        perEntryFormats,
+      );
+      if (presentation_submission) {
+        console.log(
+          "[present] Built presentation_submission len:",
+          presentation_submission.length,
+        );
+        try {
+          slog("[present] submission built", {
+            length: presentation_submission.length,
+          });
+        } catch {}
+      }
+    } else {
     // Determine which wallet credential to use
     let selectedType = credentialType;
     if (!selectedType) {
@@ -742,11 +1648,21 @@ export async function performPresentation(
         hasCredential: !!stored?.credential,
       });
     } catch {}
-    if (!stored || !stored.credential)
+    if (!stored || (!stored.credential && !(stored.multi && Array.isArray(stored.entries))))
       throw new Error("Credential not found in wallet cache");
 
+    const resolvedDevicePath = resolveDeviceKeyPath(keyPath);
+    const { privateJwk, publicJwk } = await ensureOrCreateEcKeyPair(resolvedDevicePath);
+
+    let credentialEnvelopeForVp = stored.credential;
+    if (stored.multi && Array.isArray(stored.entries) && stored.entries.length > 0) {
+      const match = stored.entries.find((e) => ecPublicJwksEqual(e?.keyBinding?.publicJwk, publicJwk));
+      const pick = match || stored.entries[0];
+      credentialEnvelopeForVp = pick.credential;
+    }
+
     // Extract the credential token from the wallet cache
-    let vpToken = extractCredentialString(stored.credential);
+    let vpToken = extractCredentialString(credentialEnvelopeForVp);
     console.log(
       "[present] Extracted credential string present=",
       typeof vpToken === "string",
@@ -773,10 +1689,7 @@ export async function performPresentation(
     } catch {}
 
     // Build key-binding JWT. For SD-JWT, include sd_hash per SD-JWT spec and use typ "kb+jwt".
-    const { privateJwk, publicJwk } = await ensureOrCreateEcKeyPair(
-      keyPath || undefined,
-    );
-    const didJwk = generateDidJwkFromPrivateJwk(publicJwk);
+    didJwk = generateDidJwkFromPrivateJwk(publicJwk);
     const kbAudience = clientId || responseUri || verifierBase;
     if (!kbAudience) {
       throw new Error(
@@ -913,7 +1826,7 @@ export async function performPresentation(
       slog("[present] credential format", { format: credentialFormat });
     } catch {}
 
-    const presentation_submission = buildPresentationSubmission(
+    presentation_submission = buildPresentationSubmission(
       presentationDefinition,
       credentialFormat,
     );
@@ -929,57 +1842,12 @@ export async function performPresentation(
       } catch {}
     }
 
-    // Build vp_token according to OpenID4VP 1.0 Section 8.1:
-    // When DCQL is used, vp_token MUST be a JSON object mapping credential query IDs to presentations.
-    // Per spec: "The object MUST contain one member for each Credential Query ... The member value
-    // MUST be a string or an array of strings". We use array form for consistency, e.g.:
-    // { "vp_token": { "example_credential_id": ["eyJhb...YMetA"] }, ... }
-    let vpTokenValue;
-    if (
-      dcqlQuery &&
-      Array.isArray(dcqlQuery.credentials) &&
-      dcqlQuery.credentials.length > 0
-    ) {
-      // DCQL query is present - build vp_token as an object mapping credential query IDs to arrays of presentations
-      const vpTokenObject = {};
-      for (const credQuery of dcqlQuery.credentials) {
-        if (credQuery && credQuery.id && typeof credQuery.id === "string") {
-          // Use the credential query ID as the key; value is always an array of presentation string(s)
-          if (credQuery.multiple === true) {
-            vpTokenObject[credQuery.id] = [vpToken];
-          } else {
-            vpTokenObject[credQuery.id] = [vpToken]; // single presentation as one-element array
-          }
-        }
-      }
-      // If we found at least one credential query ID, use the object format
-      if (Object.keys(vpTokenObject).length > 0) {
-        vpTokenValue = vpTokenObject;
-        console.log("[present] Built vp_token as DCQL object", {
-          credentialIds: Object.keys(vpTokenObject),
-        });
-        try {
-          slog("[present] vp_token DCQL format", {
-            credentialIds: Object.keys(vpTokenObject),
-          });
-        } catch {}
-      } else {
-        // Fallback: no valid credential query IDs found, use string format
-        vpTokenValue = vpToken;
-        console.log(
-          "[present] No valid credential query IDs in DCQL, using string format",
-        );
-        try {
-          slog("[present] vp_token fallback to string");
-        } catch {}
-      }
-    } else {
-      // No DCQL query - use string format (legacy/compatibility)
-      vpTokenValue = vpToken;
-      console.log("[present] No DCQL query, using string format for vp_token");
-      try {
-        slog("[present] vp_token string format");
-      } catch {}
+    vpTokenValue = vpToken;
+    console.log("[present] No DCQL query, using string format for vp_token");
+    try {
+      slog("[present] vp_token string format");
+    } catch {}
+
     }
 
     // Send the credential token (SD-JWT, mdoc DeviceResponse, or JWT VC)
@@ -1331,9 +2199,15 @@ export async function performPresentation(
               );
             }
             try {
-              return JSON.parse(res2Text);
+              return attachVerifierInfoToResult(
+                JSON.parse(res2Text),
+                parsedVerifierInfo,
+              );
             } catch {
-              return { status: "ok" };
+              return attachVerifierInfoToResult(
+                { status: "ok" },
+                parsedVerifierInfo,
+              );
             }
           }
         } catch (e) {
@@ -1371,12 +2245,50 @@ export async function performPresentation(
         verifierResponse: result,
       });
     } catch {}
-    return result;
+    return attachVerifierInfoToResult(result, parsedVerifierInfo);
   } catch (e) {
+    if (isVerifierHttpRejectionError(e)) {
+      try {
+        slog("[PRESENTATION] [ERROR] Verifier rejected VP response", {
+          error: e?.message,
+        });
+      } catch {}
+      throw e;
+    }
+    if (!payload && requestJwt) {
+      try {
+        payload = decodeRequestJwtPayloadQuiet(requestJwt);
+      } catch {
+        /* ignore */
+      }
+    }
+    if (payload && logSessionId) {
+      await storeWalletPresentationSession(
+        logSessionId,
+        payload,
+        clientIdFromDeepLink,
+      );
+    }
+    let vi = parsedVerifierInfo;
+    if (!vi && payload) {
+      try {
+        vi = parseVerifierInfo(payload);
+      } catch {
+        vi = null;
+      }
+    }
     try {
-      slog("[PRESENTATION] [ERROR] ", { status: 500, error: e.message });
-    } catch(e2) {console.log("[present] Error:", e2);}
-    throw e;
+      slog("[PRESENTATION] [ERROR] Local presentation failure", {
+        error: e?.message || String(e),
+      });
+    } catch {}
+    return await finalizeWalletPresentationFailure(
+      e,
+      payload,
+      vi,
+      slog,
+      logSessionId,
+    );
   }
 }
 

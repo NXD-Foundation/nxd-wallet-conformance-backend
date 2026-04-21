@@ -1,6 +1,14 @@
 import { expect } from "chai";
 import crypto from "crypto";
-import { computeAthForDpop, isDpopBoundAccessToken } from "../utils/tokenUtils.js";
+import {
+  computeAthForDpop,
+  isDpopBoundAccessToken,
+  deriveAuthorizationServerIssuer,
+  buildPreAuthorizedCodeTokenFormParams,
+  buildCliTokenEndpointHeaders,
+  extractFirstCredentialIdentifierFromTokenResponse,
+  buildCredentialRequestSelector,
+} from "../utils/tokenUtils.js";
 
 function referenceAth(accessToken) {
   return crypto
@@ -57,6 +65,85 @@ describe("tokenUtils DPoP helpers", () => {
 
     it("MUST be false for malformed JWT payload (invalid base64/json)", () => {
       expect(isDpopBoundAccessToken({ token_type: "Bearer" }, "aaa.b!!!.ccc")).to.equal(false);
+    });
+  });
+
+  describe("CLI token endpoint (form body + OAuth Client Attestation headers)", () => {
+    it("MUST use application/x-www-form-urlencoded fields (not JSON) for pre-authorized_code exchange", () => {
+      const authz = [
+        {
+          type: "openid_credential",
+          credential_configuration_id: "Pid",
+          locations: ["https://issuer.example"],
+        },
+      ];
+      const form = buildPreAuthorizedCodeTokenFormParams({
+        preAuthorizedCode: "sess-abc",
+        txCode: undefined,
+        authorizationDetails: authz,
+        clientAssertion: "eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiJjbGllbnQifQ.sig",
+      });
+      const body = form.toString();
+      expect(body).to.include("grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Apre-authorized_code");
+      expect(body).to.include("pre-authorized_code=sess-abc");
+      expect(body).to.match(/authorization_details=/);
+      expect(body).to.include("client_assertion_type=urn%3Aietf%3Aparams%3Aoauth%3Aclient-assertion-type%3Ajwt-bearer");
+      expect(body.startsWith("{")).to.equal(false);
+    });
+
+    it("MUST include OAuth-Client-Attestation and OAuth-Client-Attestation-PoP on token request headers", () => {
+      const h = buildCliTokenEndpointHeaders({
+        dpopJwt: "dpop.jwt.here",
+        oauthClientAttestation: "attest.jwt.here",
+        oauthClientAttestationPop: "pop.jwt.here",
+      });
+      expect(h["content-type"]).to.equal("application/x-www-form-urlencoded");
+      expect(h["DPoP"]).to.equal("dpop.jwt.here");
+      expect(h["OAuth-Client-Attestation"]).to.equal("attest.jwt.here");
+      expect(h["OAuth-Client-Attestation-PoP"]).to.equal("pop.jwt.here");
+    });
+
+    it("deriveAuthorizationServerIssuer MUST prefer fallback and otherwise use token endpoint origin", () => {
+      expect(deriveAuthorizationServerIssuer("https://as.example/token", "https://ci.example")).to.equal(
+        "https://ci.example",
+      );
+      expect(deriveAuthorizationServerIssuer("https://as.example/token", undefined)).to.equal("https://as.example");
+    });
+  });
+
+  describe("credential_identifiers from token response (RFC001 / OIDC4VCI)", () => {
+    it("extractFirstCredentialIdentifierFromTokenResponse returns first credential_identifiers entry", () => {
+      const tok = {
+        access_token: "at",
+        authorization_details: [
+          {
+            type: "openid_credential",
+            credential_identifiers: ["cred-id-from-as", "backup"],
+          },
+        ],
+      };
+      expect(extractFirstCredentialIdentifierFromTokenResponse(tok)).to.equal("cred-id-from-as");
+    });
+
+    it("parses authorization_details when returned as JSON string", () => {
+      const tok = {
+        authorization_details: JSON.stringify([
+          { type: "openid_credential", credential_identifiers: ["x-1"] },
+        ]),
+      };
+      expect(extractFirstCredentialIdentifierFromTokenResponse(tok)).to.equal("x-1");
+    });
+
+    it("buildCredentialRequestSelector prefers credential_identifier when token has identifiers", () => {
+      const sel = buildCredentialRequestSelector("OfferConfigId", {
+        authorization_details: [{ credential_identifiers: ["issued-cred-uuid"] }],
+      });
+      expect(sel).to.deep.equal({ credential_identifier: "issued-cred-uuid" });
+    });
+
+    it("buildCredentialRequestSelector falls back to credential_configuration_id", () => {
+      const sel = buildCredentialRequestSelector("Pid", { access_token: "a" });
+      expect(sel).to.deep.equal({ credential_configuration_id: "Pid" });
     });
   });
 });

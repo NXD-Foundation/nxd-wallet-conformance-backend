@@ -183,3 +183,108 @@ export function isDpopBoundAccessToken(tokenBody, accessToken) {
     return false;
   }
 }
+
+/**
+ * Authorization Server issuer URL for OAuth Client Attestation PoP `aud`
+ * (matches wallet-client server `deriveAuthorizationServerIssuer`).
+ */
+export function deriveAuthorizationServerIssuer(endpoint, fallback) {
+  if (fallback) return fallback;
+  if (!endpoint) return undefined;
+  try {
+    return new URL(endpoint).origin;
+  } catch {
+    return endpoint;
+  }
+}
+
+/**
+ * Pre-authorized code grant token request body as `application/x-www-form-urlencoded`
+ * (OAuth 2.0 token endpoint; OIDC4VCI).
+ */
+export function buildPreAuthorizedCodeTokenFormParams({
+  preAuthorizedCode,
+  txCode,
+  authorizationDetails,
+  clientAssertion,
+  clientAssertionType = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+}) {
+  const form = new URLSearchParams();
+  form.set("grant_type", "urn:ietf:params:oauth:grant-type:pre-authorized_code");
+  form.set("pre-authorized_code", preAuthorizedCode);
+  if (txCode !== undefined && txCode !== null && txCode !== "") {
+    form.set("tx_code", String(txCode));
+  }
+  if (authorizationDetails !== undefined && authorizationDetails !== null) {
+    const ad =
+      typeof authorizationDetails === "string"
+        ? authorizationDetails
+        : JSON.stringify(authorizationDetails);
+    form.set("authorization_details", ad);
+  }
+  if (clientAssertion) {
+    form.set("client_assertion", clientAssertion);
+    form.set("client_assertion_type", clientAssertionType);
+  }
+  return form;
+}
+
+/**
+ * Headers for CLI token endpoint POST (form body + DPoP + OAuth Client Attestation).
+ */
+export function buildCliTokenEndpointHeaders({
+  dpopJwt,
+  oauthClientAttestation,
+  oauthClientAttestationPop,
+}) {
+  const headers = {
+    "content-type": "application/x-www-form-urlencoded",
+  };
+  if (dpopJwt) {
+    headers["DPoP"] = dpopJwt;
+  }
+  if (oauthClientAttestation) {
+    headers["OAuth-Client-Attestation"] = oauthClientAttestation;
+  }
+  if (oauthClientAttestationPop) {
+    headers["OAuth-Client-Attestation-PoP"] = oauthClientAttestationPop;
+  }
+  return headers;
+}
+
+/**
+ * Token response may include `authorization_details` with `credential_identifiers` (OIDC4VCI / RFC001 §6.2.7).
+ * Returns the first non-empty string from any detail's `credential_identifiers` array.
+ */
+export function extractFirstCredentialIdentifierFromTokenResponse(tokenBody) {
+  if (!tokenBody || typeof tokenBody !== "object") return undefined;
+  let details = tokenBody.authorization_details;
+  if (details == null) return undefined;
+  if (typeof details === "string") {
+    try {
+      details = JSON.parse(details);
+    } catch {
+      return undefined;
+    }
+  }
+  if (!Array.isArray(details)) return undefined;
+  for (const d of details) {
+    if (!d || typeof d !== "object") continue;
+    const ids = d.credential_identifiers;
+    if (!Array.isArray(ids) || ids.length === 0) continue;
+    for (const x of ids) {
+      if (typeof x === "string" && x.length > 0) return x;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * `/credential` request body: use `credential_identifier` when the token response carried identifiers;
+ * otherwise `credential_configuration_id` from the offer flow.
+ */
+export function buildCredentialRequestSelector(configurationId, tokenBody) {
+  const cid = extractFirstCredentialIdentifierFromTokenResponse(tokenBody);
+  if (cid) return { credential_identifier: cid };
+  return { credential_configuration_id: configurationId };
+}

@@ -38,6 +38,24 @@ describe("wallet-client crypto building blocks", () => {
     expect(payload).to.have.property("attested_keys");
   });
 
+  it("createWUA MAY include sub when wallet instance id is supplied", async () => {
+    const { privateJwk, publicJwk } = await ensureOrCreateEcKeyPair(undefined, "ES256");
+    const wuaJwt = await createWUA({
+      privateJwk,
+      publicJwk,
+      issuer: "did:example:provider",
+      subject: "instance-uuid-fixed",
+      audience: "https://issuer.example/credential",
+      attestedKeys: [publicJwk],
+      eudiWalletInfo: {
+        general_info: { name: "Test Wallet", version: "1.0.0" },
+        key_storage_info: { storage_type: "software", protection_level: "software" },
+      },
+    });
+    const payload = decodeJwt(wuaJwt);
+    expect(payload).to.have.property("sub", "instance-uuid-fixed");
+  });
+
   it("createDPoP MUST use typ dpop+jwt and include htm/htu", async () => {
     const { privateJwk, publicJwk } = await ensureOrCreateEcKeyPair(undefined, "ES256");
 

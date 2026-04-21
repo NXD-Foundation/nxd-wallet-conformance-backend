@@ -1,4 +1,8 @@
 import redis from "redis";
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
+import crypto from "node:crypto";
 
 // Wallet-client dedicated Redis connection
 // Configure via WALLET_REDIS env var (host:port) or default localhost:6379
@@ -22,6 +26,46 @@ walletRedisClient.on("error", (err) => {
 walletRedisClient.on("ready", () => {
   console.log("Wallet Redis Client Ready");
 });
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const DEFAULT_INSTANCE_FILE = path.join(__dirname, "..", "..", "walletprovider", "instance-id.txt");
+const WALLET_INSTANCE_REDIS_KEY = "wallet:instance_id";
+
+/**
+ * Stable wallet instance id (RFC001 `sub` for WIA-style assertions). Override with WALLET_INSTANCE_ID.
+ * Prefers Redis; falls back to a local file if Redis is unavailable.
+ */
+export async function getOrCreateWalletInstanceId() {
+  const envId = process.env.WALLET_INSTANCE_ID?.trim();
+  if (envId) return envId;
+
+  try {
+    const existing = await walletRedisClient.get(WALLET_INSTANCE_REDIS_KEY);
+    if (existing) return existing;
+    const id = crypto.randomUUID();
+    await walletRedisClient.set(WALLET_INSTANCE_REDIS_KEY, id);
+    return id;
+  } catch {
+    return getOrCreateWalletInstanceIdFromFile();
+  }
+}
+
+function getOrCreateWalletInstanceIdFromFile() {
+  const filePath = process.env.WALLET_INSTANCE_ID_FILE?.trim() || DEFAULT_INSTANCE_FILE;
+  try {
+    if (fs.existsSync(filePath)) {
+      const v = fs.readFileSync(filePath, "utf8").trim();
+      if (v) return v;
+    }
+    const id = crypto.randomUUID();
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, id, "utf8");
+    return id;
+  } catch (e) {
+    console.error("[wallet-instance] failed to persist instance id:", e?.message || e);
+    return crypto.randomUUID();
+  }
+}
 
 // Store credential and key-binding material under credential type (configurationId)
 export async function storeWalletCredentialByType(configurationId, payload) {
@@ -137,4 +181,64 @@ export async function appendWalletLog(sessionId, logEntry) {
   }
 }
 
+const walletPresentationSessionKey = (sessionId) =>
+  `wallet:presentation_session:${sessionId}`;
 
+/**
+ * RFC002 / OpenID4VP presentation context for wallet session correlation (P1-W-11).
+ * @param {Record<string, unknown>} payload - Verified (or best-effort decoded) authorization request JWT payload
+ * @param {string | null | undefined} deepLinkClientId - `client_id` from the openid4vp deep link
+ */
+export function buildWalletPresentationSessionRecord(payload, deepLinkClientId) {
+  if (!payload || typeof payload !== "object") return null;
+  let responseMode = payload.response_mode || "direct_post";
+  const responseUri = payload.response_uri;
+  if (responseUri && /direct_post\.jwt/i.test(String(responseUri))) {
+    responseMode = "direct_post.jwt";
+  }
+  const cid =
+    typeof payload.client_id === "string" && payload.client_id.length
+      ? payload.client_id
+      : deepLinkClientId ?? null;
+  return {
+    client_id: cid,
+    response_uri: typeof responseUri === "string" ? responseUri : null,
+    response_mode: responseMode,
+    nonce: payload.nonce ?? null,
+    state: payload.state ?? null,
+    dcql_query: payload.dcql_query ?? null,
+    transaction_data: payload.transaction_data ?? null,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+export async function storeWalletPresentationSession(
+  sessionId,
+  payload,
+  deepLinkClientId,
+) {
+  if (!sessionId) return;
+  const record = buildWalletPresentationSessionRecord(payload, deepLinkClientId);
+  if (!record) return;
+  const ttl = parseInt(process.env.WALLET_PRESENTATION_SESSION_TTL || "3600", 10);
+  try {
+    await walletRedisClient.setEx(
+      walletPresentationSessionKey(sessionId),
+      ttl,
+      JSON.stringify(record),
+    );
+  } catch (e) {
+    console.error("[cache] storeWalletPresentationSession:", e?.message || e);
+  }
+}
+
+export async function getWalletPresentationSession(sessionId) {
+  if (!sessionId) return null;
+  try {
+    const v = await walletRedisClient.get(walletPresentationSessionKey(sessionId));
+    return v ? JSON.parse(v) : null;
+  } catch (e) {
+    console.error("[cache] getWalletPresentationSession:", e?.message || e);
+    return null;
+  }
+}

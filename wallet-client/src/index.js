@@ -2,19 +2,116 @@
 import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
 import fetch from "node-fetch";
-import { createProofJwt, generateDidJwkFromPrivateJwk, ensureOrCreateEcKeyPair, createWIA, createWUA, createDPoP } from "./lib/crypto.js";
+import {
+  generateDidJwkFromPrivateJwk,
+  ensureOrCreateEcKeyPair,
+  createDPoP,
+} from "./lib/crypto.js";
 import { storeWalletCredentialByType } from "./lib/cache.js";
-import { isDpopBoundAccessToken, computeAthForDpop } from "../utils/tokenUtils.js";
+import { resolveAttestationForEndpoint } from "./lib/walletProviderIdentity.js";
+import { resolveAttestDeviceKeyPaths } from "./lib/deviceKeyPaths.js";
+import { buildCredentialRequestProofs } from "./lib/credentialRequestProofs.js";
+import { normalizeCredentialOfferDeepLink } from "./lib/credentialOfferScheme.js";
+import {
+  extractNotificationId,
+  resolveNotificationEndpoint,
+  postCredentialAcceptedNotification,
+} from "./lib/credentialNotification.js";
+import {
+  isDpopBoundAccessToken,
+  computeAthForDpop,
+  deriveAuthorizationServerIssuer,
+  buildPreAuthorizedCodeTokenFormParams,
+  buildCliTokenEndpointHeaders,
+  buildCredentialRequestSelector,
+} from "../utils/tokenUtils.js";
+import {
+  getNextPollDelayMs,
+  resolveDeferredPollResult,
+  formatDeferredTerminalError,
+} from "./lib/deferredIssuancePoll.js";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function notifyCredentialAcceptedIfNeeded({
+  credentialResponse,
+  apiBase,
+  accessToken,
+  tokenBody,
+  dpopPrivateJwk,
+  dpopPublicJwk,
+}) {
+  const notificationId = extractNotificationId(credentialResponse);
+  const notificationEndpoint = resolveNotificationEndpoint(undefined, apiBase);
+  if (!notificationId || !accessToken) return;
+  await postCredentialAcceptedNotification({
+    notificationEndpoint,
+    notificationId,
+    accessToken,
+    tokenBody,
+    dpopPrivateJwk,
+    dpopPublicJwk,
+  });
+}
+
+async function storeIssuedCredentialsFromCli(configurationId, credBody, keyPairs, metadataBase) {
+  const notificationId = extractNotificationId(credBody);
+  const baseMeta = {
+    ...metadataBase,
+    ...(notificationId ? { notification_id: notificationId } : {}),
+  };
+  const n = Array.isArray(credBody?.credentials) ? credBody.credentials.length : 0;
+  if (n > 1) {
+    await storeWalletCredentialByType(configurationId, {
+      multi: true,
+      entries: credBody.credentials.map((item, i) => ({
+        credential: typeof item?.credential === "string" ? { credential: item.credential } : item,
+        keyBinding: {
+          privateJwk: keyPairs[i].privateJwk,
+          publicJwk: keyPairs[i].publicJwk,
+          didJwk: keyPairs[i].didJwk,
+        },
+        metadata: { ...baseMeta, attestedKeyIndex: i },
+      })),
+      metadata: baseMeta,
+    });
+  } else {
+    await storeWalletCredentialByType(configurationId, {
+      credential: credBody,
+      keyBinding: {
+        privateJwk: keyPairs[0].privateJwk,
+        publicJwk: keyPairs[0].publicJwk,
+        didJwk: keyPairs[0].didJwk,
+      },
+      metadata: baseMeta,
+    });
+  }
+}
 
 async function main() {
   const argv = yargs(hideBin(process.argv))
     .option("issuer", { type: "string", default: "http://localhost:3000" })
-    .option("offer", { type: "string", describe: "openid-credential-offer deep link" })
+    .option("offer", {
+      type: "string",
+      describe: "credential offer deep link (openid-credential-offer, haip, haip-vci, eu-eaa-offer)",
+    })
     .option("fetch-offer", { type: "string", describe: "issuer path to fetch an offer, e.g. /offer-no-code" })
     .option("credential", { type: "string", describe: "credential_configuration_id to request" })
-    .option("key", { type: "string", describe: "path to EC P-256 private JWK file" })
+    .option("key", {
+      type: "string",
+      describe: "device-bound proof/DPoP key (EC P-256 JWK file); default: data/device-key.json",
+    })
+    .option("proof-mode", {
+      type: "string",
+      choices: ["jwt", "attestation"],
+      default: "jwt",
+      describe: "VCI credential request: proofs.jwt (default) or proofs.attestation (WUA only)",
+    })
+    .option("attest-keys", {
+      type: "number",
+      default: 1,
+      describe: "number of device keys in WUA attested_keys (1–32); proof JWT uses first key",
+    })
     .option("poll-interval", { type: "number", default: 2000 })
     .option("poll-timeout", { type: "number", default: 30000 })
     .strict()
@@ -52,6 +149,14 @@ async function main() {
   }
 
   const apiBase = (credential_issuer || issuerBase).replace(/\/$/, "");
+  const attestKeyCount = argv["attest-keys"];
+  if (!Number.isInteger(attestKeyCount) || attestKeyCount < 1 || attestKeyCount > 32) {
+    console.error("--attest-keys must be an integer from 1 to 32");
+    process.exit(1);
+  }
+  const attestPaths = resolveAttestDeviceKeyPaths(argv.key, attestKeyCount);
+  const deviceKeyPath = attestPaths[0];
+  const proofMode = argv["proof-mode"] || "jwt";
 
   const preAuthGrant = grants?.["urn:ietf:params:oauth:grant-type:pre-authorized_code"];
   if (!preAuthGrant) {
@@ -74,7 +179,7 @@ async function main() {
   let dpopPrivateJwk = null;
   let dpopPublicJwk = null;
   try {
-    const dpopKeys = await ensureOrCreateEcKeyPair(argv.key, "ES256");
+    const dpopKeys = await ensureOrCreateEcKeyPair(deviceKeyPath, "ES256");
     dpopPrivateJwk = dpopKeys.privateJwk;
     dpopPublicJwk = dpopKeys.publicJwk;
     dpopJwt = await createDPoP({
@@ -90,33 +195,39 @@ async function main() {
     console.warn("Failed to generate DPoP (token exchange will be rejected by the issuer):", dpopError?.message);
   }
   
-  // Generate WIA (Wallet Instance Attestation) for token request
+  const authorizationServerIssuer = deriveAuthorizationServerIssuer(
+    tokenEndpoint,
+    credential_issuer || apiBase,
+  );
   let wiaJwt = null;
+  let oauthClientAttestationHeaders = {};
   try {
-    const { privateJwk: wiaPrivateJwk, publicJwk: wiaPublicJwk } = await ensureOrCreateEcKeyPair(argv.key, "ES256");
-    const wiaIssuer = generateDidJwkFromPrivateJwk(wiaPublicJwk);
-    wiaJwt = await createWIA({
-      privateJwk: wiaPrivateJwk,
-      publicJwk: wiaPublicJwk,
-      issuer: wiaIssuer,
-      audience: tokenEndpoint,
-      alg: "ES256",
-      ttlHours: 1
+    const att = await resolveAttestationForEndpoint({
+      endpointAudience: tokenEndpoint,
+      authorizationServerIssuer,
     });
-  } catch (wiaError) {
-    console.warn("Failed to generate WIA:", wiaError?.message);
+    wiaJwt = att.clientAssertionJwt;
+    oauthClientAttestationHeaders = att.oauthHeaders;
+  } catch (attError) {
+    console.warn("Failed to resolve OAuth client attestation:", attError?.message);
   }
-  
-  const tokenPayload = {
-    grant_type: "urn:ietf:params:oauth:grant-type:pre-authorized_code",
-    "pre-authorized_code": preAuthorizedCode,
-    ...(txCode ? { tx_code: txCode } : {}),
-    ...(authorizationDetails && authorizationDetails.length
-      ? { authorization_details: JSON.stringify(authorizationDetails) }
-      : {}),
-    ...(wiaJwt ? { client_assertion: wiaJwt, client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer" } : {}),
-  };
-  const tokenRes = await httpPostJson(tokenEndpoint, tokenPayload, dpopJwt);
+
+  const tokenForm = buildPreAuthorizedCodeTokenFormParams({
+    preAuthorizedCode,
+    txCode,
+    authorizationDetails,
+    clientAssertion: wiaJwt || undefined,
+  });
+  const tokenHeaders = buildCliTokenEndpointHeaders({
+    dpopJwt,
+    oauthClientAttestation: oauthClientAttestationHeaders["OAuth-Client-Attestation"],
+    oauthClientAttestationPop: oauthClientAttestationHeaders["OAuth-Client-Attestation-PoP"],
+  });
+  const tokenRes = await fetch(tokenEndpoint, {
+    method: "POST",
+    headers: tokenHeaders,
+    body: tokenForm.toString(),
+  });
 
   if (!tokenRes.ok) {
     const err = await tokenRes.json().catch(() => ({}));
@@ -145,62 +256,25 @@ async function main() {
     throw new Error("Issuer did not provide c_nonce; cannot complete proof-of-possession flow.");
   }
 
-  // key management
-  // In CLI mode we don't fetch issuerMeta; default to ES256 or allow override later if needed
-  const { privateJwk, publicJwk } = await ensureOrCreateEcKeyPair(argv.key, "ES256");
-  const didJwk = generateDidJwkFromPrivateJwk(publicJwk);
-
-  // credential request
-  const credentialEndpoint = `${apiBase}/credential`;
-  
-  // Generate WUA (Wallet Unit Attestation) for credential request.
-  // Per OIDC 4VCI v1.0 + EUDI Wallet ARF: the key used for the PoP proof (publicJwk above) is the
-  // same key we attest in WUA and that the issuer binds in the credential's cnf. Same key file
-  // => same key pair for proof and WUA; attested_keys MUST contain the proof key.
-  let wuaJwt = null;
-  try {
-    const { privateJwk: wuaPrivateJwk, publicJwk: wuaPublicJwk } = await ensureOrCreateEcKeyPair(argv.key, "ES256");
-    const wuaIssuer = generateDidJwkFromPrivateJwk(wuaPublicJwk);
-    wuaJwt = await createWUA({
-      privateJwk: wuaPrivateJwk,
-      publicJwk: wuaPublicJwk,
-      issuer: wuaIssuer,
-      audience: credentialEndpoint,
-      attestedKeys: [publicJwk], // Proof key: same as in proof JWT header; issuer puts this in cnf
-      eudiWalletInfo: {
-        general_info: {
-          name: "Test Wallet Client",
-          version: "1.0.0"
-        },
-        key_storage_info: {
-          storage_type: "software",
-          protection_level: "software"
-        }
-      },
-      alg: "ES256",
-      ttlHours: 24
-    });
-  } catch (wuaError) {
-    console.warn("Failed to generate WUA:", wuaError?.message);
+  const keyPairs = [];
+  for (const p of attestPaths) {
+    const { privateJwk, publicJwk } = await ensureOrCreateEcKeyPair(p, "ES256");
+    keyPairs.push({ privateJwk, publicJwk, didJwk: generateDidJwkFromPrivateJwk(publicJwk) });
   }
 
-  // build proof JWT with WUA in header as key_attestation (per spec)
-  const proofJwt = await createProofJwt({
-    privateJwk,
-    publicJwk,
-    audience: credential_issuer || issuerBase,
-    nonce: c_nonce,
-    issuer: didJwk,
-    typ: "openid4vci-proof+jwt",
-    alg: "ES256",
-    key_attestation: wuaJwt || undefined
+  const credentialEndpoint = `${apiBase}/credential`;
+  const { proofs: proofsSection } = await buildCredentialRequestProofs({
+    proofMode,
+    credentialEndpoint,
+    aud: credential_issuer || issuerBase,
+    c_nonce,
+    keyPairs,
+    selectedAlg: "ES256",
   });
-  
+
   const credReq = {
-    credential_configuration_id: configurationId,
-    proofs: { 
-      jwt: [proofJwt]
-    },
+    ...buildCredentialRequestSelector(configurationId, tokenBody),
+    proofs: proofsSection,
   };
 
   // DPoP on /credential is required only for DPoP-bound access tokens (RFC 9449).
@@ -241,12 +315,14 @@ async function main() {
   });
 
   if (credRes.status === 202) {
-    //deferred issuance
-    const { transaction_id } = await credRes.json();
+    const deferredAccept = await credRes.json();
+    const { transaction_id, interval: initialInterval } = deferredAccept;
     const deferredUrl = `${apiBase}/credential_deferred`;
     const start = Date.now();
+    const clientPollMs = argv["poll-interval"];
+    let nextDelayMs = getNextPollDelayMs(initialInterval, clientPollMs);
     while (Date.now() - start < argv["poll-timeout"]) {
-      await sleep(argv["poll-interval"]);
+      await sleep(nextDelayMs);
       let deferredDpopJwt = null;
       try {
         if (
@@ -273,17 +349,39 @@ async function main() {
         deferredDpopJwt,
         { Authorization: `Bearer ${accessToken}` },
       );
-      if (defRes.ok) {
-        const body = await defRes.json();
-        // store credential and key-binding material using preAuthorizedCode as session key
-        await storeWalletCredentialByType(configurationId, {
-          credential: body,
-          keyBinding: { privateJwk, publicJwk, didJwk },
-          metadata: { configurationId, c_nonce, c_nonce_expires_in, credential_issuer: credential_issuer || apiBase },
+      const defText = await defRes.text().catch(() => "");
+      const defCt = defRes.headers.get("content-type") || "";
+      const outcome = await resolveDeferredPollResult({
+        status: defRes.status,
+        ok: defRes.ok,
+        contentType: defCt,
+        responseText: defText,
+        decryptionPrivateKey: null,
+      });
+      if (outcome.kind === "success") {
+        const body = outcome.body;
+        await notifyCredentialAcceptedIfNeeded({
+          credentialResponse: body,
+          apiBase,
+          accessToken,
+          tokenBody,
+          dpopPrivateJwk,
+          dpopPublicJwk,
+        });
+        await storeIssuedCredentialsFromCli(configurationId, body, keyPairs, {
+          configurationId,
+          c_nonce,
+          c_nonce_expires_in,
+          credential_issuer: credential_issuer || apiBase,
         });
         console.log(JSON.stringify(body, null, 2));
         return;
       }
+      if (outcome.kind === "pending") {
+        nextDelayMs = getNextPollDelayMs(outcome.interval, clientPollMs);
+        continue;
+      }
+      throw new Error(formatDeferredTerminalError(outcome));
     }
     throw new Error("Deferred issuance timed out");
   }
@@ -294,11 +392,19 @@ async function main() {
   }
 
   const credBody = await credRes.json();
-  // store credential and key-binding material using preAuthorizedCode as session key
-  await storeWalletCredentialByType(configurationId, {
-    credential: credBody,
-    keyBinding: { privateJwk, publicJwk, didJwk },
-    metadata: { configurationId, c_nonce, c_nonce_expires_in, credential_issuer: credential_issuer || apiBase },
+  await notifyCredentialAcceptedIfNeeded({
+    credentialResponse: credBody,
+    apiBase,
+    accessToken,
+    tokenBody,
+    dpopPrivateJwk,
+    dpopPublicJwk,
+  });
+  await storeIssuedCredentialsFromCli(configurationId, credBody, keyPairs, {
+    configurationId,
+    c_nonce,
+    c_nonce_expires_in,
+    credential_issuer: credential_issuer || apiBase,
   });
   console.log(JSON.stringify(credBody, null, 2));
 }
@@ -317,11 +423,7 @@ async function getOfferDeepLink(issuerBase, path, credentialType) {
 }
 
 async function resolveOfferConfig(deepLink) {
-  // Normalize HAIP profile schemes (haip://, haip-vci://) to the standard
-  // openid-credential-offer:// scheme.
-  const url = new URL(
-    deepLink.replace(/^haip(-vci)?:\/\//, "openid-credential-offer://")
-  );
+  const url = new URL(normalizeCredentialOfferDeepLink(deepLink));
   if (url.protocol !== "openid-credential-offer:") {
     throw new Error("Unsupported offer scheme");
   }
