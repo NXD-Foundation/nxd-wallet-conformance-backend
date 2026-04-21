@@ -1249,7 +1249,14 @@ async function buildVpTokenFromPickedEntry({
     try {
       slog("[present] docType", { docType, selectedType });
     } catch {}
-    out = await buildMdocPresentation(vpToken, { docType });
+    out = await buildMdocPresentation(vpToken, {
+      docType,
+      clientId,
+      responseUri,
+      verifierGeneratedNonce: nonce,
+      devicePrivateJwk: stored?.keyBinding?.privateJwk || privateJwk,
+      presentationDefinition,
+    });
   } else if (typeof vpToken === "string" && vpToken.includes("~")) {
     out = attachKbJwtToSdJwt(sdJwtForPresentation, kbJwt);
   } else {
@@ -1775,7 +1782,14 @@ export async function performPresentation(
       } catch {}
 
       // Build proper DeviceResponse for presentation
-      vpToken = await buildMdocPresentation(vpToken, { docType });
+      vpToken = await buildMdocPresentation(vpToken, {
+        docType,
+        clientId,
+        responseUri,
+        verifierGeneratedNonce: nonce,
+        devicePrivateJwk: stored?.keyBinding?.privateJwk || privateJwk,
+        presentationDefinition,
+      });
       console.log("[present] Built DeviceResponse, length:", vpToken.length);
       try {
         slog("[present] DeviceResponse built", { length: vpToken.length });

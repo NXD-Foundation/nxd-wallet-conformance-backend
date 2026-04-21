@@ -9,6 +9,11 @@
     "test": "mocha test/**/*.js"
   },
   "dependencies": {
+    "@animo-id/mdoc": "^0.5.2",
+    "@noble/curves": "^1.9.2",
+    "@noble/hashes": "^1.8.0",
+    "@panva/hkdf": "^1.2.1",
+    "@peculiar/x509": "^1.12.4",
     "jose": "^5.2.4",
     "node-fetch": "^3.3.2",
     "express": "^4.19.2",
@@ -27,5 +32,4 @@
     "chai": "^5.2.0"
   }
 }
-
 

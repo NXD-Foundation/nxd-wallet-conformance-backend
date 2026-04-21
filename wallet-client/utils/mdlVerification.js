@@ -1,5 +1,8 @@
 import { decode } from 'cbor-x';
 import base64url from 'base64url';
+import crypto from "node:crypto";
+import { DeviceResponse } from "@animo-id/mdoc";
+import { mdocContext } from "./mdocContext.js";
 
 /**
  * Custom mDL verification using cbor-x decoder
@@ -313,7 +316,14 @@ export async function extractDeviceNonce(vpTokenBase64) {
  */
 export async function buildMdocPresentation(storedCredential, options = {}) {
   const { encode: encodeCbor } = await import('cbor-x');
-  const { docType = "org.iso.18013.5.1.mDL" } = options;
+  const {
+    docType = "org.iso.18013.5.1.mDL",
+    clientId,
+    responseUri,
+    verifierGeneratedNonce,
+    devicePrivateJwk,
+    presentationDefinition,
+  } = options;
   
   console.log("[mdoc-present] Building DeviceResponse for presentation");
   console.log("[mdoc-present] Stored credential type:", typeof storedCredential);
@@ -360,29 +370,45 @@ export async function buildMdocPresentation(storedCredential, options = {}) {
     throw new Error("Invalid stored credential type");
   }
   
-  // Construct Document structure
-  const document = {
-    docType: docType,
-    issuerSigned: issuerSigned,
-    // deviceSigned would go here if we had deviceAuth (MAC or signature)
-    // For now, omit it - ISO 18013-5 allows presenting without deviceSigned
-  };
-  
-  // Construct DeviceResponse
-  const deviceResponse = {
+  if (!clientId || !responseUri || !verifierGeneratedNonce || !devicePrivateJwk) {
+    throw new Error(
+      "Missing required OpenID4VP mdoc presentation inputs: clientId, responseUri, verifierGeneratedNonce, and devicePrivateJwk are required",
+    );
+  }
+
+  const issuerSignedMdoc = encodeCbor({
     version: "1.0",
-    documents: [document],
-    status: 0
-  };
-  
+    documents: [
+      {
+        docType,
+        issuerSigned,
+      },
+    ],
+    status: 0,
+  });
+
+  const mdocGeneratedNonce = crypto.randomBytes(16).toString("base64url");
+  let builder = DeviceResponse.from(new Uint8Array(issuerSignedMdoc)).usingSessionTranscriptForOID4VP({
+    mdocGeneratedNonce,
+    clientId,
+    responseUri,
+    verifierGeneratedNonce,
+  });
+
+  if (presentationDefinition) {
+    builder = builder.usingPresentationDefinition(presentationDefinition);
+  }
+
+  const signedResponse = await builder
+    .authenticateWithSignature(devicePrivateJwk, "ES256")
+    .sign(mdocContext);
+
   console.log("[mdoc-present] Constructed DeviceResponse with docType:", docType);
-  
-  // CBOR encode and base64url encode
-  const encoded = encodeCbor(deviceResponse);
-  const base64urlEncoded = base64url.encode(Buffer.from(encoded));
-  
+
+  const base64urlEncoded = base64url.encode(Buffer.from(signedResponse.encode()));
+
   console.log("[mdoc-present] Encoded DeviceResponse length:", base64urlEncoded.length);
-  
+
   return base64urlEncoded;
 }
 
