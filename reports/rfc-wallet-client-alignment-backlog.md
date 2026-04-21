@@ -577,7 +577,7 @@ Each item lists: **RFC anchor**, **code location**, **what to do**, **acceptance
 - Acceptance:
   - Wallet logs for a single presentation show the exact `client_id` and `response_uri` used, and P1-W-10 can read them after a failure.
 
-#### P1-W-12. Bind `transaction_data` hash into the VP
+#### P1-W-12. Bind `transaction_data` hash into the VP **done** 
 
 - RFC: RFC002 §8 transaction-data binding; `VP-CHECK-10`.
 - Code: `wallet-client/src/lib/presentation.js:522-582` (decode) + KB JWT builder.
@@ -597,13 +597,13 @@ Each item lists: **RFC anchor**, **code location**, **what to do**, **acceptance
 - Code: `wallet-client/src/server.js` token handler retry branch (`~1050-1110`).
 - Do: on `400 invalid_client` / `invalid_dpop_proof` from the token endpoint where the error description suggests expired WIA, rotate the WP key pair (from P0-W-4) and retry once.
 
-#### P2-W-2. Accept `eu-eaap://` same-device VP invocation
+#### P2-W-2. Accept `eu-eaap://` same-device VP invocation **done**
 
 - RFC: RFC002 §8.1 `VP-CHECK-17`.
 - Code: `wallet-client/src/lib/presentation.js:93-104` (deep-link scheme parse).
 - Do: add `eu-eaap://` as an accepted scheme alongside `openid4vp://`, `mdoc-openid4vp://`.
 
-#### P2-W-3. mdoc cryptographic binding — wire `SessionTranscript`, `OID4VPHandover`, `mdoc_generated_nonce`, `DeviceAuth`
+#### P2-W-3. mdoc cryptographic binding — wire `SessionTranscript`, `OID4VPHandover`, `mdoc_generated_nonce`, `DeviceAuth` **done**
 
 - RFC: RFC002 §8.2.5, `APT-PRES-WALLET-MDOC-03/04/10`, `VP-CHECK-15`.
 - Code: `wallet-client/utils/mdlVerification.js:261-269` (transcript builder), `:314-386` (`buildMdocPresentation`), `wallet-client/src/lib/presentation.js:937-983` (mdoc submission branch).
@@ -614,19 +614,19 @@ Each item lists: **RFC anchor**, **code location**, **what to do**, **acceptance
   4. Pass the transcript through to `direct_post.jwt` as `apu` / `apv` or through `wallet_metadata.mdoc_generated_nonce` when the verifier expects it there.
 - Acceptance: end-to-end mdoc presentation against a transcript-validating verifier (future work).
 
-#### P2-W-4. mdoc selective disclosure
+#### P2-W-4. mdoc selective disclosure **done**
 
 - RFC: RFC002 §9.1.
 - Code: `wallet-client/utils/mdlVerification.js` selective-build helper.
 - Do: filter `issuerSigned.nameSpaces` to the elements requested by the DCQL `claims` list; re-serialize `IssuerSigned` with only the selected `DataElementIdentifier` entries; update `valueDigests` accordingly (or rely on the subset-disclosure mechanism from ISO 18013-5 §9).
 
-#### P2-W-5. Consume signed issuer metadata and `issuer_info`
+#### P2-W-5. Consume signed issuer metadata and `issuer_info` **Done**
 
 - RFC: RFC001 §7.7 SHALL 5 (ETSI), §8.9.
 - Code: `wallet-client/src/server.js:549-592` (`discoverIssuerMetadata`).
 - Do: when the issuer response is a JWS with `application/jwt` or `typ: jwt`, verify against `x5c` in the protected header; extract the payload; surface `issuer_info.registration_certificate` to the test harness for assertion.
 
-#### P2-W-6. `wallet_metadata` parameter on VP requests
+#### P2-W-6. `wallet_metadata` parameter on VP requests **done**
 
 - RFC: RFC002 §8.2 (optional wallet_metadata).
 - Code: `wallet-client/src/lib/presentation.js:107-141` (`request_uri` POST body).

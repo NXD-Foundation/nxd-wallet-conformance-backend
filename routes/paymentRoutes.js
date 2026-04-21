@@ -29,6 +29,41 @@ const paymentRouter = express.Router();
 
 const serverURL = process.env.SERVER_URL || "http://localhost:3000";
 
+function mapTransactionDataHashAlg(raw) {
+  if (typeof raw !== "string") return null;
+  const normalized = raw.trim().toLowerCase().replace(/_/g, "-");
+  if (normalized === "sha-256" || normalized === "sha256") {
+    return { node: "sha256", claim: "sha-256" };
+  }
+  return null;
+}
+
+export function validateTransactionDataHashes(txData, hashes, hashAlgClaim) {
+  const alg = mapTransactionDataHashAlg(hashAlgClaim);
+  if (hashAlgClaim && !alg) {
+    return {
+      ok: false,
+      error: `Unsupported transaction_data_hashes_alg '${hashAlgClaim}'`,
+    };
+  }
+  const digestName = alg?.node || "sha256";
+  const expectedHex = crypto
+    .createHash(digestName)
+    .update(txData, "utf8")
+    .digest("hex");
+  const expectedB64Url = crypto
+    .createHash(digestName)
+    .update(txData, "utf8")
+    .digest("base64url");
+  const list = Array.isArray(hashes) ? hashes : [];
+  return {
+    ok: list.some((h) => h === expectedHex || h === expectedB64Url),
+    expectedHex,
+    expectedB64Url,
+    hashAlg: alg?.claim || "sha-256",
+  };
+}
+
 const presentation_definition_pwa = JSON.parse(
   //fs.readFileSync("./data/presentation_definition_pid+pwa.json", "utf-8")
   // fs.readFileSync("./data/presentation_definition_pid|photoID+PWA.json", "utf-8")
@@ -241,7 +276,7 @@ paymentRouter.post("/payment_direct_post/:id", async (req, res) => {
     // console.log(keybindJwt);
     // let sdHash = keybindJwt.payload.sd_hash;
     let transactionDataHashesArray = keybindJwt.payload.transaction_data_hashes;
-    // let xtDataHashAlg = keybindJwt.payload.transaction_data_hashes_alg;
+    let txDataHashAlg = keybindJwt.payload.transaction_data_hashes_alg;
 
  
     //STEP 1. Validate the VP Token as described in OpenID4VP [4] for the IETF SD-JWT VC credential format.
@@ -257,9 +292,16 @@ paymentRouter.post("/payment_direct_post/:id", async (req, res) => {
     //STEP 2. Validate the transaction_data
     // -  original base64url encoded transaction_data string ===
     // the same hash value when hashed with the given function as the hash contained in transaction_data_hashes in the key binding JWT.
-    const txData = session.txData; // base64EncodedTxData
-    const hash = crypto.createHash("sha256").update(txData).digest("hex");
-    if( !transactionDataHashesArray.includes(hash)){
+    const txData = session.txData; // base64EncodedTxData (string as sent in transaction_data[])
+    const txDataValidation = validateTransactionDataHashes(
+      txData,
+      transactionDataHashesArray,
+      txDataHashAlg,
+    );
+    if (!txDataValidation.ok) {
+      if (txDataValidation.error) {
+        return res.status(422).json({ error: txDataValidation.error });
+      }
       return res.status(422).json({ error: 'TxData Hashes Do not Match' });
     }
 

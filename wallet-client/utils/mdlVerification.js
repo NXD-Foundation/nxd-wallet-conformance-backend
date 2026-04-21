@@ -399,6 +399,7 @@ export async function buildMdocPresentation(storedCredential, options = {}) {
   console.log("[mdoc-present] Stored credential type:", typeof storedCredential);
   
   let issuerSigned;
+  let effectiveDocType = docType;
   
   // Determine what format we have stored
   if (typeof storedCredential === 'string') {
@@ -408,11 +409,17 @@ export async function buildMdocPresentation(storedCredential, options = {}) {
     const decoded = decode(buffer);
     
     if (decoded.version && decoded.documents) {
-      // Already a DeviceResponse - return as-is
-      console.log("[mdoc-present] Already a DeviceResponse, returning as-is");
-      return { vpToken: storedCredential, mdocGeneratedNonce: null };
+      const firstDocument = Array.isArray(decoded.documents)
+        ? decoded.documents[0]
+        : null;
+      if (!firstDocument?.issuerSigned) {
+        throw new Error("Stored mdoc DeviceResponse does not contain issuerSigned data");
+      }
+      effectiveDocType = firstDocument.docType || effectiveDocType;
+      issuerSigned = firstDocument.issuerSigned;
     } else if (decoded.docType || decoded.issuerSigned) {
       // Document format
+      effectiveDocType = decoded.docType || effectiveDocType;
       issuerSigned = decoded.issuerSigned || decoded;
     } else if (decoded.nameSpaces && decoded.issuerAuth) {
       // IssuerSigned format
@@ -423,15 +430,19 @@ export async function buildMdocPresentation(storedCredential, options = {}) {
   } else if (typeof storedCredential === 'object') {
     // Stored as object
     if (storedCredential.version && storedCredential.documents) {
-      // Already DeviceResponse - encode and return
-      console.log("[mdoc-present] Converting DeviceResponse object to base64url");
-      const encoded = encodeCbor(storedCredential);
-      return {
-        vpToken: base64url.encode(Buffer.from(encoded)),
-        mdocGeneratedNonce: null,
-      };
+      const firstDocument =
+        Array.isArray(storedCredential.documents) &&
+        storedCredential.documents.length > 0
+          ? storedCredential.documents[0]
+          : null;
+      if (!firstDocument?.issuerSigned) {
+        throw new Error("Stored mdoc DeviceResponse object does not contain issuerSigned data");
+      }
+      effectiveDocType = firstDocument.docType || effectiveDocType;
+      issuerSigned = firstDocument.issuerSigned;
     } else if (storedCredential.docType || storedCredential.issuerSigned) {
       // Document format
+      effectiveDocType = storedCredential.docType || effectiveDocType;
       issuerSigned = storedCredential.issuerSigned || storedCredential;
     } else if (storedCredential.nameSpaces && storedCredential.issuerAuth) {
       // IssuerSigned format
@@ -453,7 +464,7 @@ export async function buildMdocPresentation(storedCredential, options = {}) {
     version: "1.0",
     documents: [
       {
-        docType,
+        docType: effectiveDocType,
         issuerSigned,
       },
     ],
@@ -477,7 +488,10 @@ export async function buildMdocPresentation(storedCredential, options = {}) {
     sessionTranscriptBytes,
   );
 
-  const dcqlPd = presentationDefinitionFromDcqlMdocClaims(docType, dcqlEntry);
+  const dcqlPd = presentationDefinitionFromDcqlMdocClaims(
+    effectiveDocType,
+    dcqlEntry,
+  );
   const pdForSigning = dcqlPd ?? presentationDefinition;
   if (!pdForSigning) {
     throw new Error(
@@ -490,7 +504,7 @@ export async function buildMdocPresentation(storedCredential, options = {}) {
     .authenticateWithSignature(devicePrivateJwk, "ES256")
     .sign(mdocContext);
 
-  console.log("[mdoc-present] Constructed DeviceResponse with docType:", docType);
+  console.log("[mdoc-present] Constructed DeviceResponse with docType:", effectiveDocType);
 
   const base64urlEncoded = base64url.encode(Buffer.from(signedResponse.encode()));
 
