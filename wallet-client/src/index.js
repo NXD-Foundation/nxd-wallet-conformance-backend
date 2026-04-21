@@ -7,16 +7,20 @@ import {
   ensureOrCreateEcKeyPair,
   createDPoP,
 } from "./lib/crypto.js";
-import { storeWalletCredentialByType } from "./lib/cache.js";
 import { resolveAttestationForEndpoint } from "./lib/walletProviderIdentity.js";
 import { resolveAttestDeviceKeyPaths } from "./lib/deviceKeyPaths.js";
 import { buildCredentialRequestProofs } from "./lib/credentialRequestProofs.js";
 import { normalizeCredentialOfferDeepLink } from "./lib/credentialOfferScheme.js";
 import {
-  extractNotificationId,
-  resolveNotificationEndpoint,
-  postCredentialAcceptedNotification,
-} from "./lib/credentialNotification.js";
+  exchangeToken,
+  fetchCredentialNonce,
+  buildCredentialRequest,
+  postCredentialRequest,
+  pollDeferredCredential,
+  notifyCredentialAcceptedIfNeeded,
+  storeIssuedCredentials,
+  buildKeyPairs,
+} from "./lib/issuance.js";
 import {
   isDpopBoundAccessToken,
   computeAthForDpop,
@@ -25,68 +29,6 @@ import {
   buildCliTokenEndpointHeaders,
   buildCredentialRequestSelector,
 } from "../utils/tokenUtils.js";
-import {
-  getNextPollDelayMs,
-  resolveDeferredPollResult,
-  formatDeferredTerminalError,
-} from "./lib/deferredIssuancePoll.js";
-
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-async function notifyCredentialAcceptedIfNeeded({
-  credentialResponse,
-  apiBase,
-  accessToken,
-  tokenBody,
-  dpopPrivateJwk,
-  dpopPublicJwk,
-}) {
-  const notificationId = extractNotificationId(credentialResponse);
-  const notificationEndpoint = resolveNotificationEndpoint(undefined, apiBase);
-  if (!notificationId || !accessToken) return;
-  await postCredentialAcceptedNotification({
-    notificationEndpoint,
-    notificationId,
-    accessToken,
-    tokenBody,
-    dpopPrivateJwk,
-    dpopPublicJwk,
-  });
-}
-
-async function storeIssuedCredentialsFromCli(configurationId, credBody, keyPairs, metadataBase) {
-  const notificationId = extractNotificationId(credBody);
-  const baseMeta = {
-    ...metadataBase,
-    ...(notificationId ? { notification_id: notificationId } : {}),
-  };
-  const n = Array.isArray(credBody?.credentials) ? credBody.credentials.length : 0;
-  if (n > 1) {
-    await storeWalletCredentialByType(configurationId, {
-      multi: true,
-      entries: credBody.credentials.map((item, i) => ({
-        credential: typeof item?.credential === "string" ? { credential: item.credential } : item,
-        keyBinding: {
-          privateJwk: keyPairs[i].privateJwk,
-          publicJwk: keyPairs[i].publicJwk,
-          didJwk: keyPairs[i].didJwk,
-        },
-        metadata: { ...baseMeta, attestedKeyIndex: i },
-      })),
-      metadata: baseMeta,
-    });
-  } else {
-    await storeWalletCredentialByType(configurationId, {
-      credential: credBody,
-      keyBinding: {
-        privateJwk: keyPairs[0].privateJwk,
-        publicJwk: keyPairs[0].publicJwk,
-        didJwk: keyPairs[0].didJwk,
-      },
-      metadata: baseMeta,
-    });
-  }
-}
 
 async function main() {
   const argv = yargs(hideBin(process.argv))
@@ -112,8 +54,14 @@ async function main() {
       default: 1,
       describe: "number of device keys in WUA attested_keys (1–32); proof JWT uses first key",
     })
-    .option("poll-interval", { type: "number", default: 2000 })
-    .option("poll-timeout", { type: "number", default: 30000 })
+    .option("poll-interval", {
+      type: "number",
+      describe: "optional deferred issuance poll interval override in milliseconds",
+    })
+    .option("poll-timeout", {
+      type: "number",
+      describe: "optional deferred issuance timeout override in milliseconds",
+    })
     .strict()
     .help()
     .parse();
@@ -173,234 +121,125 @@ async function main() {
     credential_configuration_id: configurationId,
     ...(credential_issuer ? { locations: [credential_issuer] } : {}),
   }] : undefined;
-  
-  // Generate DPoP (Demonstrating Proof-of-Possession) for token request
-  let dpopJwt = null;
   let dpopPrivateJwk = null;
   let dpopPublicJwk = null;
-  try {
-    const dpopKeys = await ensureOrCreateEcKeyPair(deviceKeyPath, "ES256");
-    dpopPrivateJwk = dpopKeys.privateJwk;
-    dpopPublicJwk = dpopKeys.publicJwk;
-    dpopJwt = await createDPoP({
-      privateJwk: dpopPrivateJwk,
-      publicJwk: dpopPublicJwk,
-      htu: tokenEndpoint,
-      htm: "POST",
-      alg: "ES256"
-    });
-  } catch (dpopError) {
-    // RFC001 §7.4 / RFC 9449: DPoP is mandatory at the token endpoint; the issuer
-    // will reject the exchange with 400 invalid_dpop_proof if this header is missing.
-    console.warn("Failed to generate DPoP (token exchange will be rejected by the issuer):", dpopError?.message);
-  }
-  
   const authorizationServerIssuer = deriveAuthorizationServerIssuer(
     tokenEndpoint,
     credential_issuer || apiBase,
   );
-  let wiaJwt = null;
-  let oauthClientAttestationHeaders = {};
-  try {
-    const att = await resolveAttestationForEndpoint({
-      endpointAudience: tokenEndpoint,
+  const tokenExchange = await exchangeToken({
+      tokenEndpoint,
+      tokenPayload: Object.fromEntries(buildPreAuthorizedCodeTokenFormParams({
+        preAuthorizedCode,
+        txCode,
+        authorizationDetails,
+      }).entries()),
       authorizationServerIssuer,
+      ensureOrCreateEcKeyPair,
+      createDPoP,
+      resolveAttestationForEndpoint,
+      shouldRetryTokenExchangeAfterRotatingWalletProviderKey: () => false,
+      rotateWalletProviderKeyPair: async () => false,
+      postForm: async (url, params, dpopHeader, extraHeaders = {}) => {
+        const form = new URLSearchParams();
+        Object.entries(params).forEach(([key, value]) => {
+          if (typeof value !== "undefined") form.append(key, value);
+        });
+        const headers = buildCliTokenEndpointHeaders({
+          dpopJwt: dpopHeader,
+          oauthClientAttestation: extraHeaders["OAuth-Client-Attestation"],
+          oauthClientAttestationPop: extraHeaders["OAuth-Client-Attestation-PoP"],
+        });
+        return fetch(url, {
+          method: "POST",
+          headers,
+          body: form.toString(),
+        });
+      },
+      deviceKeyPath,
     });
-    wiaJwt = att.clientAssertionJwt;
-    oauthClientAttestationHeaders = att.oauthHeaders;
-  } catch (attError) {
-    console.warn("Failed to resolve OAuth client attestation:", attError?.message);
-  }
-
-  const tokenForm = buildPreAuthorizedCodeTokenFormParams({
-    preAuthorizedCode,
-    txCode,
-    authorizationDetails,
-    clientAssertion: wiaJwt || undefined,
-  });
-  const tokenHeaders = buildCliTokenEndpointHeaders({
-    dpopJwt,
-    oauthClientAttestation: oauthClientAttestationHeaders["OAuth-Client-Attestation"],
-    oauthClientAttestationPop: oauthClientAttestationHeaders["OAuth-Client-Attestation-PoP"],
-  });
-  const tokenRes = await fetch(tokenEndpoint, {
-    method: "POST",
-    headers: tokenHeaders,
-    body: tokenForm.toString(),
-  });
-
-  if (!tokenRes.ok) {
-    const err = await tokenRes.json().catch(() => ({}));
-    throw new Error(`Token error ${tokenRes.status}: ${JSON.stringify(err)}`);
-  }
-  const tokenBody = await tokenRes.json();
+  const tokenBody = tokenExchange.tokenBody;
+  dpopPrivateJwk = tokenExchange.dpopPrivateJwk;
+  dpopPublicJwk = tokenExchange.dpopPublicJwk;
   const accessToken = tokenBody.access_token;
-  let c_nonce = tokenBody.c_nonce;
-  let c_nonce_expires_in = tokenBody.c_nonce_expires_in;
+  const { c_nonce, c_nonce_expires_in } = await fetchCredentialNonce({
+    tokenBody,
+    nonceEndpoint: `${apiBase}/nonce`,
+    accessToken,
+    postJson: httpPostJson,
+  });
 
-  if (!c_nonce) {
-    const nonceEndpoint = `${apiBase}/nonce`;
-    const nonceRes = await httpPostJson(nonceEndpoint, {}, null, {
-      Authorization: `Bearer ${accessToken}`,
-    });
-    if (!nonceRes.ok) {
-      const err = await nonceRes.json().catch(() => ({}));
-      throw new Error(`Nonce error ${nonceRes.status}: ${JSON.stringify(err)}`);
-    }
-    const nonceJson = await nonceRes.json();
-    c_nonce = nonceJson.c_nonce;
-    c_nonce_expires_in = nonceJson.c_nonce_expires_in;
-  }
-
-  if (!c_nonce) {
-    throw new Error("Issuer did not provide c_nonce; cannot complete proof-of-possession flow.");
-  }
-
-  const keyPairs = [];
-  for (const p of attestPaths) {
-    const { privateJwk, publicJwk } = await ensureOrCreateEcKeyPair(p, "ES256");
-    keyPairs.push({ privateJwk, publicJwk, didJwk: generateDidJwkFromPrivateJwk(publicJwk) });
-  }
+  const keyPairs = await buildKeyPairs({
+    keyPaths: attestPaths,
+    selectedAlg: "ES256",
+    ensureOrCreateEcKeyPair,
+    generateDidJwkFromPrivateJwk,
+  });
 
   const credentialEndpoint = `${apiBase}/credential`;
-  const { proofs: proofsSection } = await buildCredentialRequestProofs({
+  const { credentialRequest: credReq } = await buildCredentialRequest({
+    configurationId,
+    tokenBody,
     proofMode,
     credentialEndpoint,
-    aud: credential_issuer || issuerBase,
+    audience: credential_issuer || issuerBase,
     c_nonce,
     keyPairs,
     selectedAlg: "ES256",
+    buildCredentialRequestProofs,
+    buildCredentialRequestSelector,
+    prepareCredentialResponseEncryption: async () => null,
   });
 
-  const credReq = {
-    ...buildCredentialRequestSelector(configurationId, tokenBody),
-    proofs: proofsSection,
-  };
-
-  // DPoP on /credential is required only for DPoP-bound access tokens (RFC 9449).
-  let credentialDpopJwt = null;
-  try {
-    if (
-      accessToken &&
-      dpopPrivateJwk &&
-      dpopPublicJwk &&
-      isDpopBoundAccessToken(tokenBody, accessToken)
-    ) {
-      const ath = computeAthForDpop(accessToken);
-      credentialDpopJwt = await createDPoP({
-        privateJwk: dpopPrivateJwk,
-        publicJwk: dpopPublicJwk,
-        htu: credentialEndpoint,
-        htm: "POST",
-        ath,
-        alg: "ES256"
-      });
-    }
-  } catch (dpopError) {
-    console.warn("Failed to generate DPoP for credential request:", dpopError?.message);
-  }
-
-  const credHeaders = {
-    "content-type": "application/json",
-    authorization: `Bearer ${accessToken}`,
-  };
-  if (credentialDpopJwt) {
-    credHeaders["DPoP"] = credentialDpopJwt;
-  }
-
-  const credRes = await fetch(credentialEndpoint, {
-    method: "POST",
-    headers: credHeaders,
-    body: JSON.stringify(credReq),
+  const { body: initialCredentialBody, status: credentialStatus } = await postCredentialRequest({
+    credentialEndpoint,
+    credentialRequest: credReq,
+    accessToken,
+    tokenBody,
+    dpopPrivateJwk,
+    dpopPublicJwk,
+    isDpopBoundAccessToken,
+    computeAthForDpop,
+    createDPoP,
+    fetchImpl: fetch,
+    parseCredentialResponsePayload: async (responseText, contentType) => {
+      if (!contentType.includes("json")) return null;
+      return responseText ? JSON.parse(responseText) : {};
+    },
   });
 
-  if (credRes.status === 202) {
-    const deferredAccept = await credRes.json();
-    const { transaction_id, interval: initialInterval } = deferredAccept;
-    const deferredUrl = `${apiBase}/credential_deferred`;
-    const start = Date.now();
-    const clientPollMs = argv["poll-interval"];
-    let nextDelayMs = getNextPollDelayMs(initialInterval, clientPollMs);
-    while (Date.now() - start < argv["poll-timeout"]) {
-      await sleep(nextDelayMs);
-      let deferredDpopJwt = null;
-      try {
-        if (
-          accessToken &&
-          dpopPrivateJwk &&
-          dpopPublicJwk &&
-          isDpopBoundAccessToken(tokenBody, accessToken)
-        ) {
-          deferredDpopJwt = await createDPoP({
-            privateJwk: dpopPrivateJwk,
-            publicJwk: dpopPublicJwk,
-            htu: deferredUrl,
-            htm: "POST",
-            ath: computeAthForDpop(accessToken),
-            alg: "ES256",
-          });
-        }
-      } catch (dpopDefErr) {
-        console.warn("Failed to generate DPoP for deferred poll:", dpopDefErr?.message);
-      }
-      const defRes = await httpPostJson(
-        deferredUrl,
-        { transaction_id },
-        deferredDpopJwt,
-        { Authorization: `Bearer ${accessToken}` },
-      );
-      const defText = await defRes.text().catch(() => "");
-      const defCt = defRes.headers.get("content-type") || "";
-      const outcome = await resolveDeferredPollResult({
-        status: defRes.status,
-        ok: defRes.ok,
-        contentType: defCt,
-        responseText: defText,
-        decryptionPrivateKey: null,
-      });
-      if (outcome.kind === "success") {
-        const body = outcome.body;
-        await notifyCredentialAcceptedIfNeeded({
-          credentialResponse: body,
-          apiBase,
-          accessToken,
-          tokenBody,
-          dpopPrivateJwk,
-          dpopPublicJwk,
-        });
-        await storeIssuedCredentialsFromCli(configurationId, body, keyPairs, {
-          configurationId,
-          c_nonce,
-          c_nonce_expires_in,
-          credential_issuer: credential_issuer || apiBase,
-        });
-        console.log(JSON.stringify(body, null, 2));
-        return;
-      }
-      if (outcome.kind === "pending") {
-        nextDelayMs = getNextPollDelayMs(outcome.interval, clientPollMs);
-        continue;
-      }
-      throw new Error(formatDeferredTerminalError(outcome));
-    }
-    throw new Error("Deferred issuance timed out");
-  }
+  const credBody = credentialStatus === 202
+    ? await pollDeferredCredential({
+        deferredEndpoint: `${apiBase}/credential_deferred`,
+        transactionId: initialCredentialBody.transaction_id,
+        initialInterval: initialCredentialBody.interval,
+        pollTimeoutMs: argv["poll-timeout"],
+        pollIntervalMs: argv["poll-interval"],
+        accessToken,
+        tokenBody,
+        dpopPrivateJwk,
+        dpopPublicJwk,
+        isDpopBoundAccessToken,
+        computeAthForDpop,
+        createDPoP,
+        postJson: httpPostJson,
+        parseCredentialResponsePayload: async (responseText, contentType) => {
+          if (!contentType.includes("json")) return null;
+          return responseText ? JSON.parse(responseText) : {};
+        },
+      })
+    : initialCredentialBody;
 
-  if (!credRes.ok) {
-    const err = await credRes.json().catch(() => ({}));
-    throw new Error(`Credential error ${credRes.status}: ${JSON.stringify(err)}`);
-  }
-
-  const credBody = await credRes.json();
   await notifyCredentialAcceptedIfNeeded({
     credentialResponse: credBody,
+    issuerMeta: undefined,
     apiBase,
     accessToken,
     tokenBody,
     dpopPrivateJwk,
     dpopPublicJwk,
   });
-  await storeIssuedCredentialsFromCli(configurationId, credBody, keyPairs, {
+  await storeIssuedCredentials(configurationId, credBody, keyPairs, {
     configurationId,
     c_nonce,
     c_nonce_expires_in,
@@ -490,5 +329,3 @@ main().catch((e) => {
   console.error(e.message || e);
   process.exit(1);
 });
-
-

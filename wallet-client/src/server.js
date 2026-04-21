@@ -28,10 +28,14 @@ import {
 } from "./lib/credentialResponseEncryption.js";
 import { parseIssuerMetadataHttpResponse } from "./lib/issuerMetadataFetch.js";
 import {
-  getNextPollDelayMs,
-  resolveDeferredPollResult,
-  formatDeferredTerminalError,
-} from "./lib/deferredIssuancePoll.js";
+  selectProofSigningAlg,
+  buildKeyPairs,
+  exchangeToken,
+  fetchCredentialNonce,
+  buildCredentialRequest,
+  postCredentialRequest,
+  pollDeferredCredential,
+} from "./lib/issuance.js";
 import { jwtVerify, decodeJwt, decodeProtectedHeader, createLocalJWKSet, importJWK, importX509 } from "jose";
 import { decodeSdJwt, getClaims } from "@sd-jwt/decode";
 import { digest } from "@sd-jwt/crypto-nodejs";
@@ -1058,13 +1062,8 @@ async function runPreAuthorizedIssuance(
   console.log("[preauth] apiBase=", apiBase, "configurationId=", configurationId); try { slog("[preauth] apiBase", { apiBase, configurationId }); } catch {}
   console.log("[preauth] tokenEndpoint=", tokenEndpoint); try { slog("[preauth] tokenEndpoint", { tokenEndpoint }); } catch {}
   console.log("[preauth] requesting token..."); try { slog("[preauth] requesting token"); } catch {}
-  
-  // Token exchange (RFC001 §7.3 SHOULD: on WIA-related 400, rotate WP key and retry once)
-  let dpopJwt = null;
   let dpopPrivateJwk = null;
   let dpopPublicJwk = null;
-  let wiaJwt = null;
-  let oauthClientAttestationHeaders = {};
   const tokenAuthzDetails = [
     {
       type: "openid_credential",
@@ -1072,141 +1071,76 @@ async function runPreAuthorizedIssuance(
       ...(issuerMeta?.credential_issuer ? { locations: [issuerMeta.credential_issuer] } : {}),
     },
   ];
-  let tokenRes;
-  let tokenResponseText = "";
-  for (let tokenAttempt = 0; tokenAttempt < 2; tokenAttempt++) {
-    try {
-      const dpopKeys = await ensureOrCreateEcKeyPair(deviceKeyPath, "ES256");
-      dpopPrivateJwk = dpopKeys.privateJwk;
-      dpopPublicJwk = dpopKeys.publicJwk;
-      dpopJwt = await createDPoP({
-        privateJwk: dpopPrivateJwk,
-        publicJwk: dpopPublicJwk,
-        htu: tokenEndpoint,
-        htm: "POST",
-        alg: "ES256",
-      });
-      console.log("[preauth] DPoP generated for token request"); try { slog("[preauth] DPoP generated", { hasDPoP: !!dpopJwt }); } catch {}
-    } catch (dpopError) {
-      console.warn("[preauth] Failed to generate DPoP (token exchange will be rejected by the issuer):", dpopError?.message); try { slog("[preauth] DPoP generation failed", { error: dpopError?.message }); } catch {}
-    }
-    try {
-      const att = await resolveAttestationForEndpoint({
-        endpointAudience: tokenEndpoint,
-        authorizationServerIssuer,
-      });
-      wiaJwt = att.clientAssertionJwt;
-      oauthClientAttestationHeaders = att.oauthHeaders;
-      console.log("[preauth] OAuth client attestation ready for token request"); try { slog("[preauth] OAuth client attestation", { hasClientAssertion: !!wiaJwt }); } catch {}
-    } catch (attError) {
-      console.warn("[preauth] Failed to resolve OAuth client attestation:", attError?.message); try { slog("[preauth] attestation failed", { error: attError?.message }); } catch {}
-    }
-    const tokenPayload = {
+  const tokenExchange = await exchangeToken({
+    tokenEndpoint,
+    tokenPayload: {
       grant_type: "urn:ietf:params:oauth:grant-type:pre-authorized_code",
       "pre-authorized_code": preAuthorizedCode,
       ...(txCode ? { tx_code: txCode } : {}),
       authorization_details: JSON.stringify(tokenAuthzDetails),
-      ...(wiaJwt ? { client_assertion: wiaJwt, client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer" } : {}),
-    };
-    tokenRes = await httpPostForm(tokenEndpoint, tokenPayload, logSessionId, dpopJwt, oauthClientAttestationHeaders);
-    console.log("[preauth] tokenRes.status=", tokenRes.status);
-    try { slog("[preauth] tokenRes.status", { status: tokenRes.status, attempt: tokenAttempt }); } catch {}
-    console.log("[preauth] tokenRes.headers:", Object.fromEntries(tokenRes.headers.entries()));
-    try { slog("[preauth] tokenRes.headers", { headers: Object.fromEntries(tokenRes.headers.entries()) }); } catch {}
-    tokenResponseText = await tokenRes.text().catch(() => "");
-    console.log("[preauth] tokenRes.body length:", tokenResponseText.length);
-    try { slog("[preauth] tokenRes.body", { length: tokenResponseText.length }); } catch {}
-    if (tokenRes.ok) break;
-    let err = {};
-    try { err = JSON.parse(tokenResponseText); } catch {}
-    if (
-      tokenAttempt === 0 &&
-      shouldRetryTokenExchangeAfterRotatingWalletProviderKey(tokenRes.status, err)
-    ) {
-      try {
-        const didRotate = await rotateWalletProviderKeyPair();
-        if (didRotate) {
-          console.log("[preauth] Rotated wallet provider key after WIA-related token error; retrying token once");
-          try { slog("[preauth] token retry after WP key rotation"); } catch {}
-          continue;
-        }
-      } catch (rotErr) {
-        console.warn("[preauth] Wallet provider key rotation failed:", rotErr?.message);
-        try { slog("[preauth] WP rotation failed", { error: rotErr?.message }); } catch {}
-      }
-    }
-    console.error("[preauth] token error", tokenRes.status, tokenResponseText);
-    console.error("[preauth] token error parsed:", JSON.stringify(err, null, 2));
-    try { slog("[preauth] token error", { status: tokenRes.status, err, body: tokenResponseText }); } catch {}
-    throw new Error(`token_error ${tokenRes.status}: ${JSON.stringify(err)}`);
-  }
-  
-  let tokenBody;
-  try {
-    tokenBody = JSON.parse(tokenResponseText);
-    console.log("[preauth] token response parsed successfully"); 
-    try { slog("[preauth] token response parsed", { hasAccessToken: !!tokenBody.access_token, hasCNonce: !!tokenBody.c_nonce }); } catch {}
-  } catch (e) {
-    console.error("[preauth] failed to parse token response as JSON:", e?.message); 
-    try { slog("[preauth] token response parse failed", { error: e?.message, body: tokenResponseText }); } catch {}
-    throw new Error(`token_error: invalid JSON response - ${e?.message}`);
-  }
+    },
+    authorizationServerIssuer,
+    ensureOrCreateEcKeyPair,
+    createDPoP,
+    resolveAttestationForEndpoint,
+    shouldRetryTokenExchangeAfterRotatingWalletProviderKey,
+    rotateWalletProviderKeyPair,
+    postForm: (url, params, dpopHeader, extraHeaders) =>
+      httpPostForm(url, params, logSessionId, dpopHeader, extraHeaders),
+    deviceKeyPath,
+    log: slog,
+    logPrefix: "[preauth]",
+  });
+  const tokenBody = tokenExchange.tokenBody;
+  dpopPrivateJwk = tokenExchange.dpopPrivateJwk;
+  dpopPublicJwk = tokenExchange.dpopPublicJwk;
   const accessToken = tokenBody.access_token;
-  let c_nonce = tokenBody.c_nonce;
-  let c_nonce_expires_in = tokenBody.c_nonce_expires_in;
+  const { c_nonce, c_nonce_expires_in } = await fetchCredentialNonce({
+    tokenBody,
+    nonceEndpoint: issuerMeta.nonce_endpoint,
+    accessToken,
+    postJson: (url, body, dpopHeader, extraHeaders) =>
+      httpPostJson(
+        url,
+        body,
+        logSessionId,
+        {
+          ...extraHeaders,
+          ...(dpopHeader ? { DPoP: dpopHeader } : {}),
+        },
+      ),
+  });
   console.log("[preauth] got access_token=", accessToken ? "yes" : "no", "c_nonce=", c_nonce ? "yes" : "no"); try { slog("[preauth] token received", { hasAccessToken: !!accessToken, hasCNonce: !!c_nonce }); } catch {}
-  if (!c_nonce && issuerMeta.nonce_endpoint) {
-    const nonceEndpoint = issuerMeta.nonce_endpoint;
-    console.log("[preauth] nonceEndpoint=", nonceEndpoint); try { slog("[preauth] nonceEndpoint", { nonceEndpoint }); } catch {}
-    const nonceRes = await httpPostJson(
-      nonceEndpoint,
-      {},
-      logSessionId,
-      accessToken ? { Authorization: `Bearer ${accessToken}` } : {}
-    ); try { slog("[preauth] nonce request", { endpoint: nonceEndpoint, status: nonceRes.status }); } catch {}
-    if (!nonceRes.ok) {
-      const text = await nonceRes.text().catch(() => "");
-      console.error("[preauth] nonce error", nonceRes.status, text);
-      let err = {};
-      try { err = JSON.parse(text); } catch {}
-      try { slog("[preauth] nonce error", { status: nonceRes.status, err, body: text }); } catch {}
-      throw new Error(`nonce_error ${nonceRes.status}: ${JSON.stringify(err)}`);
-    }
-    const nonceJson = await nonceRes.json();
-    c_nonce = nonceJson.c_nonce;
-    c_nonce_expires_in = nonceJson.c_nonce_expires_in;
-    console.log("[preauth] obtained c_nonce from nonce endpoint"); try { slog("[preauth] obtained c_nonce from nonce endpoint", { hasExpiresIn: !!c_nonce_expires_in }); } catch {}
-  } else if (!c_nonce) {
-    throw new Error("nonce_error: issuer did not provide c_nonce and no nonce_endpoint is available");
-  }
-
-  // Algorithm negotiation
-  const supportedAlgs = issuerMeta?.proof_types_supported?.jwt?.proof_signing_alg_values_supported || issuerMeta?.credential_configurations_supported?.[configurationId]?.proof_types_supported?.jwt?.proof_signing_alg_values_supported || [];
-  const preferredOrder = ["ES256", "ES384", "ES512", "EdDSA"];
-  const selectedAlg = (Array.isArray(supportedAlgs) && supportedAlgs.length)
-    ? (preferredOrder.find((a) => supportedAlgs.includes(a)) || supportedAlgs[0])
-    : "ES256";
-  console.log("[preauth] issuer supported proof algs:", supportedAlgs); try { slog("[preauth] supported algs", { supportedAlgs }); } catch {}
+  const selectedAlg = selectProofSigningAlg(issuerMeta, configurationId);
   console.log("[preauth] selected proof alg:", selectedAlg); try { slog("[preauth] selected alg", { selectedAlg }); } catch {}
 
   const aud = issuerMeta?.credential_issuer || apiBase;
   console.log("[preauth] proof audience:", aud, issuerMeta?.credential_issuer ? "(from issuerMeta.credential_issuer)" : "(fallback apiBase)"); try { slog("[preauth] proof audience", { aud }); } catch {}
 
-  const keyPairs = [];
-  for (const p of attestPaths) {
-    const { privateJwk, publicJwk } = await ensureOrCreateEcKeyPair(p, selectedAlg);
-    keyPairs.push({ privateJwk, publicJwk, didJwk: generateDidJwkFromPrivateJwk(publicJwk) });
-  }
+  const keyPairs = await buildKeyPairs({
+    keyPaths: attestPaths,
+    selectedAlg,
+    ensureOrCreateEcKeyPair,
+    generateDidJwkFromPrivateJwk,
+  });
 
   const credentialEndpoint = issuerMeta.credential_endpoint || `${apiBase}/credential`;
-
-  const { proofs: proofsSection, proofJwt } = await buildCredentialRequestProofs({
+  const {
+    credentialRequest: credReq,
+    proofJwt,
+    credentialResponseDecryptionKey,
+  } = await buildCredentialRequest({
+    configurationId,
+    tokenBody,
     proofMode,
     credentialEndpoint,
-    aud,
+    audience: aud,
     c_nonce,
     keyPairs,
     selectedAlg,
+    buildCredentialRequestProofs,
+    buildCredentialRequestSelector,
+    prepareCredentialResponseEncryption: () => prepareCredentialResponseEncryption(issuerMeta),
   });
   if (proofJwt) {
     try { console.log("[preauth] proof JWT created. len=", proofJwt?.length || 0); slog("[preauth] proof created", { length: proofJwt?.length || 0 }); } catch {}
@@ -1216,18 +1150,6 @@ async function runPreAuthorizedIssuance(
 
   console.log("[preauth] credentialEndpoint=", credentialEndpoint); try { slog("[preauth] credentialEndpoint", { credentialEndpoint }); } catch {}
   console.log("[preauth] requesting credential..."); try { slog("[preauth] requesting credential"); } catch {}
-  let credentialResponseDecryptionKey = null;
-  const credentialResponseEncCtx = await prepareCredentialResponseEncryption(issuerMeta);
-  if (credentialResponseEncCtx) {
-    credentialResponseDecryptionKey = credentialResponseEncCtx.privateKey;
-  }
-  const credReq = {
-    ...buildCredentialRequestSelector(configurationId, tokenBody),
-    proofs: proofsSection,
-    ...(credentialResponseEncCtx
-      ? { credential_response_encryption: credentialResponseEncCtx.credential_response_encryption }
-      : {}),
-  };
   console.log("[preauth] credential request:", JSON.stringify({ ...credReq, proofs: redactProofsForLog(credReq.proofs) }, null, 2)); try { slog("[preauth] credential request body", { hasBody: true }); } catch {}
   if (accessToken) {
     console.log("[preauth] access_token:", accessToken); try { slog("[preauth] access_token", { accessToken }); } catch {}
@@ -1235,221 +1157,54 @@ async function runPreAuthorizedIssuance(
     console.warn("[preauth] access_token missing in token response"); try { slog("[preauth] access_token missing"); } catch {}
   }
   try { slog("[preauth] credential request", { configurationId, proofMode, hasProofJwt: !!proofJwt }); } catch {}
-  
-  let credentialDpopJwt = null;
-  try {
-    if (
-      accessToken &&
-      dpopPrivateJwk &&
-      dpopPublicJwk &&
-      isDpopBoundAccessToken(tokenBody, accessToken)
-    ) {
-      credentialDpopJwt = await createDPoP({
-        privateJwk: dpopPrivateJwk,
-        publicJwk: dpopPublicJwk,
-        htu: credentialEndpoint,
-        htm: "POST",
-        ath: computeAthForDpop(accessToken),
-        alg: "ES256"
-      });
-    }
-  } catch (dpopCredError) {
-    console.warn("[preauth] Failed to generate DPoP for credential request:", dpopCredError?.message);
-    try { slog("[preauth] DPoP for credential failed", { error: dpopCredError?.message }); } catch {}
-  }
-
-  const credReqBody = JSON.stringify(credReq);
-  const credRequestId = `cred_req_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
-  const credHeaders = {
-    "content-type": "application/json",
-    authorization: `Bearer ${accessToken}`,
-    ...(credentialDpopJwt ? { DPoP: credentialDpopJwt } : {}),
-  };
-  try { 
-    slog("[CREDENTIAL] [REQUEST] Credential request", { 
-      requestId: credRequestId,
-      endpoint: credentialEndpoint,
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: "Bearer <redacted>", DPoP: credentialDpopJwt ? "<redacted>" : undefined },
-      body: { ...credReq, proofs: redactProofsForLog(credReq.proofs) },
-    }); 
-  } catch {}
-  const credRes = await fetch(credentialEndpoint, {
-    method: "POST",
-    headers: credHeaders,
-    body: credReqBody,
+  const initialCredentialResponse = await postCredentialRequest({
+    credentialEndpoint,
+    credentialRequest: credReq,
+    accessToken,
+    tokenBody,
+    dpopPrivateJwk,
+    dpopPublicJwk,
+    isDpopBoundAccessToken,
+    computeAthForDpop,
+    createDPoP,
+    fetchImpl: fetch,
+    parseCredentialResponsePayload: (responseText, contentType) =>
+      parseCredentialResponsePayload(responseText, contentType, credentialResponseDecryptionKey),
   });
-  const responseText = await credRes.text().catch(() => "");
-  const responseContentType = credRes.headers.get("content-type") || "";
-  let responseBody = null;
-  if (!credRes.ok) {
-    try {
-      responseBody = responseText ? JSON.parse(responseText) : null;
-    } catch {}
-  } else {
-    try {
-      responseBody = await parseCredentialResponsePayload(
-        responseText,
-        responseContentType,
-        credentialResponseDecryptionKey,
-      );
-    } catch (parseErr) {
-      try {
-        slog("[preauth] credential response parse failed", {
-          error: parseErr?.message,
-          contentType: responseContentType,
-        });
-      } catch {}
-    }
-  }
+  console.log("[preauth] credentialRes.status=", initialCredentialResponse.status);
+  try { slog("[preauth] credentialRes.status", { status: initialCredentialResponse.status }); } catch {}
 
-  console.log("[preauth] credentialRes.status=", credRes.status); 
-  try { 
-    slog("[CREDENTIAL] [RESPONSE] Credential response", { 
-      requestId: credRequestId,
-      endpoint: credentialEndpoint,
-      status: credRes.status,
-      statusText: credRes.statusText,
-      headers: Object.fromEntries(credRes.headers.entries()),
-      body: responseBody ?? (credentialResponseDecryptionKey ? "<encrypted>" : responseText)
-    }); 
-  } catch {}
-
-  if (!credRes.ok) {
-    console.error("[preauth] credential error", credRes.status); 
-    try { slog("[preauth] credential error start", { status: credRes.status }); } catch {}
-    console.error("[preauth] credential error response headers:", Object.fromEntries(credRes.headers.entries()));
-    console.error("[preauth] credential error response body:", responseText);
-    
-    let err = {};
-    try { 
-      err = JSON.parse(responseText); 
-      console.error("[preauth] credential error parsed JSON:", JSON.stringify(err, null, 2)); 
-      try { slog("[preauth] credential error parsed", { err }); } catch {}
-    } catch (parseErr) {
-      console.error("[preauth] credential error response is not JSON, raw text:", responseText); 
-      try { slog("[preauth] credential error not JSON", { text: responseText }); } catch {}
-      err = { error: "invalid_response", error_description: responseText };
-    }
-    
-    try { slog("[preauth] credential error", { status: credRes.status, err }); } catch {}
-    throw new Error(`credential_error ${credRes.status}: ${JSON.stringify(err)}`);
-  }
-
-  // Log successful response body
-  try {
-    const logPayload = credentialResponseDecryptionKey && responseBody != null
-      ? JSON.stringify(responseBody)
-      : responseText;
-    console.log("[preauth] credential response:", logPayload); 
-    try { slog("[preauth] credential response", { length: logPayload.length, body: logPayload }); } catch {}
-  } catch (e) {
-    console.warn("[preauth] failed to log credential response:", e?.message); 
-    try { slog("[preauth] failed to log response", { error: e?.message }); } catch {}
-  }
-
-  if (credRes.status === 202) {
-    const credBody = responseBody;
-    if (!credBody || typeof credBody !== "object") {
-      console.error("[preauth] failed to parse deferred response"); 
-      try { slog("[preauth] deferred response parse failed", { contentType: responseContentType }); } catch {}
-      throw new Error(`credential_error ${credRes.status}: invalid response (expected JSON inside JWE or plain JSON)`);
-    }
-    const { transaction_id } = credBody;
-    console.log("[preauth] deferred issuance, transaction_id:", transaction_id); 
-    try { slog("[preauth] deferred issuance", { transaction_id }); } catch {}
-    const start = Date.now();
-    const timeout = pollTimeoutMs ?? 30000;
-    const clientPollMs = pollIntervalMs ?? 2000;
-    const deferredEndpoint = issuerMeta.credential_deferred_endpoint || `${apiBase}/credential_deferred`;
-    let nextDelayMs = getNextPollDelayMs(credBody.interval, clientPollMs);
-    while (Date.now() - start < timeout) {
-      await sleep(nextDelayMs);
-      let deferredDpopJwtPre = null;
-      try {
-        if (
-          accessToken &&
-          dpopPrivateJwk &&
-          dpopPublicJwk &&
-          isDpopBoundAccessToken(tokenBody, accessToken)
-        ) {
-          deferredDpopJwtPre = await createDPoP({
-            privateJwk: dpopPrivateJwk,
-            publicJwk: dpopPublicJwk,
-            htu: deferredEndpoint,
-            htm: "POST",
-            ath: computeAthForDpop(accessToken),
-            alg: "ES256",
-          });
-        }
-      } catch (deferredDpopErr) {
-        console.warn("[preauth] Failed to generate DPoP for deferred poll:", deferredDpopErr?.message);
-        try {
-          slog("[preauth] DPoP for deferred poll failed", { error: deferredDpopErr?.message });
-        } catch {}
-      }
-      const defRes = await httpPostJson(
-        deferredEndpoint,
-        { transaction_id },
-        logSessionId,
-        {
-          Authorization: `Bearer ${accessToken}`,
-          ...(deferredDpopJwtPre ? { DPoP: deferredDpopJwtPre } : {}),
-        },
-      );
-      console.log("[preauth] deferred poll ->", defRes.status); 
-      try { slog("[preauth] deferred poll", { status: defRes.status }); } catch {}
-      const defBodyText = await defRes.text().catch(() => "");
-      const defCt = defRes.headers.get("content-type") || "";
-      console.log("[preauth] deferred response body length:", defBodyText.length); 
-      try { slog("[preauth] deferred response", { length: defBodyText.length }); } catch {}
-      const outcome = await resolveDeferredPollResult({
-        status: defRes.status,
-        ok: defRes.ok,
-        contentType: defCt,
-        responseText: defBodyText,
-        decryptionPrivateKey: credentialResponseDecryptionKey,
-      });
-      if (outcome.kind === "success") {
-        const defBody = outcome.body;
-        try { slog("[preauth] deferred ready"); } catch {}
-        await validateAndStoreCredential({
-          configurationId,
-          credential: defBody,
-          issuerMeta,
-          apiBase,
-          keyBindings: keyPairs.map((k) => ({
-            privateJwk: k.privateJwk,
-            publicJwk: k.publicJwk,
-            didJwk: k.didJwk,
-          })),
-          metadata: { configurationId, c_nonce, c_nonce_expires_in },
-          authorizationServerMeta: issuerMeta._authorizationServerMeta,
-          accessToken,
-          tokenBody,
-          dpopPrivateJwk,
-          dpopPublicJwk,
-        }, logSessionId);
-        try { slog("[ISSUANCE] [COMPLETE] Pre-authorized issuance flow (deferred)", { configurationId, success: true }); } catch {}
-        return defBody;
-      }
-      if (outcome.kind === "pending") {
-        nextDelayMs = getNextPollDelayMs(outcome.interval, clientPollMs);
-        try { slog("[preauth] deferred issuance_pending", { nextDelayMs }); } catch {}
-        continue;
-      }
-      console.warn("[preauth] deferred poll terminal:", defRes.status, defBodyText); 
-      try { slog("[preauth] deferred poll terminal", { status: defRes.status, error: outcome.errorBody }); } catch {}
-      throw new Error(formatDeferredTerminalError(outcome));
-    }
-    try { slog("[preauth] deferred timeout"); } catch {}
-    throw new Error("timeout: Deferred issuance timed out");
-  }
-
-  const credBody = responseBody;
+  const credBody = initialCredentialResponse.status === 202
+    ? await pollDeferredCredential({
+        deferredEndpoint: issuerMeta.credential_deferred_endpoint || `${apiBase}/credential_deferred`,
+        transactionId: initialCredentialResponse.body.transaction_id,
+        initialInterval: initialCredentialResponse.body.interval,
+        pollTimeoutMs,
+        pollIntervalMs,
+        accessToken,
+        tokenBody,
+        dpopPrivateJwk,
+        dpopPublicJwk,
+        isDpopBoundAccessToken,
+        computeAthForDpop,
+        createDPoP,
+        postJson: (url, body, dpopHeader, extraHeaders) =>
+          httpPostJson(
+            url,
+            body,
+            logSessionId,
+            {
+              ...extraHeaders,
+              ...(dpopHeader ? { DPoP: dpopHeader } : {}),
+            },
+          ),
+        parseCredentialResponsePayload: (responseText, contentType) =>
+          parseCredentialResponsePayload(responseText, contentType, credentialResponseDecryptionKey),
+      })
+    : initialCredentialResponse.body;
   if (!credBody || typeof credBody !== "object") {
-    console.error("[preauth] failed to parse credential response"); 
-    try { slog("[preauth] credential response parse failed", { contentType: responseContentType }); } catch {}
+    console.error("[preauth] failed to parse credential response");
+    try { slog("[preauth] credential response parse failed"); } catch {}
     throw new Error(`credential_error: invalid JSON response`);
   }
   console.log("[preauth] credential received, starting validation"); 
@@ -1692,11 +1447,8 @@ async function runAuthorizationCodeIssuance(
   console.log("[codeflow] requesting token..."); try { slog("[codeflow] requesting token"); } catch {}
   
   const codeflowAsIssuer = deriveAuthorizationServerIssuer(tokenEndpoint, authorizationServerIssuer);
-  let dpopJwt = null;
   let dpopPrivateJwk = null;
   let dpopPublicJwk = null;
-  let wiaJwt = null;
-  let oauthClientAttestationHeaders = {};
   const tokenAuthzDetails = [
     {
       type: "openid_credential",
@@ -1704,329 +1456,130 @@ async function runAuthorizationCodeIssuance(
       ...(issuerMeta?.credential_issuer ? { locations: [issuerMeta.credential_issuer] } : {}),
     },
   ];
-  let tokenRes;
-  let tokenResponseTextCode = "";
-  for (let tokenAttempt = 0; tokenAttempt < 2; tokenAttempt++) {
-    try {
-      const dpopKeys = await ensureOrCreateEcKeyPair(deviceKeyPath, "ES256");
-      dpopPrivateJwk = dpopKeys.privateJwk;
-      dpopPublicJwk = dpopKeys.publicJwk;
-      dpopJwt = await createDPoP({
-        privateJwk: dpopPrivateJwk,
-        publicJwk: dpopPublicJwk,
-        htu: tokenEndpoint,
-        htm: "POST",
-        alg: "ES256",
-      });
-      console.log("[codeflow] DPoP generated for token request"); try { slog("[codeflow] DPoP generated", { hasDPoP: !!dpopJwt }); } catch {}
-    } catch (dpopError) {
-      console.warn("[codeflow] Failed to generate DPoP (token exchange will be rejected by the issuer):", dpopError?.message); try { slog("[codeflow] DPoP generation failed", { error: dpopError?.message }); } catch {}
-    }
-    try {
-      const att = await resolveAttestationForEndpoint({
-        endpointAudience: tokenEndpoint,
-        authorizationServerIssuer: codeflowAsIssuer,
-      });
-      wiaJwt = att.clientAssertionJwt;
-      oauthClientAttestationHeaders = att.oauthHeaders;
-      console.log("[codeflow] OAuth client attestation for token request"); try { slog("[codeflow] token attestation", { hasClientAssertion: !!wiaJwt }); } catch {}
-    } catch (attError) {
-      console.warn("[codeflow] Failed to resolve OAuth attestation:", attError?.message); try { slog("[codeflow] attestation failed", { error: attError?.message }); } catch {}
-    }
-    tokenRes = await httpPostForm(
-      tokenEndpoint,
-      {
-        grant_type: "authorization_code",
-        code,
-        code_verifier: codeVerifier,
-        client_id: "wallet-client",
-        redirect_uri: redirectUri,
-        authorization_details: JSON.stringify(tokenAuthzDetails),
-        ...(wiaJwt ? { client_assertion: wiaJwt, client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer" } : {}),
-      },
-      logSessionId,
-      dpopJwt,
-      oauthClientAttestationHeaders,
-    );
-    console.log("[codeflow] tokenRes.status=", tokenRes.status); try { slog("[codeflow] tokenRes.status", { status: tokenRes.status, attempt: tokenAttempt }); } catch {}
-    tokenResponseTextCode = await tokenRes.text().catch(() => "");
-    if (tokenRes.ok) break;
-    let err = {};
-    try { err = JSON.parse(tokenResponseTextCode); } catch {}
-    if (
-      tokenAttempt === 0 &&
-      shouldRetryTokenExchangeAfterRotatingWalletProviderKey(tokenRes.status, err)
-    ) {
-      try {
-        const didRotate = await rotateWalletProviderKeyPair();
-        if (didRotate) {
-          console.log("[codeflow] Rotated wallet provider key after WIA-related token error; retrying token once");
-          try { slog("[codeflow] token retry after WP key rotation"); } catch {}
-          continue;
-        }
-      } catch (rotErr) {
-        console.warn("[codeflow] Wallet provider key rotation failed:", rotErr?.message);
-        try { slog("[codeflow] WP rotation failed", { error: rotErr?.message }); } catch {}
-      }
-    }
-    console.error("[codeflow] token error", tokenRes.status, tokenResponseTextCode);
-    try { slog("[codeflow] token error", { status: tokenRes.status, err, body: tokenResponseTextCode }); } catch {}
-    throw new Error(`token_error ${tokenRes.status}: ${JSON.stringify(err)}`);
-  }
-  let tokenBody;
-  try {
-    tokenBody = JSON.parse(tokenResponseTextCode);
-  } catch (e) {
-    throw new Error(`token_error: invalid JSON response - ${e?.message}`);
-  }
+  const tokenExchange = await exchangeToken({
+    tokenEndpoint,
+    tokenPayload: {
+      grant_type: "authorization_code",
+      code,
+      code_verifier: codeVerifier,
+      client_id: "wallet-client",
+      redirect_uri: redirectUri,
+      authorization_details: JSON.stringify(tokenAuthzDetails),
+    },
+    authorizationServerIssuer: codeflowAsIssuer,
+    ensureOrCreateEcKeyPair,
+    createDPoP,
+    resolveAttestationForEndpoint: ({ endpointAudience, authorizationServerIssuer: issuer }) =>
+      resolveAttestationForEndpoint({ endpointAudience, authorizationServerIssuer: issuer }),
+    shouldRetryTokenExchangeAfterRotatingWalletProviderKey,
+    rotateWalletProviderKeyPair,
+    postForm: (url, params, dpopHeader, extraHeaders) =>
+      httpPostForm(url, params, logSessionId, dpopHeader, extraHeaders),
+    deviceKeyPath,
+    log: slog,
+    logPrefix: "[codeflow]",
+  });
+  const tokenBody = tokenExchange.tokenBody;
+  dpopPrivateJwk = tokenExchange.dpopPrivateJwk;
+  dpopPublicJwk = tokenExchange.dpopPublicJwk;
   const accessToken = tokenBody.access_token;
-  let c_nonce = tokenBody.c_nonce;
-  let c_nonce_expires_in = tokenBody.c_nonce_expires_in;
+  const { c_nonce, c_nonce_expires_in } = await fetchCredentialNonce({
+    tokenBody,
+    nonceEndpoint: issuerMeta.nonce_endpoint,
+    accessToken,
+    postJson: (url, body, dpopHeader, extraHeaders) =>
+      httpPostJson(
+        url,
+        body,
+        logSessionId,
+        {
+          ...extraHeaders,
+          ...(dpopHeader ? { DPoP: dpopHeader } : {}),
+        },
+      ),
+  });
   console.log("[codeflow] got access_token=", accessToken ? "yes" : "no", "c_nonce=", c_nonce ? "yes" : "no"); try { slog("[codeflow] token received", { hasAccessToken: !!accessToken, hasCNonce: !!c_nonce }); } catch {}
-  if (c_nonce) {
-    console.log("[codeflow] using c_nonce from token response"); try { slog("[codeflow] using c_nonce from token"); } catch {}
-  } else if (issuerMeta.nonce_endpoint) {
-    const nonceEndpoint = issuerMeta.nonce_endpoint;
-    console.log("[codeflow] nonceEndpoint=", nonceEndpoint); try { slog("[codeflow] nonceEndpoint", { nonceEndpoint }); } catch {}
-    const nonceRes = await httpPostJson(
-      nonceEndpoint,
-      {},
-      logSessionId,
-      accessToken ? { Authorization: `Bearer ${accessToken}` } : {}
-    ); try { slog("[codeflow] nonce request", { endpoint: nonceEndpoint, status: nonceRes.status }); } catch {}
-    if (!nonceRes.ok) {
-      const text = await nonceRes.text().catch(() => "");
-      console.error("[codeflow] nonce error", nonceRes.status, text); try { slog("[codeflow] nonce error", { status: nonceRes.status, error: text }); } catch {}
-      let err = {};
-      try { err = JSON.parse(text); } catch {}
-      throw new Error(`nonce_error ${nonceRes.status}: ${JSON.stringify(err)}`);
-    }
-    const nonceJson = await nonceRes.json();
-    c_nonce = nonceJson.c_nonce;
-    c_nonce_expires_in = nonceJson.c_nonce_expires_in;
-  } else {
-    throw new Error("nonce_error: issuer did not provide c_nonce and no nonce_endpoint is available");
-  }
-
-  // Algorithm negotiation
-  const supportedAlgs2 = issuerMeta?.proof_types_supported?.jwt?.proof_signing_alg_values_supported || issuerMeta?.credential_configurations_supported?.[configurationId]?.proof_types_supported?.jwt?.proof_signing_alg_values_supported || [];
-  const preferredOrder2 = ["ES256", "ES384", "ES512", "EdDSA"];
-  const selectedAlg2 = (Array.isArray(supportedAlgs2) && supportedAlgs2.length)
-    ? (preferredOrder2.find((a) => supportedAlgs2.includes(a)) || supportedAlgs2[0])
-    : "ES256";
-  console.log("[codeflow] issuer supported proof algs:", supportedAlgs2); try { slog("[codeflow] supported algs", { supportedAlgs: supportedAlgs2 }); } catch {}
+  const selectedAlg2 = selectProofSigningAlg(issuerMeta, configurationId);
   console.log("[codeflow] selected proof alg:", selectedAlg2); try { slog("[codeflow] selected alg", { selectedAlg: selectedAlg2 }); } catch {}
 
   const aud2 = issuerMeta?.credential_issuer || apiBase;
   console.log("[codeflow] proof audience:", aud2, issuerMeta?.credential_issuer ? "(from issuerMeta.credential_issuer)" : "(fallback apiBase)"); try { slog("[codeflow] proof audience", { aud: aud2 }); } catch {}
 
-  const keyPairs = [];
-  for (const p of attestPaths) {
-    const { privateJwk, publicJwk } = await ensureOrCreateEcKeyPair(p, selectedAlg2);
-    keyPairs.push({ privateJwk, publicJwk, didJwk: generateDidJwkFromPrivateJwk(publicJwk) });
-  }
+  const keyPairs = await buildKeyPairs({
+    keyPaths: attestPaths,
+    selectedAlg: selectedAlg2,
+    ensureOrCreateEcKeyPair,
+    generateDidJwkFromPrivateJwk,
+  });
 
   const credentialEndpoint = issuerMeta.credential_endpoint || `${apiBase}/credential`;
-
-  const { proofs: proofsSectionCode } = await buildCredentialRequestProofs({
+  const {
+    credentialRequest: credReq,
+    credentialResponseDecryptionKey: credentialResponseDecryptionKeyCode,
+  } = await buildCredentialRequest({
+    configurationId,
+    tokenBody,
     proofMode,
     credentialEndpoint,
-    aud: aud2,
+    audience: aud2,
     c_nonce,
     keyPairs,
     selectedAlg: selectedAlg2,
+    buildCredentialRequestProofs,
+    buildCredentialRequestSelector,
+    prepareCredentialResponseEncryption: () => prepareCredentialResponseEncryption(issuerMeta),
   });
-
   console.log("[codeflow] credentialEndpoint=", credentialEndpoint); try { slog("[codeflow] credentialEndpoint", { credentialEndpoint }); } catch {}
   console.log("[codeflow] requesting credential..."); try { slog("[codeflow] requesting credential"); } catch {}
-  let credentialResponseDecryptionKeyCode = null;
-  const credentialResponseEncCtxCode = await prepareCredentialResponseEncryption(issuerMeta);
-  if (credentialResponseEncCtxCode) {
-    credentialResponseDecryptionKeyCode = credentialResponseEncCtxCode.privateKey;
-  }
-  const credReq = {
-    ...buildCredentialRequestSelector(configurationId, tokenBody),
-    proofs: proofsSectionCode,
-    ...(credentialResponseEncCtxCode
-      ? { credential_response_encryption: credentialResponseEncCtxCode.credential_response_encryption }
-      : {}),
-  };
   console.log("[codeflow] credential request:", JSON.stringify({ ...credReq, proofs: redactProofsForLog(credReq.proofs) }, null, 2)); try { slog("[codeflow] credential request body", { hasBody: true }); } catch {}
-  let credentialDpopJwtCode = null;
-  try {
-    if (
-      accessToken &&
-      dpopPrivateJwk &&
-      dpopPublicJwk &&
-      isDpopBoundAccessToken(tokenBody, accessToken)
-    ) {
-      credentialDpopJwtCode = await createDPoP({
-        privateJwk: dpopPrivateJwk,
-        publicJwk: dpopPublicJwk,
-        htu: credentialEndpoint,
-        htm: "POST",
-        ath: computeAthForDpop(accessToken),
-        alg: "ES256"
-      });
-    }
-  } catch (dpopCredError) {
-    console.warn("[codeflow] Failed to generate DPoP for credential request:", dpopCredError?.message);
-    try { slog("[codeflow] DPoP for credential failed", { error: dpopCredError?.message }); } catch {}
-  }
-  const credReqBody = JSON.stringify(credReq);
-  const credHeadersCode = {
-    "content-type": "application/json",
-    authorization: `Bearer ${accessToken}`,
-    ...(credentialDpopJwtCode ? { DPoP: credentialDpopJwtCode } : {}),
-  };
-  try { slog("[codeflow] sending credential request", { endpoint: credentialEndpoint, hasDPoP: !!credentialDpopJwtCode, body: { ...credReq, proofs: redactProofsForLog(credReq.proofs) } }); } catch {}
-  const credRes = await fetch(credentialEndpoint, {
-    method: "POST",
-    headers: credHeadersCode,
-    body: credReqBody,
+  const initialCredentialResponse = await postCredentialRequest({
+    credentialEndpoint,
+    credentialRequest: credReq,
+    accessToken,
+    tokenBody,
+    dpopPrivateJwk,
+    dpopPublicJwk,
+    isDpopBoundAccessToken,
+    computeAthForDpop,
+    createDPoP,
+    fetchImpl: fetch,
+    parseCredentialResponsePayload: (responseText, contentType) =>
+      parseCredentialResponsePayload(responseText, contentType, credentialResponseDecryptionKeyCode),
   });
-  console.log("[codeflow] credentialRes.status=", credRes.status); 
-  try { slog("[codeflow] credentialRes.status", { status: credRes.status }); } catch {}
-  console.log("[codeflow] credentialRes.headers:", Object.fromEntries(credRes.headers.entries())); 
-  try { slog("[codeflow] credentialRes.headers", { headers: Object.fromEntries(credRes.headers.entries()) }); } catch {}
+  console.log("[codeflow] credentialRes.status=", initialCredentialResponse.status);
+  try { slog("[codeflow] credentialRes.status", { status: initialCredentialResponse.status }); } catch {}
 
-  const responseText = await credRes.text().catch(() => "");
-  const responseContentTypeCode = credRes.headers.get("content-type") || "";
-  console.log("[codeflow] credentialRes.body length:", responseText.length); 
-  try { slog("[codeflow] credentialRes.body", { length: responseText.length }); } catch {}
-
-  let responseBodyCode = null;
-  if (credRes.ok || credRes.status === 202) {
-    try {
-      responseBodyCode = await parseCredentialResponsePayload(
-        responseText,
-        responseContentTypeCode,
-        credentialResponseDecryptionKeyCode,
-      );
-    } catch (parseErr) {
-      try {
-        slog("[codeflow] credential response parse failed", {
-          error: parseErr?.message,
-          contentType: responseContentTypeCode,
-        });
-      } catch {}
-    }
-  }
-
-  if (credRes.status === 202) {
-    const credBody = responseBodyCode;
-    if (!credBody || typeof credBody !== "object") {
-      console.error("[codeflow] failed to parse deferred response"); 
-      try { slog("[codeflow] deferred response parse failed", { contentType: responseContentTypeCode }); } catch {}
-      throw new Error(`credential_error ${credRes.status}: invalid response (expected JSON inside JWE or plain JSON)`);
-    }
-    const { transaction_id } = credBody;
-    console.log("[codeflow] deferred issuance, transaction_id:", transaction_id); 
-    try { slog("[codeflow] deferred issuance", { transaction_id }); } catch {}
-    const start = Date.now();
-    const timeout = pollTimeoutMs ?? 30000;
-    const clientPollMs = pollIntervalMs ?? 2000;
-    const deferredEndpoint = issuerMeta.credential_deferred_endpoint || `${apiBase}/credential_deferred`;
-    let nextDelayMs = getNextPollDelayMs(credBody.interval, clientPollMs);
-    while (Date.now() - start < timeout) {
-      await sleep(nextDelayMs);
-      let deferredDpopJwtCode = null;
-      try {
-        if (
-          accessToken &&
-          dpopPrivateJwk &&
-          dpopPublicJwk &&
-          isDpopBoundAccessToken(tokenBody, accessToken)
-        ) {
-          deferredDpopJwtCode = await createDPoP({
-            privateJwk: dpopPrivateJwk,
-            publicJwk: dpopPublicJwk,
-            htu: deferredEndpoint,
-            htm: "POST",
-            ath: computeAthForDpop(accessToken),
-            alg: "ES256",
-          });
-        }
-      } catch (deferredDpopErr) {
-        console.warn("[codeflow] Failed to generate DPoP for deferred poll:", deferredDpopErr?.message);
-        try {
-          slog("[codeflow] DPoP for deferred poll failed", { error: deferredDpopErr?.message });
-        } catch {}
-      }
-      const defRes = await httpPostJson(
-        deferredEndpoint,
-        { transaction_id },
-        logSessionId,
-        {
-          Authorization: `Bearer ${accessToken}`,
-          ...(deferredDpopJwtCode ? { DPoP: deferredDpopJwtCode } : {}),
-        },
-      );
-      try { slog("[codeflow] deferred poll", { status: defRes.status }); } catch {}
-      const defBodyText = await defRes.text().catch(() => "");
-      const defCtCode = defRes.headers.get("content-type") || "";
-      console.log("[codeflow] deferred response body length:", defBodyText.length); 
-      try { slog("[codeflow] deferred response", { length: defBodyText.length }); } catch {}
-      const outcome = await resolveDeferredPollResult({
-        status: defRes.status,
-        ok: defRes.ok,
-        contentType: defCtCode,
-        responseText: defBodyText,
-        decryptionPrivateKey: credentialResponseDecryptionKeyCode,
-      });
-      if (outcome.kind === "success") {
-        const defBody = outcome.body;
-        try { slog("[codeflow] deferred ready"); } catch {}
-        await validateAndStoreCredential({
-          configurationId,
-          credential: defBody,
-          issuerMeta,
-          apiBase,
-          keyBindings: keyPairs.map((k) => ({
-            privateJwk: k.privateJwk,
-            publicJwk: k.publicJwk,
-            didJwk: k.didJwk,
-          })),
-          metadata: { configurationId, c_nonce, c_nonce_expires_in },
-          authorizationServerMeta: issuerMeta._authorizationServerMeta,
-          accessToken,
-          tokenBody,
-          dpopPrivateJwk,
-          dpopPublicJwk,
-        }, logSessionId);
-        return defBody;
-      }
-      if (outcome.kind === "pending") {
-        nextDelayMs = getNextPollDelayMs(outcome.interval, clientPollMs);
-        try { slog("[codeflow] deferred issuance_pending", { nextDelayMs }); } catch {}
-        continue;
-      }
-      console.warn("[codeflow] deferred poll terminal:", defRes.status, defBodyText); 
-      try { slog("[codeflow] deferred poll terminal", { status: defRes.status, error: outcome.errorBody }); } catch {}
-      throw new Error(formatDeferredTerminalError(outcome));
-    }
-    try { slog("[codeflow] deferred timeout"); } catch {}
-    throw new Error("timeout: Deferred issuance timed out");
-  }
-
-  if (!credRes.ok) {
-    let err = {};
-    try { 
-      err = JSON.parse(responseText); 
-    } catch (parseErr) {
-      console.error("[codeflow] credential error response is not JSON, raw text:", responseText); 
-      try { slog("[codeflow] credential error not JSON", { text: responseText }); } catch {}
-      err = { error: "invalid_response", error_description: responseText };
-    }
-    console.error("[codeflow] credential error parsed:", JSON.stringify(err, null, 2)); 
-    try { slog("[codeflow] credential error", { status: credRes.status, err }); } catch {}
-    throw new Error(`credential_error ${credRes.status}: ${JSON.stringify(err)}`);
-  }
-  
-  const credBody = responseBodyCode;
+  const credBody = initialCredentialResponse.status === 202
+    ? await pollDeferredCredential({
+        deferredEndpoint: issuerMeta.credential_deferred_endpoint || `${apiBase}/credential_deferred`,
+        transactionId: initialCredentialResponse.body.transaction_id,
+        initialInterval: initialCredentialResponse.body.interval,
+        pollTimeoutMs,
+        pollIntervalMs,
+        accessToken,
+        tokenBody,
+        dpopPrivateJwk,
+        dpopPublicJwk,
+        isDpopBoundAccessToken,
+        computeAthForDpop,
+        createDPoP,
+        postJson: (url, body, dpopHeader, extraHeaders) =>
+          httpPostJson(
+            url,
+            body,
+            logSessionId,
+            {
+              ...extraHeaders,
+              ...(dpopHeader ? { DPoP: dpopHeader } : {}),
+            },
+          ),
+        parseCredentialResponsePayload: (responseText, contentType) =>
+          parseCredentialResponsePayload(responseText, contentType, credentialResponseDecryptionKeyCode),
+      })
+    : initialCredentialResponse.body;
   if (!credBody || typeof credBody !== "object") {
-    console.error("[codeflow] failed to parse credential response"); 
-    try { slog("[codeflow] credential response parse failed", { contentType: responseContentTypeCode }); } catch {}
+    console.error("[codeflow] failed to parse credential response");
+    try { slog("[codeflow] credential response parse failed"); } catch {}
     throw new Error(`credential_error: invalid JSON response`);
   }
   console.log("[codeflow] credential received, starting validation"); 
@@ -2723,9 +2276,6 @@ async function verifyJwsWithDid(jws, header, didOrIss) {
   }
   throw lastErr || new Error('DID verification failed');
 }
-
-
-
 
 
 

@@ -1,16 +1,18 @@
 import { parseCredentialResponsePayload } from "./credentialResponseEncryption.js";
 
 /** OIDC4VCI §9 / RFC001 §6.3 — server hint in seconds; wait at least this long between polls. */
-export function getNextPollDelayMs(issuerIntervalSeconds, clientIntervalMs = 2000) {
-  const client = Math.max(0, Number(clientIntervalMs) || 0) || 2000;
+export function getNextPollDelayMs(issuerIntervalSeconds, clientIntervalMs) {
+  const parsedClient = Number(clientIntervalMs);
+  const hasClientOverride = Number.isFinite(parsedClient) && parsedClient > 0;
+  const client = hasClientOverride ? parsedClient : null;
   if (
     typeof issuerIntervalSeconds === "number" &&
     Number.isFinite(issuerIntervalSeconds) &&
     issuerIntervalSeconds >= 0
   ) {
-    return Math.max(client, issuerIntervalSeconds * 1000);
+    return Math.max(client ?? 0, issuerIntervalSeconds * 1000);
   }
-  return client;
+  return client ?? 2000;
 }
 
 /**
