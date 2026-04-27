@@ -32,8 +32,11 @@ import {
 } from "./cs03.js";
 import { transactionDataBindingForSdJwtKb } from "./transactionDataKb.js";
 import { normalizeDcqlClaimsToSegmentLists } from "./dcqlClaimsPaths.js";
-
 export { normalizeDcqlClaimsToSegmentLists } from "./dcqlClaimsPaths.js";
+import {
+  storedCredentialMatchesDcqlQuery,
+  presentationFormatFromDcqlQuery,
+} from "./dcqlCredentialSelection.js";
 
 function makeSessionLogger(sessionId) {
   return function sessionLog(...args) {
@@ -1062,28 +1065,6 @@ export function normalizeDcqlCredentialFormat(format) {
   return f;
 }
 
-function readSdJwtVctFromRaw(rawToken) {
-  try {
-    const jws = rawToken.split("~")[0];
-    const { payload } = decodeJwt(jws);
-    return payload?.vct ?? null;
-  } catch {
-    return null;
-  }
-}
-
-function mdocDoctypeMetaMatchesConfiguration(entry, configurationId) {
-  const dv = entry.meta?.doctype_value;
-  if (dv == null || dv === "") return true;
-  if (typeof dv !== "string") return true;
-  const stripped = dv.replace(/:mso_mdoc$/i, "").toLowerCase();
-  const cid = String(configurationId).toLowerCase();
-  if (stripped.includes(cid) || cid.includes(stripped)) return true;
-  if (stripped.includes("pid") && cid.includes("pid")) return true;
-  if (stripped.includes("mdl") && cid.includes("mdl")) return true;
-  return false;
-}
-
 /**
  * @param {object} entry - dcql_query.credentials[]
  * @param {string} configurationId - wallet Redis key (configuration id)
@@ -1091,27 +1072,13 @@ function mdocDoctypeMetaMatchesConfiguration(entry, configurationId) {
  * @param {string} wantFmt - normalized format from {@link normalizeDcqlCredentialFormat}
  */
 export function storedRawMatchesDcqlEntry(entry, configurationId, rawToken, wantFmt) {
-  const isMdoc = isMdocCredential(rawToken);
   if (wantFmt === "mso_mdoc") {
-    if (!isMdoc) return false;
-    return mdocDoctypeMetaMatchesConfiguration(entry, configurationId);
+    return storedCredentialMatchesDcqlQuery(entry, rawToken);
   }
   if (wantFmt === "dc+sd-jwt" || wantFmt === "vc+sd-jwt") {
-    if (isMdoc) return false;
-    if (!rawToken.includes("~")) return false;
-    const vct = readSdJwtVctFromRaw(rawToken);
-    const vctValues = entry.meta?.vct_values;
-    if (Array.isArray(vctValues) && vctValues.length > 0) {
-      if (vct == null) return false;
-      const ok = vctValues.some(
-        (w) =>
-          typeof w === "string" &&
-          (w === vct || vct.includes(w) || w.includes(vct)),
-      );
-      if (!ok) return false;
-    }
-    return true;
+    return storedCredentialMatchesDcqlQuery(entry, rawToken);
   }
+  const isMdoc = isMdocCredential(rawToken);
   if (wantFmt === "jwt_vc_json" || wantFmt === "jwt_vp") {
     if (isMdoc) return false;
     if (rawToken.includes("~")) return false;
@@ -1608,16 +1575,7 @@ export async function performPresentation(
             mdocSessionNonce,
           });
         if (entryMdocNonce) mdocGeneratedNonces.push(entryMdocNonce);
-        const raw = found.rawToken;
-        const wantFmt = normalizeDcqlCredentialFormat(credQuery.format);
-        const submissionFmt = isMdocCredential(raw)
-          ? "mso_mdoc"
-          : raw.includes("~")
-            ? wantFmt === "vc+sd-jwt"
-              ? "vc+sd-jwt"
-              : "dc+sd-jwt"
-            : "jwt_vp";
-        perEntryFormats.push(submissionFmt);
+        perEntryFormats.push(presentationFormatFromDcqlQuery(credQuery));
         vpTokenObject[credQuery.id] = [vpStr];
       }
       vpTokenValue = vpTokenObject;
@@ -1651,55 +1609,52 @@ export async function performPresentation(
         } catch {}
       }
     } else {
-    // Determine which wallet credential to use
-    let selectedType = credentialType;
-    if (!selectedType) {
-      // Try to infer from presentation_definition (dcql vct or descriptor id hints)
-      const candidateTypes = await listWalletCredentialTypes();
+      let selectedType = credentialType;
+      if (!selectedType) {
+        const candidateTypes = await listWalletCredentialTypes();
+        try {
+          slog("[present] wallet types", { count: candidateTypes.length });
+        } catch {}
+        console.log(
+          "[present] Available wallet credential types:",
+          candidateTypes,
+        );
+        if (candidateTypes.length === 0)
+          throw new Error("No credentials available in wallet cache");
+        const defText = JSON.stringify(presentationDefinition || {});
+        selectedType =
+          candidateTypes.find((t) => defText.includes(t)) || candidateTypes[0];
+      }
       try {
-        slog("[present] wallet types", { count: candidateTypes.length });
+        slog("[present] selected type", { selectedType });
       } catch {}
+      console.log("[present] Selected credential type:", selectedType);
+
+      const stored = await getWalletCredentialByType(selectedType);
       console.log(
-        "[present] Available wallet credential types:",
-        candidateTypes,
+        "[present] Stored credential found:",
+        !!stored,
+        "has.credential=",
+        !!stored?.credential,
       );
-      if (candidateTypes.length === 0)
-        throw new Error("No credentials available in wallet cache");
-      // Heuristic: prefer a candidate whose type name appears in definition id/descriptor ids
-      const defText = JSON.stringify(presentationDefinition || {});
-      selectedType =
-        candidateTypes.find((t) => defText.includes(t)) || candidateTypes[0];
-    }
-    console.log("[present] Selected credential type:", selectedType);
-    try {
-      slog("[present] selected type", { selectedType });
-    } catch {}
+      try {
+        slog("[present] stored credential", {
+          found: !!stored,
+          hasCredential: !!stored?.credential,
+        });
+      } catch {}
+      if (!stored || (!stored.credential && !(stored.multi && Array.isArray(stored.entries))))
+        throw new Error("Credential not found in wallet cache");
 
-    const stored = await getWalletCredentialByType(selectedType);
-    console.log(
-      "[present] Stored credential found:",
-      !!stored,
-      "has.credential=",
-      !!stored?.credential,
-    );
-    try {
-      slog("[present] stored credential", {
-        found: !!stored,
-        hasCredential: !!stored?.credential,
-      });
-    } catch {}
-    if (!stored || (!stored.credential && !(stored.multi && Array.isArray(stored.entries))))
-      throw new Error("Credential not found in wallet cache");
+      const resolvedDevicePath = resolveDeviceKeyPath(keyPath);
+      const { privateJwk, publicJwk } = await ensureOrCreateEcKeyPair(resolvedDevicePath);
 
-    const resolvedDevicePath = resolveDeviceKeyPath(keyPath);
-    const { privateJwk, publicJwk } = await ensureOrCreateEcKeyPair(resolvedDevicePath);
-
-    let credentialEnvelopeForVp = stored.credential;
-    if (stored.multi && Array.isArray(stored.entries) && stored.entries.length > 0) {
-      const match = stored.entries.find((e) => ecPublicJwksEqual(e?.keyBinding?.publicJwk, publicJwk));
-      const pick = match || stored.entries[0];
-      credentialEnvelopeForVp = pick.credential;
-    }
+      let credentialEnvelopeForVp = stored.credential;
+      if (stored.multi && Array.isArray(stored.entries) && stored.entries.length > 0) {
+        const match = stored.entries.find((e) => ecPublicJwksEqual(e?.keyBinding?.publicJwk, publicJwk));
+        const pick = match || stored.entries[0];
+        credentialEnvelopeForVp = pick.credential;
+      }
 
     // Extract the credential token from the wallet cache
     let vpToken = extractCredentialString(credentialEnvelopeForVp);
@@ -1792,7 +1747,6 @@ export async function performPresentation(
 
       // Determine docType from credential type, presentation definition, or descriptor ID
       let docType = selectedType || "org.iso.18013.5.1.mDL"; // Use selected credential type as default
-
       if (presentationDefinition?.input_descriptors?.[0]?.id) {
         const descriptorId = presentationDefinition.input_descriptors[0].id;
 
@@ -1873,7 +1827,7 @@ export async function performPresentation(
       } catch {}
     }
 
-    // Determine credential format for presentation_submission
+    // Descriptor format for presentation_submission: use DCQL when available
     const credentialFormat = isMdoc
       ? "mso_mdoc"
       : vpToken.includes("~")
