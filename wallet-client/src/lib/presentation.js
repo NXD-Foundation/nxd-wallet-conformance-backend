@@ -26,6 +26,10 @@ import {
   buildOobCs03VpToken,
   sendCs03OobResponse,
 } from "./cs03.js";
+import {
+  selectWalletCredentialTypeForDcql,
+  presentationFormatFromDcqlQuery,
+} from "./dcqlCredentialSelection.js";
 
 function makeSessionLogger(sessionId) {
   return function sessionLog(...args) {
@@ -703,24 +707,57 @@ export async function performPresentation(
       };
     }
 
-    // Determine which wallet credential to use
-    let selectedType = credentialType;
-    if (!selectedType) {
-      // Try to infer from presentation_definition (dcql vct or descriptor id hints)
-      const candidateTypes = await listWalletCredentialTypes();
+    // Determine which wallet credential to use: DCQL first, then PEX / heuristics
+    const hasDcqlCredentials =
+      payload.dcql_query &&
+      Array.isArray(payload.dcql_query.credentials) &&
+      payload.dcql_query.credentials.length > 0;
+
+    let selectedType = null;
+    let matchedDcqlQuery = null;
+    if (hasDcqlCredentials) {
+      const pick = await selectWalletCredentialTypeForDcql({
+        dcqlQuery: payload.dcql_query,
+        listWalletCredentialTypes,
+        getWalletCredentialByType,
+        extractCredentialString,
+      });
+      if (!pick) {
+        throw new Error(
+          "No stored credential matches the verifier DCQL query (format and meta: doctype_value / vct_values).",
+        );
+      }
+      if (credentialType && pick.selectedType !== credentialType) {
+        throw new Error(
+          `Request credential type "${credentialType}" does not match the credential type selected for DCQL ("${pick.selectedType}").`,
+        );
+      }
+      selectedType = pick.selectedType;
+      matchedDcqlQuery = pick.matchedQuery;
       try {
-        slog("[present] wallet types", { count: candidateTypes.length });
+        slog("[present] DCQL-selected credential", {
+          selectedType,
+          dcqlId: matchedDcqlQuery?.id,
+          format: matchedDcqlQuery?.format,
+        });
       } catch {}
-      console.log(
-        "[present] Available wallet credential types:",
-        candidateTypes,
-      );
-      if (candidateTypes.length === 0)
-        throw new Error("No credentials available in wallet cache");
-      // Heuristic: prefer a candidate whose type name appears in definition id/descriptor ids
-      const defText = JSON.stringify(presentationDefinition || {});
-      selectedType =
-        candidateTypes.find((t) => defText.includes(t)) || candidateTypes[0];
+    } else {
+      selectedType = credentialType;
+      if (!selectedType) {
+        const candidateTypes = await listWalletCredentialTypes();
+        try {
+          slog("[present] wallet types", { count: candidateTypes.length });
+        } catch {}
+        console.log(
+          "[present] Available wallet credential types:",
+          candidateTypes,
+        );
+        if (candidateTypes.length === 0)
+          throw new Error("No credentials available in wallet cache");
+        const defText = JSON.stringify(presentationDefinition || {});
+        selectedType =
+          candidateTypes.find((t) => defText.includes(t)) || candidateTypes[0];
+      }
     }
     console.log("[present] Selected credential type:", selectedType);
     try {
@@ -828,10 +865,11 @@ export async function performPresentation(
         slog("[present] processing mdoc");
       } catch {}
 
-      // Determine docType from credential type, presentation definition, or descriptor ID
+      // Determine docType from DCQL meta, credential type, presentation definition, or descriptor ID
       let docType = selectedType || "org.iso.18013.5.1.mDL"; // Use selected credential type as default
-
-      if (presentationDefinition?.input_descriptors?.[0]?.id) {
+      if (matchedDcqlQuery?.meta?.doctype_value) {
+        docType = matchedDcqlQuery.meta.doctype_value;
+      } else if (presentationDefinition?.input_descriptors?.[0]?.id) {
         const descriptorId = presentationDefinition.input_descriptors[0].id;
 
         // If descriptor ID looks like a docType (has dots/colons), use it directly
@@ -904,12 +942,14 @@ export async function performPresentation(
       } catch {}
     }
 
-    // Determine credential format for presentation_submission
-    const credentialFormat = isMdoc
-      ? "mso_mdoc"
-      : vpToken.includes("~")
-        ? "dc+sd-jwt"
-        : "jwt_vp";
+    // Descriptor format for presentation_submission: use DCQL when available
+    const credentialFormat = matchedDcqlQuery
+      ? presentationFormatFromDcqlQuery(matchedDcqlQuery)
+      : isMdoc
+        ? "mso_mdoc"
+        : vpToken.includes("~")
+          ? "dc+sd-jwt"
+          : "jwt_vp";
     console.log(
       "[present] Credential format for submission:",
       credentialFormat,
