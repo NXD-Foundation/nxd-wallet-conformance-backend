@@ -9,6 +9,7 @@ import { digest } from "@sd-jwt/crypto-nodejs";
 import { verifyReceivedMdlToken } from "../utils/mdlVerification.js";
 import { didKeyToJwks } from "../utils/cryptoUtils.js";
 import { isDpopBoundAccessToken, computeAthForDpop } from "../utils/tokenUtils.js";
+import { extractMdocDocType } from "./lib/mdocDocType.js";
 
 const app = express();
 app.use(express.json({ limit: "2mb" }));
@@ -1863,24 +1864,69 @@ async function validateAndStoreCredential({ configurationId, credential, issuerM
   }
 
   // Try SD-JWT first (presence of '~'), else treat as JWT VC; if neither, try mdoc
+  const credentialConfig =
+    issuerMeta?.credential_configurations_supported?.[configurationId] || {};
+  let detectedFormat = credentialConfig.format || null;
+  let detectedDoctype =
+    typeof credentialConfig.doctype === "string" && credentialConfig.doctype.length > 0
+      ? credentialConfig.doctype
+      : null;
   try {
     if (typeof token === 'string' && token.includes('~')) {
+      if (!detectedFormat) {
+        try {
+          detectedFormat = decodeProtectedHeader(token.split("~")[0])?.typ || null;
+        } catch {}
+      }
+      if (!detectedFormat || detectedFormat === "kb+jwt") detectedFormat = "dc+sd-jwt";
       console.log("[validate] detected SD-JWT format (contains '~')"); 
-      try { slog("[validate] validating SD-JWT"); } catch {}
+      try { slog("[validate] validating SD-JWT", { detectedFormat }); } catch {}
       await validateSdJwt({ sdJwt: token, issuerMeta, configurationId, expectedCNonce: metadata?.c_nonce, authorizationServerMeta: authorizationServerMeta || issuerMeta._authorizationServerMeta }, logSessionId);
     } else if (typeof token === 'string' && token.split('.').length >= 3) {
+      if (!detectedFormat) detectedFormat = "jwt_vc_json";
       console.log("[validate] detected JWT VC format (3+ parts)"); 
-      try { slog("[validate] validating JWT VC"); } catch {}
+      try { slog("[validate] validating JWT VC", { detectedFormat }); } catch {}
       await validateJwtVc({ jwtVc: token, issuerMeta, apiBase, configurationId, publicJwk: keyBinding?.publicJwk }, logSessionId);
     } else if (typeof token === 'string') {
+      if (!detectedFormat) detectedFormat = "mso_mdoc";
       // Potential mdoc base64url
       console.log("[validate] detected potential mdoc format"); 
-      try { slog("[validate] validating mdoc"); } catch {}
+      try { slog("[validate] validating mdoc", { detectedFormat }); } catch {}
       const mdocResult = await verifyReceivedMdlToken(token, { validateStructure: true, includeMetadata: false });
       if (!mdocResult.success) {
         console.error("[validate] mdoc validation failed:", mdocResult.error); 
         try { slog("[validate] mdoc validation failed", { error: mdocResult.error }); } catch {}
         throw new Error(`mdoc_validation_failed: ${mdocResult.error}`);
+      }
+      try {
+        const extractedDoctype = extractMdocDocType(token, {
+          fallbackDocType: detectedDoctype,
+        });
+        if (extractedDoctype) {
+          detectedDoctype = extractedDoctype;
+        }
+        try {
+          slog("[validate] mdoc doctype extracted", {
+            doctype: detectedDoctype,
+            metadataDoctype: credentialConfig.doctype || null,
+          });
+        } catch {}
+      } catch (e) {
+        try {
+          slog("[validate] mdoc doctype extraction failed", {
+            error: e?.message || String(e),
+            metadataDoctype: credentialConfig.doctype || null,
+          });
+        } catch {}
+      }
+      if (
+        credentialConfig.doctype &&
+        detectedDoctype &&
+        credentialConfig.doctype !== detectedDoctype
+      ) {
+        throw new Error(
+          `mdoc_doctype_mismatch: issuer metadata doctype ${credentialConfig.doctype} does not match credential docType ${detectedDoctype}`,
+        );
       }
       // Placeholder for cryptographic verification using trust anchors
       if (process.env.WALLET_MDL_STRICT === 'true') {
@@ -1901,8 +1947,12 @@ async function validateAndStoreCredential({ configurationId, credential, issuerM
 
   // If validation passed, store
   console.log("[validate] credential validation passed, storing"); 
-  try { slog("[store] credential", { configurationId }); } catch {}
-  await storeWalletCredentialByType(configurationId, { credential, keyBinding, metadata });
+  try { slog("[store] credential", { configurationId, format: detectedFormat, doctype: detectedDoctype }); } catch {}
+  await storeWalletCredentialByType(configurationId, {
+    credential,
+    keyBinding,
+    metadata: { ...metadata, format: detectedFormat, doctype: detectedDoctype },
+  });
 }
 
 function extractCredentialToken(credentialEnvelope) {

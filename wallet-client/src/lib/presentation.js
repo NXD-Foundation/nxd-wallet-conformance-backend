@@ -30,6 +30,10 @@ import {
   selectWalletCredentialTypeForDcql,
   presentationFormatFromDcqlQuery,
 } from "./dcqlCredentialSelection.js";
+import {
+  filterSdJwtByDcqlClaims,
+  sdJwtWithoutKbJwt,
+} from "./sdJwtDisclosureSelection.js";
 
 function makeSessionLogger(sessionId) {
   return function sessionLog(...args) {
@@ -721,6 +725,7 @@ export async function performPresentation(
         listWalletCredentialTypes,
         getWalletCredentialByType,
         extractCredentialString,
+        slog,
       });
       if (!pick) {
         throw new Error(
@@ -806,6 +811,18 @@ export async function performPresentation(
     try {
       slog("[present] credential type", { isMdoc, isSdJwt });
     } catch {}
+
+    if (isSdJwt && matchedDcqlQuery) {
+      const before = vpToken;
+      vpToken = filterSdJwtByDcqlClaims(vpToken, matchedDcqlQuery);
+      try {
+        slog("[present] SD-JWT filtered by DCQL", {
+          beforeDisclosures: sdJwtWithoutKbJwt(before).disclosures.length,
+          afterDisclosures: sdJwtWithoutKbJwt(vpToken).disclosures.length,
+          dcqlId: matchedDcqlQuery.id,
+        });
+      } catch {}
+    }
 
     // Build key-binding JWT. For SD-JWT, include sd_hash per SD-JWT spec and use typ "kb+jwt".
     const { privateJwk, publicJwk } = await ensureOrCreateEcKeyPair(
@@ -905,6 +922,7 @@ export async function performPresentation(
         verifierGeneratedNonce: nonce,
         devicePrivateJwk: stored?.keyBinding?.privateJwk || privateJwk,
         presentationDefinition,
+        dcqlCredentialQuery: matchedDcqlQuery,
       });
       console.log("[present] Built DeviceResponse, length:", vpToken.length);
       try {
@@ -987,7 +1005,10 @@ export async function performPresentation(
     ) {
       // DCQL query is present - build vp_token as an object mapping credential query IDs to arrays of presentations
       const vpTokenObject = {};
-      for (const credQuery of dcqlQuery.credentials) {
+      const responseCredentialQueries = matchedDcqlQuery
+        ? [matchedDcqlQuery]
+        : dcqlQuery.credentials;
+      for (const credQuery of responseCredentialQueries) {
         if (credQuery && credQuery.id && typeof credQuery.id === "string") {
           // Use the credential query ID as the key; value is always an array of presentation string(s)
           if (credQuery.multiple === true) {

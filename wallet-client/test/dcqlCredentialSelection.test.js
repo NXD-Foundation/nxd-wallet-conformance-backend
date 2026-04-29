@@ -7,6 +7,7 @@ import {
   presentationFormatFromDcqlQuery,
   selectWalletCredentialTypeForDcql,
 } from "../src/lib/dcqlCredentialSelection.js";
+import { extractMdocDocType } from "../src/lib/mdocDocType.js";
 
 function buildMdocB64ForTests(docType) {
   const cbor = encode({
@@ -14,6 +15,19 @@ function buildMdocB64ForTests(docType) {
     issuerSigned: { nameSpaces: {}, issuerAuth: new Uint8Array([1]) },
   });
   return base64url.encode(cbor, "utf8");
+}
+
+function buildIssuerSignedOnlyMdocForTests(docType = null) {
+  const issuerAuth = docType
+    ? [new Uint8Array(), {}, encode({ docType }), new Uint8Array()]
+    : new Uint8Array([1]);
+  return base64url.encode(
+    encode({
+      nameSpaces: {},
+      issuerAuth,
+    }),
+    "utf8",
+  );
 }
 
 async function buildDcSdJwtForTests(vct) {
@@ -46,6 +60,31 @@ describe("dcqlCredentialSelection", () => {
     });
   });
 
+  describe("extractMdocDocType", () => {
+    it("extracts docType from an embedded Document structure", () => {
+      const mdoc = buildMdocB64ForTests("org.iso.18013.5.1.mDL");
+      expect(extractMdocDocType(mdoc)).to.equal("org.iso.18013.5.1.mDL");
+    });
+
+    it("extracts docType from an IssuerSigned issuerAuth MSO payload", () => {
+      const mdoc = buildIssuerSignedOnlyMdocForTests(
+        "urn:eu.europa.ec.eudi:pid:1",
+      );
+      expect(extractMdocDocType(mdoc)).to.equal(
+        "urn:eu.europa.ec.eudi:pid:1",
+      );
+    });
+
+    it("falls back to metadata doctype when IssuerSigned has no readable MSO payload", () => {
+      const mdoc = buildIssuerSignedOnlyMdocForTests();
+      expect(
+        extractMdocDocType(mdoc, {
+          fallbackDocType: "urn:eu.europa.ec.eudi:pid:1",
+        }),
+      ).to.equal("urn:eu.europa.ec.eudi:pid:1");
+    });
+  });
+
   describe("storedCredentialMatchesDcqlQuery", () => {
     it("matches mso_mdoc when doctype_value equals stored document", () => {
       const b64 = buildMdocB64ForTests(pidDoctype);
@@ -67,6 +106,58 @@ describe("dcqlCredentialSelection", () => {
       const sd = await buildDcSdJwtForTests("eu.test.demo");
       const q = { format: "mso_mdoc", meta: { doctype_value: pidDoctype } };
       expect(storedCredentialMatchesDcqlQuery(q, sd)).to.equal(false);
+    });
+    it("matches IssuerSigned-only mdoc using a metadata doctype fallback", () => {
+      const issuerSignedOnly = buildIssuerSignedOnlyMdocForTests();
+      const q = {
+        id: "cred1",
+        format: "mso_mdoc",
+        meta: { doctype_value: "urn:eu.europa.ec.eudi:pid:1" },
+      };
+      expect(
+        storedCredentialMatchesDcqlQuery(q, issuerSignedOnly, undefined, {
+          fallbackDocType: "urn:eu.europa.ec.eudi:pid:1",
+        }),
+      ).to.equal(true);
+    });
+    it("matches IssuerSigned-only mdoc using the docType from issuerAuth MSO", () => {
+      const issuerSignedOnly = buildIssuerSignedOnlyMdocForTests(
+        "urn:eu.europa.ec.eudi:pid:1",
+      );
+      const q = {
+        id: "cred1",
+        format: "mso_mdoc",
+        meta: { doctype_value: "urn:eu.europa.ec.eudi:pid:1" },
+      };
+      expect(storedCredentialMatchesDcqlQuery(q, issuerSignedOnly)).to.equal(
+        true,
+      );
+    });
+    it("rejects IssuerSigned-only mdoc when fallback doctype does not match", () => {
+      const issuerSignedOnly = buildIssuerSignedOnlyMdocForTests();
+      const q = {
+        id: "cred1",
+        format: "mso_mdoc",
+        meta: { doctype_value: "urn:eu.europa.ec.eudi:pid:1" },
+      };
+      expect(
+        storedCredentialMatchesDcqlQuery(q, issuerSignedOnly, undefined, {
+          fallbackDocType: "org.iso.18013.5.1.mDL",
+        }),
+      ).to.equal(false);
+    });
+    it("does not let fallback doctype override an embedded mdoc docType", () => {
+      const mdoc = buildMdocB64ForTests("org.iso.18013.5.1.mDL");
+      const q = {
+        id: "cred1",
+        format: "mso_mdoc",
+        meta: { doctype_value: "urn:eu.europa.ec.eudi:pid:1" },
+      };
+      expect(
+        storedCredentialMatchesDcqlQuery(q, mdoc, undefined, {
+          fallbackDocType: "urn:eu.europa.ec.eudi:pid:1",
+        }),
+      ).to.equal(false);
     });
     it("matches dc+sd-jwt to SD-JWT and optional vct_values", async () => {
       const vct = "eu.webuildconsortium.helloworld.v1";
@@ -124,6 +215,201 @@ describe("dcqlCredentialSelection", () => {
       expect(
         presentationFormatFromDcqlQuery(result.matchedQuery),
       ).to.equal("mso_mdoc");
+    });
+
+    it("accepts a required credential_set option that references the matched credential query id", async () => {
+      const mdocB64 = buildMdocB64ForTests(pidDoctype);
+      const store = {
+        [pidDoctype]: { credential: { credential: mdocB64 } },
+      };
+      const dcqlQuery = {
+        credential_sets: [
+          {
+            required: true,
+            options: [["b9d5165a-c3a0-437e-b397-cdf351331f3f"]],
+          },
+        ],
+        credentials: [
+          {
+            id: "b9d5165a-c3a0-437e-b397-cdf351331f3f",
+            format: "mso_mdoc",
+            multiple: false,
+            meta: { doctype_value: pidDoctype },
+            claims: [
+              { path: ["org.iso.18013.5.1", "family_name"] },
+            ],
+          },
+        ],
+      };
+      const result = await selectWalletCredentialTypeForDcql({
+        dcqlQuery,
+        listWalletCredentialTypes: async () => Object.keys(store),
+        getWalletCredentialByType: async (t) => store[t] || null,
+        extractCredentialString: (env) => env?.credential || null,
+      });
+      expect(result).to.not.equal(null);
+      expect(result.selectedType).to.equal(pidDoctype);
+      expect(result.matchedQuery.id).to.equal(
+        "b9d5165a-c3a0-437e-b397-cdf351331f3f",
+      );
+    });
+
+    it("uses the mso_mdoc configuration id as a doctype fallback for IssuerSigned-only stored credentials", async () => {
+      const issuerSignedOnly = buildIssuerSignedOnlyMdocForTests();
+      const store = {
+        "urn:eu.europa.ec.eudi:pid:1:mso_mdoc": {
+          credential: { credential: issuerSignedOnly },
+          metadata: {
+            configurationId: "urn:eu.europa.ec.eudi:pid:1:mso_mdoc",
+            format: "mso_mdoc",
+          },
+        },
+      };
+      const dcqlQuery = {
+        credentials: [
+          {
+            id: "cred1",
+            format: "mso_mdoc",
+            meta: { doctype_value: "urn:eu.europa.ec.eudi:pid:1" },
+          },
+        ],
+      };
+      const result = await selectWalletCredentialTypeForDcql({
+        dcqlQuery,
+        listWalletCredentialTypes: async () => Object.keys(store),
+        getWalletCredentialByType: async (t) => store[t] || null,
+        extractCredentialString: (env) => env?.credential || null,
+      });
+      expect(result).to.not.equal(null);
+      expect(result.selectedType).to.equal(
+        "urn:eu.europa.ec.eudi:pid:1:mso_mdoc",
+      );
+    });
+
+    it("uses stored metadata.doctype before deriving a fallback from the wallet type", async () => {
+      const issuerSignedOnly = buildIssuerSignedOnlyMdocForTests();
+      const store = {
+        pid: {
+          credential: { credential: issuerSignedOnly },
+          metadata: {
+            configurationId: "pid",
+            format: "mso_mdoc",
+            doctype: "urn:eu.europa.ec.eudi:pid:1",
+          },
+        },
+      };
+      const dcqlQuery = {
+        credentials: [
+          {
+            id: "cred1",
+            format: "mso_mdoc",
+            meta: { doctype_value: "urn:eu.europa.ec.eudi:pid:1" },
+          },
+        ],
+      };
+      const result = await selectWalletCredentialTypeForDcql({
+        dcqlQuery,
+        listWalletCredentialTypes: async () => Object.keys(store),
+        getWalletCredentialByType: async (t) => store[t] || null,
+        extractCredentialString: (env) => env?.credential || null,
+      });
+      expect(result).to.not.equal(null);
+      expect(result.selectedType).to.equal("pid");
+    });
+
+    it("returns null when an IssuerSigned-only mdoc fallback doctype mismatches DCQL", async () => {
+      const issuerSignedOnly = buildIssuerSignedOnlyMdocForTests();
+      const store = {
+        "org.iso.18013.5.1.mDL:mso_mdoc": {
+          credential: { credential: issuerSignedOnly },
+          metadata: {
+            configurationId: "org.iso.18013.5.1.mDL:mso_mdoc",
+            format: "mso_mdoc",
+          },
+        },
+      };
+      const dcqlQuery = {
+        credentials: [
+          {
+            id: "cred1",
+            format: "mso_mdoc",
+            meta: { doctype_value: "urn:eu.europa.ec.eudi:pid:1" },
+          },
+        ],
+      };
+      const result = await selectWalletCredentialTypeForDcql({
+        dcqlQuery,
+        listWalletCredentialTypes: async () => Object.keys(store),
+        getWalletCredentialByType: async (t) => store[t] || null,
+        extractCredentialString: (env) => env?.credential || null,
+      });
+      expect(result).to.equal(null);
+    });
+
+    it("rejects credential_sets options that reference unknown credential query ids", async () => {
+      const dcqlQuery = {
+        credential_sets: [
+          {
+            required: true,
+            options: [["missing-id"]],
+          },
+        ],
+        credentials: [
+          {
+            id: "known-id",
+            format: "mso_mdoc",
+            meta: { doctype_value: pidDoctype },
+          },
+        ],
+      };
+
+      let error;
+      try {
+        await selectWalletCredentialTypeForDcql({
+          dcqlQuery,
+          listWalletCredentialTypes: async () => [],
+          getWalletCredentialByType: async () => null,
+          extractCredentialString: () => null,
+        });
+      } catch (e) {
+        error = e;
+      }
+      expect(error).to.be.instanceOf(Error);
+      expect(error.message).to.include("unknown credential id");
+    });
+
+    it("does not select a single credential query that cannot satisfy required credential_sets", async () => {
+      const mdocB64 = buildMdocB64ForTests(pidDoctype);
+      const store = {
+        [pidDoctype]: { credential: { credential: mdocB64 } },
+      };
+      const dcqlQuery = {
+        credential_sets: [
+          {
+            required: true,
+            options: [["c1", "c2"]],
+          },
+        ],
+        credentials: [
+          {
+            id: "c1",
+            format: "mso_mdoc",
+            meta: { doctype_value: pidDoctype },
+          },
+          {
+            id: "c2",
+            format: "dc+sd-jwt",
+            meta: { vct_values: ["missing"] },
+          },
+        ],
+      };
+      const result = await selectWalletCredentialTypeForDcql({
+        dcqlQuery,
+        listWalletCredentialTypes: async () => Object.keys(store),
+        getWalletCredentialByType: async (t) => store[t] || null,
+        extractCredentialString: (env) => env?.credential || null,
+      });
+      expect(result).to.equal(null);
     });
 
     it("picks the SD-JWT-typed config when DCQL requests dc+sd-jwt with vct_values", async () => {

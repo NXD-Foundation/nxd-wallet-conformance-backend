@@ -44,6 +44,30 @@ const { clientMetadata: clientMetadataMDL } = loadConfigurationFiles(
   "./data/verifier-config-mdl.json"
 );
 
+const AGE_VERIFICATION_DCQL_QUERY = {
+  credential_sets: [
+    {
+      required: true,
+      options: [["31e7226b-64eb-4c4c-a791-2d877691891c"]],
+    },
+  ],
+  credentials: [
+    {
+      id: "31e7226b-64eb-4c4c-a791-2d877691891c",
+      format: "mso_mdoc",
+      multiple: false,
+      meta: {
+        doctype_value: "eu.europa.ec.av.1",
+      },
+      claims: [
+        {
+          path: ["eu.europa.ec.av.1", "age_over_18"],
+        },
+      ],
+    },
+  ],
+};
+
 /**
  * Generate VP request with presentation definition
  */
@@ -84,6 +108,54 @@ mdlRouter.get("/generateVPRequest", async (req, res) => {
       stack: error.stack
     });
     const errorResponse = createErrorResponse(error.message, "generateVPRequest", 500, sessionId);
+    res.status(500).json(errorResponse);
+  }
+});
+
+/**
+ * Generate mDL VP request with age verification DCQL query
+ */
+mdlRouter.get("/generateVPRequestDCQL", async (req, res) => {
+  const sessionId = req.query.sessionId || uuidv4();
+  try {
+    const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
+
+    await logInfo(sessionId, "Starting mDL VP request generation (DCQL)", {
+      endpoint: "/generateVPRequestDCQL",
+      responseMode,
+      sessionId,
+    });
+
+    const result = await generateVPRequest({
+      sessionId,
+      responseMode,
+      clientId: CONFIG.CLIENT_ID,
+      clientMetadata,
+      kid: null,
+      serverURL: CONFIG.SERVER_URL,
+      dcqlQuery: AGE_VERIFICATION_DCQL_QUERY,
+      usePostMethod: false,
+      routePath: "/mdl/VPrequest",
+    });
+
+    await logInfo(sessionId, "mDL VP request generated successfully (DCQL)", {
+      hasQR: !!result.qr,
+      deepLinkLength: result.deepLink?.length,
+      credentialQueryCount: AGE_VERIFICATION_DCQL_QUERY.credentials.length,
+    });
+
+    res.json(result);
+  } catch (error) {
+    await logError(sessionId, "Error generating mDL VP request (DCQL)", {
+      error: error.message,
+      stack: error.stack,
+    });
+    const errorResponse = createErrorResponse(
+      error.message,
+      "generateVPRequestDCQL",
+      500,
+      sessionId,
+    );
     res.status(500).json(errorResponse);
   }
 });

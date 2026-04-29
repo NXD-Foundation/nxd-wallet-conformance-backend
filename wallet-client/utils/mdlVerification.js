@@ -257,6 +257,56 @@ export function validateMdlClaims(extractedClaims, requestedFields) {
   return true;
 }
 
+function dcqlPathToMdocJsonPath(path) {
+  if (!Array.isArray(path) || path.length < 2) return null;
+  const [namespace, elementIdentifier] = path;
+  if (
+    typeof namespace !== "string" ||
+    namespace.length === 0 ||
+    typeof elementIdentifier !== "string" ||
+    elementIdentifier.length === 0
+  ) {
+    return null;
+  }
+
+  return `$['${namespace.replaceAll("'", "\\'")}']['${elementIdentifier.replaceAll("'", "\\'")}']`;
+}
+
+function presentationDefinitionFromDcqlMdocQuery(dcqlCredentialQuery, docType) {
+  if (!dcqlCredentialQuery || dcqlCredentialQuery.format !== "mso_mdoc") {
+    return null;
+  }
+
+  const fields = Array.isArray(dcqlCredentialQuery.claims)
+    ? dcqlCredentialQuery.claims
+        .map((claim) => dcqlPathToMdocJsonPath(claim?.path))
+        .filter(Boolean)
+        .map((path) => ({
+          path: [path],
+          intent_to_retain: false,
+        }))
+    : [];
+
+  if (fields.length === 0) return null;
+
+  const requestedDocType =
+    dcqlCredentialQuery.meta?.doctype_value || docType || dcqlCredentialQuery.id;
+
+  return {
+    id: `dcql_${dcqlCredentialQuery.id || requestedDocType || "mdoc"}`,
+    input_descriptors: [
+      {
+        id: requestedDocType,
+        format: { mso_mdoc: { alg: ["ES256"] } },
+        constraints: {
+          limit_disclosure: "required",
+          fields,
+        },
+      },
+    ],
+  };
+}
+
 /**
  * Helper function to get session transcript bytes for OID4VP
  * This is specific to OpenID4VP protocol
@@ -312,6 +362,7 @@ export async function extractDeviceNonce(vpTokenBase64) {
  * @param {Object} options - Presentation options
  * @param {string} options.docType - Document type (e.g., "org.iso.18013.5.1.mDL")
  * @param {Object} options.sessionTranscript - Optional session transcript for deviceAuth
+ * @param {Object} options.dcqlCredentialQuery - Matched DCQL credential query, used for DCQL-only mdoc requests
  * @returns {string} Base64url encoded DeviceResponse ready for presentation
  */
 export async function buildMdocPresentation(storedCredential, options = {}) {
@@ -323,6 +374,7 @@ export async function buildMdocPresentation(storedCredential, options = {}) {
     verifierGeneratedNonce,
     devicePrivateJwk,
     presentationDefinition,
+    dcqlCredentialQuery,
   } = options;
   
   console.log("[mdoc-present] Building DeviceResponse for presentation");
@@ -395,8 +447,16 @@ export async function buildMdocPresentation(storedCredential, options = {}) {
     verifierGeneratedNonce,
   });
 
-  if (presentationDefinition) {
-    builder = builder.usingPresentationDefinition(presentationDefinition);
+  const effectivePresentationDefinition =
+    presentationDefinition ||
+    presentationDefinitionFromDcqlMdocQuery(dcqlCredentialQuery, docType);
+
+  if (effectivePresentationDefinition) {
+    builder = builder.usingPresentationDefinition(effectivePresentationDefinition);
+  } else {
+    throw new Error(
+      "Missing mdoc disclosure request: provide presentationDefinition or dcqlCredentialQuery with claims",
+    );
   }
 
   const signedResponse = await builder

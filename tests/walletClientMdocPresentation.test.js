@@ -77,4 +77,66 @@ describe("wallet-client mdoc presentation", () => {
     expect(issuerAuthHeaders).to.be.an("object");
     expect(issuerAuthHeaders["33"]).to.be.an("array").that.is.not.empty;
   });
+
+  it("builds a DeviceResponse from a DCQL-only mdoc credential query", async () => {
+    const { publicKey, privateKey } = await jose.generateKeyPair("ES256");
+    const proofJwk = await jose.exportJWK(publicKey);
+    const privateJwk = await jose.exportJWK(privateKey);
+
+    const proofJwt = await new jose.SignJWT({
+      iss: "did:example:holder",
+      aud: "http://localhost:3000",
+      nonce: "test-nonce-wallet-mdoc-dcql-presentation",
+    })
+      .setProtectedHeader({
+        alg: "ES256",
+        typ: "openid4vci-proof+jwt",
+        jwk: proofJwk,
+      })
+      .sign(privateKey);
+
+    const issuedCredential = await handleCredentialGenerationBasedOnFormat(
+      {
+        vct: "urn:eu.europa.ec.eudi:pid:1:mso_mdoc",
+        proofs: { jwt: [proofJwt] },
+      },
+      {
+        signatureType: "x509",
+        isHaip: false,
+      },
+      "http://localhost:3000",
+      "mDL",
+    );
+
+    const vpToken = await buildMdocPresentation(issuedCredential, {
+      docType: "urn:eu.europa.ec.eudi:pid:1",
+      clientId: "x509_san_dns:verifier.example.org",
+      responseUri: "https://verifier.example.org/direct_post",
+      verifierGeneratedNonce: "verifier-nonce-456",
+      devicePrivateJwk: privateJwk,
+      dcqlCredentialQuery: {
+        id: "pid_credential",
+        format: "mso_mdoc",
+        meta: { doctype_value: "urn:eu.europa.ec.eudi:pid:1" },
+        claims: [
+          {
+            path: ["urn:eu.europa.ec.eudi:pid:1", "given_name"],
+          },
+        ],
+      },
+    });
+
+    const deviceResponse = decode(Buffer.from(vpToken, "base64url"));
+    expect(deviceResponse).to.have.property("version", "1.0");
+    expect(deviceResponse.documents).to.be.an("array").with.length(1);
+    expect(deviceResponse.documents[0]).to.have.property(
+      "docType",
+      "urn:eu.europa.ec.eudi:pid:1",
+    );
+    expect(deviceResponse.documents[0]).to.have.property("deviceSigned");
+
+    const issuerAuthHeaders = deviceResponse.documents[0].issuerSigned.issuerAuth[1];
+    expect(issuerAuthHeaders).to.be.an("object");
+    expect(issuerAuthHeaders["33"]).to.be.an("array").that.is.not.empty;
+  });
 });
