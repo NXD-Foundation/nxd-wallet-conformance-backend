@@ -1,6 +1,25 @@
 import { decode } from 'cbor-x';
 import base64url from 'base64url';
 
+function readCoseHeader(headers, label) {
+  if (!headers) return undefined;
+  if (headers instanceof Map) {
+    return headers.get(label) ?? headers.get(String(label));
+  }
+  if (typeof headers === "object") {
+    return headers[label] ?? headers[String(label)];
+  }
+  return undefined;
+}
+
+function bytesToUtf8(value) {
+  if (typeof value === "string") return value;
+  if (value instanceof Uint8Array || Buffer.isBuffer(value)) {
+    return Buffer.from(value).toString("utf8");
+  }
+  return undefined;
+}
+
 /**
  * Custom mDL verification using cbor-x decoder
  * This bypasses the buggy @auth0/mdl library and provides reliable verification
@@ -10,13 +29,15 @@ import base64url from 'base64url';
  * @param {string[]} options.requestedFields - Array of field names to extract (for selective disclosure)
  * @param {boolean} options.validateStructure - Whether to perform strict structure validation (default: true)
  * @param {boolean} options.includeMetadata - Whether to include metadata in response (default: true)
+ * @param {boolean} options.requireDeviceSignatureKid - Whether to require COSE kid in deviceSignature unprotected header
  * @returns {Object} Verification result
  */
 export async function verifyMdlToken(vpTokenBase64, options = {}, documentType = "urn:eu.europa.ec.eudi:pid:1") {
   const {
     requestedFields = null,
     validateStructure = true,
-    includeMetadata = true
+    includeMetadata = true,
+    requireDeviceSignatureKid = false
   } = options;
   
   try {
@@ -115,6 +136,18 @@ export async function verifyMdlToken(vpTokenBase64, options = {}, documentType =
     if (validateStructure && !document.docType) {
       throw new Error("Document missing docType");
     }
+
+    const issuerAuthHeaders = document.issuerSigned?.issuerAuth?.[1];
+    const issuerX5Chain = readCoseHeader(issuerAuthHeaders, 33);
+    const deviceSignature =
+      document.deviceSigned?.deviceAuth?.deviceSignature || null;
+    const deviceSignatureHeaders = deviceSignature?.[1];
+    const deviceSignatureKidBytes = readCoseHeader(deviceSignatureHeaders, 4);
+    const deviceSignatureKid = bytesToUtf8(deviceSignatureKidBytes);
+
+    if (requireDeviceSignatureKid && !deviceSignatureKid) {
+      throw new Error("Device signature missing COSE kid header (label 4)");
+    }
     
     // Step 6: Extract claims from issuerSigned nameSpaces
     const allClaims = {};
@@ -191,6 +224,14 @@ export async function verifyMdlToken(vpTokenBase64, options = {}, documentType =
         requestedFields: requestedFields,
         hasDeviceSigned: !!document.deviceSigned,
         hasIssuerSigned: !!document.issuerSigned,
+        hasIssuerX5Chain: !!issuerX5Chain,
+        issuerX5ChainCount: Array.isArray(issuerX5Chain)
+          ? issuerX5Chain.length
+          : issuerX5Chain
+            ? 1
+            : 0,
+        hasDeviceSignatureKid: !!deviceSignatureKid,
+        deviceSignatureKid,
         extractedAt: new Date().toISOString()
       };
     }

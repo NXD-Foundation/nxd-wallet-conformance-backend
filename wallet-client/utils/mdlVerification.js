@@ -354,6 +354,89 @@ export async function extractDeviceNonce(vpTokenBase64) {
   }
 }
 
+function base64urlEncode(input) {
+  return Buffer.from(input)
+    .toString("base64")
+    .replace(/=/g, "")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_");
+}
+
+function jwkThumbprintKid(jwk) {
+  if (!jwk || typeof jwk !== "object") return "device-key-1";
+
+  let thumbprintInput = null;
+  if (jwk.kty === "EC" && jwk.crv && jwk.x && jwk.y) {
+    thumbprintInput = JSON.stringify({
+      crv: jwk.crv,
+      kty: jwk.kty,
+      x: jwk.x,
+      y: jwk.y,
+    });
+  } else if (jwk.kty === "OKP" && jwk.crv && jwk.x) {
+    thumbprintInput = JSON.stringify({
+      crv: jwk.crv,
+      kty: jwk.kty,
+      x: jwk.x,
+    });
+  } else if (jwk.kty === "RSA" && jwk.e && jwk.n) {
+    thumbprintInput = JSON.stringify({
+      e: jwk.e,
+      kty: jwk.kty,
+      n: jwk.n,
+    });
+  }
+
+  if (!thumbprintInput) return "device-key-1";
+  return `jkt:${base64urlEncode(crypto.createHash("sha256").update(thumbprintInput).digest())}`;
+}
+
+function withDeviceKeyId(devicePrivateJwk, deviceKeyId) {
+  if (!devicePrivateJwk || typeof devicePrivateJwk !== "object") {
+    return devicePrivateJwk;
+  }
+  if (devicePrivateJwk.kid) return devicePrivateJwk;
+  return {
+    ...devicePrivateJwk,
+    kid: deviceKeyId || jwkThumbprintKid(devicePrivateJwk),
+  };
+}
+
+function normalizeIssuerAuthX5Chain(issuerSigned) {
+  const issuerAuth = issuerSigned?.issuerAuth;
+  if (!Array.isArray(issuerAuth) || issuerAuth.length < 2) return issuerSigned;
+
+  const unprotectedHeaders = issuerAuth[1];
+  if (!unprotectedHeaders || typeof unprotectedHeaders !== "object") {
+    return issuerSigned;
+  }
+
+  const normalizeKey = (key) => (/^\d+$/.test(String(key)) ? Number(key) : key);
+  const normalizeValue = (key, value) =>
+    normalizeKey(key) === 33 && value && !Array.isArray(value)
+      ? [value]
+      : value;
+
+  if (unprotectedHeaders instanceof Map) {
+    const normalized = new Map();
+    for (const [key, value] of unprotectedHeaders.entries()) {
+      const normalizedKey = normalizeKey(key);
+      normalized.set(normalizedKey, normalizeValue(normalizedKey, value));
+    }
+    issuerAuth[1] = normalized;
+    return issuerSigned;
+  }
+
+  const normalized = new Map();
+  for (const [key, value] of Object.entries(unprotectedHeaders)) {
+    const normalizedKey = normalizeKey(key);
+    normalized.set(normalizedKey, normalizeValue(normalizedKey, value));
+  }
+  issuerAuth[1] = normalized;
+
+  return issuerSigned;
+}
+
 /**
  * Constructs a DeviceResponse for presentation from stored credential
  * This is used when the wallet presents an mdoc credential to a verifier
@@ -363,6 +446,7 @@ export async function extractDeviceNonce(vpTokenBase64) {
  * @param {string} options.docType - Document type (e.g., "org.iso.18013.5.1.mDL")
  * @param {Object} options.sessionTranscript - Optional session transcript for deviceAuth
  * @param {Object} options.dcqlCredentialQuery - Matched DCQL credential query, used for DCQL-only mdoc requests
+ * @param {string} options.deviceKeyId - Optional COSE kid for DeviceAuthentication signature
  * @returns {string} Base64url encoded DeviceResponse ready for presentation
  */
 export async function buildMdocPresentation(storedCredential, options = {}) {
@@ -373,6 +457,7 @@ export async function buildMdocPresentation(storedCredential, options = {}) {
     responseUri,
     verifierGeneratedNonce,
     devicePrivateJwk,
+    deviceKeyId,
     presentationDefinition,
     dcqlCredentialQuery,
   } = options;
@@ -428,6 +513,8 @@ export async function buildMdocPresentation(storedCredential, options = {}) {
     );
   }
 
+  issuerSigned = normalizeIssuerAuthX5Chain(issuerSigned);
+
   const issuerSignedMdoc = encodeCbor({
     version: "1.0",
     documents: [
@@ -460,7 +547,7 @@ export async function buildMdocPresentation(storedCredential, options = {}) {
   }
 
   const signedResponse = await builder
-    .authenticateWithSignature(devicePrivateJwk, "ES256")
+    .authenticateWithSignature(withDeviceKeyId(devicePrivateJwk, deviceKeyId), "ES256")
     .sign(mdocContext);
 
   console.log("[mdoc-present] Constructed DeviceResponse with docType:", docType);

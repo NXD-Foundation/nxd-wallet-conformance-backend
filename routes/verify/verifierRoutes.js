@@ -529,7 +529,8 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
         const verificationOptions = {
           requestedFields: vpSession.sdsRequested, // Apply selective disclosure if requested
           validateStructure: true,
-          includeMetadata: true
+          includeMetadata: true,
+          requireDeviceSignatureKid: true
         };
 
         // TODO
@@ -566,7 +567,10 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
         }
         
         await logInfo(sessionId, "mDL verification successful", {
-          claimsCount: Object.keys(mdocResult.claims || {}).length
+          claimsCount: Object.keys(mdocResult.claims || {}).length,
+          hasIssuerX5Chain: !!mdocResult.metadata?.hasIssuerX5Chain,
+          hasDeviceSignatureKid: !!mdocResult.metadata?.hasDeviceSignatureKid,
+          deviceSignatureKid: mdocResult.metadata?.deviceSignatureKid
         });
 
         const claims = mdocResult.claims;

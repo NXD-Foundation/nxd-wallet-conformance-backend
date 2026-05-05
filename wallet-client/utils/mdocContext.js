@@ -7,7 +7,8 @@ import { X509Certificate } from "@peculiar/x509";
 import { exportJWK, importX509 } from "jose";
 import * as mdoc from "@animo-id/mdoc";
 
-const { CoseKey, KeyOps, KeyType, MacAlgorithm, hex, stringToBytes } = mdoc;
+const CoseKey = mdoc.CoseKey || mdoc.COSEKey;
+const { KeyOps, KeyType, MacAlgorithm, hex, stringToBytes } = mdoc;
 
 function asUint8Array(value) {
   if (value instanceof Uint8Array) return value;
@@ -18,6 +19,18 @@ function asUint8Array(value) {
     return new Uint8Array(value);
   }
   return Uint8Array.from(value);
+}
+
+function cosePublicKeyBytes(key) {
+  if (key?.publicKey) return asUint8Array(key.publicKey);
+
+  const x = key?.get?.(-2);
+  const y = key?.get?.(-3);
+  if (x && y) {
+    return Uint8Array.from([4, ...asUint8Array(x), ...asUint8Array(y)]);
+  }
+
+  throw new Error("COSE public key is missing P-256 x/y coordinates");
 }
 
 export const mdocContext = {
@@ -70,16 +83,18 @@ export const mdocContext = {
         const sig = p256.sign(hashed, asUint8Array(Buffer.from(jwk.d, "base64url")));
         return sig.toCompactRawBytes();
       },
-      verify: async ({ sign1, key }) => {
+      verify: async ({ sign1, key, jwk }) => {
         if (!sign1.signature) {
           throw new Error("signature is required for sign1 verification");
         }
 
-        const hashed = sha256(asUint8Array(sign1.toBeSigned));
+        const verificationKey = key ?? jwk;
+        const { data } = sign1.getRawSigningData();
+        const hashed = sha256(asUint8Array(data));
         return p256.verify(
           asUint8Array(sign1.signature),
           hashed,
-          asUint8Array(key.publicKey),
+          cosePublicKeyBytes(verificationKey),
         );
       },
     },
@@ -93,7 +108,17 @@ export const mdocContext = {
     getPublicKey: async ({ certificate, alg }) => {
       const parsed = new X509Certificate(certificate);
       const key = await importX509(parsed.toString(), alg, { extractable: true });
-      return CoseKey.fromJwk(await exportJWK(key));
+      const jwk = await exportJWK(key);
+      return typeof CoseKey.fromJwk === "function"
+        ? CoseKey.fromJwk(jwk)
+        : CoseKey.fromJWK(jwk);
+    },
+    getCertificateData: ({ certificate }) => {
+      const parsed = new X509Certificate(certificate);
+      return {
+        notBefore: parsed.notBefore,
+        notAfter: parsed.notAfter,
+      };
     },
     validateCertificateChain: async ({ trustedCertificates, x5chain: certificateChain }) => {
       if (certificateChain.length === 0) {

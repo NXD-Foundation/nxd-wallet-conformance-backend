@@ -123,12 +123,19 @@ function normalizeIssuerAuthHeaders(preparedIssuerSigned) {
 
   const unprotectedHeaders = issuerAuth[1];
 
+  const normalizeX5Chain = (key, value) => {
+    if ((key === 33 || key === "33") && value && !Array.isArray(value)) {
+      return [value];
+    }
+    return value;
+  };
+
   // Case 1: Map (expected when using CBOR Maps for COSE headers)
   if (unprotectedHeaders instanceof Map) {
     const cleanedMap = new Map();
     for (const [key, value] of unprotectedHeaders.entries()) {
       if (value !== undefined) {
-        cleanedMap.set(key, value);
+        cleanedMap.set(key, normalizeX5Chain(key, value));
       } else {
         console.log(
           `[mdl-issue] Removing undefined value from unprotected header field ${key} (COSE header should be omitted when not set)`
@@ -149,7 +156,7 @@ function normalizeIssuerAuthHeaders(preparedIssuerSigned) {
       if (value !== undefined) {
         // Convert numeric string keys to integers to preserve COSE label semantics
         const intKey = /^\d+$/.test(key) ? parseInt(key, 10) : key;
-        cleanedMap.set(intKey, value);
+        cleanedMap.set(intKey, normalizeX5Chain(intKey, value));
       } else {
         console.log(
           `[mdl-issue] Removing undefined value from unprotected header field ${key} (COSE header should be omitted when not set)`

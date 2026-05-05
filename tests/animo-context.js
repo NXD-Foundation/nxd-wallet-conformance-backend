@@ -7,7 +7,20 @@ import { X509Certificate } from '@peculiar/x509'
 import { exportJWK, importX509 } from 'jose'
 import * as mdoc from '@animo-id/mdoc'
 
-const { CoseKey, KeyOps, KeyType, MacAlgorithm, hex, stringToBytes } = mdoc;
+const CoseKey = mdoc.CoseKey || mdoc.COSEKey;
+const { KeyOps, KeyType, MacAlgorithm, hex, stringToBytes } = mdoc;
+
+function cosePublicKeyBytes(key) {
+  if (key?.publicKey) return key.publicKey
+
+  const x = key?.get?.(-2)
+  const y = key?.get?.(-3)
+  if (x && y) {
+    return Uint8Array.from([4, ...x, ...y])
+  }
+
+  throw new Error('COSE public key is missing P-256 x/y coordinates')
+}
 
 export const mdocContext = {
   crypto: {
@@ -61,15 +74,17 @@ export const mdocContext = {
         return sig.toCompactRawBytes()
       },
       verify: async (input) => {
-        const { sign1, key } = input
-        const { toBeSigned, signature } = sign1
+        const { sign1, key, jwk } = input
+        const { signature } = sign1
 
         if (!signature) {
           throw new Error('signature is required for sign1 verification')
         }
 
-        const hashed = sha256(toBeSigned)
-        return p256.verify(signature, hashed, key.publicKey)
+        const verificationKey = key ?? jwk
+        const { data } = sign1.getRawSigningData()
+        const hashed = sha256(data)
+        return p256.verify(signature, hashed, cosePublicKeyBytes(verificationKey))
       },
     },
   },
@@ -86,7 +101,17 @@ export const mdocContext = {
         extractable: true,
       })
 
-      return CoseKey.fromJwk((await exportJWK(key)))
+      const jwk = await exportJWK(key)
+      return typeof CoseKey.fromJwk === 'function'
+        ? CoseKey.fromJwk(jwk)
+        : CoseKey.fromJWK(jwk)
+    },
+    getCertificateData: (input) => {
+      const certificate = new X509Certificate(input.certificate)
+      return {
+        notBefore: certificate.notBefore,
+        notAfter: certificate.notAfter,
+      }
     },
 
     validateCertificateChain: async (input) => {

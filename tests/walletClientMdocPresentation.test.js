@@ -76,6 +76,10 @@ describe("wallet-client mdoc presentation", () => {
     const issuerAuthHeaders = document.issuerSigned.issuerAuth[1];
     expect(issuerAuthHeaders).to.be.an("object");
     expect(issuerAuthHeaders["33"]).to.be.an("array").that.is.not.empty;
+
+    const deviceSignatureHeaders =
+      document.deviceSigned.deviceAuth.deviceSignature[1];
+    expect(deviceSignatureHeaders).to.have.property("4");
   });
 
   it("builds a DeviceResponse from a DCQL-only mdoc credential query", async () => {
@@ -138,5 +142,9 @@ describe("wallet-client mdoc presentation", () => {
     const issuerAuthHeaders = deviceResponse.documents[0].issuerSigned.issuerAuth[1];
     expect(issuerAuthHeaders).to.be.an("object");
     expect(issuerAuthHeaders["33"]).to.be.an("array").that.is.not.empty;
+
+    const deviceSignatureHeaders =
+      deviceResponse.documents[0].deviceSigned.deviceAuth.deviceSignature[1];
+    expect(deviceSignatureHeaders).to.have.property("4");
   });
 });

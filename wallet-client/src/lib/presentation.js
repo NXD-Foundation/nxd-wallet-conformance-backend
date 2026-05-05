@@ -921,6 +921,11 @@ export async function performPresentation(
         responseUri,
         verifierGeneratedNonce: nonce,
         devicePrivateJwk: stored?.keyBinding?.privateJwk || privateJwk,
+        deviceKeyId:
+          stored?.keyBinding?.privateJwk?.kid ||
+          stored?.keyBinding?.publicJwk?.kid ||
+          stored?.keyBinding?.didJwk ||
+          didJwk,
         presentationDefinition,
         dcqlCredentialQuery: matchedDcqlQuery,
       });
