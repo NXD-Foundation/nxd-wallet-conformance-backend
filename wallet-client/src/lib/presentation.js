@@ -5,6 +5,7 @@ import {
   createProofJwt,
   generateDidJwkFromPrivateJwk,
   ensureOrCreateEcKeyPair,
+  normalizeSdJwtForKeyBindingHashInput,
 } from "./crypto.js";
 import { resolveDeviceKeyPath } from "./deviceKeyPaths.js";
 import {
@@ -927,14 +928,8 @@ export function filterSdJwtDisclosuresForDcqlClaims(sdJwt, dcqlEntry) {
 function attachKbJwtToSdJwt(sdJwt, kbJwt) {
   if (!sdJwt || typeof sdJwt !== "string")
     throw new Error("Invalid sd-jwt to present");
-  // Trim any trailing '~' to avoid creating empty disclosure segments
-  let token = sdJwt;
-  while (token.endsWith("~")) token = token.slice(0, -1);
-  const parts = token.split("~");
-  // kb-jwt is a JWT (has dots) and is appended as the last segment.
-  const hasKbJwt = parts.slice(1).some((p) => p.includes("."));
-  if (hasKbJwt) return token; // already present
-  return `${token}~${kbJwt}`;
+  const token = normalizeSdJwtForKeyBindingHashInput(sdJwt);
+  return `${token}${kbJwt}`;
 }
 
 async function buildJwtVpToken({

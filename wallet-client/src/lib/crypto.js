@@ -40,6 +40,21 @@ export function generateDidJwkFromPrivateJwk(publicJwk) {
   return `did:jwk:${jwkStr}`;
 }
 
+export function normalizeSdJwtForKeyBindingHashInput(sdJwt) {
+  if (!sdJwt || typeof sdJwt !== "string") return sdJwt;
+
+  let token = sdJwt;
+  while (token.endsWith("~")) token = token.slice(0, -1);
+
+  const parts = token.split("~");
+  const last = parts[parts.length - 1];
+  if (parts.length > 1 && typeof last === "string" && last.split(".").length === 3) {
+    parts.pop();
+  }
+
+  return `${parts.join("~")}~`;
+}
+
 export async function createProofJwt({
   privateJwk,
   publicJwk,
@@ -69,12 +84,13 @@ export async function createProofJwt({
   };
 
   // For SD-JWT Key Binding JWTs, optionally include sd_hash as defined in
-  // draft-ietf-oauth-selective-disclosure-jwt-14 Section 4.3.1.
+  // draft-ietf-oauth-selective-disclosure-jwt-20 Section 4.3.1.
   // The hash is taken over the US-ASCII bytes of the encoded SD-JWT
   // (<Issuer-signed JWT>~<Disclosure 1>~...~<Disclosure N>~), and the
   // digest bytes are base64url-encoded.
   if (sdJwt) {
-    const sdJwtBytes = Buffer.from(sdJwt, "ascii");
+    const normalizedSdJwt = normalizeSdJwtForKeyBindingHashInput(sdJwt);
+    const sdJwtBytes = Buffer.from(normalizedSdJwt, "ascii");
     const hash = crypto.createHash("sha256").update(sdJwtBytes).digest();
     const sdHash = base64url(hash);
     payload.sd_hash = sdHash;

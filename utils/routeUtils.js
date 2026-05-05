@@ -1801,6 +1801,8 @@ export async function generateVPRequest(params) {
     responseMode,
     undefined,
     undefined,
+    undefined,
+    null, // va_jwt — must align with buildVpRequestJWT(..., wallet_metadata, va_jwt, state, jar_alg, verifier_info)
     state,
     jarAlg || CONFIG.DEFAULT_JAR_ALG,
     verifierInfo

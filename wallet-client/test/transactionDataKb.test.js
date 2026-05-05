@@ -5,7 +5,11 @@ import {
   computeTransactionDataHashesEntries,
   transactionDataBindingForSdJwtKb,
 } from "../src/lib/transactionDataKb.js";
-import { createProofJwt, ensureOrCreateEcKeyPair } from "../src/lib/crypto.js";
+import {
+  createProofJwt,
+  ensureOrCreateEcKeyPair,
+  normalizeSdJwtForKeyBindingHashInput,
+} from "../src/lib/crypto.js";
 import { decodeJwt } from "jose";
 
 describe("transactionDataKb (RFC002 §8 / SD-JWT KB)", () => {
@@ -79,5 +83,31 @@ describe("transactionDataKb (RFC002 §8 / SD-JWT KB)", () => {
     expect(payload.transaction_data_hashes).to.deep.equal(bind.transaction_data_hashes);
     expect(payload.transaction_data_hashes_alg).to.equal("sha-256");
     expect(payload).to.have.property("sd_hash");
+  });
+
+  it("normalizes SD-JWT hash input with trailing separator and without existing KB-JWT", async () => {
+    const { privateJwk, publicJwk } = await ensureOrCreateEcKeyPair(undefined, "ES256");
+    const sdJwtWithoutTrailingSeparator = "issuer.jwt.sig~disclosure";
+    const existingKbJwt = "old.header.signature";
+    const normalized = normalizeSdJwtForKeyBindingHashInput(
+      `${sdJwtWithoutTrailingSeparator}~${existingKbJwt}`,
+    );
+    expect(normalized).to.equal(`${sdJwtWithoutTrailingSeparator}~`);
+
+    const kb = await createProofJwt({
+      privateJwk,
+      publicJwk,
+      audience: "https://verifier.example",
+      nonce: "n1",
+      issuer: "did:jwk:test",
+      typ: "kb+jwt",
+      sdJwt: sdJwtWithoutTrailingSeparator,
+    });
+    const payload = decodeJwt(kb);
+    const expected = crypto
+      .createHash("sha256")
+      .update(`${sdJwtWithoutTrailingSeparator}~`, "ascii")
+      .digest("base64url");
+    expect(payload.sd_hash).to.equal(expected);
   });
 });

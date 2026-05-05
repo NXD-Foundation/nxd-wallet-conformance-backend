@@ -78,11 +78,12 @@ vpStandardRouter.get("/vp/etsi/same-device", (req, res) => {
 vpStandardRouter.get("/vp/request", async (req, res) => {
   let sessionId;
   let requestId = null;
-  
+  let slog = null;
+
   try {
     // Extract standardized parameters
-    sessionId = req.query.session_id || uuidv4();
-    const slog = makeSessionLogger(sessionId);
+    sessionId = normalizedVpSessionIdFromQuery(req.query) || uuidv4();
+    slog = makeSessionLogger(sessionId);
     bindSessionLoggingContext(req, res, sessionId);
 
     const profile = req.query.profile || "dcql";
