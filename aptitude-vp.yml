@@ -290,3 +290,28 @@ presentation_verification:
         - "VP-CHECK-16"
         - "VP-CHECK-18"
       expected_outcome: "Successful completion of the ISO/IEC 18013-7-aligned remote mdoc presentation session."
+
+# ==============================================================================
+# STATUS / POLLING (verifier — routes/verify/verifierRoutes.js)
+# ==============================================================================
+# VP initiation uses session_id on GET /vp/request; these endpoints expect
+# sessionId (camelCase) with the same session identifier value.
+status_endpoints:
+
+  - id: "APT-STATUS-VP-01"
+    name: "Verification status polling"
+    description: "Poll verification outcome for a VP session (status and disclosed claims on success)."
+    method: "GET"
+    path: "/verificationStatus"
+    url: "http://localhost:3000/verificationStatus?sessionId=apt-vp-001"
+    parameters:
+      sessionId: "apt-vp-001"
+
+  - id: "APT-STATUS-VP-02"
+    name: "Verification status history"
+    description: "Retrieve full verifier session record for a VP session (includes history beyond the summary returned by /verificationStatus)."
+    method: "GET"
+    path: "/verificationStatusHistory"
+    url: "http://localhost:3000/verificationStatusHistory?sessionId=apt-vp-001"
+    parameters:
+      sessionId: "apt-vp-001"

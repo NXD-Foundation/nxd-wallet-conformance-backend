@@ -204,3 +204,19 @@ credential_issuance:
         credential_format: "mso_mdoc"
         signature_type: "x509"
         offer_scheme: "eu_eaa"
+
+# ==============================================================================
+# STATUS / POLLING (issuer — routes/issue/sharedIssuanceFlows.js)
+# ==============================================================================
+# Query parameter name is sessionId (camelCase). Use the sessionId returned in
+# the GET /vci/offer JSON body for the active issuance session.
+status_endpoints:
+
+  - id: "APT-STATUS-VCI-01"
+    name: "Issuance status polling"
+    description: "Poll issuance lifecycle status for a credential issuance session (pre-authorized or authorization-code session stored for this issuer)."
+    method: "GET"
+    path: "/issueStatus"
+    url: "http://localhost:3000/issueStatus?sessionId=test-apt-vci-session"
+    parameters:
+      sessionId: "test-apt-vci-session"

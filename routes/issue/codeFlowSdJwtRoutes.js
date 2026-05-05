@@ -273,17 +273,24 @@ function updateSessionForAuthorization(existingCodeSession, requestData) {
   return existingCodeSession;
 }
 
-function handleDynamicAuthorizationRedirect(existingCodeSession, requestData) {
-  const { client_id_scheme, credentialsRequested, nonce, state, redirectUri } = requestData;
+async function handleDynamicAuthorizationRedirect(existingCodeSession, requestData) {
+  // PAR + GET /authorize often only passes client_id + request_uri; client_id_scheme
+  // is not repeated on the URL. Use the scheme stored when the code session was created.
+  const client_id_scheme =
+    requestData.client_id_scheme ||
+    existingCodeSession.client_id_scheme ||
+    "redirect_uri";
+  const { credentialsRequested, nonce, state, redirectUri } = requestData;
+  const requestDataWithScheme = { ...requestData, client_id_scheme };
 
   if (client_id_scheme === "redirect_uri") {
-    return handleRedirectUriScheme(existingCodeSession, requestData);
+    return handleRedirectUriScheme(existingCodeSession, requestDataWithScheme);
   } else if (client_id_scheme === "x509_san_dns") {
-    return handleX509Scheme(existingCodeSession, requestData);
-  } else if (client_id_scheme.indexOf("did") >= 0) {
-    return handleDidScheme(existingCodeSession, requestData);
+    return await handleX509Scheme(existingCodeSession, requestDataWithScheme);
+  } else if (typeof client_id_scheme === "string" && client_id_scheme.indexOf("did") >= 0) {
+    return handleDidScheme(existingCodeSession, requestDataWithScheme);
   } else if (client_id_scheme === "payment") {
-    return handlePaymentScheme(existingCodeSession, requestData);
+    return handlePaymentScheme(existingCodeSession, requestDataWithScheme);
   }
 
   const supportedSchemes = ["redirect_uri", "x509_san_dns", "did:web", "did:jwk", "payment"];
@@ -325,13 +332,13 @@ function handleRedirectUriScheme(existingCodeSession, requestData) {
   return redirectUrl;
 }
 
-function handleX509Scheme(existingCodeSession, requestData) {
+async function handleX509Scheme(existingCodeSession, requestData) {
   const { credentialsRequested, redirectUri, issuerState } = requestData;
   
   console.log("client_id_scheme x509_san_dns");
   
   if (credentialsRequested.indexOf("urn:eu.europa.ec.eudi:pid:1") >= 0) {
-    return handleX509PIDFlow(existingCodeSession, requestData);
+    return await handleX509PIDFlow(existingCodeSession, requestData);
   }
 
   const request_uri = `${SERVER_URL}/x509VPrequest_dynamic/${issuerState}`;
@@ -1039,12 +1046,15 @@ codeFlowRouterSDJWT.get("/authorize", async (req, res) => {
       return res.redirect(302, errorRedirectUrl);
     }
 
-    // Handle authorization based on flow type
-    let redirectUrl;
-    if (existingCodeSession.isDynamic) {
-      redirectUrl = handleDynamicAuthorizationRedirect(existingCodeSession, updatedRequestData);
-    } else {
-      redirectUrl = await handleNonDynamicAuthorization(existingCodeSession, updatedRequestData);
+    // Handle authorization based on flow type (flatten any thenable — omitting await used to yield Location: [object Promise])
+    const redirectCandidate = existingCodeSession.isDynamic
+      ? handleDynamicAuthorizationRedirect(existingCodeSession, updatedRequestData)
+      : handleNonDynamicAuthorization(existingCodeSession, updatedRequestData);
+    const redirectUrl = await Promise.resolve(redirectCandidate);
+    if (typeof redirectUrl !== "string") {
+      throw new Error(
+        "GET /authorize: redirect target must be a string (internal error — check dynamic authz redirect helpers).",
+      );
     }
 
     if (slog) {

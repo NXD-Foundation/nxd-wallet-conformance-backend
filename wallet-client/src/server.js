@@ -16,6 +16,7 @@ import {
   appendWalletLog,
   getWalletLogs,
   ensureWalletRedisConnected,
+  getOrCreateWalletInstanceId,
 } from "./lib/cache.js";
 import {
   extractNotificationId,
@@ -1337,11 +1338,14 @@ async function runAuthorizationCodeIssuance(
       ...(issuerMeta?.credential_issuer ? { locations: [issuerMeta.credential_issuer] } : {}),
     },
   ];
+  // HAIP 1.0 / OAuth client attestation: `client_id` MUST equal the attestation JWT `sub`
+  // (wallet instance id), not a static label — see issuer `assertClientIdMatchesAttestationSub`.
+  const codeflowOAuthClientId = await getOrCreateWalletInstanceId();
   const authzParams = {
     response_type: "code",
     ...(issuerState ? { issuer_state: issuerState } : {}), // Only include if provided in offer (OIDC4VCI 1.0)
     state,
-    client_id: "wallet-client",
+    client_id: codeflowOAuthClientId,
     redirect_uri: redirectUri,
     code_challenge: codeChallenge,
     code_challenge_method: codeChallengeMethod,
@@ -1462,7 +1466,7 @@ async function runAuthorizationCodeIssuance(
       grant_type: "authorization_code",
       code,
       code_verifier: codeVerifier,
-      client_id: "wallet-client",
+      client_id: codeflowOAuthClientId,
       redirect_uri: redirectUri,
       authorization_details: JSON.stringify(tokenAuthzDetails),
     },

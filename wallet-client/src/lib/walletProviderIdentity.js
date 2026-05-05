@@ -122,10 +122,12 @@ export async function buildWalletOAuthClientAttestationBundle({
     cnfJwk: publicJwk,
     ttlSeconds: clientAssertionTtlSeconds,
   });
+  // PoP `iss` MUST equal attestation `sub` (wallet instance id), not the Wallet Provider id
+  // — see oauthClientAttestation `assertPopIssMatchesAttestationSub` / attestation-based client auth.
   const oauthPopJwt = await createOAuthClientAttestationPopJwt({
     privateJwk,
     publicJwk,
-    issuer: providerId,
+    issuer: instanceId,
     audience: authorizationServerIssuer,
   });
   return {

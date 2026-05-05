@@ -59,6 +59,9 @@ describe("wallet provider identity (RFC001 iss / OAuth attestation)", () => {
     expect(oauthHeaders["OAuth-Client-Attestation-PoP"]).to.be.a("string");
     const popH = decodeProtectedHeader(oauthHeaders["OAuth-Client-Attestation-PoP"]);
     expect(popH.typ).to.equal("oauth-client-attestation-pop+jwt");
+    const popP = decodeJwt(oauthHeaders["OAuth-Client-Attestation-PoP"]);
+    expect(popP.iss).to.equal("11111111-1111-1111-1111-111111111111");
+    expect(popP.iss).to.equal(p.sub);
   });
 
   it("buildWalletUnitAttestationJwt: typ key-attestation+jwt; iss = Wallet Provider; sub = instance id", async () => {
