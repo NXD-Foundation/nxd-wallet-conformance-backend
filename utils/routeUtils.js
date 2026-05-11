@@ -1180,6 +1180,59 @@ export const getClientIdScheme = (req) => {
   return req.query.client_id_scheme || DEFAULT_CLIENT_ID_SCHEME;
 };
 
+/**
+ * Authorization-code offer issuance shape for GET /offer-code-sd-jwt.
+ * - `standard` (default): immediate authorize redirect with code; no OpenID4VP credential request step.
+ * - `dynamic`: dynamic credential request (OpenID4VP / x509VPrequest_dynamic path, etc.).
+ * - `deferred`: deferred issuance session (same as legacy GET /offer-code-defered).
+ *
+ * Query: `issuance_mode` (or `issuanceMode`), or `dynamic_credential_request=true` when mode is omitted.
+ * Typos `deffered` / `defered` are accepted for `deferred`.
+ *
+ * @param {import('express').Request | { query?: Record<string, unknown> }} req
+ * @returns {{ isDynamic: boolean, isDeferred: boolean, includeCredentialType: boolean }}
+ */
+export function resolveCodeFlowOfferIssuanceOptions(req) {
+  const q = (req && req.query) || {};
+  const modeRaw = q.issuance_mode ?? q.issuanceMode;
+
+  const normalizeMode = (s) =>
+    String(s)
+      .trim()
+      .toLowerCase()
+      .replace(/-/g, "_");
+
+  if (modeRaw != null && String(modeRaw).trim() !== "") {
+    let v = normalizeMode(modeRaw);
+    if (v === "deffered" || v === "defered") v = "deferred";
+
+    if (v === "standard" || v === "default" || v === "immediate") {
+      return { isDynamic: false, isDeferred: false, includeCredentialType: true };
+    }
+    if (v === "dynamic") {
+      return { isDynamic: true, isDeferred: false, includeCredentialType: false };
+    }
+    if (v === "deferred") {
+      return { isDynamic: false, isDeferred: true, includeCredentialType: false };
+    }
+    throw new Error(
+      `Invalid issuance_mode '${String(modeRaw).trim()}'. Expected: standard, dynamic, deferred.`,
+    );
+  }
+
+  const dynFlag = q.dynamic_credential_request ?? q.dynamicCredentialRequest;
+  const wantsDynamic =
+    dynFlag === true ||
+    dynFlag === 1 ||
+    String(dynFlag || "").toLowerCase() === "true" ||
+    String(dynFlag || "").toLowerCase() === "1";
+  if (wantsDynamic) {
+    return { isDynamic: true, isDeferred: false, includeCredentialType: false };
+  }
+
+  return { isDynamic: false, isDeferred: false, includeCredentialType: true };
+}
+
 // ============================================================================
 // SESSION MANAGEMENT UTILITIES
 // ============================================================================

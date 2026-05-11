@@ -1,4 +1,9 @@
 base_url: "http://localhost:3000"
+logs_endpoint: "/logs"
+# Authorization-code offers via GET /offer-code-sd-jwt:
+# - Default (omit or issuance_mode=standard): non-dynamic authorize (no intermediate OpenID4VP credential request).
+# - issuance_mode=dynamic or dynamic_credential_request=true: dynamic credential request (same session shape as legacy /offer-code-sd-jwt-dynamic).
+# - issuance_mode=deferred (aliases: deffered, defered): deferred issuance (legacy /offer-code-defered). Use '&' between query params, not a second '?'.
 
 credential_issuance:
 
@@ -6,15 +11,14 @@ credential_issuance:
 
     - id: "VCI-005"
       name: "PID Issuance (mDoc, X.509, Authorization Code)"
-      description: "OID4VCI 1.0 authorization-code issuance for urn:eu.europa.ec.eudi:pid:1:mso_mdoc in mso_mdoc format using the x509 signature profile and x509_san_dns client_id scheme, delivered through the eu-eaa-offer:// offer scheme. The flow requires PAR, PKCE with S256, Wallet Instance Attestation with proof of possession at the PAR and Token endpoints, and sender-constrained access tokens. The credential request requires proofs and accepts attestation while rejecting jwt for the mdoc path. The issuer signing material is the X.509 certificate chain at ./x509EC/client_certificate.crt. This test covers VCI-CHECK-01, VCI-CHECK-02, VCI-CHECK-03, VCI-CHECK-03A, VCI-CHECK-05, VCI-CHECK-06, VCI-CHECK-06A, VCI-CHECK-07, and VCI-CHECK-08, with expected outcome successful end-to-end authorization-code issuance for the mdoc X.509 case, or explicit rejection of the wrong proof type."
+      description: "OID4VCI 1.0 authorization-code issuance for urn:eu.europa.ec.eudi:pid:1:mso_mdoc in mso_mdoc format using the x509 signature profile and x509_san_dns client_id scheme, delivered through the eu-eaa-offer:// offer scheme. The offer is minted via GET /offer-code-sd-jwt (non-dynamic code session): /authorize redirects to the wallet redirect_uri with an authorization code and does not issue an intermediate OpenID4VP dynamic credential request. The flow requires PAR, PKCE with S256, Wallet Instance Attestation with proof of possession at the PAR and Token endpoints, and sender-constrained access tokens. The credential request requires proofs and accepts attestation while rejecting jwt for the mdoc path. The issuer signing material is the X.509 certificate chain at ./x509EC/client_certificate.crt. This test covers VCI-CHECK-01, VCI-CHECK-02, VCI-CHECK-03, VCI-CHECK-03A, VCI-CHECK-05, VCI-CHECK-06, VCI-CHECK-06A, VCI-CHECK-07, and VCI-CHECK-08, with expected outcome successful end-to-end authorization-code issuance for the mdoc X.509 case, or explicit rejection of the wrong proof type."
       method: "GET"
-      path: "/vci/offer"
-      url: "http://localhost:3000/vci/offer?flow=authorization_code&credential_type=urn%3Aeu.europa.ec.eudi%3Apid%3A1%3Amso_mdoc&credential_format=mso_mdoc&signature_type=x509&offer_scheme=eu_eaa"
+      path: "/offer-code-sd-jwt"
+      url: "http://localhost:3000/offer-code-sd-jwt?credentialType=urn%3Aeu.europa.ec.eudi%3Apid%3A1%3Amso_mdoc&client_id_scheme=x509_san_dns&signatureType=x509&offer_scheme=eu_eaa"
       parameters:
-        flow: "authorization_code"
-        credential_type: "urn:eu.europa.ec.eudi:pid:1:mso_mdoc"
-        credential_format: "mso_mdoc"
-        signature_type: "x509"
+        credentialType: "urn:eu.europa.ec.eudi:pid:1:mso_mdoc"
+        client_id_scheme: "x509_san_dns"
+        signatureType: "x509"
         offer_scheme: "eu_eaa"
       issuance_protocol: "OID4VCI 1.0"
       request_profile_variant: "Authorization-code flow, mdoc, X.509"
@@ -57,15 +61,14 @@ credential_issuance:
 
     - id: "VCI-009"
       name: "PID Issuance (SD-JWT, X.509, Authorization Code, enc=A128GCM)"
-      description: "OID4VCI 1.0 authorization-code issuance for ETSIRfc001PidVcSdJwt in sd-jwt format using the x509 signature profile and x509_san_dns client_id scheme, delivered through the eu-eaa-offer:// offer scheme. The flow requires PAR, PKCE with S256, Wallet Instance Attestation with proof of possession at the PAR and Token endpoints, and sender-constrained access tokens. The credential request requires proofs and uses the jwt proof path with Wallet Unit Attestation handling. The issuer signing material is the X.509 certificate chain at ./x509EC/client_certificate.crt. The response uses credential response encryption with alg ECDH-ES and enc A128GCM. This test covers VCI-CHECK-01, VCI-CHECK-02, VCI-CHECK-03, VCI-CHECK-03A, VCI-CHECK-05, VCI-CHECK-06, VCI-CHECK-06A, VCI-CHECK-07, and VCI-CHECK-10, with expected outcome successful end-to-end authorization-code issuance when the credential response encryption uses A128GCM."
+      description: "OID4VCI 1.0 authorization-code issuance for ETSIRfc001PidVcSdJwt in sd-jwt format using the x509 signature profile and x509_san_dns client_id scheme, delivered through the eu-eaa-offer:// offer scheme. The offer is minted via GET /offer-code-sd-jwt (non-dynamic code session): /authorize redirects to the wallet redirect_uri with an authorization code and does not issue an intermediate OpenID4VP dynamic credential request. The flow requires PAR, PKCE with S256, Wallet Instance Attestation with proof of possession at the PAR and Token endpoints, and sender-constrained access tokens. The credential request requires proofs and uses the jwt proof path with Wallet Unit Attestation handling. The issuer signing material is the X.509 certificate chain at ./x509EC/client_certificate.crt. The response uses credential response encryption with alg ECDH-ES and enc A128GCM. This test covers VCI-CHECK-01, VCI-CHECK-02, VCI-CHECK-03, VCI-CHECK-03A, VCI-CHECK-05, VCI-CHECK-06, VCI-CHECK-06A, VCI-CHECK-07, and VCI-CHECK-10, with expected outcome successful end-to-end authorization-code issuance when the credential response encryption uses A128GCM."
       method: "GET"
-      path: "/vci/offer"
-      url: "http://localhost:3000/vci/offer?flow=authorization_code&credential_type=ETSIRfc001PidVcSdJwt&credential_format=sd-jwt&signature_type=x509&offer_scheme=eu_eaa"
+      path: "/offer-code-sd-jwt"
+      url: "http://localhost:3000/offer-code-sd-jwt?credentialType=ETSIRfc001PidVcSdJwt&client_id_scheme=x509_san_dns&signatureType=x509&offer_scheme=eu_eaa"
       parameters:
-        flow: "authorization_code"
-        credential_type: "ETSIRfc001PidVcSdJwt"
-        credential_format: "sd-jwt"
-        signature_type: "x509"
+        credentialType: "ETSIRfc001PidVcSdJwt"
+        client_id_scheme: "x509_san_dns"
+        signatureType: "x509"
         offer_scheme: "eu_eaa"
       issuance_protocol: "OID4VCI 1.0"
       request_profile_variant: "Authorization-code flow, SD-JWT, A128GCM"
@@ -110,15 +113,14 @@ credential_issuance:
 
     - id: "VCI-010"
       name: "PID Issuance (SD-JWT, X.509, Authorization Code, enc=A256GCM)"
-      description: "OID4VCI 1.0 authorization-code issuance for ETSIRfc001PidVcSdJwt in sd-jwt format using the x509 signature profile and x509_san_dns client_id scheme, delivered through the eu-eaa-offer:// offer scheme. The flow requires PAR, PKCE with S256, Wallet Instance Attestation with proof of possession at the PAR and Token endpoints, and sender-constrained access tokens. The credential request requires proofs and uses the jwt proof path with Wallet Unit Attestation handling. The issuer signing material is the X.509 certificate chain at ./x509EC/client_certificate.crt. The response uses credential response encryption with alg ECDH-ES and enc A256GCM. This test covers VCI-CHECK-01, VCI-CHECK-02, VCI-CHECK-03, VCI-CHECK-03A, VCI-CHECK-05, VCI-CHECK-06, VCI-CHECK-06A, VCI-CHECK-07, and VCI-CHECK-11, with expected outcome successful end-to-end authorization-code issuance when the credential response encryption uses A256GCM."
+      description: "OID4VCI 1.0 authorization-code issuance for ETSIRfc001PidVcSdJwt in sd-jwt format using the x509 signature profile and x509_san_dns client_id scheme, delivered through the eu-eaa-offer:// offer scheme. The offer is minted via GET /offer-code-sd-jwt (non-dynamic code session): /authorize redirects to the wallet redirect_uri with an authorization code and does not issue an intermediate OpenID4VP dynamic credential request. The flow requires PAR, PKCE with S256, Wallet Instance Attestation with proof of possession at the PAR and Token endpoints, and sender-constrained access tokens. The credential request requires proofs and uses the jwt proof path with Wallet Unit Attestation handling. The issuer signing material is the X.509 certificate chain at ./x509EC/client_certificate.crt. The response uses credential response encryption with alg ECDH-ES and enc A256GCM. This test covers VCI-CHECK-01, VCI-CHECK-02, VCI-CHECK-03, VCI-CHECK-03A, VCI-CHECK-05, VCI-CHECK-06, VCI-CHECK-06A, VCI-CHECK-07, and VCI-CHECK-11, with expected outcome successful end-to-end authorization-code issuance when the credential response encryption uses A256GCM."
       method: "GET"
-      path: "/vci/offer"
-      url: "http://localhost:3000/vci/offer?flow=authorization_code&credential_type=ETSIRfc001PidVcSdJwt&credential_format=sd-jwt&signature_type=x509&offer_scheme=eu_eaa"
+      path: "/offer-code-sd-jwt"
+      url: "http://localhost:3000/offer-code-sd-jwt?credentialType=ETSIRfc001PidVcSdJwt&client_id_scheme=x509_san_dns&signatureType=x509&offer_scheme=eu_eaa"
       parameters:
-        flow: "authorization_code"
-        credential_type: "ETSIRfc001PidVcSdJwt"
-        credential_format: "sd-jwt"
-        signature_type: "x509"
+        credentialType: "ETSIRfc001PidVcSdJwt"
+        client_id_scheme: "x509_san_dns"
+        signatureType: "x509"
         offer_scheme: "eu_eaa"
       issuance_protocol: "OID4VCI 1.0"
       request_profile_variant: "Authorization-code flow, SD-JWT, A256GCM"
@@ -206,7 +208,7 @@ credential_issuance:
         offer_scheme: "eu_eaa"
 
 # ==============================================================================
-# STATUS / POLLING (issuer — routes/issue/sharedIssuanceFlows.js)
+# STATUS / POLLING (issuer ? routes/issue/sharedIssuanceFlows.js)
 # ==============================================================================
 # Query parameter name is sessionId (camelCase). Use the sessionId returned in
 # the GET /vci/offer JSON body for the active issuance session.

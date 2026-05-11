@@ -8,6 +8,7 @@ import {
   getPublicIssuerBaseUrl,
   createOpenID4VPRequestUrl,
   resolvePidVpInvocationScheme,
+  resolveCodeFlowOfferIssuanceOptions,
 } from '../utils/routeUtils.js';
 
 describe('Route Utils', () => {
@@ -224,6 +225,71 @@ describe('Route Utils', () => {
         body: { offer_scheme: 'eu-eaa' },
       };
       expect(getCredentialOfferSchemeFromRequest(req)).to.equal(URL_SCHEMES.EU_EAA);
+    });
+  });
+
+  describe('resolveCodeFlowOfferIssuanceOptions', () => {
+    it('defaults to standard (non-dynamic, non-deferred)', () => {
+      expect(resolveCodeFlowOfferIssuanceOptions({ query: {} })).to.deep.equal({
+        isDynamic: false,
+        isDeferred: false,
+        includeCredentialType: true,
+      });
+    });
+
+    it('maps issuance_mode=dynamic', () => {
+      expect(
+        resolveCodeFlowOfferIssuanceOptions({ query: { issuance_mode: 'dynamic' } }),
+      ).to.deep.equal({
+        isDynamic: true,
+        isDeferred: false,
+        includeCredentialType: false,
+      });
+    });
+
+    it('maps dynamic_credential_request when mode omitted', () => {
+      expect(
+        resolveCodeFlowOfferIssuanceOptions({ query: { dynamic_credential_request: 'true' } }),
+      ).to.deep.equal({
+        isDynamic: true,
+        isDeferred: false,
+        includeCredentialType: false,
+      });
+    });
+
+    it('issuance_mode takes precedence over dynamic_credential_request flag', () => {
+      expect(
+        resolveCodeFlowOfferIssuanceOptions({
+          query: { issuance_mode: 'standard', dynamic_credential_request: 'true' },
+        }),
+      ).to.deep.equal({
+        isDynamic: false,
+        isDeferred: false,
+        includeCredentialType: true,
+      });
+    });
+
+    it('maps deferred and common typos', () => {
+      expect(
+        resolveCodeFlowOfferIssuanceOptions({ query: { issuance_mode: 'deferred' } }),
+      ).to.deep.equal({
+        isDynamic: false,
+        isDeferred: true,
+        includeCredentialType: false,
+      });
+      expect(
+        resolveCodeFlowOfferIssuanceOptions({ query: { issuance_mode: 'deffered' } }),
+      ).to.deep.equal({
+        isDynamic: false,
+        isDeferred: true,
+        includeCredentialType: false,
+      });
+    });
+
+    it('throws on unknown mode', () => {
+      expect(() =>
+        resolveCodeFlowOfferIssuanceOptions({ query: { issuance_mode: 'nope' } }),
+      ).to.throw(/Invalid issuance_mode/);
     });
   });
 

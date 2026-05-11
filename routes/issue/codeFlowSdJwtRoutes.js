@@ -50,6 +50,7 @@ import {
   getCredentialType,
   getSignatureType,
   getClientIdScheme,
+  resolveCodeFlowOfferIssuanceOptions,
   
   // Session management utilities
   createCodeFlowSession,
@@ -98,6 +99,51 @@ async function manageSession(uuid, sessionData) {
     await storeCodeFlowSession(uuid, sessionData);
   }
   return existingSession;
+}
+
+/**
+ * Shared handler for credential offers on the SD-JWT code-flow router.
+ * @param {*} fixedIssuance Omit to derive flags from `issuance_mode` / `dynamic_credential_request` on the request.
+ */
+async function emitOfferCodeSdJwt(req, res, fixedIssuance, routeLabel) {
+  let sessionId;
+  try {
+    sessionId = getSessionId(req);
+    bindSessionLoggingContext(req, res, sessionId);
+
+    const signatureType = getSignatureType(req);
+    const credentialType = getCredentialType(req);
+    const client_id_scheme = getClientIdScheme(req);
+
+    const issuance = fixedIssuance ?? resolveCodeFlowOfferIssuanceOptions(req);
+    const sessionData = createCodeFlowSession(
+      client_id_scheme,
+      "code",
+      issuance.isDynamic,
+      issuance.isDeferred,
+      signatureType,
+    );
+    await manageSession(sessionId, sessionData);
+
+    const invocationScheme = getCredentialOfferSchemeFromRequest(req);
+
+    const credentialOffer = createCodeFlowCredentialOfferResponse(
+      sessionId,
+      credentialType,
+      client_id_scheme,
+      issuance.includeCredentialType,
+      invocationScheme,
+    );
+    const encodedQR = await generateQRCode(credentialOffer, sessionId);
+
+    res.json({
+      qr: encodedQR,
+      deepLink: credentialOffer,
+      sessionId,
+    });
+  } catch (error) {
+    handleRouteError(error, routeLabel, res, sessionId);
+  }
 }
 
 function createPARRequest(requestData) {
@@ -488,104 +534,25 @@ async function buildIdTokenRequestJWTForDid(uuid, existingCodeSession) {
 // ************* CREDENTIAL OFFER ENDPOINTS *************************
 // ******************************************************************
 codeFlowRouterSDJWT.get(["/offer-code-sd-jwt"], async (req, res) => {
-  let sessionId;
-  try {
-    sessionId = getSessionId(req);
-    bindSessionLoggingContext(req, res, sessionId);
-
-    const signatureType = getSignatureType(req);
-    const credentialType = getCredentialType(req);
-    const client_id_scheme = getClientIdScheme(req);
-
-    const sessionData = createCodeFlowSession(client_id_scheme, "code", false, false, signatureType);
-    await manageSession(sessionId, sessionData);
-
-    // Wallet invocation: `offer_scheme` or `url_scheme` (openid-credential-offer://, haip://, eu-eaa-offer://)
-    const invocationScheme = getCredentialOfferSchemeFromRequest(req);
-
-    const credentialOffer = createCodeFlowCredentialOfferResponse(
-      sessionId,
-      credentialType,
-      client_id_scheme,
-      true,
-      invocationScheme
-    );
-    const encodedQR = await generateQRCode(credentialOffer, sessionId);
-    
-    res.json({
-      qr: encodedQR,
-      deepLink: credentialOffer,
-      sessionId,
-    });
-  } catch (error) {
-    handleRouteError(error, "offer-code-sd-jwt", res, sessionId);
-  }
+  await emitOfferCodeSdJwt(req, res, null, "offer-code-sd-jwt");
 });
 
 codeFlowRouterSDJWT.get(["/offer-code-sd-jwt-dynamic"], async (req, res) => {
-  let sessionId;
-  try {
-    sessionId = getSessionId(req);
-    bindSessionLoggingContext(req, res, sessionId);
-
-    const credentialType = getCredentialType(req);
-    const client_id_scheme = getClientIdScheme(req);
-
-    const sessionData = createCodeFlowSession(client_id_scheme, "code", true);
-    await manageSession(sessionId, sessionData);
-
-    const invocationScheme = getCredentialOfferSchemeFromRequest(req);
-
-    const credentialOffer = createCodeFlowCredentialOfferResponse(
-      sessionId,
-      credentialType,
-      client_id_scheme,
-      false,
-      invocationScheme
-    );
-    const encodedQR = await generateQRCode(credentialOffer, sessionId);
-    
-    res.json({
-      qr: encodedQR,
-      deepLink: credentialOffer,
-      sessionId,
-    });
-  } catch (error) {
-    handleRouteError(error, "offer-code-sd-jwt-dynamic", res, sessionId);
-  }
+  await emitOfferCodeSdJwt(
+    req,
+    res,
+    { isDynamic: true, isDeferred: false, includeCredentialType: false },
+    "offer-code-sd-jwt-dynamic",
+  );
 });
 
 codeFlowRouterSDJWT.get(["/offer-code-defered"], async (req, res) => {
-  let sessionId;
-  try {
-    sessionId = getSessionId(req);
-    bindSessionLoggingContext(req, res, sessionId);
-
-    const credentialType = getCredentialType(req);
-    const client_id_scheme = getClientIdScheme(req);
-
-    const sessionData = createCodeFlowSession(client_id_scheme, "code", false, true);
-    await manageSession(sessionId, sessionData);
-
-    const invocationScheme = getCredentialOfferSchemeFromRequest(req);
-
-    const credentialOffer = createCodeFlowCredentialOfferResponse(
-      sessionId,
-      credentialType,
-      client_id_scheme,
-      false,
-      invocationScheme
-    );
-    const encodedQR = await generateQRCode(credentialOffer, sessionId);
-    
-    res.json({
-      qr: encodedQR,
-      deepLink: credentialOffer,
-      sessionId,
-    });
-  } catch (error) {
-    handleRouteError(error, "offer-code-defered", res, sessionId);
-  }
+  await emitOfferCodeSdJwt(
+    req,
+    res,
+    { isDynamic: false, isDeferred: true, includeCredentialType: false },
+    "offer-code-defered",
+  );
 });
 
 // auth code-flow request
