@@ -34,6 +34,37 @@ function withSpecRef(message, ...refs) {
   return `${message}${message.endsWith(".") ? "" : "."} See ${present.join(" and ")}.`;
 }
 
+export function parseBooleanEnvFlag(value, defaultValue = false) {
+  if (value === undefined || value === null) return defaultValue;
+  const normalized = String(value).trim().toLowerCase();
+  if (normalized === "") return defaultValue;
+  if (normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on") {
+    return true;
+  }
+  if (normalized === "0" || normalized === "false" || normalized === "no" || normalized === "off") {
+    return false;
+  }
+  return defaultValue;
+}
+
+export function isEtsiIssuanceProfileEnforced() {
+  return parseBooleanEnvFlag(process.env.ENFORCE_ETSI_ISSUANCE_PROFILE, false);
+}
+
+export function logSoftEtsiIssuanceViolation(slog, scope, error, details = {}) {
+  if (!slog) return;
+  try {
+    slog(
+      `${scope} [WARN] ETSI issuance profile check failed; continuing because ENFORCE_ETSI_ISSUANCE_PROFILE is disabled`,
+      {
+        error,
+        enforcementEnv: process.env.ENFORCE_ETSI_ISSUANCE_PROFILE ?? "unset(default:true)",
+        ...details,
+      },
+    );
+  } catch {}
+}
+
 // ============================================================================
 // SHARED CONSTANTS
 // ============================================================================

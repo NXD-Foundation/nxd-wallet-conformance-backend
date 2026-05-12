@@ -215,6 +215,15 @@ The PDF cites **OpenID4VCI Appendix E** and the **OAuth attestation draft** for 
 - **`tests/keyAttestationProof.test.js`** — `proofs.attestation` / JWKS resolution.
 - **`tests/wuaValidation.test.js`** — `isWuaWalletProviderTrustedByPolicy` stub behaviour.
 
+### 8.7 Future note: configurable ETSI issuance enforcement
+
+The issuer supports `ENFORCE_ETSI_ISSUANCE_PROFILE` for interop rollout and troubleshooting.
+
+- Unset or `true`: ETSI issuance checks stay enforced.
+- `false`: ETSI-specific WIA/WUA issuance failures are logged with the session `slog` pattern and the flow continues.
+
+This toggle is intended only for ETSI issuance-profile enforcement. Generic request validation and baseline proof verification still fail normally.
+
 ---
 
 ## 9. References cited by the TS (for traceability)

@@ -18,6 +18,7 @@ process.env.SERVER_URL = 'http://localhost:3000';
 // The ALLOW_NO_REDIS flag allows Redis-dependent code to work without a Redis connection.
 
 describe('Shared Issuance Flows', () => {
+  const originalEtsiEnforcementEnv = process.env.ENFORCE_ETSI_ISSUANCE_PROFILE;
   /** Bound at PAR/authorize; token exchange must present the same `client_id` when set (RFC001 P0-2). */
   const TEST_OAUTH_CLIENT_ID = 'test-oauth-client-id';
   /** Bound at PAR/authorize; token exchange must present the same `redirect_uri` when set (RFC001 P0-3). */
@@ -207,6 +208,11 @@ describe('Shared Issuance Flows', () => {
   });
 
   after(() => {
+    if (originalEtsiEnforcementEnv !== undefined) {
+      process.env.ENFORCE_ETSI_ISSUANCE_PROFILE = originalEtsiEnforcementEnv;
+    } else {
+      delete process.env.ENFORCE_ETSI_ISSUANCE_PROFILE;
+    }
     if (globalSandbox) {
       globalSandbox.restore();
     }
@@ -241,6 +247,11 @@ describe('Shared Issuance Flows', () => {
   });
 
   afterEach(() => {
+    if (originalEtsiEnforcementEnv !== undefined) {
+      process.env.ENFORCE_ETSI_ISSUANCE_PROFILE = originalEtsiEnforcementEnv;
+    } else {
+      delete process.env.ENFORCE_ETSI_ISSUANCE_PROFILE;
+    }
     sandbox.restore();
   });
 
@@ -265,6 +276,31 @@ describe('Shared Issuance Flows', () => {
         })
         .expect(400);
       expect(response.body).to.have.property("error", "invalid_client");
+    });
+
+    it('continues token flow when WIA is missing and ENFORCE_ETSI_ISSUANCE_PROFILE=false', async function () {
+      if (!cacheServiceRedis.client.isReady) {
+        this.skip();
+      }
+      process.env.ENFORCE_ETSI_ISSUANCE_PROFILE = 'false';
+      const preAuthCode = 'test-pre-auth-soft-no-wia-' + uuidv4();
+      await cacheServiceRedis.storePreAuthSession(preAuthCode, {
+        status: 'pending',
+        authorizationDetails: null,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const { dpopJwt } = await makeTokenDpop();
+      const response = await request(app)
+        .post('/token_endpoint')
+        .set('DPoP', dpopJwt)
+        .send({
+          grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
+          'pre-authorized_code': preAuthCode,
+        })
+        .expect(200);
+
+      expect(response.body).to.have.property('access_token');
+      expect(response.body).to.have.property('c_nonce');
     });
 
     it('should handle pre-authorized code flow successfully', async () => {
@@ -1946,6 +1982,40 @@ describe('Shared Issuance Flows', () => {
       expect(res.status).to.equal(400);
       expect(res.body).to.have.property('error', 'invalid_proof');
       expect(res.body.error_description).to.match(/key_attestation/i);
+    });
+
+    it('P1-1 relaxed — continues device-bound issuance without key_attestation when ENFORCE_ETSI_ISSUANCE_PROFILE=false', async function () {
+      if (!cacheServiceRedis.client?.isReady) {
+        this.skip();
+      }
+      process.env.ENFORCE_ETSI_ISSUANCE_PROFILE = 'false';
+      const sessionKey = 'p11-soft-no-key-attestation-' + uuidv4();
+      const accessToken = 'test-access-token-p11-soft-' + uuidv4();
+      const nonce = cryptoUtils.generateNonce();
+      await cacheServiceRedis.storeNonce(nonce, 300);
+      await cacheServiceRedis.storePreAuthSession(sessionKey, {
+        status: 'success',
+        isDeferred: false,
+        accessToken,
+        c_nonce: nonce,
+      });
+      const proof = signProofJwt({
+        nonce,
+        iss: 'did:holder:test',
+        aud: process.env.SERVER_URL,
+      });
+
+      const res = await request(app)
+        .post('/credential')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({
+          credential_configuration_id: 'rfc001-device-bound-test',
+          proofs: { jwt: [proof] },
+        });
+
+      expect(res.status).to.equal(200);
+      expect(res.body).to.have.property('credentials');
+      expect(res.body.credentials).to.be.an('array').that.is.not.empty;
     });
 
     it('P1-1b — MUST return invalid_proof when proof signature does not verify with WUA attested_keys[0]', async function () {

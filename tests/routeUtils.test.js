@@ -9,6 +9,8 @@ import {
   createOpenID4VPRequestUrl,
   resolvePidVpInvocationScheme,
   resolveCodeFlowOfferIssuanceOptions,
+  isEtsiIssuanceProfileEnforced,
+  parseBooleanEnvFlag,
 } from '../utils/routeUtils.js';
 
 describe('Route Utils', () => {
@@ -194,6 +196,42 @@ describe('Route Utils', () => {
       expect(getPublicIssuerBaseUrl({ headers: {} })).to.equal(
         'https://fallback.example.com',
       );
+    });
+  });
+
+  describe('ETSI issuance enforcement env flag', () => {
+    const previous = process.env.ENFORCE_ETSI_ISSUANCE_PROFILE;
+
+    afterEach(() => {
+      if (previous === undefined) {
+        delete process.env.ENFORCE_ETSI_ISSUANCE_PROFILE;
+      } else {
+        process.env.ENFORCE_ETSI_ISSUANCE_PROFILE = previous;
+      }
+    });
+
+    it('defaults to enforced when env var is unset', () => {
+      delete process.env.ENFORCE_ETSI_ISSUANCE_PROFILE;
+      expect(isEtsiIssuanceProfileEnforced()).to.equal(true);
+    });
+
+    it('treats explicit false-like values as relaxed mode', () => {
+      process.env.ENFORCE_ETSI_ISSUANCE_PROFILE = 'false';
+      expect(isEtsiIssuanceProfileEnforced()).to.equal(false);
+      process.env.ENFORCE_ETSI_ISSUANCE_PROFILE = '0';
+      expect(isEtsiIssuanceProfileEnforced()).to.equal(false);
+      process.env.ENFORCE_ETSI_ISSUANCE_PROFILE = 'no';
+      expect(isEtsiIssuanceProfileEnforced()).to.equal(false);
+    });
+
+    it('parses common boolean spellings', () => {
+      expect(parseBooleanEnvFlag('true')).to.equal(true);
+      expect(parseBooleanEnvFlag('1')).to.equal(true);
+      expect(parseBooleanEnvFlag('yes')).to.equal(true);
+      expect(parseBooleanEnvFlag('false', true)).to.equal(false);
+      expect(parseBooleanEnvFlag('0', true)).to.equal(false);
+      expect(parseBooleanEnvFlag('off', true)).to.equal(false);
+      expect(parseBooleanEnvFlag('unexpected', true)).to.equal(true);
     });
   });
 

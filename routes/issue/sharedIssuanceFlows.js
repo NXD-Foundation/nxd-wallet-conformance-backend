@@ -67,6 +67,8 @@ import {
   assertOpenidCredentialAuthorizationDetails,
   resolveCredentialIdentifierFromOpenidCredentialEntry,
   getPublicIssuerBaseUrl,
+  isEtsiIssuanceProfileEnforced,
+  logSoftEtsiIssuanceViolation,
 } from "../../utils/routeUtils.js";
 import {
   decryptCredentialRequestJwe,
@@ -1170,6 +1172,7 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
   let sessionId = null;
   let slog = null;
   let requestId = null;
+  const enforceEtsiIssuance = isEtsiIssuanceProfileEnforced();
 
   try {
     const {
@@ -1211,22 +1214,30 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
     // RFC001 §7.4 — Wallet Instance Attestation (WIA) is mandatory at the token endpoint
     // (client_assertion + jwt-bearer type). JWS signature is verified; Wallet Provider trust list is not used.
     const wiaJwt = extractWIAFromTokenRequest(req.body, req.headers);
+    let wiaValidation = null;
     if (!wiaJwt) {
-      if (slog) {
-        try {
-          slog(
-            "[TOKEN] [ERROR] Missing WIA (client_assertion)",
-            { grant_type },
-          );
-        } catch {}
+      if (!enforceEtsiIssuance) {
+        logSoftEtsiIssuanceViolation(slog, "[TOKEN]", "Missing WIA (client_assertion)", {
+          check: "wia_presence",
+          grant_type,
+        });
+      } else {
+        if (slog) {
+          try {
+            slog(
+              "[TOKEN] [ERROR] Missing WIA (client_assertion)",
+              { grant_type },
+            );
+          } catch {}
+        }
+        return res.status(400).json({
+          error: "invalid_client",
+          error_description:
+            "Wallet Instance Attestation (WIA) is required: send client_assertion with client_assertion_type urn:ietf:params:oauth:client-assertion-type:jwt-bearer (RFC001 §7.4).",
+        });
       }
-      return res.status(400).json({
-        error: "invalid_client",
-        error_description:
-          "Wallet Instance Attestation (WIA) is required: send client_assertion with client_assertion_type urn:ietf:params:oauth:client-assertion-type:jwt-bearer (RFC001 §7.4).",
-      });
     }
-    if (slog) {
+    if (wiaJwt && slog) {
       try {
         const decoded = jwt.decode(wiaJwt, { complete: true });
         const p = decoded?.payload;
@@ -1240,21 +1251,29 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
         });
       } catch {}
     }
-    const wiaValidation = await validateWIA(wiaJwt, sessionId);
-    if (!wiaValidation.valid) {
-      if (slog) {
-        try {
-          slog("[TOKEN] [ERROR] WIA validation failed", {
-            error: wiaValidation.error,
-          });
-        } catch {}
-      }
-      return res.status(400).json({
-        error: "invalid_client",
-        error_description: wiaValidation.error || "Invalid Wallet Instance Attestation",
-      });
+    if (wiaJwt) {
+      wiaValidation = await validateWIA(wiaJwt, sessionId);
     }
-    if (slog) {
+    if (wiaJwt && !wiaValidation.valid) {
+      if (!enforceEtsiIssuance) {
+        logSoftEtsiIssuanceViolation(slog, "[TOKEN]", wiaValidation.error, {
+          check: "wia_validation",
+        });
+      } else {
+        if (slog) {
+          try {
+            slog("[TOKEN] [ERROR] WIA validation failed", {
+              error: wiaValidation.error,
+            });
+          } catch {}
+        }
+        return res.status(400).json({
+          error: "invalid_client",
+          error_description: wiaValidation.error || "Invalid Wallet Instance Attestation",
+        });
+      }
+    }
+    if (wiaValidation?.valid && slog) {
       try {
         slog("[TOKEN] WIA validated successfully", {
           wiaIssuer: wiaValidation.payload?.iss,
@@ -1270,36 +1289,62 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
       trustedJwks: getTrustedClientAttesterJwks(),
     });
     if (!attestationResult.skip && !attestationResult.ok) {
-      if (slog) {
-        try {
-          slog("[TOKEN] Client attestation rejected", {
-            error: attestationResult.errorDescription,
-          });
-        } catch {}
+      if (!enforceEtsiIssuance) {
+        logSoftEtsiIssuanceViolation(slog, "[TOKEN]", attestationResult.errorDescription, {
+          check: "oauth_client_attestation",
+        });
+      } else {
+        if (slog) {
+          try {
+            slog("[TOKEN] Client attestation rejected", {
+              error: attestationResult.errorDescription,
+            });
+          } catch {}
+        }
+        return res.status(attestationResult.statusCode || 401).json({
+          error: attestationResult.oauthError || "invalid_client",
+          error_description: attestationResult.errorDescription,
+        });
       }
-      return res.status(attestationResult.statusCode || 401).json({
-        error: attestationResult.oauthError || "invalid_client",
-        error_description: attestationResult.errorDescription,
-      });
     }
 
     if (attestationResult.skip) {
-      return res.status(400).json({
-        error: "invalid_client",
-        error_description:
-          "OAuth-Client-Attestation and OAuth-Client-Attestation-PoP headers are required with Wallet Instance Attestation (RFC001 §7.4).",
-      });
+      if (!enforceEtsiIssuance) {
+        logSoftEtsiIssuanceViolation(
+          slog,
+          "[TOKEN]",
+          "Missing OAuth-Client-Attestation and OAuth-Client-Attestation-PoP headers with WIA",
+          { check: "oauth_client_attestation_headers" },
+        );
+      } else {
+        return res.status(400).json({
+          error: "invalid_client",
+          error_description:
+            "OAuth-Client-Attestation and OAuth-Client-Attestation-PoP headers are required with Wallet Instance Attestation (RFC001 §7.4).",
+        });
+      }
     }
-    try {
-      await assertWiaCnfMatchesClientAttestation(
-        wiaValidation.payload,
-        attestationResult.attestationPayload
-      );
-    } catch (e) {
-      return res.status(400).json({
-        error: "invalid_client",
-        error_description: e?.message || "WIA client attestation binding failed",
-      });
+    if (wiaValidation?.valid && attestationResult.ok) {
+      try {
+        await assertWiaCnfMatchesClientAttestation(
+          wiaValidation.payload,
+          attestationResult.attestationPayload
+        );
+      } catch (e) {
+        if (!enforceEtsiIssuance) {
+          logSoftEtsiIssuanceViolation(
+            slog,
+            "[TOKEN]",
+            e?.message || "WIA client attestation binding failed",
+            { check: "wia_client_attestation_binding" },
+          );
+        } else {
+          return res.status(400).json({
+            error: "invalid_client",
+            error_description: e?.message || "WIA client attestation binding failed",
+          });
+        }
+      }
     }
 
     // TODO: Implement Wallet Unit Attestation (WUA) based client authentication for token endpoint requests
@@ -1631,6 +1676,7 @@ sharedRouter.post("/credential", async (req, res) => {
   let sessionId = null;
   let slog = null;
   let requestId = null;
+  const enforceEtsiIssuance = isEtsiIssuanceProfileEnforced();
   
   try {
     const requestBody = await parseCredentialEndpointBody(req);
@@ -1838,34 +1884,22 @@ sharedRouter.post("/credential", async (req, res) => {
 
           let publicKeyForProof;
           if (jwtProofRequiresKeyAttestation) {
+            const relaxDeviceBoundEtsiViolation = (errorMessage, check) => {
+              if (enforceEtsiIssuance) {
+                throw new Error(errorMessage);
+              }
+              logSoftEtsiIssuanceViolation(slog, "[CREDENTIAL]", errorMessage, {
+                check,
+                fallback: "proof_jwt_holder_binding",
+                credential_configuration_id: effectiveConfigurationId,
+              });
+            };
             const wuaCompact = headerForVerification.key_attestation;
-            if (typeof wuaCompact !== "string" || !wuaCompact.trim()) {
-              throw new Error(
-                `${ERROR_MESSAGES.INVALID_PROOF}: proofs.jwt MUST include protected-header parameter 'key_attestation' (Wallet Unit Attestation) for this credential configuration (RFC001 §7.5.1). See ${SPEC_REFS.VCI_PROOF}`
-              );
-            }
-            const wuaStrict = await validateWUA(wuaCompact, sessionId, issuerConfigForProof);
-            if (!wuaStrict.valid) {
-              throw new Error(
-                `${ERROR_MESSAGES.INVALID_PROOF}: Wallet Unit Attestation in key_attestation could not be validated. ${wuaStrict.error || ""}`.trim()
-              );
-            }
-            const attested = wuaStrict.payload?.attested_keys;
-            if (!Array.isArray(attested) || !attested[0] || typeof attested[0] !== "object") {
-              throw new Error(
-                `${ERROR_MESSAGES.INVALID_PROOF}: WUA attested_keys[0] is required for device-bound issuance (RFC001 §7.5.1). See ${SPEC_REFS.VCI_PROOF}`
-              );
-            }
             publicKeyForProof = await resolveProofJwtPublicJwk(headerForVerification, {
               sessionId,
               messages: ERROR_MESSAGES,
               specRefVciProof: SPEC_REFS.VCI_PROOF,
             });
-            if (!proofKeyMatchesWUAAttestedKeys(publicKeyForProof, wuaStrict.payload)) {
-              throw new Error(
-                `${ERROR_MESSAGES.INVALID_PROOF}: proof signing key MUST match WUA attested_keys[0] (RFC001 §7.5.1). See ${SPEC_REFS.VCI_PROOF}`
-              );
-            }
             await verifyProofJWT(
               requestBody.proofJwt,
               publicKeyForProof,
@@ -1873,14 +1907,42 @@ sharedRouter.post("/credential", async (req, res) => {
               sessionId,
               req,
             );
-            requestBody._credentialBindingCnfList = await dedupeAttestedKeysToCnfList(attested);
-            if (slog) {
-              try {
-                slog("[CREDENTIAL] Device-bound proof verified; multi-key cnf list", {
-                  wuaIssuer: wuaStrict.payload?.iss,
-                  attestedKeyCount: requestBody._credentialBindingCnfList?.length ?? 0,
-                });
-              } catch {}
+            if (typeof wuaCompact !== "string" || !wuaCompact.trim()) {
+              relaxDeviceBoundEtsiViolation(
+                `${ERROR_MESSAGES.INVALID_PROOF}: proofs.jwt MUST include protected-header parameter 'key_attestation' (Wallet Unit Attestation) for this credential configuration (RFC001 §7.5.1). See ${SPEC_REFS.VCI_PROOF}`,
+                "key_attestation_presence",
+              );
+            } else {
+              const wuaStrict = await validateWUA(wuaCompact, sessionId, issuerConfigForProof);
+              if (!wuaStrict.valid) {
+                relaxDeviceBoundEtsiViolation(
+                  `${ERROR_MESSAGES.INVALID_PROOF}: Wallet Unit Attestation in key_attestation could not be validated. ${wuaStrict.error || ""}`.trim(),
+                  "key_attestation_validation",
+                );
+              } else {
+                const attested = wuaStrict.payload?.attested_keys;
+                if (!Array.isArray(attested) || !attested[0] || typeof attested[0] !== "object") {
+                  relaxDeviceBoundEtsiViolation(
+                    `${ERROR_MESSAGES.INVALID_PROOF}: WUA attested_keys[0] is required for device-bound issuance (RFC001 §7.5.1). See ${SPEC_REFS.VCI_PROOF}`,
+                    "attested_keys_primary",
+                  );
+                } else if (!proofKeyMatchesWUAAttestedKeys(publicKeyForProof, wuaStrict.payload)) {
+                  relaxDeviceBoundEtsiViolation(
+                    `${ERROR_MESSAGES.INVALID_PROOF}: proof signing key MUST match WUA attested_keys[0] (RFC001 §7.5.1). See ${SPEC_REFS.VCI_PROOF}`,
+                    "proof_key_matches_attested_keys_0",
+                  );
+                } else {
+                  requestBody._credentialBindingCnfList = await dedupeAttestedKeysToCnfList(attested);
+                  if (slog) {
+                    try {
+                      slog("[CREDENTIAL] Device-bound proof verified; multi-key cnf list", {
+                        wuaIssuer: wuaStrict.payload?.iss,
+                        attestedKeyCount: requestBody._credentialBindingCnfList?.length ?? 0,
+                      });
+                    } catch {}
+                  }
+                }
+              }
             }
           } else {
             publicKeyForProof = await resolveProofJwtPublicJwk(headerForVerification, {

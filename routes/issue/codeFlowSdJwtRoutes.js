@@ -75,6 +75,8 @@ import {
   parseAuthorizationDetailsParameterRaw,
   assertOpenidCredentialAuthorizationDetails,
   resolveCredentialIdentifierFromOpenidCredentialEntry,
+  isEtsiIssuanceProfileEnforced,
+  logSoftEtsiIssuanceViolation,
 } from "../../utils/routeUtils.js";
 import {
   validateOAuthClientAttestationFromRequest,
@@ -611,6 +613,8 @@ codeFlowRouterSDJWT.post(["/par", "/authorize/par"], async (req, res) => {
       try { slog("[ISSUER] [PAR] [START] Processing PAR request", { hasIssuerState: !!issuerState, hasState: !!requestData.state }); } catch {}
     }
 
+    const enforceEtsiIssuance = isEtsiIssuanceProfileEnforced();
+
     const attestationResult = await validateOAuthClientAttestationFromRequest({
       headers: req.headers,
       clientId: requestData.client_id,
@@ -618,55 +622,74 @@ codeFlowRouterSDJWT.post(["/par", "/authorize/par"], async (req, res) => {
       trustedJwks: getTrustedClientAttesterJwks(),
     });
     if (!attestationResult.skip && !attestationResult.ok) {
-      if (slog) {
-        try {
-          slog("[ISSUER] [PAR] Client attestation rejected", {
-            error: attestationResult.errorDescription,
-          });
-        } catch {}
-        logHttpResponse(
+      if (!enforceEtsiIssuance) {
+        logSoftEtsiIssuanceViolation(
           slog,
-          requestId,
-          "/par",
-          attestationResult.statusCode || 401,
-          "Unauthorized",
-          res.getHeaders(),
-          {
-            error: attestationResult.oauthError,
-            error_description: attestationResult.errorDescription,
-          }
+          "[ISSUER] [PAR]",
+          attestationResult.errorDescription,
+          { check: "oauth_client_attestation" },
         );
+      } else {
+        if (slog) {
+          try {
+            slog("[ISSUER] [PAR] Client attestation rejected", {
+              error: attestationResult.errorDescription,
+            });
+          } catch {}
+          logHttpResponse(
+            slog,
+            requestId,
+            "/par",
+            attestationResult.statusCode || 401,
+            "Unauthorized",
+            res.getHeaders(),
+            {
+              error: attestationResult.oauthError,
+              error_description: attestationResult.errorDescription,
+            }
+          );
+        }
+        return res.status(attestationResult.statusCode || 401).json({
+          error: attestationResult.oauthError || "invalid_client",
+          error_description: attestationResult.errorDescription,
+        });
       }
-      return res.status(attestationResult.statusCode || 401).json({
-        error: attestationResult.oauthError || "invalid_client",
-        error_description: attestationResult.errorDescription,
-      });
     }
 
     // RFC001 §7.3–7.4 — WIA is mandatory at PAR (same client_assertion carrier as token endpoint).
     const wiaJwt = extractWIAFromTokenRequest(req.body, req.headers);
+    let wiaValidation = null;
     if (!wiaJwt) {
-      if (slog) {
-        try {
-          slog("[ISSUER] [PAR] [ERROR] Missing WIA (client_assertion)");
-        } catch {}
-        logHttpResponse(
+      if (!enforceEtsiIssuance) {
+        logSoftEtsiIssuanceViolation(
           slog,
-          requestId,
-          "/par",
-          400,
-          "Bad Request",
-          res.getHeaders(),
-          { error: "invalid_client", error_description: "Wallet Instance Attestation (WIA) is required on PAR (RFC001 §7.3)." },
+          "[ISSUER] [PAR]",
+          "Missing WIA (client_assertion)",
+          { check: "wia_presence" },
         );
+      } else {
+        if (slog) {
+          try {
+            slog("[ISSUER] [PAR] [ERROR] Missing WIA (client_assertion)");
+          } catch {}
+          logHttpResponse(
+            slog,
+            requestId,
+            "/par",
+            400,
+            "Bad Request",
+            res.getHeaders(),
+            { error: "invalid_client", error_description: "Wallet Instance Attestation (WIA) is required on PAR (RFC001 §7.3)." },
+          );
+        }
+        return res.status(400).json({
+          error: "invalid_client",
+          error_description:
+            "Wallet Instance Attestation (WIA) is required: send client_assertion with client_assertion_type urn:ietf:params:oauth:client-assertion-type:jwt-bearer (RFC001 §7.3).",
+        });
       }
-      return res.status(400).json({
-        error: "invalid_client",
-        error_description:
-          "Wallet Instance Attestation (WIA) is required: send client_assertion with client_assertion_type urn:ietf:params:oauth:client-assertion-type:jwt-bearer (RFC001 §7.3).",
-      });
     }
-    if (slog) {
+    if (wiaJwt && slog) {
       try {
         const decoded = jwt.decode(wiaJwt, { complete: true });
         const p = decoded?.payload;
@@ -680,28 +703,39 @@ codeFlowRouterSDJWT.post(["/par", "/authorize/par"], async (req, res) => {
         });
       } catch {}
     }
-    const wiaValidation = await validateWIA(wiaJwt, issuerState);
-    if (!wiaValidation.valid) {
-      if (slog) {
-        try {
-          slog("[ISSUER] [PAR] [ERROR] WIA validation failed", { error: wiaValidation.error });
-        } catch {}
-        logHttpResponse(
-          slog,
-          requestId,
-          "/par",
-          400,
-          "Bad Request",
-          res.getHeaders(),
-          { error: "invalid_client", error_description: wiaValidation.error },
-        );
-      }
-      return res.status(400).json({
-        error: "invalid_client",
-        error_description: wiaValidation.error || "Invalid Wallet Instance Attestation",
-      });
+    if (wiaJwt) {
+      wiaValidation = await validateWIA(wiaJwt, issuerState);
     }
-    if (slog) {
+    if (wiaJwt && !wiaValidation.valid) {
+      if (!enforceEtsiIssuance) {
+        logSoftEtsiIssuanceViolation(
+          slog,
+          "[ISSUER] [PAR]",
+          wiaValidation.error,
+          { check: "wia_validation" },
+        );
+      } else {
+        if (slog) {
+          try {
+            slog("[ISSUER] [PAR] [ERROR] WIA validation failed", { error: wiaValidation.error });
+          } catch {}
+          logHttpResponse(
+            slog,
+            requestId,
+            "/par",
+            400,
+            "Bad Request",
+            res.getHeaders(),
+            { error: "invalid_client", error_description: wiaValidation.error },
+          );
+        }
+        return res.status(400).json({
+          error: "invalid_client",
+          error_description: wiaValidation.error || "Invalid Wallet Instance Attestation",
+        });
+      }
+    }
+    if (wiaValidation?.valid && slog) {
       try {
         slog("[ISSUER] [PAR] WIA validated successfully", {
           wiaIssuer: wiaValidation.payload?.iss,
@@ -711,56 +745,76 @@ codeFlowRouterSDJWT.post(["/par", "/authorize/par"], async (req, res) => {
     }
 
     if (attestationResult.skip) {
-      if (slog) {
-        try {
-          slog("[ISSUER] [PAR] [ERROR] Missing OAuth client attestation headers with WIA");
-        } catch {}
-        logHttpResponse(
+      if (!enforceEtsiIssuance) {
+        logSoftEtsiIssuanceViolation(
           slog,
-          requestId,
-          "/par",
-          400,
-          "Bad Request",
-          res.getHeaders(),
-          {
-            error: "invalid_client",
-            error_description:
-              "OAuth-Client-Attestation and OAuth-Client-Attestation-PoP headers are required with Wallet Instance Attestation (RFC001 §7.3).",
-          }
+          "[ISSUER] [PAR]",
+          "Missing OAuth client attestation headers with WIA",
+          { check: "oauth_client_attestation_headers" },
         );
+      } else {
+        if (slog) {
+          try {
+            slog("[ISSUER] [PAR] [ERROR] Missing OAuth client attestation headers with WIA");
+          } catch {}
+          logHttpResponse(
+            slog,
+            requestId,
+            "/par",
+            400,
+            "Bad Request",
+            res.getHeaders(),
+            {
+              error: "invalid_client",
+              error_description:
+                "OAuth-Client-Attestation and OAuth-Client-Attestation-PoP headers are required with Wallet Instance Attestation (RFC001 §7.3).",
+            }
+          );
+        }
+        return res.status(400).json({
+          error: "invalid_client",
+          error_description:
+            "OAuth-Client-Attestation and OAuth-Client-Attestation-PoP headers are required with Wallet Instance Attestation (RFC001 §7.3).",
+        });
       }
-      return res.status(400).json({
-        error: "invalid_client",
-        error_description:
-          "OAuth-Client-Attestation and OAuth-Client-Attestation-PoP headers are required with Wallet Instance Attestation (RFC001 §7.3).",
-      });
     }
-    try {
-      await assertWiaCnfMatchesClientAttestation(
-        wiaValidation.payload,
-        attestationResult.attestationPayload
-      );
-    } catch (e) {
-      if (slog) {
-        try {
-          slog("[ISSUER] [PAR] [ERROR] WIA / client attestation cnf mismatch", {
-            message: e?.message,
-          });
-        } catch {}
-        logHttpResponse(
-          slog,
-          requestId,
-          "/par",
-          400,
-          "Bad Request",
-          res.getHeaders(),
-          { error: "invalid_client", error_description: e?.message || "WIA client attestation binding failed" }
+    if (wiaValidation?.valid && attestationResult.ok) {
+      try {
+        await assertWiaCnfMatchesClientAttestation(
+          wiaValidation.payload,
+          attestationResult.attestationPayload
         );
+      } catch (e) {
+        if (!enforceEtsiIssuance) {
+          logSoftEtsiIssuanceViolation(
+            slog,
+            "[ISSUER] [PAR]",
+            e?.message || "WIA client attestation binding failed",
+            { check: "wia_client_attestation_binding" },
+          );
+        } else {
+          if (slog) {
+            try {
+              slog("[ISSUER] [PAR] [ERROR] WIA / client attestation cnf mismatch", {
+                message: e?.message,
+              });
+            } catch {}
+            logHttpResponse(
+              slog,
+              requestId,
+              "/par",
+              400,
+              "Bad Request",
+              res.getHeaders(),
+              { error: "invalid_client", error_description: e?.message || "WIA client attestation binding failed" }
+            );
+          }
+          return res.status(400).json({
+            error: "invalid_client",
+            error_description: e?.message || "WIA client attestation binding failed",
+          });
+        }
       }
-      return res.status(400).json({
-        error: "invalid_client",
-        error_description: e?.message || "WIA client attestation binding failed",
-      });
     }
 
     const parPkceErrors = validateAuthorizationRequest(
