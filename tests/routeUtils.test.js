@@ -210,8 +210,13 @@ describe('Route Utils', () => {
       }
     });
 
-    it('defaults to enforced when env var is unset', () => {
+    it('defaults to relaxed when env var is unset', () => {
       delete process.env.ENFORCE_ETSI_ISSUANCE_PROFILE;
+      expect(isEtsiIssuanceProfileEnforced()).to.equal(false);
+    });
+
+    it('enables enforcement when env var is true-like', () => {
+      process.env.ENFORCE_ETSI_ISSUANCE_PROFILE = 'true';
       expect(isEtsiIssuanceProfileEnforced()).to.equal(true);
     });
 

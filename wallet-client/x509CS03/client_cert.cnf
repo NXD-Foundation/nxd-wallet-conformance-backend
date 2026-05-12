@@ -9,7 +9,7 @@ x509_extensions = v3_req
 C = GR
 ST = Aegean
 L = Chios
-O = WE BUILD Wallet Client
+O = APTITUDE Wallet Client
 OU = CS03 Test Signer
 CN = wallet-client-cs03.local
 

@@ -9,7 +9,7 @@
   "input_descriptors": [
     {
       "id": "ewc-pid-credential",
-      "name": "WE BUILD PID Credential",
+      "name": "APTITUDE PID Credential",
       "format": {
         "vc+sd-jwt": {
           "alg": ["ES256", "ES384"]

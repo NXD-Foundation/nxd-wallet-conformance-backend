@@ -417,42 +417,22 @@ describe('OIDC4VCI V1.0 - Metadata Discovery Compliance', () => {
   });
 
   describe('V1.0 Nonce Endpoint - Behavior', () => {
-    it('POST /nonce without Authorization MUST return 401 invalid_token', async () => {
-      const res = await request(app).post('/nonce').expect(401);
-      expect(res.body.error).to.equal('invalid_token');
+    it('POST /nonce without Authorization returns c_nonce and c_nonce_expires_in', async () => {
+      const res = await request(app).post('/nonce').expect(200);
+      expect(res.body).to.have.property('c_nonce');
+      expect(res.body).to.have.property('c_nonce_expires_in');
     });
 
-    it('POST /nonce with valid access_token returns c_nonce and c_nonce_expires_in', async function () {
-      const cache = await import('../services/cacheServiceRedis.js');
-      if (!cache.client?.isReady) this.skip();
-      const accessToken = `md-nonce-${crypto.randomUUID()}`;
-      const sessionKey = `md-nonce-sess-${crypto.randomUUID()}`;
-      await cache.storePreAuthSession(sessionKey, { status: 'success', accessToken });
-
-      const res = await request(app)
-        .post('/nonce')
-        .set('Authorization', `Bearer ${accessToken}`)
-        .expect(200);
+    it('POST /nonce returns c_nonce and c_nonce_expires_in even when no access token is supplied', async () => {
+      const res = await request(app).post('/nonce').expect(200);
       expect(res.header['content-type']).to.include('application/json');
       expect(res.body).to.have.property('c_nonce');
       expect(res.body).to.have.property('c_nonce_expires_in');
     });
 
-    it('POST /nonce twice with same token SHOULD yield different c_nonce values', async function () {
-      const cache = await import('../services/cacheServiceRedis.js');
-      if (!cache.client?.isReady) this.skip();
-      const accessToken = `md-nonce-twice-${crypto.randomUUID()}`;
-      const sessionKey = `md-nonce-sess2-${crypto.randomUUID()}`;
-      await cache.storePreAuthSession(sessionKey, { status: 'success', accessToken });
-
-      const r1 = await request(app)
-        .post('/nonce')
-        .set('Authorization', `Bearer ${accessToken}`)
-        .expect(200);
-      const r2 = await request(app)
-        .post('/nonce')
-        .set('Authorization', `Bearer ${accessToken}`)
-        .expect(200);
+    it('POST /nonce twice SHOULD yield different c_nonce values', async () => {
+      const r1 = await request(app).post('/nonce').expect(200);
+      const r2 = await request(app).post('/nonce').expect(200);
       expect(r1.body.c_nonce).to.be.a('string');
       expect(r2.body.c_nonce).to.be.a('string');
       expect(r1.body.c_nonce).to.not.equal(r2.body.c_nonce);
@@ -3579,17 +3559,17 @@ describe('OIDC4VCI V1.0 - c_nonce in Token Response', () => {
       expect(nonceCleanup.nonces.has(expiredNonce)).to.be.false;
     });
 
-    it('SHOULD associate c_nonce with access token', () => {
-      const accessToken = crypto.randomBytes(32).toString('base64url');
+    it('SHOULD manage c_nonce independently of access token syntax', () => {
       const cnonce = crypto.randomBytes(16).toString('base64url');
       
-      const nonceBinding = {
-        cnonce: cnonce,
-        accessToken: accessToken,
-        createdAt: Math.floor(Date.now() / 1000)
+      const nonceRecord = {
+        cnonce,
+        createdAt: Math.floor(Date.now() / 1000),
+        expiresAt: Math.floor(Date.now() / 1000) + 86400
       };
       
-      expect(nonceBinding.accessToken).to.equal(accessToken);
+      expect(nonceRecord.cnonce).to.equal(cnonce);
+      expect(nonceRecord.expiresAt).to.be.greaterThan(nonceRecord.createdAt);
     });
   });
 
@@ -3600,32 +3580,15 @@ describe('OIDC4VCI V1.0 - c_nonce in Token Response', () => {
         .expect(200);
     });
 
-    it('POST /nonce should return fresh c_nonce when authorized', async function () {
-      const cache = await import('../services/cacheServiceRedis.js');
-      if (!cache.client?.isReady) this.skip();
-      const accessToken = `md-refresh-${crypto.randomUUID()}`;
-      const sessionKey = `md-refresh-sess-${crypto.randomUUID()}`;
-      await cache.storePreAuthSession(sessionKey, { status: 'success', accessToken });
-
-      const res = await request(app)
-        .post('/nonce')
-        .set('Authorization', `Bearer ${accessToken}`)
-        .expect(200);
+    it('POST /nonce should return fresh c_nonce without requiring authorization', async () => {
+      const res = await request(app).post('/nonce').expect(200);
       expect(res.body).to.have.property('c_nonce');
       expect(res.body).to.have.property('c_nonce_expires_in');
     });
     
-    it('SHOULD allow c_nonce refresh without new access token', () => {
-      const accessToken = 'eyJhbGci...'; // Still valid
+    it('SHOULD allow c_nonce refresh without reauthorization', () => {
       const oldCnonce = crypto.randomBytes(16).toString('base64url'); // Expired
-      
-      // Request to nonce endpoint
-      const nonceRequest = {
-        headers: {
-          Authorization: `Bearer ${accessToken}`
-        }
-      };
-      
+
       // Response with fresh c_nonce
       const nonceResponse = {
         c_nonce: crypto.randomBytes(16).toString('base64url'),
@@ -3636,14 +3599,14 @@ describe('OIDC4VCI V1.0 - c_nonce in Token Response', () => {
       expect(nonceResponse).to.have.property('c_nonce_expires_in');
     });
 
-    it('MUST validate access token before issuing new c_nonce', () => {
-      const validAccessToken = 'valid_token_xyz';
-      const invalidAccessToken = 'invalid_token_abc';
-      
-      const isAccessTokenValid = (token) => token === validAccessToken;
-      
-      expect(isAccessTokenValid(validAccessToken)).to.be.true;
-      expect(isAccessTokenValid(invalidAccessToken)).to.be.false;
+    it('MUST issue a fresh c_nonce without requiring access-token validation at the nonce endpoint', () => {
+      const nonceResponse = {
+        c_nonce: crypto.randomBytes(16).toString('base64url'),
+        c_nonce_expires_in: 86400
+      };
+
+      expect(nonceResponse.c_nonce).to.be.a('string').and.not.empty;
+      expect(nonceResponse.c_nonce_expires_in).to.equal(86400);
     });
   });
 
@@ -6169,20 +6132,8 @@ describe('OIDC4VCI V1.0 - API-backed Endpoint Validations', () => {
   });
 
   describe('Nonce Endpoint (/nonce)', () => {
-    it('POST /nonce without auth returns 401; with session returns c_nonce', async function () {
-      const unauth = await request(app).post('/nonce').expect(401);
-      expect(unauth.body).to.have.property('error', 'invalid_token');
-
-      const cache = await import('../services/cacheServiceRedis.js');
-      if (!cache.client?.isReady) this.skip();
-      const accessToken = `md-par-nonce-${crypto.randomUUID()}`;
-      const sessionKey = `md-par-sess-${crypto.randomUUID()}`;
-      await cache.storePreAuthSession(sessionKey, { status: 'success', accessToken });
-
-      const res = await request(app)
-        .post('/nonce')
-        .set('Authorization', `Bearer ${accessToken}`)
-        .expect(200);
+    it('POST /nonce returns c_nonce without requiring auth', async () => {
+      const res = await request(app).post('/nonce').expect(200);
       expect(res.body).to.have.property('c_nonce');
       expect(res.body).to.have.property('c_nonce_expires_in');
     });

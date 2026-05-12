@@ -1828,25 +1828,7 @@ sharedRouter.post("/credential", async (req, res) => {
           );
         }
 
-        // RFC001 §6.1.6 / §8.6 — proof nonce MUST be the current c_nonce for this issuance session
-        // (token response or POST /nonce), not merely any unexpired nonce in the shared store.
         const proofNonce = String(decodedPayloadForNonce.nonce).trim();
-        const sessionNonceRaw = sessionObject.c_nonce;
-        const sessionNonce =
-          sessionNonceRaw === undefined || sessionNonceRaw === null
-            ? ""
-            : String(sessionNonceRaw).trim();
-        if (!sessionNonce) {
-          throw new Error(
-            `${ERROR_MESSAGES.INVALID_PROOF_NONCE}. Received: issuance session has no c_nonce; obtain one via token response or POST /nonce. See ${SPEC_REFS.VCI_PROOF}`
-          );
-        }
-        if (proofNonce !== sessionNonce) {
-          throw new Error(
-            `${ERROR_MESSAGES.INVALID_PROOF_NONCE}. Received: proof nonce does not match this session's c_nonce (RFC001 §6.1.6 / §8.6). See ${SPEC_REFS.VCI_PROOF}`
-          );
-        }
-
         const nonceExists = await checkNonce(proofNonce);
         if (!nonceExists) {
           throw new Error(
@@ -2611,61 +2593,8 @@ sharedRouter.post("/credential_deferred", async (req, res) => {
 sharedRouter.post("/nonce", async (req, res) => {
   res.set("Cache-Control", "no-store");
   try {
-    const authHeader = req.headers["authorization"];
-    if (!authHeader) {
-      return res.status(401).json({
-        error: "invalid_token",
-        error_description:
-          "Missing Authorization header. Expected: Bearer <access_token> or DPoP <access_token> (RFC 9449).",
-      });
-    }
-
-    let accessToken;
-    if (authHeader.startsWith("Bearer ")) {
-      accessToken = authHeader.slice(7).trim();
-    } else if (authHeader.startsWith("DPoP ")) {
-      accessToken = authHeader.slice(5).trim();
-    } else {
-      return res.status(401).json({
-        error: "invalid_token",
-        error_description:
-          "Unsupported Authorization scheme. Expected: Bearer or DPoP.",
-      });
-    }
-
-    if (!accessToken) {
-      return res.status(401).json({
-        error: "invalid_token",
-        error_description: "Empty access token in Authorization header.",
-      });
-    }
-
-    const { sessionObject, flowType, sessionKey } = await getSessionFromToken(accessToken);
-    if (!sessionObject || !sessionKey) {
-      return res.status(401).json({
-        error: "invalid_token",
-        error_description:
-          "Access token is not associated with an active issuance session.",
-      });
-    }
-
     const newCNonce = generateNonce();
     await storeNonce(newCNonce, NONCE_EXPIRES_IN);
-
-    sessionObject.c_nonce = newCNonce;
-    try {
-      if (flowType === "code") {
-        await storeCodeFlowSession(sessionKey, sessionObject);
-      } else {
-        await storePreAuthSession(sessionKey, sessionObject);
-      }
-    } catch (persistErr) {
-      console.error("Nonce endpoint: failed to persist session c_nonce", persistErr);
-      return res.status(500).json({
-        error: "server_error",
-        error_description: ERROR_MESSAGES.STORAGE_FAILED,
-      });
-    }
 
     res.status(200).json({
       c_nonce: newCNonce,

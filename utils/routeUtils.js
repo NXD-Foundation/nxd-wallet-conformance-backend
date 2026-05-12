@@ -58,7 +58,7 @@ export function logSoftEtsiIssuanceViolation(slog, scope, error, details = {}) {
       `${scope} [WARN] ETSI issuance profile check failed; continuing because ENFORCE_ETSI_ISSUANCE_PROFILE is disabled`,
       {
         error,
-        enforcementEnv: process.env.ENFORCE_ETSI_ISSUANCE_PROFILE ?? "unset(default:true)",
+        enforcementEnv: process.env.ENFORCE_ETSI_ISSUANCE_PROFILE ?? "unset(default:false)",
         ...details,
       },
     );
@@ -125,11 +125,11 @@ export const QR_CONFIG = {
 };
 
 export const CLIENT_METADATA = {
-  client_name: "UAegean WE BUILD Verifier",
+  client_name: "UAegean APTITUDE Verifier",
   logo_uri: "https://studyingreece.edu.gr/wp-content/uploads/2023/03/25.png",
   location: "Greece",
   cover_uri: "string",
-  description: "WE BUILD pilot case verification",
+  description: "APTITUDE pilot case verification",
   vp_formats_supported: {
     "dc+sd-jwt": {
       "sd-jwt_alg_values": ["ES256", "ES384"],
@@ -721,7 +721,7 @@ export const DEFAULT_DCQL_QUERY = {
 /** CS-03 / CSC remote signing: DCQL credential id must match qesRequest.credential_ids */
 export const CS03_SIGNING_CREDENTIAL_ID = "signing-cert-01";
 
-/** DCQL query for CSC X.509 (WE BUILD CS-03) */
+/** DCQL query for CSC X.509 (APTITUDE CS-03) */
 export const CS03_DCQL_QUERY = {
   credentials: [
     {

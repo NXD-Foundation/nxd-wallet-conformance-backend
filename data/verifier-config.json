@@ -1,11 +1,11 @@
 {
   "client_id": "x509_hash:8BjveBCmjioyX2GQ549sKgnysexUs39meCLWy4jucQk",
   "client_id_schemes_supported": ["x509_hash", "x509_san_dns"],
-  "client_name": "UAegean WE BUILD Verifier",
+  "client_name": "UAegean APTITUDE Verifier",
   "logo_uri": "https://studyingreece.edu.gr/wp-content/uploads/2023/03/25.png",
   "location": "Greece",
   "cover_uri": "string",
-  "description": "WE BUILD pilot case verification",
+  "description": "APTITUDE pilot case verification",
   "vp_formats_supported": {
     "jwt_vc_json": {
       "alg_values": ["ES256", "ES384"]

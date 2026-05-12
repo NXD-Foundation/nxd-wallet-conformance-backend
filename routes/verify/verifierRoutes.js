@@ -1669,7 +1669,7 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
           );
         }
 
-        // CS-03 (CSC qesRequest): capture VP credential response shape per WE BUILD spec §8.2
+        // CS-03 (CSC qesRequest): capture VP credential response shape per APTITUDE spec §8.2
         // (inline documentWithSignature / signatureObject, or empty {} per credential when using responseURI).
         if (vpSession.cs03_signing) {
           const expectedCredIds =

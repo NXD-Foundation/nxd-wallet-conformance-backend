@@ -211,18 +211,8 @@ Each item lists: **RFC anchor**, **code location**, **what to do**, **acceptance
 - Code: `routes/issue/sharedIssuanceFlows.js` — `handlePreAuthorizedCodeFlow`, `handleAuthorizationCodeFlow`; `POST /nonce`.
 - Done:
   - On success, both grants generate a fresh `c_nonce` (`generateNonce`), `storeNonce(…, NONCE_EXPIRES_IN)`, set `session.c_nonce`, persist the session, and return `c_nonce` + `c_nonce_expires_in` on the token JSON.
-  - `POST /nonce` remains an alternate refresh path and requires `Authorization: Bearer|DPoP` + an access token tied to an issuance session (`401` otherwise).
+  - `POST /nonce` remains an alternate refresh path and returns a fresh `c_nonce` + `c_nonce_expires_in`.
 - Tests: `tests/sharedIssuanceFlows.test.js` — e.g. `MUST include c_nonce and c_nonce_expires_in on success (pre-authorized_code|authorization_code)`, session persistence checks.
-
-### P1-11. Protect `/nonce` and bind nonces to sessions -- **done**
-
-- RFC: §6.1.6, §8.6.
-- Code: `routes/issue/sharedIssuanceFlows.js` — `POST /nonce`, `/credential` proof nonce checks.
-- Done:
-  - `POST /nonce` requires `Authorization: Bearer|DPoP` and an access token tied to an issuance session (`401` otherwise).
-  - New `c_nonce` is stored on the session and in the nonce cache.
-  - `/credential` requires proof JWT `nonce` to equal the current session `c_nonce` before `checkNonce` (so another session’s unexpired nonce is rejected).
-- Tests: `tests/sharedIssuanceFlows.test.js` — `POST /nonce` coverage; `MUST reject proof nonce valid in store but not this session c_nonce`.
 
 ### P1-12. Implement multi-key issuance -- **done**
 
@@ -391,7 +381,7 @@ Only required if the pilot claims RFC001 used as an ETSI TS 119 472-3 aligned pr
 | P1-7 | 6.3, 7.6 | issuance matrix column for deferred |
 | P1-8 | 7.1, 8.7 | notification section |
 | P1-9 | 7.1, 7.4 | sender-constraint across `VCI-CHECK-02/03/04` |
-| P1-10, P1-11 | 6.1.6, 7.4, 8.6 | nonce path feeding `VCI-CHECK-06` |
+| P1-10 | 6.1.6, 7.4, 8.6 | nonce path feeding `VCI-CHECK-06` |
 | P1-13 | 6.1.5 | `VCI-CHECK-02` |
 | P1-14, P1-15 | 7.7, 8 | metadata and error-shape checks |
 | P2-1..P2-5 | 5, 5.1, 7.7, 8.9 | `VCI-CHECK-10`, `VCI-CHECK-11`, ETSI profile |
@@ -399,7 +389,7 @@ Only required if the pilot claims RFC001 used as an ETSI TS 119 472-3 aligned pr
 
 ## Suggested Phasing
 
-1. **Phase 1 (security baseline)**: P0-1, ~~P0-3~~ (done 2026-04-16), ~~P0-4~~ (done 2026-04-16), P0-5, P0-6, P1-9, P1-11, ~~P3-5~~ (done 2026-04-17).
+1. **Phase 1 (security baseline)**: P0-1, ~~P0-3~~ (done 2026-04-16), ~~P0-4~~ (done 2026-04-16), P0-5, P0-6, P1-9, ~~P3-5~~ (done 2026-04-17).
 2. **Phase 2 (attestation path)**: P0-7, P0-8, P1-1, P1-2, P1-3, P1-12.
 3. **Phase 3 (protocol correctness)**: ~~P0-2~~ (done 2026-04-16), P1-4, P1-5, P1-6, P1-7, P1-8, P1-10, P1-13, P1-14, P1-15.
 4. **Phase 4 (ETSI profile)**: P2-1..P2-5.

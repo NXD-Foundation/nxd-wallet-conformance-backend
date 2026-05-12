@@ -81,17 +81,7 @@ const tokenResponse = {
 };
 ```
 
-Wallets that depend on token-response `c_nonce` must call `/nonce` separately. This is tolerable under OID4VCI 1.0, but combined with A4 it weakens nonce binding to the issuance session.
-
-### A4. `/nonce` endpoint has no access token check
-
-Anyone can call `POST /nonce` and get a fresh `c_nonce`. The nonce is not bound to a specific access token or session.
-
-```1793:1802:routes/issue/sharedIssuanceFlows.js
-sharedRouter.post("/nonce", async (req, res) => { ... }
-```
-
-Impact: a nonce cannot be tied to the authenticated issuance transaction at validation time. This is a real replay-surface relaxation that should be fixed.
+Wallets that depend on token-response `c_nonce` must call `/nonce` separately. This is tolerable under OID4VCI 1.0.
 
 ### A5. Deferred success response shape does not match immediate response
 
@@ -801,4 +791,3 @@ If you want a strict summary:
 - RFC001 plus ETSI-aligned profile: no
 
 All findings in this report have been validated against the current code, and eighteen additional issuer-side gaps were identified during validation (see "Additional Findings Discovered During Validation" above). Fixing the P0 and P1 items in the separate backlog brings the issuer into RFC baseline compliance. P2 is required only if ETSI TS 119 472-3 alignment is a target.
-

@@ -136,7 +136,6 @@ Missing / wrong:
 #### §6.1.6 / §8.6 Nonce Endpoint — aligned
 
 - CLI and server both obtain a fresh `c_nonce` from `/nonce` when the token response omits it.
-- When the issuer now requires `Authorization: Bearer|DPoP` at `/nonce` (issuer P1-11), the server sends it; the CLI also sends `Authorization: Bearer ${accessToken}` when calling `/nonce` (`src/index.js:132-134`).
 
 #### §6.1.6 / §7.5 / §8.5 Credential Request — partial
 

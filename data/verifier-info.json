@@ -1,6 +1,6 @@
 {
   "verifier_id": "dss.aegean.gr",
-  "service_description": "UAegean WE BUILD verifier service for OpenID4VP and RFC002-aligned verification flows.",
+  "service_description": "UAegean APTITUDE verifier service for OpenID4VP and RFC002-aligned verification flows.",
   "rp_registrar_uri": "https://dss.aegean.gr/registrar",
   "intended_use": "openid4vp_verifier",
   "purpose": "Requesting verifiable presentations needed by UAegean pilot verifier flows.",

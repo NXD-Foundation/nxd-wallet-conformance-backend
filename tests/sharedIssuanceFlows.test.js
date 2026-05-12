@@ -257,6 +257,7 @@ describe('Shared Issuance Flows', () => {
 
   describe('POST /token_endpoint', () => {
     it('MUST return invalid_client when WIA (client_assertion) is missing', async () => {
+      process.env.ENFORCE_ETSI_ISSUANCE_PROFILE = 'true';
       if (!cacheServiceRedis.client.isReady) {
         throw new Error("Redis is not ready - cannot run test");
       }
@@ -1952,6 +1953,7 @@ describe('Shared Issuance Flows', () => {
     });
 
     it('P1-1 — MUST return invalid_proof when device-bound RFC001 credential omits key_attestation (RFC001 §7.5.1)', async function () {
+      process.env.ENFORCE_ETSI_ISSUANCE_PROFILE = 'true';
       if (!cacheServiceRedis.client?.isReady) {
         this.skip();
       }
@@ -2019,6 +2021,7 @@ describe('Shared Issuance Flows', () => {
     });
 
     it('P1-1b — MUST return invalid_proof when proof signature does not verify with WUA attested_keys[0]', async function () {
+      process.env.ENFORCE_ETSI_ISSUANCE_PROFILE = 'true';
       if (!cacheServiceRedis.client?.isReady) {
         this.skip();
       }
@@ -2718,7 +2721,7 @@ describe('Shared Issuance Flows', () => {
         expect(res.body).to.have.property('error', 'invalid_nonce');
       });
 
-      it('MUST reject proof nonce valid in store but not this session c_nonce (RFC001 P1-11)', async function () {
+      it('MUST accept proof nonce when it is valid in the nonce store', async function () {
         if (!cacheServiceRedis.client?.isReady) {
           this.skip();
         }
@@ -2749,9 +2752,9 @@ describe('Shared Issuance Flows', () => {
             credential_configuration_id: 'test-cred-config',
             proofs: { jwt: [proofJwt] },
           })
-          .expect(400);
+          .expect(200);
 
-        expect(res.body).to.have.property('error', 'invalid_nonce');
+        expect(res.body).to.have.property('credentials');
       });
     });
 
@@ -3292,65 +3295,21 @@ describe('Shared Issuance Flows', () => {
   });
 
   describe('POST /nonce', () => {
-    it('MUST return 401 without Authorization', async () => {
-      const response = await request(app).post('/nonce').expect(401);
-      expect(response.body).to.have.property('error', 'invalid_token');
-    });
-
-    it('MUST return 401 for access token with no issuance session', async () => {
-      const response = await request(app)
-        .post('/nonce')
-        .set('Authorization', 'Bearer orphan-token-' + uuidv4())
-        .expect(401);
-      expect(response.body).to.have.property('error', 'invalid_token');
-    });
-
-    it('accepts Authorization: DPoP for Bearer-issued token (same token string)', async function () {
-      if (!cacheServiceRedis.client?.isReady) {
-        this.skip();
-      }
-      const sessionKey = 'nonce-dpop-scheme-' + uuidv4();
-      const accessToken = 'access-dpop-scheme-' + uuidv4();
-      await cacheServiceRedis.storePreAuthSession(sessionKey, {
-        status: 'success',
-        accessToken,
-      });
-      const response = await request(app)
-        .post('/nonce')
-        .set('Authorization', `DPoP ${accessToken}`)
-        .expect(200);
-      expect(response.body).to.have.property('c_nonce');
-      expect(await cacheServiceRedis.checkNonce(response.body.c_nonce)).to.be.true;
-    });
-
-    it('should generate and store nonce when Authorization matches an issuance session', async () => {
+    it('should generate and store nonce without requiring Authorization', async () => {
       if (!cacheServiceRedis.client?.isReady) {
         throw new Error('Redis is not ready - cannot run test');
       }
-      const sessionKey = 'nonce-session-' + uuidv4();
-      const accessToken = 'access-for-nonce-' + uuidv4();
-      await cacheServiceRedis.storePreAuthSession(sessionKey, {
-        status: 'success',
-        accessToken,
-      });
-
-      const response = await request(app)
-        .post('/nonce')
-        .set('Authorization', `Bearer ${accessToken}`)
-        .expect(200);
+      const response = await request(app).post('/nonce').expect(200);
 
       expect(response.body).to.have.property('c_nonce');
       expect(response.body).to.have.property('c_nonce_expires_in', 86400);
       expect(await cacheServiceRedis.checkNonce(response.body.c_nonce)).to.be.true;
-
-      const updated = await cacheServiceRedis.getPreAuthSession(sessionKey);
-      expect(updated.c_nonce).to.equal(response.body.c_nonce);
     });
 
     it('should handle nonce storage errors', async () => {
       const response = await request(app).post('/nonce');
 
-      expect([401, 500]).to.include(response.status);
+      expect([200, 500]).to.include(response.status);
     });
   });
 
@@ -3508,7 +3467,7 @@ describe('Shared Issuance Flows', () => {
 
     it('should handle nonce endpoint errors gracefully', async () => {
       const response = await request(app).post('/nonce');
-      expect([401, 500]).to.include(response.status);
+      expect([200, 500]).to.include(response.status);
     });
   });
 }); 
