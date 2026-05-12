@@ -21,6 +21,7 @@ import {
   resolveMdocInvocationScheme,
   resolvePidVpInvocationScheme,
   loadVerifierClientMetadataForRequests,
+  normalizedVpSessionIdFromQuery,
 } from "../../utils/routeUtils.js";
 import {
   logInfo,
@@ -36,7 +37,10 @@ const vpStandardRouter = express.Router();
 
 // Middleware to set session context for console interception
 vpStandardRouter.use((req, res, next) => {
-  const sessionId = req.query.session_id || req.params.sessionId || req.params.id;
+  const sessionId =
+    normalizedVpSessionIdFromQuery(req.query) ||
+    req.params.sessionId ||
+    req.params.id;
   if (sessionId) {
     setSessionContext(sessionId);
     res.on("finish", () => {

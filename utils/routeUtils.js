@@ -754,6 +754,21 @@ export function parseCs03Query(query) {
 }
 
 /**
+ * Standardized VP GET `/vp/request`: read optional `session_id` from query, normalized.
+ * @param {Record<string, unknown>} query - req.query
+ * @returns {string | null} trimmed non-empty id, or null if absent / blank
+ */
+export function normalizedVpSessionIdFromQuery(query) {
+  if (!query || typeof query !== "object") return null;
+  const raw = query.session_id;
+  if (raw === undefined || raw === null) return null;
+  const first = Array.isArray(raw) ? raw[0] : raw;
+  if (first === undefined || first === null) return null;
+  const trimmed = String(first).trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+/**
  * Build CSC qesRequest object (decoded JSON before base64url encoding into transaction_data).
  * Checksum is computed over {@code data/cs03-sample.pdf}.
  *
