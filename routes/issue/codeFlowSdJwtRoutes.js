@@ -346,7 +346,9 @@ async function handleDynamicAuthorizationRedirect(existingCodeSession, requestDa
 }
 
 function handleRedirectUriScheme(existingCodeSession, requestData) {
-  const { credentialsRequested, nonce, issuerState } = requestData;
+  const { nonce, issuerState } = requestData;
+  const isPIDIssuanceFlow =
+    requestData.isPIDIssuanceFlow ?? existingCodeSession.isPIDIssuanceFlow;
   
   console.log("client_id_scheme redirect_uri");
   const response_uri = `${SERVER_URL}/direct_post_vci/${issuerState}`;
@@ -363,7 +365,7 @@ function handleRedirectUriScheme(existingCodeSession, requestData) {
     nonce
   );
 
-  if (credentialsRequested.indexOf("urn:eu.europa.ec.eudi:pid:1") >= 0) {
+  if (isPIDIssuanceFlow) {
     console.log("passing id_token!!");
     redirectUrl = buildVPbyValue(
       response_uri,
@@ -381,11 +383,13 @@ function handleRedirectUriScheme(existingCodeSession, requestData) {
 }
 
 async function handleX509Scheme(existingCodeSession, requestData) {
-  const { credentialsRequested, redirectUri, issuerState } = requestData;
+  const { issuerState } = requestData;
+  const isPIDIssuanceFlow =
+    requestData.isPIDIssuanceFlow ?? existingCodeSession.isPIDIssuanceFlow;
   
   console.log("client_id_scheme x509_san_dns");
   
-  if (credentialsRequested.indexOf("urn:eu.europa.ec.eudi:pid:1") >= 0) {
+  if (isPIDIssuanceFlow) {
     return await handleX509PIDFlow(existingCodeSession, requestData);
   }
 
@@ -411,12 +415,14 @@ async function handleX509PIDFlow(existingCodeSession, requestData) {
 }
 
 function handleDidScheme(existingCodeSession, requestData) {
-  const { credentialsRequested, issuerState } = requestData;
+  const { issuerState } = requestData;
+  const isPIDIssuanceFlow =
+    requestData.isPIDIssuanceFlow ?? existingCodeSession.isPIDIssuanceFlow;
   
   console.log("client_id_scheme did");
   
   let request_uri = `${SERVER_URL}/didJwksVPrequest_dynamic/${issuerState}`;
-  if (credentialsRequested.indexOf("urn:eu.europa.ec.eudi:pid:1") >= 0) {
+  if (isPIDIssuanceFlow) {
     request_uri = `${SERVER_URL}/id_token_did_request_dynamic/${issuerState}`;
   }
 
@@ -610,7 +616,22 @@ codeFlowRouterSDJWT.post(["/par", "/authorize/par"], async (req, res) => {
       if (bodyForLog.code_challenge) bodyForLog.code_challenge = "[REDACTED]";
       if (bodyForLog.client_assertion) bodyForLog.client_assertion = "[REDACTED]";
       requestId = logHttpRequest(slog, "POST", "/par", req.headers, bodyForLog);
-      try { slog("[ISSUER] [PAR] [START] Processing PAR request", { hasIssuerState: !!issuerState, hasState: !!requestData.state }); } catch {}
+      try {
+        slog("[ISSUER] [PAR] [START] Processing PAR request", {
+          event: "par.received",
+          phase: "par",
+          kind: "protocol",
+          compliance: {
+            status: "n/a",
+            specs: [
+              { name: "RFC9126", section: "2" },
+              { name: "OpenID4VCI 1.0", section: "6.1" },
+            ],
+          },
+          hasIssuerState: !!issuerState,
+          hasState: !!requestData.state,
+        });
+      } catch {}
     }
 
     const enforceEtsiIssuance = isEtsiIssuanceProfileEnforced();
@@ -874,14 +895,36 @@ codeFlowRouterSDJWT.post(["/par", "/authorize/par"], async (req, res) => {
 
     if (slog) {
       logHttpResponse(slog, requestId, "/par", 201, "Created", res.getHeaders(), result);
-      try { slog("[ISSUER] [PAR] [COMPLETE] PAR request processed successfully", { success: true, requestUri: result.request_uri }); } catch {}
+      try {
+        slog("[ISSUER] [PAR] [COMPLETE] PAR request processed successfully", {
+          event: "par.accepted",
+          phase: "par",
+          kind: "protocol",
+          compliance: {
+            status: "pass",
+            specs: [
+              { name: "RFC9126", section: "2.2" },
+            ],
+          },
+          success: true,
+          requestUri: result.request_uri,
+        });
+      } catch {}
     }
 
     res.statusCode = 201;
     return res.json(result);
   } catch (error) {
     if (slog) {
-      try { slog("[ISSUER] [PAR] [ERROR] Error processing PAR request", { error: error.message }); } catch {}
+      try {
+        slog("[ISSUER] [PAR] [ERROR] Error processing PAR request", {
+          event: "par.failed",
+          phase: "par",
+          kind: "protocol",
+          compliance: { status: "fail" },
+          error: error.message,
+        });
+      } catch {}
       logHttpResponse(slog, requestId, "/par", 500, "Internal Server Error", res.getHeaders(), { error: error.message });
     }
     handleRouteError(error, "PAR endpoint", res, issuerState);
@@ -930,7 +973,21 @@ codeFlowRouterSDJWT.get("/authorize", async (req, res) => {
       const queryForLog = { ...req.query };
       if (queryForLog.code_challenge) queryForLog.code_challenge = "[REDACTED]";
       requestId = logHttpRequest(slog, "GET", "/authorize", req.headers, queryForLog);
-      try { slog("[ISSUER] [AUTHORIZATION] [START] Processing authorization request", { hasRequestUri: !!requestData.request_uri, hasState: !!requestData.state }); } catch {}
+      try {
+        slog("[ISSUER] [AUTHORIZATION] [START] Processing authorization request", {
+          event: "authorize.received",
+          phase: "authorize",
+          kind: "protocol",
+          compliance: {
+            status: "n/a",
+            specs: [
+              { name: "OpenID4VCI 1.0", section: "6.1" },
+            ],
+          },
+          hasRequestUri: !!requestData.request_uri,
+          hasState: !!requestData.state,
+        });
+      } catch {}
     }
 
     // RFC001 §7.3 / OAuth PAR: when AS metadata sets require_pushed_authorization_requests,
@@ -1071,6 +1128,21 @@ codeFlowRouterSDJWT.get("/authorize", async (req, res) => {
     const redirectCandidate = existingCodeSession.isDynamic
       ? handleDynamicAuthorizationRedirect(existingCodeSession, updatedRequestData)
       : handleNonDynamicAuthorization(existingCodeSession, updatedRequestData);
+    if (slog) {
+      try {
+        slog("[ISSUER] [AUTHORIZATION] Routing decision computed", {
+          event: "authorize.routing_decision",
+          phase: "authorize",
+          kind: "internal",
+          compliance: { status: "n/a" },
+          client_id_scheme: existingCodeSession.client_id_scheme,
+          credential_requested: credentialsRequested,
+          isPIDIssuanceFlow,
+          session_is_dynamic: !!existingCodeSession.isDynamic,
+          decision: existingCodeSession.isDynamic ? "dynamic_redirect" : "issue_authorization_code",
+        });
+      } catch {}
+    }
     const redirectUrl = await Promise.resolve(redirectCandidate);
     if (typeof redirectUrl !== "string") {
       throw new Error(
@@ -1080,13 +1152,30 @@ codeFlowRouterSDJWT.get("/authorize", async (req, res) => {
 
     if (slog) {
       logHttpResponse(slog, requestId, "/authorize", 302, "Found", res.getHeaders(), { redirectUrl });
-      try { slog("[ISSUER] [AUTHORIZATION] [COMPLETE] Authorization request processed successfully", { success: true, isDynamic: existingCodeSession.isDynamic }); } catch {}
+      try {
+        slog("[ISSUER] [AUTHORIZATION] [COMPLETE] Authorization request processed successfully", {
+          event: "authorize.completed",
+          phase: "authorize",
+          kind: "protocol",
+          compliance: { status: "pass" },
+          success: true,
+          isDynamic: existingCodeSession.isDynamic,
+        });
+      } catch {}
     }
     
     return res.redirect(302, redirectUrl);
   } catch (error) {
     if (slog) {
-      try { slog("[ISSUER] [AUTHORIZATION] [ERROR] Error processing authorization request", { error: error.message }); } catch {}
+      try {
+        slog("[ISSUER] [AUTHORIZATION] [ERROR] Error processing authorization request", {
+          event: "authorize.failed",
+          phase: "authorize",
+          kind: "protocol",
+          compliance: { status: "fail" },
+          error: error.message,
+        });
+      } catch {}
       logHttpResponse(slog, requestId, "/authorize", 500, "Internal Server Error", res.getHeaders(), { error: error.message });
     }
     

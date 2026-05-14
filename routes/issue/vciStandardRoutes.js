@@ -5,6 +5,7 @@ import {
   getSessionId,
   getCredentialType,
   getSignatureType,
+  resolveCodeFlowOfferIssuanceOptions,
   createCodeFlowSession,
   getCredentialOfferSchemeFromRequest,
   createBaseSession,
@@ -37,6 +38,7 @@ const vciStandardRouter = express.Router();
  * - credential_type: e.g., urn:eu.europa.ec.eudi:pid:1, org.iso.18013.5.1.mDL
  * - credential_format: sd-jwt | mso_mdoc
  * - signature_type: x509 | jwk | kid-jwk | did-web
+ * - isDynamic: true | false (explicitly enable the legacy dynamic VP detour)
  */
 vciStandardRouter.get("/vci/offer", async (req, res) => {
   let sessionId;
@@ -54,9 +56,24 @@ vciStandardRouter.get("/vci/offer", async (req, res) => {
     const credentialType = req.query.credential_type || getCredentialType(req);
     const credentialFormat = req.query.credential_format || "sd-jwt";
     const signatureType = req.query.signature_type || getSignatureType(req);
+    const issuance = resolveCodeFlowOfferIssuanceOptions(req);
 
     requestId = logHttpRequest(slog, "GET", "/vci/offer", req.headers, req.query);
-    try { slog("[ISSUER] [VCI] [START] Processing standardized VCI offer request", { flow, txCodeRequired, credentialType, credentialFormat, signatureType }); } catch {}
+    try {
+      slog("[ISSUER] [VCI] [START] Processing standardized VCI offer request", {
+        event: "offer.created",
+        phase: "offer",
+        kind: "protocol",
+        compliance: { status: "n/a" },
+        flow,
+        txCodeRequired,
+        credentialType,
+        credentialFormat,
+        signatureType,
+        isDynamic: issuance.isDynamic,
+        isDeferred: issuance.isDeferred,
+      });
+    } catch {}
 
     // Map signature_type to internal format
     let internalSignatureType = signatureType;
@@ -82,8 +99,8 @@ vciStandardRouter.get("/vci/offer", async (req, res) => {
       const sessionData = createCodeFlowSession(
         clientIdScheme,
         "code",
-        true, // isDynamic
-        false, // isDeferred
+        issuance.isDynamic,
+        issuance.isDeferred,
         internalSignatureType
       );
       
@@ -95,7 +112,7 @@ vciStandardRouter.get("/vci/offer", async (req, res) => {
         sessionId,
         credentialType,
         clientIdScheme,
-        true, // includeCredentialType
+        issuance.includeCredentialType,
         invocationScheme
       );
       
@@ -109,7 +126,17 @@ vciStandardRouter.get("/vci/offer", async (req, res) => {
 
       if (slog) {
         logHttpResponse(slog, requestId, "/vci/offer", 200, "OK", res.getHeaders(), response);
-        try { slog("[ISSUER] [VCI] Authorization code flow offer generated", { hasQR: !!encodedQR, deepLinkLength: credentialOffer?.length }); } catch {}
+        try {
+          slog("[ISSUER] [VCI] Authorization code flow offer generated", {
+            event: "offer.authorization_code.generated",
+            phase: "offer",
+            kind: "protocol",
+            compliance: { status: "pass" },
+            hasQR: !!encodedQR,
+            deepLinkLength: credentialOffer?.length,
+            clientIdScheme,
+          });
+        } catch {}
       }
 
       return res.json(response);
@@ -144,7 +171,17 @@ vciStandardRouter.get("/vci/offer", async (req, res) => {
 
       if (slog) {
         logHttpResponse(slog, requestId, "/vci/offer", 200, "OK", res.getHeaders(), response);
-        try { slog("[ISSUER] [VCI] Pre-authorized code flow offer generated", { txCodeRequired, hasQR: !!response.qr, deepLinkLength: response.deepLink?.length }); } catch {}
+        try {
+          slog("[ISSUER] [VCI] Pre-authorized code flow offer generated", {
+            event: "offer.pre_authorized_code.generated",
+            phase: "offer",
+            kind: "protocol",
+            compliance: { status: "pass" },
+            txCodeRequired,
+            hasQR: !!response.qr,
+            deepLinkLength: response.deepLink?.length,
+          });
+        } catch {}
       }
 
       return res.json(response);
@@ -155,7 +192,15 @@ vciStandardRouter.get("/vci/offer", async (req, res) => {
     }
   } catch (error) {
     if (slog) {
-      try { slog("[ISSUER] [VCI] [ERROR] Error in standardized VCI offer endpoint", { error: error.message }); } catch {}
+      try {
+        slog("[ISSUER] [VCI] [ERROR] Error in standardized VCI offer endpoint", {
+          event: "offer.failed",
+          phase: "offer",
+          kind: "protocol",
+          compliance: { status: "fail" },
+          error: error.message,
+        });
+      } catch {}
       logHttpResponse(slog, requestId, "/vci/offer", 500, "Internal Server Error", res.getHeaders(), { error: error.message });
     }
     handleRouteError(error, "vci/offer", res, sessionId);
@@ -232,5 +277,3 @@ vciStandardRouter.get("/credential-offer-no-code/:id", async (req, res) => {
 });
 
 export default vciStandardRouter;
-
-

@@ -1208,7 +1208,22 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
       if (logParams.client_assertion) logParams.client_assertion = "<redacted>";
       
       requestId = logHttpRequest(slog, "POST", "/token_endpoint", req.headers, logParams);
-      try { slog("[TOKEN] [START] Token endpoint request", { grant_type, hasCode: !!code, hasPreAuthCode: !!preAuthorizedCode }); } catch {}
+      try {
+        slog("[TOKEN] [START] Token endpoint request", {
+          event: "token.received",
+          phase: "token",
+          kind: "protocol",
+          compliance: {
+            status: "n/a",
+            specs: [
+              { name: "OpenID4VCI 1.0", section: "6.1" },
+            ],
+          },
+          grant_type,
+          hasCode: !!code,
+          hasPreAuthCode: !!preAuthorizedCode,
+        });
+      } catch {}
     }
 
     // RFC001 §7.4 — Wallet Instance Attestation (WIA) is mandatory at the token endpoint
@@ -1276,6 +1291,16 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
     if (wiaValidation?.valid && slog) {
       try {
         slog("[TOKEN] WIA validated successfully", {
+          event: "token.wia.validated",
+          phase: "token",
+          kind: "compliance",
+          compliance: {
+            status: "pass",
+            specs: [
+              { name: "ETSI TS 119 472-3", section: "4.5.2" },
+              { name: "OpenID4VCI 1.0", section: "Appendix E" },
+            ],
+          },
           wiaIssuer: wiaValidation.payload?.iss,
           wiaExp: wiaValidation.payload?.exp,
         });
@@ -1493,14 +1518,24 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
           );
           dpopCnf = { jkt };
           if (slog) {
-            try {
-              slog(
-                "[TOKEN] DPoP header validated, issuing DPoP-bound token",
-                {
-                  hasJkt: true,
-                  htm,
-                  htu,
-                  iat,
+          try {
+            slog(
+              "[TOKEN] DPoP header validated, issuing DPoP-bound token",
+              {
+                event: "token.dpop.validated",
+                phase: "token",
+                kind: "compliance",
+                compliance: {
+                  status: "pass",
+                  specs: [
+                    { name: "RFC9449", section: "4" },
+                    { name: "RFC001", section: "7.4" },
+                  ],
+                },
+                hasJkt: true,
+                htm,
+                htu,
+                iat,
                   jti,
                 }
               );
@@ -1566,7 +1601,14 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
       );
     } else if (grant_type === "authorization_code") {
       if (slog) {
-        try { slog("[TOKEN] Processing authorization code flow"); } catch {}
+        try {
+          slog("[TOKEN] Processing authorization code flow", {
+            event: "token.authorization_code.processing",
+            phase: "token",
+            kind: "protocol",
+            compliance: { status: "n/a" },
+          });
+        } catch {}
       }
       tokenResponse = await handleAuthorizationCodeFlow(
         code,
@@ -1593,13 +1635,34 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
       if (logResponse.access_token) logResponse.access_token = "<redacted>";
       if (logResponse.refresh_token) logResponse.refresh_token = "<redacted>";
       logHttpResponse(slog, requestId, "/token_endpoint", 200, "OK", res.getHeaders(), logResponse);
-      try { slog("[TOKEN] [COMPLETE] Token endpoint request", { success: true, hasAccessToken: !!tokenResponse.access_token }); } catch {}
+      try {
+        slog("[TOKEN] [COMPLETE] Token endpoint request", {
+          event: "token.completed",
+          phase: "token",
+          kind: "protocol",
+          compliance: { status: "pass" },
+          success: true,
+          hasAccessToken: !!tokenResponse.access_token,
+          hasRefreshToken: !!tokenResponse.refresh_token,
+          tokenType: tokenResponse.token_type,
+          hasCNonce: !!tokenResponse.c_nonce,
+        });
+      } catch {}
     }
 
     res.json(tokenResponse);
   } catch (error) {
     if (slog) {
-      try { slog("[TOKEN] [ERROR] Token endpoint error", { error: error.message, errorCode: error.errorCode }); } catch {}
+      try {
+        slog("[TOKEN] [ERROR] Token endpoint error", {
+          event: "token.failed",
+          phase: "token",
+          kind: "protocol",
+          compliance: { status: "fail" },
+          error: error.message,
+          errorCode: error.errorCode,
+        });
+      } catch {}
     }
 
     // Handle authorization_pending and slow_down errors
@@ -1717,7 +1780,21 @@ sharedRouter.post("/credential", async (req, res) => {
       if (logBody.proofAttestationJwt) logBody.proofAttestationJwt = "<redacted>";
       
       requestId = logHttpRequest(slog, "POST", "/credential", req.headers, logBody);
-      try { slog("[CREDENTIAL] [START] Credential request", { credential_configuration_id: requestBody.credential_configuration_id, credential_identifier: requestBody.credential_identifier }); } catch {}
+      try {
+        slog("[CREDENTIAL] [START] Credential request", {
+          event: "credential.received",
+          phase: "credential",
+          kind: "protocol",
+          compliance: {
+            status: "n/a",
+            specs: [
+              { name: "OpenID4VCI 1.0", section: "8" },
+            ],
+          },
+          credential_configuration_id: requestBody.credential_configuration_id,
+          credential_identifier: requestBody.credential_identifier,
+        });
+      } catch {}
     }
     
     if (!sessionObject) {
@@ -1995,6 +2072,15 @@ sharedRouter.post("/credential", async (req, res) => {
         // Log successful proof validation
         if (sessionId) {
           await logInfo(sessionId, "Proof validation successful", {
+            event: "credential.proof.validated",
+            phase: "credential",
+            kind: "protocol",
+            compliance: {
+              status: "pass",
+              specs: [
+                { name: "OpenID4VCI 1.0", section: "8.2" },
+              ],
+            },
             effectiveConfigurationId
           }).catch(() => {});
         }
@@ -2055,7 +2141,15 @@ sharedRouter.post("/credential", async (req, res) => {
       if (slog) {
         try { slog("[CREDENTIAL] Deferred credential issuance initiated", { transaction_id: response.transaction_id }); } catch {}
         logHttpResponse(slog, requestId, "/credential", 202, "Accepted", res.getHeaders(), response);
-        try { slog("[CREDENTIAL] [COMPLETE] Credential request (deferred)", { success: true }); } catch {}
+        try {
+          slog("[CREDENTIAL] [COMPLETE] Credential request (deferred)", {
+            event: "credential.deferred.accepted",
+            phase: "credential",
+            kind: "protocol",
+            compliance: { status: "pass" },
+            success: true,
+          });
+        } catch {}
       }
       return sendCredentialSuccessResponse(res, 202, response, requestBody);
     } else {
@@ -2068,11 +2162,28 @@ sharedRouter.post("/credential", async (req, res) => {
           req,
         );
         if (slog) {
-          try { slog("[CREDENTIAL] Credential issued successfully", { effectiveConfigurationId, notification_id: response.notification_id }); } catch {}
+          try {
+            slog("[CREDENTIAL] Credential issued successfully", {
+              event: "credential.issued",
+              phase: "credential",
+              kind: "protocol",
+              compliance: { status: "pass" },
+              effectiveConfigurationId,
+              notification_id: response.notification_id,
+            });
+          } catch {}
           const logResponse = { ...response };
           if (logResponse.credential) logResponse.credential = "<redacted>";
           logHttpResponse(slog, requestId, "/credential", 200, "OK", res.getHeaders(), logResponse);
-          try { slog("[CREDENTIAL] [COMPLETE] Credential request", { success: true }); } catch {}
+          try {
+            slog("[CREDENTIAL] [COMPLETE] Credential request", {
+              event: "credential.completed",
+              phase: "credential",
+              kind: "protocol",
+              compliance: { status: "pass" },
+              success: true,
+            });
+          } catch {}
         }
 
         // Mark session as successful after credential issuance and store notification_id
@@ -2123,7 +2234,16 @@ sharedRouter.post("/credential", async (req, res) => {
         
         if (slog) {
           logHttpResponse(slog, requestId, "/credential", 500, "Internal Server Error", res.getHeaders(), { error: "server_error", error_description: credError.message });
-          try { slog("[CREDENTIAL] [COMPLETE] Credential request", { success: false, error: credError.message }); } catch {}
+          try {
+            slog("[CREDENTIAL] [COMPLETE] Credential request", {
+              event: "credential.failed",
+              phase: "credential",
+              kind: "protocol",
+              compliance: { status: "fail" },
+              success: false,
+              error: credError.message,
+            });
+          } catch {}
         }
         
         // If credential generation fails, it's a server error, not a client error
@@ -2175,6 +2295,16 @@ sharedRouter.post("/credential", async (req, res) => {
       if (slog) {
         try {
           slog("[CREDENTIAL] [ERROR] invalid_dpop_proof", {
+            event: "credential.dpop.invalid",
+            phase: "credential",
+            kind: "compliance",
+            compliance: {
+              status: "fail",
+              specs: [
+                { name: "RFC9449", section: "7" },
+                { name: "RFC001", section: "7.5" },
+              ],
+            },
             error: error.message,
           });
         } catch {}
@@ -2831,6 +2961,16 @@ async function validatePKCE(session, code_verifier, stored_code_challenge, sessi
   if (tester === stored_code_challenge) {
     if (sessionId) {
       logInfo(sessionId, "PKCE verification successful", {
+        event: "token.pkce_verified",
+        phase: "token",
+        kind: "compliance",
+        compliance: {
+          status: "pass",
+          specs: [
+            { name: "RFC7636", section: "4.6" },
+            { name: "RFC001", section: "7.3" },
+          ],
+        },
         codeChallengeMatch: true
       }).catch(() => {});
     }

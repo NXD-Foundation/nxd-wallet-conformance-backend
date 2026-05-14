@@ -2,12 +2,30 @@ import express from "express";
 import {
   getSessionLogs,
   clearSessionLogs,
+  summarizeSessionLogs,
   logInfo,
   client, // Import the existing Redis client
 } from "../services/cacheServiceRedis.js";
 import { createErrorResponse } from "../utils/routeUtils.js";
 
 const loggingRouter = express.Router();
+
+function parseVerboseFlag(value) {
+  if (value === true || value === 1) return true;
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return normalized === "true" || normalized === "1";
+}
+
+function filterLogsForHumanView(logs = []) {
+  return logs.filter((log) => {
+    const kind = log?.kind || "protocol";
+    const level = log?.level || "info";
+
+    if (level === "warn" || level === "error") return true;
+    if (kind === "protocol" || kind === "compliance") return true;
+    return false;
+  });
+}
 
 /**
  * SESSION LOGGING API ENDPOINTS
@@ -31,11 +49,16 @@ loggingRouter.get("/logs/:sessionId", async (req, res) => {
     const sessionId = req.query.sessionId || req.params.sessionId || req.params.id;
     await logInfo(sessionId, "Retrieving session logs", { endpoint: "/logs/:sessionId" });
     
-    const logs = await getSessionLogs(sessionId);
+    const rawLogs = await getSessionLogs(sessionId);
+    const verbose = parseVerboseFlag(req.query.verbose);
+    const logs = verbose ? rawLogs : filterLogsForHumanView(rawLogs);
     res.json({
       sessionId,
+      summary: summarizeSessionLogs(rawLogs),
+      verbose,
       logs,
-      count: logs.length
+      count: logs.length,
+      totalCount: rawLogs.length,
     });
   } catch (error) {
     const errorResponse = createErrorResponse(error, "GET /logs/:sessionId");
@@ -68,7 +91,8 @@ loggingRouter.delete("/logs/:sessionId", async (req, res) => {
  */
 loggingRouter.post("/logs/batch", async (req, res) => {
   try {
-    const { sessionIds } = req.body;
+    const { sessionIds, verbose } = req.body;
+    const includeVerbose = parseVerboseFlag(verbose);
     
     if (!Array.isArray(sessionIds) || sessionIds.length === 0) {
       return res.status(400).json({ 
@@ -79,16 +103,21 @@ loggingRouter.post("/logs/batch", async (req, res) => {
     const results = {};
     for (const sessionId of sessionIds) {
       try {
-        const logs = await getSessionLogs(sessionId);
+        const rawLogs = await getSessionLogs(sessionId);
+        const logs = includeVerbose ? rawLogs : filterLogsForHumanView(rawLogs);
         results[sessionId] = {
+          summary: summarizeSessionLogs(rawLogs),
+          verbose: includeVerbose,
           logs,
-          count: logs.length
+          count: logs.length,
+          totalCount: rawLogs.length,
         };
       } catch (error) {
         results[sessionId] = {
           error: error.message,
           logs: [],
-          count: 0
+          count: 0,
+          totalCount: 0,
         };
       }
     }

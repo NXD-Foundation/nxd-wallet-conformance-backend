@@ -188,6 +188,64 @@ function resolveMsoMdocNamespace(credentialConfiguration, credPayload) {
   );
 }
 
+/**
+ * Resolve issuer metadata row for mso_mdoc issuance.
+ *
+ * `requestBody.vct` is often normalized to the semantic VC type / ISO doctype (e.g.
+ * urn:eu.europa.ec.eudi:pid:1), which maps to the dc+sd-jwt credential configuration — that entry
+ * has no `doctype`. The mdoc-specific row is keyed by credential_configuration_id (e.g.
+ * ...:mso_mdoc) and carries `doctype` + mdoc metadata.
+ */
+function resolveCredentialConfigurationForMdl(
+  issuerConfigValues,
+  vct,
+  requestBody,
+) {
+  const supported = issuerConfigValues?.credential_configurations_supported || {};
+  const explicitId =
+    requestBody?.credential_configuration_id ||
+    requestBody?.credential_identifier;
+
+  const pick = (key) => (key && typeof key === "string" ? supported[key] : null);
+
+  let cfg = pick(explicitId);
+  if (cfg?.format === "mso_mdoc" && cfg?.doctype) {
+    console.log(
+      `[mdl-issue] Resolved credential configuration via credential_configuration_id: ${explicitId}`,
+    );
+    return cfg;
+  }
+
+  cfg = pick(vct);
+  if (cfg?.doctype) {
+    console.log(`[mdl-issue] Resolved credential configuration via vct key: ${vct}`);
+    return cfg;
+  }
+
+  const suffixed = pick(`${vct}:mso_mdoc`);
+  if (suffixed?.doctype) {
+    console.log(
+      `[mdl-issue] Resolved credential configuration via :mso_mdoc suffix for semantic vct: ${vct}`,
+    );
+    return suffixed;
+  }
+
+  for (const [configId, candidate] of Object.entries(supported)) {
+    if (
+      candidate?.format === "mso_mdoc" &&
+      candidate?.doctype &&
+      candidate.doctype === vct
+    ) {
+      console.log(
+        `[mdl-issue] Resolved credential configuration via doctype match (id: ${configId})`,
+      );
+      return candidate;
+    }
+  }
+
+  return cfg || pick(explicitId);
+}
+
 // Load issuer configuration for KID and JWK header preference
 let issuerConfigValues = {};
 try {
@@ -536,7 +594,10 @@ export async function handleCredentialGenerationBasedOnFormat(
     case "VerifiablePIDSDJWTAttestation":
     case "urn:eu.europa.ec.eudi:pid:1":
     case "test-cred-config": // For testing purposes
-      credPayload = getPIDSDJWTData();
+      credPayload =
+        format === "mDL" || format === "mdl"
+          ? getPIDSDJWTDataMsoMdoc()
+          : getPIDSDJWTData();
       break;
     case "VerifiableePassportCredentialSDJWT":
       credPayload = getEPassportSDJWTData();
@@ -771,8 +832,11 @@ async function generateMdlCredentialManually(
   console.log("Attempting to generate mDL credential using manual CBOR construction...");
   try {
      
-      const credentialConfiguration =
-        issuerConfigValues.credential_configurations_supported[vct];
+      const credentialConfiguration = resolveCredentialConfigurationForMdl(
+        issuerConfigValues,
+        vct,
+        requestBody,
+      );
       if (!credentialConfiguration) {
         throw new Error(`Configuration not found for VCT: ${vct}`);
       }
@@ -1053,15 +1117,18 @@ async function generateMdlCredentialWithAuth0Library(
 ) {
   console.log(`[mdl-issue] Starting mDL credential generation using @auth0/mdl library for VCT: ${vct}`);
   
-  // Step 1: Get credential configuration
-  const credentialConfiguration =
-    issuerConfigValues.credential_configurations_supported[vct];
+  // Step 1: Get credential configuration (may differ from semantic vct; see resolveCredentialConfigurationForMdl)
+  const credentialConfiguration = resolveCredentialConfigurationForMdl(
+    issuerConfigValues,
+    vct,
+    requestBody,
+  );
   if (!credentialConfiguration) {
     const availableConfigs = Object.keys(issuerConfigValues.credential_configurations_supported || {}).join(', ') || 'none';
     console.error(`[mdl-issue] Configuration not found. Received VCT: '${vct}', Expected: one of [${availableConfigs}]`);
     throw new Error(`Configuration not found for VCT: ${vct}. Received: '${vct}', Expected: one of [${availableConfigs}]`);
   }
-  console.log(`[mdl-issue] Found credential configuration for VCT: ${vct}`);
+  console.log(`[mdl-issue] Found credential configuration for mDL issuance (request vct: ${vct})`);
 
   const docType = credentialConfiguration.doctype;
   if (!docType) {

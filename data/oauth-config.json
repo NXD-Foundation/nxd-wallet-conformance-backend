@@ -18,6 +18,9 @@
     "vReceipt",
     "urn:eu.europa.ec.eudi:pid:1",
     "urn:eu.europa.ec.eudi:pid:1:mso_mdoc",
+    "ETSIRfc001PidVcSdJwt",
+    "ETSIRfc001PidVcJwt",
+    "ETSIRfc001PidX509Attr",
     "PaymentWalletAttestation",
     "PhotoID",
     "PCD",
@@ -52,6 +55,10 @@
     },
     "jwt_vc_json": {
       "alg_values_supported": ["ES256"]
+    },
+    "dc+sd-jwt": {
+      "sd-jwt_alg_values": ["ES256"],
+      "kb-jwt_alg_values": ["ES256"]
     }
   },
   "subject_syntax_types_supported": [

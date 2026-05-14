@@ -54,9 +54,26 @@ export function isEtsiIssuanceProfileEnforced() {
 export function logSoftEtsiIssuanceViolation(slog, scope, error, details = {}) {
   if (!slog) return;
   try {
+    const phase =
+      scope.includes("[PAR]") ? "par" :
+      scope.includes("[TOKEN]") ? "token" :
+      scope.includes("[CREDENTIAL]") ? "credential" :
+      "internal";
+    const check = details?.check;
+    const eventSuffix = typeof check === "string" && check ? check : "unspecified";
     slog(
       `${scope} [WARN] ETSI issuance profile check failed; continuing because ENFORCE_ETSI_ISSUANCE_PROFILE is disabled`,
       {
+        event: `${phase}.etsi_profile.warn.${eventSuffix}`,
+        phase,
+        kind: "compliance",
+        compliance: {
+          status: "warn",
+          specs: [
+            { name: "ETSI TS 119 472-3", section: phase === "credential" ? "4.6" : "4.5.1" },
+            { name: "OpenID4VCI 1.0", section: "Appendix E" },
+          ],
+        },
         error,
         enforcementEnv: process.env.ENFORCE_ETSI_ISSUANCE_PROFILE ?? "unset(default:false)",
         ...details,
@@ -1241,6 +1258,19 @@ export const getClientIdScheme = (req) => {
 export function resolveCodeFlowOfferIssuanceOptions(req) {
   const q = (req && req.query) || {};
   const modeRaw = q.issuance_mode ?? q.issuanceMode;
+  const explicitDynamicRaw = q.isDynamic ?? q.is_dynamic;
+
+  const parseBooleanFlag = (value, label) => {
+    if (value == null || String(value).trim() === "") return null;
+    if (value === true || value === 1) return true;
+    if (value === false || value === 0) return false;
+    const normalized = String(value).trim().toLowerCase();
+    if (normalized === "true" || normalized === "1") return true;
+    if (normalized === "false" || normalized === "0") return false;
+    throw new Error(
+      `Invalid ${label} '${String(value).trim()}'. Expected: true, false, 1, or 0.`,
+    );
+  };
 
   const normalizeMode = (s) =>
     String(s)
@@ -1266,12 +1296,16 @@ export function resolveCodeFlowOfferIssuanceOptions(req) {
     );
   }
 
+  const explicitDynamic = parseBooleanFlag(explicitDynamicRaw, "isDynamic");
+  if (explicitDynamic === true) {
+    return { isDynamic: true, isDeferred: false, includeCredentialType: false };
+  }
+  if (explicitDynamic === false) {
+    return { isDynamic: false, isDeferred: false, includeCredentialType: true };
+  }
+
   const dynFlag = q.dynamic_credential_request ?? q.dynamicCredentialRequest;
-  const wantsDynamic =
-    dynFlag === true ||
-    dynFlag === 1 ||
-    String(dynFlag || "").toLowerCase() === "true" ||
-    String(dynFlag || "").toLowerCase() === "1";
+  const wantsDynamic = parseBooleanFlag(dynFlag, "dynamic_credential_request");
   if (wantsDynamic) {
     return { isDynamic: true, isDeferred: false, includeCredentialType: false };
   }

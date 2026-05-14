@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "test": "mocha tests/**/*.js",
-    "dev": "SERVER_URL=https://60e4-2a02-587-8701-ab00-dfbf-3a92-c3eb-d2bd.ngrok-free.app node server.js"
+    "dev": "SERVER_URL=https://e1f4-2a02-587-8701-ab00-7f2d-f55-3847-dbac.ngrok-free.app node server.js"
   },
   "author": "",
   "license": "ISC",

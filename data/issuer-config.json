@@ -27,15 +27,48 @@
       "credential_metadata": {
         "display": [
           {
-            "name": "PID (RFC001 ETSI — vc+sd-jwt)",
+            "name": "PID (RFC001 ETSI — dc+sd-jwt)",
             "locale": "en-GB",
-            "description": "JSON-LD W3C VC EAA secured with SD-JWT per RFC001 §5.1 / §7.7"
+            "description": "SD-JWT VC (dc+sd-jwt) with PID vct urn:eu.europa.ec.eudi:pid:1 — HAIP/EUDI wallet interoperable; RFC001 configuration id retained."
           }
         ],
-        "claims": []
+        "claims": [
+          {
+            "path": ["given_name"],
+            "display": [{ "name": "Given Name", "locale": "en-GB" }]
+          },
+          {
+            "path": ["family_name"],
+            "display": [{ "name": "Surname", "locale": "en-GB" }]
+          },
+          {
+            "path": ["birth_date"],
+            "display": [{ "name": "Birth Date", "locale": "en-GB" }]
+          },
+          {
+            "path": ["age_over_18"],
+            "display": [{ "name": "Age Over 18", "locale": "en-GB" }]
+          },
+          {
+            "path": ["issuance_date"],
+            "display": [{ "name": "Issuance Date", "locale": "en-GB" }]
+          },
+          {
+            "path": ["expiry_date"],
+            "display": [{ "name": "Expiry Date", "locale": "en-GB" }]
+          },
+          {
+            "path": ["issuing_authority"],
+            "display": [{ "name": "Issuing Authority", "locale": "en-GB" }]
+          },
+          {
+            "path": ["issuing_country"],
+            "display": [{ "name": "Issuing Country", "locale": "en-GB" }]
+          }
+        ]
       },
       "credential_signing_alg_values_supported": ["ES256"],
-      "format": "vc+sd-jwt",
+      "format": "dc+sd-jwt",
       "vct": "urn:eu.europa.ec.eudi:pid:1",
       "proof_types_supported": {
         "jwt": {
@@ -55,7 +88,40 @@
             "description": "JSON-LD W3C VC EAA secured with JOSE per RFC001 §5.1 / §7.7"
           }
         ],
-        "claims": []
+        "claims": [
+          {
+            "path": ["given_name"],
+            "display": [{ "name": "Given Name", "locale": "en-GB" }]
+          },
+          {
+            "path": ["family_name"],
+            "display": [{ "name": "Surname", "locale": "en-GB" }]
+          },
+          {
+            "path": ["birth_date"],
+            "display": [{ "name": "Birth Date", "locale": "en-GB" }]
+          },
+          {
+            "path": ["age_over_18"],
+            "display": [{ "name": "Age Over 18", "locale": "en-GB" }]
+          },
+          {
+            "path": ["issuance_date"],
+            "display": [{ "name": "Issuance Date", "locale": "en-GB" }]
+          },
+          {
+            "path": ["expiry_date"],
+            "display": [{ "name": "Expiry Date", "locale": "en-GB" }]
+          },
+          {
+            "path": ["issuing_authority"],
+            "display": [{ "name": "Issuing Authority", "locale": "en-GB" }]
+          },
+          {
+            "path": ["issuing_country"],
+            "display": [{ "name": "Issuing Country", "locale": "en-GB" }]
+          }
+        ]
       },
       "credential_signing_alg_values_supported": ["ES256"],
       "format": "vc+jwt",
@@ -78,7 +144,40 @@
             "description": "X.509 Attribute Certificate (RFC 5755) per RFC001 §5.1 / §7.7 — pilot attribute encoding"
           }
         ],
-        "claims": []
+        "claims": [
+          {
+            "path": ["given_name"],
+            "display": [{ "name": "Given Name", "locale": "en-GB" }]
+          },
+          {
+            "path": ["family_name"],
+            "display": [{ "name": "Surname", "locale": "en-GB" }]
+          },
+          {
+            "path": ["birth_date"],
+            "display": [{ "name": "Birth Date", "locale": "en-GB" }]
+          },
+          {
+            "path": ["age_over_18"],
+            "display": [{ "name": "Age Over 18", "locale": "en-GB" }]
+          },
+          {
+            "path": ["issuance_date"],
+            "display": [{ "name": "Issuance Date", "locale": "en-GB" }]
+          },
+          {
+            "path": ["expiry_date"],
+            "display": [{ "name": "Expiry Date", "locale": "en-GB" }]
+          },
+          {
+            "path": ["issuing_authority"],
+            "display": [{ "name": "Issuing Authority", "locale": "en-GB" }]
+          },
+          {
+            "path": ["issuing_country"],
+            "display": [{ "name": "Issuing Country", "locale": "en-GB" }]
+          }
+        ]
       },
       "credential_signing_alg_values_supported": ["ES256"],
       "format": "x509_attr",

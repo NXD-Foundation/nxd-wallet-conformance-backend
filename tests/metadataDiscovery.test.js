@@ -1134,14 +1134,16 @@ describe('OIDC4VCI V1.0 - Metadata Discovery Compliance', () => {
       expect(response.body).to.not.have.property('batch_credential_endpoint');
     });
 
-    it('RFC001 ETSI: issuer metadata MUST advertise vc+sd-jwt, vc+jwt, and x509_attr in at least one credential configuration each', async () => {
+    it('RFC001 ETSI: issuer metadata MUST advertise SD-JWT VC (vc+sd-jwt or dc+sd-jwt), vc+jwt, and x509_attr in at least one credential configuration each', async () => {
       const response = await request(app)
         .get('/.well-known/openid-credential-issuer')
         .expect(200);
 
       const configs = Object.values(response.body.credential_configurations_supported || {});
       const formats = new Set(configs.map((c) => c && c.format).filter(Boolean));
-      expect(formats.has('vc+sd-jwt'), 'vc+sd-jwt').to.be.true;
+      const hasSdJwtVcFormat =
+        formats.has('vc+sd-jwt') || formats.has('dc+sd-jwt');
+      expect(hasSdJwtVcFormat, 'vc+sd-jwt or dc+sd-jwt').to.be.true;
       expect(formats.has('vc+jwt'), 'vc+jwt').to.be.true;
       expect(formats.has('x509_attr'), 'x509_attr').to.be.true;
     });

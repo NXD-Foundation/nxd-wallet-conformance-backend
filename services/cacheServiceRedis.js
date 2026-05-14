@@ -406,13 +406,20 @@ export async function storeSessionLog(sessionId, logLevel, message, metadata = {
     
     const key = `session-logs:${sessionId}`;
     const timestamp = new Date().toISOString();
+    const normalizedMetadata = normalizeLogMetadata(metadata);
     
     const logEntry = {
       timestamp,
       level: logLevel,
       message,
-      metadata
+      event: extractExplicitLogField(normalizedMetadata, "event"),
+      phase: extractExplicitLogField(normalizedMetadata, "phase"),
+      kind: extractExplicitLogField(normalizedMetadata, "kind"),
+      compliance: extractExplicitLogField(normalizedMetadata, "compliance"),
+      artifacts: extractExplicitLogField(normalizedMetadata, "artifacts"),
+      metadata: normalizedMetadata
     };
+    enrichLogEntry(logEntry);
     
     // Get existing logs or initialize empty array
     const existingLogs = await client.get(key);
@@ -431,6 +438,173 @@ export async function storeSessionLog(sessionId, logLevel, message, metadata = {
   } catch (err) {
     console.error("Error storing session log:", err);
   }
+}
+
+function extractExplicitLogField(metadata, field) {
+  if (!metadata || typeof metadata !== "object") return undefined;
+  if (!(field in metadata)) return undefined;
+  const value = metadata[field];
+  delete metadata[field];
+  return value;
+}
+
+function normalizeLogMetadata(metadata) {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return {};
+  }
+  return sanitizeLogValue(metadata);
+}
+
+function sanitizeLogValue(value, keyPath = "") {
+  if (value == null) return value;
+  if (Array.isArray(value)) {
+    return value.slice(0, 20).map((item) => sanitizeLogValue(item, keyPath));
+  }
+  if (typeof value === "object") {
+    const out = {};
+    for (const [key, child] of Object.entries(value)) {
+      out[key] = sanitizeLogValue(child, key);
+    }
+    return out;
+  }
+  if (typeof value !== "string") return value;
+
+  const lowerKey = String(keyPath).toLowerCase();
+  if (
+    lowerKey.includes("token") ||
+    lowerKey.includes("proof") ||
+    lowerKey.includes("jwt") ||
+    lowerKey.includes("assertion") ||
+    lowerKey.includes("qr")
+  ) {
+    return summarizeSecretString(value);
+  }
+
+  if (value.length > 400) {
+    return {
+      preview: `${value.slice(0, 180)}...${value.slice(-40)}`,
+      length: value.length,
+    };
+  }
+
+  return value;
+}
+
+function summarizeSecretString(value) {
+  if (typeof value !== "string") return value;
+  return {
+    present: true,
+    length: value.length,
+    preview: value.length <= 24 ? value : `${value.slice(0, 12)}...${value.slice(-8)}`,
+  };
+}
+
+function enrichLogEntry(entry) {
+  const inferred = inferLogAttributes(entry.message, entry.metadata);
+  if (!entry.event && inferred.event) entry.event = inferred.event;
+  if (!entry.phase && inferred.phase) entry.phase = inferred.phase;
+  if (!entry.kind && inferred.kind) entry.kind = inferred.kind;
+  if (!entry.compliance && inferred.compliance) entry.compliance = inferred.compliance;
+}
+
+function inferLogAttributes(message = "", metadata = {}) {
+  const text = String(message);
+  const lower = text.toLowerCase();
+  const out = {};
+
+  if (text.includes("[HTTP]")) out.kind = "http";
+  else if (text.includes("[WARN]") || text.includes("[ERROR]")) out.kind = "compliance";
+  else out.kind = "protocol";
+
+  if (text.includes("[VCI]") || lower.includes("qr code") || lower.includes("/vci/offer")) out.phase = "offer";
+  else if (text.includes("[PAR]") || lower.includes("/par")) out.phase = "par";
+  else if (text.includes("[AUTHORIZATION]") || lower.includes("/authorize")) out.phase = "authorize";
+  else if (text.includes("[TOKEN]") || lower.includes("/token")) out.phase = "token";
+  else if (lower.includes("/nonce")) out.phase = "nonce";
+  else if (text.includes("[CREDENTIAL]") || lower.includes("/credential")) out.phase = "credential";
+  else if (lower.includes("vp request") || lower.includes("openid4vp")) out.phase = "vp";
+  else if (lower.includes("/logs")) out.phase = "internal";
+
+  if (text.includes("[HTTP] [REQUEST]")) out.event = "http.request";
+  else if (text.includes("[HTTP] [RESPONSE]")) out.event = "http.response";
+  else if (text.includes("[ISSUER] [VCI] [START]")) out.event = "offer.created";
+  else if (lower.includes("qr code generated successfully")) out.event = "offer.qr.generated";
+  else if (text.includes("[ISSUER] [PAR] [START]")) out.event = "par.received";
+  else if (text.includes("[ISSUER] [PAR] [COMPLETE]")) out.event = "par.accepted";
+  else if (text.includes("[ISSUER] [AUTHORIZATION] [START]")) out.event = "authorize.received";
+  else if (text.includes("[ISSUER] [AUTHORIZATION] [COMPLETE]")) out.event = "authorize.completed";
+  else if (text.includes("[TOKEN] [START]")) out.event = "token.received";
+  else if (lower.includes("pkce verification successful")) out.event = "token.pkce_verified";
+  else if (lower.includes("wia validated")) out.event = "token.wia.validated";
+  else if (lower.includes("wua validated")) out.event = "credential.wua.validated";
+  else if (lower.includes("proof jwt signature and claims validated successfully")) out.event = "credential.proof.validated";
+  else if (text.includes("[CREDENTIAL] [COMPLETE]")) out.event = "credential.completed";
+  else if (lower.includes("retrieving session logs")) out.event = "logs.retrieved";
+
+  if (out.event === "token.pkce_verified") {
+    out.compliance = {
+      status: "pass",
+      specs: [
+        { name: "RFC7636", section: "4.6" },
+        { name: "RFC001", section: "7.3" },
+      ],
+    };
+  } else if (lower.includes("missing wia")) {
+    out.compliance = {
+      status: entryLevelToCompliance(text),
+      specs: [
+        { name: "ETSI TS 119 472-3", section: "4.5.1" },
+        { name: "OpenID4VCI 1.0", section: "Appendix E" },
+      ],
+    };
+  } else if (lower.includes("proof validation successful")) {
+    out.compliance = {
+      status: "pass",
+      specs: [
+        { name: "OpenID4VCI 1.0", section: "8.2" },
+      ],
+    };
+  }
+
+  return out;
+}
+
+function entryLevelToCompliance(message = "") {
+  if (message.includes("[ERROR]")) return "fail";
+  if (message.includes("[WARN]")) return "warn";
+  return "pass";
+}
+
+export function summarizeSessionLogs(logs = []) {
+  const phases = {};
+  const warnings = [];
+  const errors = [];
+
+  for (const log of logs) {
+    const phase = log.phase || "internal";
+    if (!phases[phase]) phases[phase] = "pass";
+    if (log.level === "error") phases[phase] = "fail";
+    else if (log.level === "warn" && phases[phase] !== "fail") phases[phase] = "pass_with_warning";
+
+    if (log.level === "warn") warnings.push(log.message);
+    if (log.level === "error") errors.push(log.message);
+  }
+
+  const first = logs[0]?.timestamp || null;
+  const last = logs[logs.length - 1]?.timestamp || null;
+  const finalStatus = errors.length > 0 ? "failed" : warnings.length > 0 ? "success_with_warnings" : "success";
+  const firstOffer = logs.find((log) => log.event === "offer.created");
+
+  return {
+    status: finalStatus,
+    flow: firstOffer?.metadata?.flow || null,
+    credential_type: firstOffer?.metadata?.credentialType || null,
+    started_at: first,
+    finished_at: last,
+    phases,
+    warnings: warnings.slice(0, 10),
+    errors: errors.slice(0, 10),
+  };
 }
 
 // Function to retrieve all logs for a specific session
