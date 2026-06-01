@@ -3,8 +3,6 @@ import crypto from "node:crypto";
 import { jwtVerify, createLocalJWKSet, importJWK, importX509 } from "jose";
 import {
   createProofJwt,
-  generateDidJwkFromPrivateJwk,
-  ensureOrCreateEcKeyPair,
 } from "./crypto.js";
 import {
   getWalletCredentialByType,
@@ -34,6 +32,7 @@ import {
   filterSdJwtByDcqlClaims,
   sdJwtWithoutKbJwt,
 } from "./sdJwtDisclosureSelection.js";
+import { resolvePresentationKeyBinding } from "./presentationKeyBinding.js";
 
 function makeSessionLogger(sessionId) {
   return function sessionLog(...args) {
@@ -824,11 +823,20 @@ export async function performPresentation(
       } catch {}
     }
 
-    // Build key-binding JWT. For SD-JWT, include sd_hash per SD-JWT spec and use typ "kb+jwt".
-    const { privateJwk, publicJwk } = await ensureOrCreateEcKeyPair(
-      keyPath || undefined,
-    );
-    const didJwk = generateDidJwkFromPrivateJwk(publicJwk);
+    // Build key-binding JWT with the same key the issuer bound into the credential.
+    const {
+      privateJwk,
+      publicJwk,
+      didJwk,
+      alg: presentationAlg,
+      source: presentationKeySource,
+    } = await resolvePresentationKeyBinding({ stored, keyPath });
+    try {
+      slog("[present] presentation key selected", {
+        source: presentationKeySource,
+        alg: presentationAlg,
+      });
+    } catch {}
     const kbAudience = clientId || responseUri || verifierBase;
     if (!kbAudience) {
       throw new Error(
@@ -842,6 +850,7 @@ export async function performPresentation(
       nonce,
       issuer: didJwk,
       typ: isSdJwt ? "kb+jwt" : "openid4vp-proof+jwt",
+      alg: presentationAlg,
       sdJwt: isSdJwt ? vpToken : undefined,
     });
     console.log("[present] Built kbJwt len:", kbJwt.length);
@@ -953,6 +962,7 @@ export async function performPresentation(
         issuer: didJwk,
         audience: kbAudience,
         nonce,
+        alg: presentationAlg,
       });
       console.log("[present] Wrapped JWT VC in JWT VP");
       try {
@@ -1172,9 +1182,9 @@ export async function performPresentation(
           console.log("[present] Created JWE:", responseJwtOrJwe);
         } else {
           // Fallback: send signed JWT directly if no enc key is provided
-          const signingKey = await importJWK(privateJwk, "ES256");
+          const signingKey = await importJWK(privateJwk, presentationAlg);
           responseJwtOrJwe = await new SignJWT(jwtPayload)
-            .setProtectedHeader({ alg: "ES256", typ: "JWT", kid: didJwk })
+            .setProtectedHeader({ alg: presentationAlg, typ: "JWT", kid: didJwk })
             .setIssuer(jwtPayload.iss)
             .setAudience(jwtPayload.aud)
             .setIssuedAt(jwtPayload.iat)

@@ -1,0 +1,17 @@
+{
+  "privateJwk": {
+    "kty": "EC",
+    "x": "1HtPBpWETZVdvDeW6SLYGvPohF9kfishTQKFtEd3Uhc",
+    "y": "6pq8ogEbljeBdU1WKDveA4i9UYFn5B-cBGyEsMWyOr0",
+    "crv": "P-256",
+    "d": "HZZiW0knR0NxJR2ky6xdRnSh2EAKxJmLoXRHrdaj-rY",
+    "alg": "ES256"
+  },
+  "publicJwk": {
+    "kty": "EC",
+    "x": "1HtPBpWETZVdvDeW6SLYGvPohF9kfishTQKFtEd3Uhc",
+    "y": "6pq8ogEbljeBdU1WKDveA4i9UYFn5B-cBGyEsMWyOr0",
+    "crv": "P-256",
+    "alg": "ES256"
+  }
+}

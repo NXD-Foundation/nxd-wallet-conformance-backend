@@ -48,6 +48,7 @@ import {
   summarizeCs03ValidationForLog,
   validateCs03CredentialResponses,
 } from "../../utils/cs03Validation.js";
+import { validateSdJwtKeyBindingMatchesCredential } from "../../utils/sdJwtKeyBinding.js";
 
 const getSessionTranscriptBytes = (
   oid4vpData,
@@ -103,6 +104,26 @@ function computeSdHashFromPresentedToken(sdJwtToken) {
 
   const hash = crypto.createHash("sha256").update(Buffer.from(prefix, "ascii")).digest();
   return hash.toString("base64url");
+}
+
+
+function describeSdJwtKeyBindingError(errorCode) {
+  switch (errorCode) {
+    case "missing_key_binding_jwt":
+      return "Key Binding JWT is missing from the presented SD-JWT.";
+    case "credential_cnf_jwk_missing":
+      return "Credential is missing cnf.jwk required for SD-JWT key binding.";
+    case "invalid_key_binding_jwt_header":
+      return "Key Binding JWT protected header is invalid.";
+    case "key_binding_jwk_missing":
+      return "Key Binding JWT protected header is missing jwk.";
+    case "key_binding_cnf_mismatch":
+      return "Key Binding JWT signer key does not match credential cnf.jwk.";
+    case "key_binding_signature_invalid":
+      return "Key Binding JWT signature does not verify with its protected header jwk.";
+    default:
+      return "SD-JWT key binding validation failed.";
+  }
 }
 
 /** Redact base64 payloads for CS-03 session / structured logs (counts and lengths only). */
@@ -1423,11 +1444,63 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
               specRef: SPEC_REFS.SD_JWT_KEY_BINDING
             });
           } else {
-            // Should not normally happen, but log for diagnostics.
-            await logWarn(sessionId, "sdJwtForKeybind missing while key-binding JWT present; skipping sd_hash verification", {
+            await logError(sessionId, "sdJwtForKeybind missing while key-binding JWT present", {
               hasKeybindJwt: true,
               specRef: SPEC_REFS.SD_JWT_KEY_BINDING
             }).catch(() => {});
+            try {
+              vpSession.status = "failed";
+              vpSession.error = "invalid_key_binding_jwt";
+              vpSession.error_description = `Unable to associate Key Binding JWT with a presented SD-JWT. See ${SPEC_REFS.SD_JWT_KEY_BINDING}`;
+              await storeVPSession(sessionId, vpSession);
+            } catch (storageError) {
+              await logError(sessionId, "Failed to update session status after missing SD-JWT for key binding", {
+                error: storageError.message,
+                stack: storageError.stack
+              }).catch(() => {});
+            }
+            return res.status(400).json({
+              error: `Unable to associate Key Binding JWT with a presented SD-JWT. See ${SPEC_REFS.SD_JWT_KEY_BINDING}`
+            });
+          }
+
+          if (sdJwtForKeybind) {
+            try {
+              await validateSdJwtKeyBindingMatchesCredential({
+                sdJwt: sdJwtForKeybind,
+              });
+              await logDebug(sessionId, "SD-JWT Key Binding JWT cnf binding verified successfully", {
+                hasKeybindJwt: true,
+                specRef: SPEC_REFS.SD_JWT_KEY_BINDING
+              });
+            } catch (bindingError) {
+              const bindingErrorDescription = describeSdJwtKeyBindingError(bindingError.message);
+              await logError(sessionId, "SD-JWT Key Binding JWT validation failed", {
+                error: bindingError.message,
+                errorDescription: bindingErrorDescription,
+                specRef: SPEC_REFS.SD_JWT_KEY_BINDING,
+                kbHeaderJwk: kbHeader.jwk ? {
+                  kty: kbHeader.jwk.kty,
+                  crv: kbHeader.jwk.crv,
+                  x: kbHeader.jwk.x,
+                  y: kbHeader.jwk.y,
+                } : null,
+              });
+              try {
+                vpSession.status = "failed";
+                vpSession.error = "invalid_key_binding_jwt";
+                vpSession.error_description = `${bindingErrorDescription} See ${SPEC_REFS.SD_JWT_KEY_BINDING}`;
+                await storeVPSession(sessionId, vpSession);
+              } catch (storageError) {
+                await logError(sessionId, "Failed to update session status after key binding validation failure", {
+                  error: storageError.message,
+                  stack: storageError.stack
+                }).catch(() => {});
+              }
+              return res.status(400).json({
+                error: `${bindingErrorDescription} See ${SPEC_REFS.SD_JWT_KEY_BINDING}`
+              });
+            }
           }
         }
 
@@ -2004,6 +2077,116 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
             }).catch(() => {});
           }
           return res.status(400).json({ error: `aud claim does not match verifier client_id. Received: '${jwtFromKeybind.payload.aud}', expected: '${vpSession.client_id}'. See ${SPEC_REFS.VP_CREDENTIAL_RESPONSE}` });
+        }
+      }
+
+      // Verify sd_hash and credential cnf binding if key-binding JWT provided.
+      if (jwtFromKeybind && jwtFromKeybind.payload) {
+        const kbPayload = jwtFromKeybind.payload;
+        const kbHeader = jwtFromKeybind.header || {};
+
+        if (!kbPayload.sd_hash) {
+          await logError(sessionId, "SD-JWT Key Binding JWT missing sd_hash claim", {
+            hasKeybindJwt: true,
+            specRef: SPEC_REFS.SD_JWT_KEY_BINDING,
+            kbTyp: kbHeader.typ || null
+          });
+          try {
+            vpSession.status = "failed";
+            vpSession.error = "invalid_key_binding_jwt";
+            vpSession.error_description = `Key Binding JWT for SD-JWT is missing required sd_hash claim. See ${SPEC_REFS.SD_JWT_KEY_BINDING}`;
+            await storeVPSession(sessionId, vpSession);
+          } catch (storageError) {
+            await logError(sessionId, "Failed to update session status after sd_hash missing error", {
+              error: storageError.message,
+              stack: storageError.stack
+            }).catch(() => {});
+          }
+          return res.status(400).json({
+            error: `Key Binding JWT for SD-JWT is missing required sd_hash claim. See ${SPEC_REFS.SD_JWT_KEY_BINDING}`
+          });
+        }
+
+        if (sdJwtForKeybind) {
+          const expectedSdHash = computeSdHashFromPresentedToken(sdJwtForKeybind);
+          if (!expectedSdHash || kbPayload.sd_hash !== expectedSdHash) {
+            await logError(sessionId, "SD-JWT Key Binding JWT sd_hash mismatch", {
+              kbSdHash: kbPayload.sd_hash,
+              expectedSdHash,
+              specRef: SPEC_REFS.SD_JWT_KEY_BINDING,
+              sdJwtPreview: sdJwtForKeybind.substring(0, 100) + "...",
+            });
+            try {
+              vpSession.status = "failed";
+              vpSession.error = "invalid_key_binding_jwt";
+              vpSession.error_description = `Key Binding JWT sd_hash does not match presented SD-JWT. See ${SPEC_REFS.SD_JWT_KEY_BINDING}`;
+              await storeVPSession(sessionId, vpSession);
+            } catch (storageError) {
+              await logError(sessionId, "Failed to update session status after sd_hash mismatch", {
+                error: storageError.message,
+                stack: storageError.stack
+              }).catch(() => {});
+            }
+            return res.status(400).json({
+              error: `Key Binding JWT sd_hash does not match presented SD-JWT. See ${SPEC_REFS.SD_JWT_KEY_BINDING}`
+            });
+          }
+
+          try {
+            await validateSdJwtKeyBindingMatchesCredential({
+              sdJwt: sdJwtForKeybind,
+            });
+            await logDebug(sessionId, "SD-JWT Key Binding JWT cnf binding verified successfully", {
+              hasKeybindJwt: true,
+              specRef: SPEC_REFS.SD_JWT_KEY_BINDING
+            });
+          } catch (bindingError) {
+            const bindingErrorDescription = describeSdJwtKeyBindingError(bindingError.message);
+            await logError(sessionId, "SD-JWT Key Binding JWT validation failed", {
+              error: bindingError.message,
+              errorDescription: bindingErrorDescription,
+              specRef: SPEC_REFS.SD_JWT_KEY_BINDING,
+              kbHeaderJwk: kbHeader.jwk ? {
+                kty: kbHeader.jwk.kty,
+                crv: kbHeader.jwk.crv,
+                x: kbHeader.jwk.x,
+                y: kbHeader.jwk.y,
+              } : null,
+            });
+            try {
+              vpSession.status = "failed";
+              vpSession.error = "invalid_key_binding_jwt";
+              vpSession.error_description = `${bindingErrorDescription} See ${SPEC_REFS.SD_JWT_KEY_BINDING}`;
+              await storeVPSession(sessionId, vpSession);
+            } catch (storageError) {
+              await logError(sessionId, "Failed to update session status after key binding validation failure", {
+                error: storageError.message,
+                stack: storageError.stack
+              }).catch(() => {});
+            }
+            return res.status(400).json({
+              error: `${bindingErrorDescription} See ${SPEC_REFS.SD_JWT_KEY_BINDING}`
+            });
+          }
+        } else {
+          await logError(sessionId, "sdJwtForKeybind missing while key-binding JWT present", {
+            hasKeybindJwt: true,
+            specRef: SPEC_REFS.SD_JWT_KEY_BINDING
+          }).catch(() => {});
+          try {
+            vpSession.status = "failed";
+            vpSession.error = "invalid_key_binding_jwt";
+            vpSession.error_description = `Unable to associate Key Binding JWT with a presented SD-JWT. See ${SPEC_REFS.SD_JWT_KEY_BINDING}`;
+            await storeVPSession(sessionId, vpSession);
+          } catch (storageError) {
+            await logError(sessionId, "Failed to update session status after missing SD-JWT for key binding", {
+              error: storageError.message,
+              stack: storageError.stack
+            }).catch(() => {});
+          }
+          return res.status(400).json({
+            error: `Unable to associate Key Binding JWT with a presented SD-JWT. See ${SPEC_REFS.SD_JWT_KEY_BINDING}`
+          });
         }
       }
 
