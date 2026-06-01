@@ -144,6 +144,8 @@ http://localhost:3000/vci/offer?flow=authorization_code&credential_type=ETSIRfc0
 
 **Authorization code · default offer scheme (`openid-credential-offer://`)**
 
+**NOTE:** Implementation variant only. Do **not** treat `signature_type=jwk`, `kid-jwk`, `did-web`, or `did:jwk` as APTITUDE RFC001 conformance cases. RFC001 targets OpenID4VCI v1.0 with HAIP v1.0 and ETSI TS 119 472-3 alignment, where the deployed conformance baseline is X.509-backed (`signature_type=x509`) with ETSI issuer metadata, `x5c`, `issuer_info`, wallet attestation handling, and `eu-eaa-offer://` support. JWK/KID-JWK/DID variants may remain useful for implementation or interoperability experiments, but they are intentionally excluded from the RFC001 HAIP/ETSI test matrix.
+
 ```
 http://localhost:3000/vci/offer?flow=authorization_code&credential_type=ETSIRfc001PidVcSdJwt&signature_type=jwk
 ```
