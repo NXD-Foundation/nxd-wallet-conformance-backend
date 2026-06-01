@@ -42,6 +42,66 @@ function extractCertificateChain(certPem) {
  * Used for x509 and dc_api flows.
  * @returns {{ privateKeyPkcs8: string, certChain: string[] }}
  */
+const DEFAULT_VERIFIER_CA_PEMS = [
+  path.resolve(process.cwd(), "certs", "pidissuerca02_eu.pem"),
+];
+
+function resolveVerifierCaPemPaths() {
+  const raw = process.env.WEBUILD_X5C_CA_PEM;
+  if (!raw) return DEFAULT_VERIFIER_CA_PEMS;
+  return raw
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry) => (path.isAbsolute(entry) ? entry : path.resolve(process.cwd(), entry)));
+}
+
+function appendCaCertsIfNeeded(certChain, caPemPaths = resolveVerifierCaPemPaths()) {
+  if (!Array.isArray(certChain) || certChain.length !== 1) {
+    return certChain;
+  }
+
+  const seen = new Set(certChain);
+  const missingOrInvalid = [];
+
+  for (const pemPath of caPemPaths) {
+    if (!fs.existsSync(pemPath)) {
+      missingOrInvalid.push(`${pemPath} (missing)`);
+      continue;
+    }
+
+    try {
+      const pem = fs.readFileSync(pemPath, "utf8");
+      const certs = extractCertificateChain(pem);
+      for (const derB64 of certs) {
+        if (!seen.has(derB64)) {
+          certChain.push(derB64);
+          seen.add(derB64);
+        }
+      }
+    } catch (error) {
+      missingOrInvalid.push(`${pemPath} (${error.message})`);
+    }
+  }
+
+  if (certChain.length > 1) {
+    return certChain;
+  }
+
+  const allowLeafOnly = /^true$/i.test(process.env.WEBUILD_X5C_ALLOW_LEAF_ONLY || "");
+  const reason = missingOrInvalid.length > 0
+    ? missingOrInvalid.join(", ")
+    : "no CA certificates were appended";
+  const message = `WE-BUILD verifier x5c CA chain is unavailable: ${reason}`;
+
+  if (!allowLeafOnly) {
+    throw new Error(`${message}. Add certs/pidissuerca02_eu.pem or set WEBUILD_X5C_CA_PEM.`);
+  }
+
+  console.warn(`${message}. Continuing with leaf-only x5c because WEBUILD_X5C_ALLOW_LEAF_ONLY=true.`);
+  return certChain;
+}
+
 function loadVerifierP12() {
   const p12Path = path.resolve(process.cwd(), "certs", "WE-BUILD-Verifier.p12");
   const passphrase = process.env.WEBUILD_P12_PASSWORD || "webuild";
@@ -62,7 +122,7 @@ function loadVerifierP12() {
       `openssl pkcs12 -in "${p12Path}" -nodes -nocerts -passin env:WEBUILD_P12_PASS`,
       { encoding: "utf8", maxBuffer: 64 * 1024, env: envWithPass }
     );
-    const certChain = extractCertificateChain(certPem);
+    const certChain = appendCaCertsIfNeeded(extractCertificateChain(certPem));
     const privateKey = crypto.createPrivateKey(privateKeyPem);
     const privateKeyPkcs8 = privateKey.export({
       type: "pkcs8",
