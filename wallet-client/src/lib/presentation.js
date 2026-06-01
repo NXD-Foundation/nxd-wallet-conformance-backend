@@ -8,6 +8,7 @@ import {
   normalizeSdJwtForKeyBindingHashInput,
 } from "./crypto.js";
 import { resolveDeviceKeyPath } from "./deviceKeyPaths.js";
+import { resolvePresentationKeyBinding } from "./presentationKeyBinding.js";
 import {
   getWalletCredentialByType,
   listWalletCredentialTypes,
@@ -1122,8 +1123,11 @@ async function findWalletStoredForDcqlEntry(entry, usedConfigurationIds) {
 }
 
 async function resolveKeysEnvelopeAndRawFromPick(stored, keyPath, pickedEntry) {
-  const resolvedDevicePath = resolveDeviceKeyPath(keyPath);
-  const { privateJwk, publicJwk } = await ensureOrCreateEcKeyPair(resolvedDevicePath);
+  const { privateJwk, publicJwk, didJwk, alg } = await resolvePresentationKeyBinding({
+    stored,
+    pickedEntry,
+    keyPath,
+  });
   let envelope = pickedEntry.credential;
   if (stored.multi && Array.isArray(stored.entries)) {
     const match = stored.entries.find((e) =>
@@ -1132,7 +1136,14 @@ async function resolveKeysEnvelopeAndRawFromPick(stored, keyPath, pickedEntry) {
     envelope = (match || pickedEntry).credential;
   }
   const rawToken = extractCredentialString(envelope);
-  return { privateJwk, publicJwk, credentialEnvelopeForVp: envelope, rawToken };
+  return {
+    privateJwk,
+    publicJwk,
+    didJwk,
+    alg,
+    credentialEnvelopeForVp: envelope,
+    rawToken,
+  };
 }
 
 function docTypeForMdocPresentation(dcqlEntry, selectedType, presentationDefinition) {
@@ -1169,7 +1180,7 @@ async function buildVpTokenFromPickedEntry({
   authorizationRequestPayload = null,
   mdocSessionNonce = null,
 }) {
-  const { privateJwk, publicJwk, rawToken: vpToken } =
+  const { privateJwk, publicJwk, didJwk, alg, rawToken: vpToken } =
     await resolveKeysEnvelopeAndRawFromPick(stored, keyPath, pickedEntry);
   if (!vpToken) {
     throw new Error("Unable to extract presentable credential token from wallet cache");
@@ -1183,7 +1194,6 @@ async function buildVpTokenFromPickedEntry({
     sdJwtForPresentation = filterSdJwtDisclosuresForDcqlClaims(vpToken, dcqlEntry);
   }
 
-  const didJwk = generateDidJwkFromPrivateJwk(publicJwk);
   const kbAudience = clientId || responseUri || verifierBase;
   if (!kbAudience) {
     throw new Error(
@@ -1201,6 +1211,7 @@ async function buildVpTokenFromPickedEntry({
     nonce,
     issuer: didJwk,
     typ: isSdJwt ? "kb+jwt" : "openid4vp-proof+jwt",
+    alg,
     sdJwt: isSdJwt ? sdJwtForPresentation : undefined,
     transaction_data_hashes: txKb?.transaction_data_hashes,
     transaction_data_hashes_alg: txKb?.transaction_data_hashes_alg,
@@ -1225,7 +1236,7 @@ async function buildVpTokenFromPickedEntry({
       clientId,
       responseUri,
       verifierGeneratedNonce: nonce,
-      devicePrivateJwk: stored?.keyBinding?.privateJwk || privateJwk,
+      devicePrivateJwk: privateJwk,
       presentationDefinition,
       dcqlEntry,
       ...(mdocSessionNonce
@@ -1585,7 +1596,7 @@ export async function performPresentation(
 
       const resolvedDevicePath = resolveDeviceKeyPath(keyPath);
       const { publicJwk } = await ensureOrCreateEcKeyPair(resolvedDevicePath);
-      didJwk = generateDidJwkFromPrivateJwk(publicJwk);
+      didJwk = resolvedDidJwk;
 
       presentation_submission = buildPresentationSubmissionDcql(
         presentationDefinition,
@@ -1641,12 +1652,22 @@ export async function performPresentation(
       if (!stored || (!stored.credential && !(stored.multi && Array.isArray(stored.entries))))
         throw new Error("Credential not found in wallet cache");
 
-      const resolvedDevicePath = resolveDeviceKeyPath(keyPath);
-      const { privateJwk, publicJwk } = await ensureOrCreateEcKeyPair(resolvedDevicePath);
+      const pickedForBinding =
+        stored.multi && Array.isArray(stored.entries) && stored.entries.length > 0
+          ? stored.entries[0]
+          : { keyBinding: stored.keyBinding, credential: stored.credential };
+      const { privateJwk, publicJwk, didJwk: resolvedDidJwk, alg: presentationAlg } =
+        await resolvePresentationKeyBinding({
+          stored,
+          pickedEntry: pickedForBinding,
+          keyPath,
+        });
 
       let credentialEnvelopeForVp = stored.credential;
       if (stored.multi && Array.isArray(stored.entries) && stored.entries.length > 0) {
-        const match = stored.entries.find((e) => ecPublicJwksEqual(e?.keyBinding?.publicJwk, publicJwk));
+        const match = stored.entries.find((e) =>
+          ecPublicJwksEqual(e?.keyBinding?.publicJwk, publicJwk),
+        );
         const pick = match || stored.entries[0];
         credentialEnvelopeForVp = pick.credential;
       }
@@ -1679,7 +1700,7 @@ export async function performPresentation(
     } catch {}
 
     // Build key-binding JWT. For SD-JWT, include sd_hash per SD-JWT spec and use typ "kb+jwt".
-    didJwk = generateDidJwkFromPrivateJwk(publicJwk);
+    didJwk = resolvedDidJwk;
     const kbAudience = clientId || responseUri || verifierBase;
     if (!kbAudience) {
       throw new Error(
@@ -1694,6 +1715,7 @@ export async function performPresentation(
       nonce,
       issuer: didJwk,
       typ: isSdJwt ? "kb+jwt" : "openid4vp-proof+jwt",
+      alg: presentationAlg,
       sdJwt: isSdJwt ? vpToken : undefined,
       transaction_data_hashes: txKbMain?.transaction_data_hashes,
       transaction_data_hashes_alg: txKbMain?.transaction_data_hashes_alg,
@@ -1776,7 +1798,7 @@ export async function performPresentation(
         clientId,
         responseUri,
         verifierGeneratedNonce: nonce,
-        devicePrivateJwk: stored?.keyBinding?.privateJwk || privateJwk,
+        devicePrivateJwk: privateJwk,
         presentationDefinition,
         ...(mdocSessionNonce
           ? { mdocGeneratedNonceOverride: mdocSessionNonce }
@@ -2006,9 +2028,9 @@ export async function performPresentation(
           console.log("[present] Created JWE:", responseJwtOrJwe);
         } else {
           // Fallback: send signed JWT directly if no enc key is provided
-          const signingKey = await importJWK(privateJwk, "ES256");
+          const signingKey = await importJWK(privateJwk, presentationAlg);
           responseJwtOrJwe = await new SignJWT(jwtPayload)
-            .setProtectedHeader({ alg: "ES256", typ: "JWT", kid: didJwk })
+            .setProtectedHeader({ alg: presentationAlg, typ: "JWT", kid: didJwk })
             .setIssuer(jwtPayload.iss)
             .setAudience(jwtPayload.aud)
             .setIssuedAt(jwtPayload.iat)
