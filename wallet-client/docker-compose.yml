@@ -18,7 +18,12 @@ services:
       - WALLET_CREDENTIAL_TTL=86400
       - WALLET_TEST_SESSION_TTL=86400
       
-      # Debug and logging
+      # Wallet issuance profile: compatibility (default) or webuild-cs01
+      - WALLET_PROFILE=compatibility
+      # OAuth client_id; must match Wallet Unit Attestation sub in outbound requests
+      - WALLET_CLIENT_ID=wallet-client
+      # Attestation source: local-key only (trust-framework not yet implemented)
+      - WALLET_ATTESTATION_SOURCE=local-key
       - WALLET_DEBUG_CREDENTIAL=false
       - WALLET_MDL_STRICT=false
       

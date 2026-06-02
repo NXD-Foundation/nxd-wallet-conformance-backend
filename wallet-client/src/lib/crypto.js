@@ -140,18 +140,11 @@ function normalizeUri(uri) {
 }
 
 /**
- * Creates a Wallet Instance Attestation (WIA) JWT
- * Based on TS3 Wallet Unit Attestation spec:
- * https://github.com/eu-digital-identity-wallet/eudi-doc-standards-and-technical-specifications/blob/main/docs/technical-specifications/ts3-wallet-unit-attestation.md
- * 
- * @param {object} options
- * @param {object} options.privateJwk - Private JWK for signing
- * @param {object} options.publicJwk - Public JWK (for header)
- * @param {string} options.issuer - Issuer identifier (typically wallet provider DID or URL)
- * @param {string} options.audience - Audience (token endpoint URL)
- * @param {string} options.alg - Signing algorithm (default: ES256)
- * @param {number} options.ttlHours - Time-to-live in hours (default: 1, max: 24)
- * @returns {Promise<string>} - Signed WIA JWT
+ * Legacy OAuth body client_assertion JWT for compatibility-mode mixed client authentication.
+ * CS-01 uses Wallet Unit Attestation via OAuth-Client-Attestation headers instead.
+ * See wallet-client/src/lib/walletUnitAttestation.js for the current attestation model.
+ *
+ * @deprecated Prefer createLegacyBodyClientAssertionJwt() from walletUnitAttestation.js
  */
 export async function createWIA({ privateJwk, publicJwk, issuer, audience, alg = "ES256", ttlHours = 1 }) {
   // Ensure TTL is less than 24 hours per spec
@@ -230,21 +223,9 @@ export async function createOAuthClientAttestationPopJwt({
 }
 
 /**
- * Creates a Wallet Unit Attestation (WUA) JWT
- * Based on TS3 Wallet Unit Attestation spec:
- * https://github.com/eu-digital-identity-wallet/eudi-doc-standards-and-technical-specifications/blob/main/docs/technical-specifications/ts3-wallet-unit-attestation.md
- * 
- * @param {object} options
- * @param {object} options.privateJwk - Private JWK for signing
- * @param {object} options.publicJwk - Public JWK (for header)
- * @param {string} options.issuer - Issuer identifier (typically wallet provider DID or URL)
- * @param {string} options.audience - Audience (credential endpoint URL)
- * @param {object[]} options.attestedKeys - Array of attested key JWKs
- * @param {object} options.eudiWalletInfo - EUDI wallet info object with general_info and key_storage_info
- * @param {object} options.status - Optional status/revocation information
- * @param {string} options.alg - Signing algorithm (default: ES256)
- * @param {number} options.ttlHours - Time-to-live in hours (default: 24)
- * @returns {Promise<string>} - Signed WUA JWT
+ * Wallet Unit Attestation JWT (key-attestation+jwt) for credential proof binding.
+ * For OAuth PAR/Token client authentication, use createWalletUnitAttestationClientAuth()
+ * in walletUnitAttestation.js instead.
  */
 export async function createWUA({ 
   privateJwk, 

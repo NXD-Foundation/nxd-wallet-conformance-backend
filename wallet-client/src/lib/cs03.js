@@ -1,12 +1,21 @@
 import fs from "fs";
+import path from "node:path";
 import crypto from "node:crypto";
 import fetch from "node-fetch";
+import { fileURLToPath } from "node:url";
 
 export const CSC_X509_FORMAT = "https://cloudsignatureconsortium.org/2025/x509";
 export const CSC_QES_TYPE = "https://cloudsignatureconsortium.org/2025/qes";
 
-function readJson(path) {
-  return JSON.parse(fs.readFileSync(path, "utf8"));
+const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
+const WALLET_CLIENT_DIR = path.resolve(MODULE_DIR, "..", "..");
+
+function resolveWalletClientPath(relativePath) {
+  return path.resolve(WALLET_CLIENT_DIR, relativePath);
+}
+
+function readJson(filePath) {
+  return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
 
 export function decodeCs03TransactionDataEntry(entry) {
@@ -44,11 +53,12 @@ export function extractCs03Request(payload) {
 }
 
 export function loadLocalCs03Signer() {
-  const metadata = readJson("./x509CS03/credential.json");
+  const metadataPath = resolveWalletClientPath("x509CS03/credential.json");
+  const metadata = readJson(metadataPath);
   return {
     ...metadata,
-    certificatePem: fs.readFileSync(metadata.certificatePath, "utf8"),
-    privateKeyPem: fs.readFileSync(metadata.privateKeyPath, "utf8"),
+    certificatePem: fs.readFileSync(resolveWalletClientPath(metadata.certificatePath), "utf8"),
+    privateKeyPem: fs.readFileSync(resolveWalletClientPath(metadata.privateKeyPath), "utf8"),
   };
 }
 
