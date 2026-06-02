@@ -122,11 +122,7 @@ The wallet client will start on `http://localhost:4000` by default.
 
 ### Example: Issue a Credential
 
-```bash
-# Using wallet client CLI
-cd wallet-client
-node src/index.js --issuer http://localhost:3000 --fetch-offer /offer-no-code --credential VerifiablePortableDocumentA2SDJWT
-```
+Use the wallet-client HTTP service and post an offer or session request to its API. The wallet-client is now maintained as a web service rather than a separate CLI flow.
 
 ## Configuration
 
@@ -759,12 +755,8 @@ The `wallet-client/` directory contains a VCI + VP **test wallet** implementatio
 
 ### Wallet Client Architecture
 
-The wallet client is a **wallet-holder** implementation that exercises both VCI (issuance) and VP (presentation) flows:
+The wallet client is a **wallet-holder** implementation that exercises both VCI (issuance) and VP (presentation) flows through its HTTP service:
 
-- **CLI** (`wallet-client/src/index.js`):
-  - Non-interactive helper to obtain credentials via pre-authorized code flow
-  - Generates proof JWTs, handles `c_nonce` and deferred issuance
-  - Writes issued credentials + key-binding material into Redis
 - **HTTP service** (`wallet-client/src/server.js`):
   - **`POST /issue`**: VCI pre-authorized flow using `openid-credential-offer://` or `haip://` links
   - **`POST /issue-codeflow`**: VCI authorization code flow with dynamic VP support
@@ -938,42 +930,7 @@ Per OpenID4VP v1.0 Section 7.2.2:
 
 ## Using the Wallet Client
 
-The wallet client can be used in two modes:
-
-#### CLI Mode (Quick Start)
-
-For a simple pre-authorized SD-JWT issuance:
-
-```bash
-# in another terminal
-cd wallet-client
-npm install
-
-# Example: use a pre-authorized offer from the issuer
-node src/index.js --issuer http://localhost:3000 --fetch-offer /offer-no-code --credential VerifiablePortableDocumentA2SDJWT
-```
-
-**CLI Options:**
-```bash
-node src/index.js [--issuer URL] [--offer OFFER_URI] [--fetch-offer PATH] [--credential ID] [--key PATH]
-```
-
-- **--issuer**: Base URL of issuer (default: `http://localhost:3000`)
-- **--offer**: Deep link `openid-credential-offer://?...` from issuer
-- **--fetch-offer**: Issuer path to fetch an offer
-- **--credential**: Desired `credential_configuration_id` (defaults to first in offer)
-- **--key**: Optional path to an EC P-256 private JWK. If omitted, a new key is generated in-memory.
-
-**What the CLI does:**
-- Resolves the credential offer URI and downloads the offer JSON
-- For **pre-authorized flow**:
-  - Exchanges the pre-authorized code at token endpoint to get `access_token`
-  - If `user_pin_required` is true, prompts for transaction code (PIN)
-- Requests a fresh `c_nonce` at nonce endpoint
-- Builds a proof JWT (`ES256`, `jwk` in header, `iss` = did:jwk, `aud` = issuer base URL, `nonce` = `c_nonce`)
-- Calls credential endpoint with `credential_configuration_id` and the proof (using V1.0 `proofs` format)
-- If issuer responds `202` with `transaction_id`, polls deferred credential endpoint until credential is ready
-- Stores issued credential and key binding material in Redis for later use in presentations
+The wallet client is exposed as an HTTP service.
 
 #### Server Mode (Full Wallet Flows)
 
@@ -997,7 +954,7 @@ Once running (default `http://localhost:4000`), you can:
   - **`GET /session-status/:sessionId`** to poll session outcome
   - **`GET /logs/:sessionId`** to fetch detailed wallet logs
 
-This makes `wallet-client` a **comprehensive test wallet** that exercises all issuer and verifier scenarios defined in the rest of the project (credential formats, flows, response modes, client_id_schemes, and attestation mechanisms), while remaining clearly non-production and focused on conformance experimentation.
+This makes `wallet-client` a **comprehensive test wallet** that exercises issuer and verifier scenarios through its HTTP service (credential formats, flows, response modes, client_id_schemes, and attestation mechanisms), while remaining clearly non-production and focused on conformance experimentation.
 
 ## References
 
