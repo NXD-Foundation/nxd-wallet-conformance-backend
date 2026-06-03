@@ -5,13 +5,13 @@ import path from "path";
 import { decodeProtectedHeader, decodeJwt } from "jose";
 import { ensureOrCreateEcKeyPair } from "../src/lib/crypto.js";
 import {
-  resolveAttestationForEndpoint,
+  resolveWiaForParOrToken,
   buildWalletUnitAttestationJwt,
   shouldRetryTokenExchangeAfterRotatingWalletProviderKey,
   rotateWalletProviderKeyPair,
 } from "../src/lib/walletProviderIdentity.js";
 
-describe("wallet provider identity (RFC001 iss / OAuth attestation)", () => {
+describe("wallet provider identity (RFC001 WIA / WUA)", () => {
   let tmpKey;
   const saved = {};
 
@@ -45,21 +45,22 @@ describe("wallet provider identity (RFC001 iss / OAuth attestation)", () => {
     }
   });
 
-  it("resolveAttestationForEndpoint: client_assertion uses typ oauth-client-attestation+jwt (token/PAR)", async () => {
-    const { clientAssertionJwt, oauthHeaders } = await resolveAttestationForEndpoint({
+  it("resolveWiaForParOrToken: WIA uses typ oauth-client-attestation+jwt (PAR/Token)", async () => {
+    const { wiaJwt, wiaHeaders } = await resolveWiaForParOrToken({
       endpointAudience: "https://as.example/token",
       authorizationServerIssuer: "https://as.example",
+      clientId: "11111111-1111-1111-1111-111111111111",
     });
-    const h = decodeProtectedHeader(clientAssertionJwt);
-    const p = decodeJwt(clientAssertionJwt);
+    const h = decodeProtectedHeader(wiaJwt);
+    const p = decodeJwt(wiaJwt);
     expect(h.typ).to.equal("oauth-client-attestation+jwt");
     expect(p.sub).to.equal("11111111-1111-1111-1111-111111111111");
     expect(p.iss).to.equal("did:example:wallet-provider");
-    expect(oauthHeaders["OAuth-Client-Attestation"]).to.be.a("string");
-    expect(oauthHeaders["OAuth-Client-Attestation-PoP"]).to.be.a("string");
-    const popH = decodeProtectedHeader(oauthHeaders["OAuth-Client-Attestation-PoP"]);
+    expect(wiaHeaders["OAuth-Client-Attestation"]).to.be.a("string");
+    expect(wiaHeaders["OAuth-Client-Attestation-PoP"]).to.be.a("string");
+    const popH = decodeProtectedHeader(wiaHeaders["OAuth-Client-Attestation-PoP"]);
     expect(popH.typ).to.equal("oauth-client-attestation-pop+jwt");
-    const popP = decodeJwt(oauthHeaders["OAuth-Client-Attestation-PoP"]);
+    const popP = decodeJwt(wiaHeaders["OAuth-Client-Attestation-PoP"]);
     expect(popP.iss).to.equal("11111111-1111-1111-1111-111111111111");
     expect(popP.iss).to.equal(p.sub);
   });
@@ -118,7 +119,7 @@ describe("wallet provider identity (RFC001 iss / OAuth attestation)", () => {
   });
 
   it("rotateWalletProviderKeyPair replaces persisted key material", async () => {
-    await resolveAttestationForEndpoint({
+    await resolveWiaForParOrToken({
       endpointAudience: "https://as.example/token",
       authorizationServerIssuer: "https://as.example",
     });

@@ -21,7 +21,7 @@ import base64url from "base64url";
 import jwt from "jsonwebtoken";
 import path from "path";
 import * as jose from "jose";
-import { assertCnfJwkIsPublicOnly } from "./oauthClientAttestation.js";
+import { assertCnfJwkIsPublicOnly, getOAuthClientAttestationHeaders } from "./oauthClientAttestation.js";
 
 const WUA_SPEC_REF =
   "TS3 Wallet Unit Attestation";
@@ -2797,25 +2797,26 @@ export const validateWUA = async (wuaJwt, sessionId = null, issuerMetadata = nul
 };
 
 /**
- * Extracts WIA from token endpoint request or Pushed Authorization Request (PAR)
- * 
- * Per spec: WIA SHALL be sent to the Authorization Server in the Pushed Authorization Request 
- * and the Token Request as client_assertion with client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer
- * 
- * The WIA SHALL be sent along with a Proof-of-Possession (PoP), as specified in Appendix E 
- * of OpenID for Verifiable Credential Issuance v1.0.
- * 
+ * Extracts WIA from a PAR or token request.
+ *
+ * RFC001 / attestation-based client auth: prefer `OAuth-Client-Attestation` header.
+ * Legacy wallets may still send `client_assertion` + jwt-bearer in the form body.
+ *
  * @param {object} reqBody - Request body
- * @param {object} reqHeaders - Request headers (unused, kept for API compatibility)
+ * @param {object} reqHeaders - Request headers
  * @returns {string|null} - WIA JWT or null if not found
  */
 export const extractWIAFromTokenRequest = (reqBody, reqHeaders) => {
-  // WIA is sent as client_assertion in the request body (OAuth 2.0 client assertion)
-  // Per OAuth 2.0 spec, client assertions are sent in the body, not in Authorization header
-  if (reqBody.client_assertion && reqBody.client_assertion_type === 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer') {
+  const { attestationJwt } = getOAuthClientAttestationHeaders(reqHeaders);
+  if (attestationJwt) {
+    return attestationJwt;
+  }
+  if (
+    reqBody?.client_assertion &&
+    reqBody?.client_assertion_type === "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
+  ) {
     return reqBody.client_assertion;
   }
-  
   return null;
 };
 

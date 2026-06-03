@@ -206,8 +206,6 @@ export function buildPreAuthorizedCodeTokenFormParams({
   preAuthorizedCode,
   txCode,
   authorizationDetails,
-  clientAssertion,
-  clientAssertionType = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
 }) {
   const form = new URLSearchParams();
   form.set("grant_type", "urn:ietf:params:oauth:grant-type:pre-authorized_code");
@@ -222,32 +220,34 @@ export function buildPreAuthorizedCodeTokenFormParams({
         : JSON.stringify(authorizationDetails);
     form.set("authorization_details", ad);
   }
-  if (clientAssertion) {
-    form.set("client_assertion", clientAssertion);
-    form.set("client_assertion_type", clientAssertionType);
-  }
   return form;
 }
 
 /**
- * Headers for CLI token endpoint POST (form body + DPoP + OAuth Client Attestation).
+ * Headers for CLI token endpoint POST (form body + DPoP + WIA headers).
  */
 export function buildCliTokenEndpointHeaders({
   dpopJwt,
+  wiaHeaderJwt,
+  wiaPopJwt,
+  /** @deprecated use wiaHeaderJwt */
   oauthClientAttestation,
+  /** @deprecated use wiaPopJwt */
   oauthClientAttestationPop,
 }) {
+  const attestation = wiaHeaderJwt ?? oauthClientAttestation;
+  const pop = wiaPopJwt ?? oauthClientAttestationPop;
   const headers = {
     "content-type": "application/x-www-form-urlencoded",
   };
   if (dpopJwt) {
     headers["DPoP"] = dpopJwt;
   }
-  if (oauthClientAttestation) {
-    headers["OAuth-Client-Attestation"] = oauthClientAttestation;
+  if (attestation) {
+    headers["OAuth-Client-Attestation"] = attestation;
   }
-  if (oauthClientAttestationPop) {
-    headers["OAuth-Client-Attestation-PoP"] = oauthClientAttestationPop;
+  if (pop) {
+    headers["OAuth-Client-Attestation-PoP"] = pop;
   }
   return headers;
 }

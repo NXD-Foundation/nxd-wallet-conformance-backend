@@ -81,21 +81,21 @@ describe("tokenUtils DPoP helpers", () => {
         preAuthorizedCode: "sess-abc",
         txCode: undefined,
         authorizationDetails: authz,
-        clientAssertion: "eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiJjbGllbnQifQ.sig",
       });
       const body = form.toString();
       expect(body).to.include("grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Apre-authorized_code");
       expect(body).to.include("pre-authorized_code=sess-abc");
       expect(body).to.match(/authorization_details=/);
-      expect(body).to.include("client_assertion_type=urn%3Aietf%3Aparams%3Aoauth%3Aclient-assertion-type%3Ajwt-bearer");
+      expect(body).to.not.include("client_assertion");
+      expect(body).to.not.include("client_assertion_type");
       expect(body.startsWith("{")).to.equal(false);
     });
 
     it("MUST include OAuth-Client-Attestation and OAuth-Client-Attestation-PoP on token request headers", () => {
       const h = buildCliTokenEndpointHeaders({
         dpopJwt: "dpop.jwt.here",
-        oauthClientAttestation: "attest.jwt.here",
-        oauthClientAttestationPop: "pop.jwt.here",
+        wiaHeaderJwt: "attest.jwt.here",
+        wiaPopJwt: "pop.jwt.here",
       });
       expect(h["content-type"]).to.equal("application/x-www-form-urlencoded");
       expect(h["DPoP"]).to.equal("dpop.jwt.here");

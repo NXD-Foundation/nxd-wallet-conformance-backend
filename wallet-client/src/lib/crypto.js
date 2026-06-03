@@ -70,6 +70,7 @@ export async function createProofJwt({
 }) {
   const header = { alg, typ, jwk: publicJwk };
   if (key_attestation) {
+    // WUA JWT for Credential binding (RFC001 proofs.jwt), not WIA.
     header.key_attestation = key_attestation;
   }
   const now = Math.floor(Date.now() / 1000);
@@ -180,10 +181,10 @@ function normalizeUri(uri) {
 }
 
 /**
- * Legacy WIA-style JWT (`typ: JWT`). For RFC001 token/PAR client assertions, use
- * {@link createOAuthClientAttestationJwt} with the wallet provider key (see `walletProviderIdentity.js`).
+ * Legacy wallet-instance JWT (`typ: JWT`). RFC001 PAR/Token WIA uses
+ * {@link createWiaJwt} (`typ: oauth-client-attestation+jwt`; see `walletProviderIdentity.js`).
  *
- * @deprecated Prefer {@link createOAuthClientAttestationJwt} for OAuth 2.0 attestation-based client auth.
+ * @deprecated Prefer {@link createWiaJwt} for Wallet Instance Attestation at PAR/Token.
  */
 export async function createWIA({ privateJwk, publicJwk, issuer, audience, alg = "ES256", ttlHours = 1 }) {
   // Ensure TTL is less than 24 hours per spec
@@ -210,7 +211,11 @@ export async function createWIA({ privateJwk, publicJwk, issuer, audience, alg =
   return jwt;
 }
 
-export async function createOAuthClientAttestationJwt({
+/**
+ * Wallet Instance Attestation (WIA) for PAR/Token.
+ * Wire format: `typ: oauth-client-attestation+jwt` (OAuth attestation-based client authentication).
+ */
+export async function createWiaJwt({
   privateJwk,
   publicJwk,
   issuer,
@@ -240,7 +245,11 @@ export async function createOAuthClientAttestationJwt({
   return jwt;
 }
 
-export async function createOAuthClientAttestationPopJwt({
+/**
+ * Proof of possession for the key in WIA `cnf` (PAR/Token).
+ * Wire format: `typ: oauth-client-attestation-pop+jwt`; `iss` MUST equal WIA `sub`.
+ */
+export async function createWiaPopJwt({
   privateJwk,
   publicJwk,
   issuer,
@@ -275,7 +284,7 @@ export async function createOAuthClientAttestationPopJwt({
  * @param {string} options.issuer - Issuer identifier (Wallet Provider; RFC001 §7.5)
  * @param {string} [options.subject] - Wallet instance identifier (optional `sub` claim)
  * @param {string} options.audience - Audience (credential endpoint URL)
- * @param {object[]} options.attestedKeys - Array of attested key JWKs
+ * @param {object[]} options.attestedKeys - Ordered attested holder JWKs (RFC001 §7.5.1; proof JWT uses index 0)
  * @param {object} options.eudiWalletInfo - EUDI wallet info object with general_info and key_storage_info
  * @param {object} options.status - Optional status/revocation information
  * @param {string} options.alg - Signing algorithm (default: ES256)
@@ -298,6 +307,7 @@ export async function createWUA({
   const exp = now + Math.floor(ttlHours * 3600);
   
   const header = { alg, typ: "key-attestation+jwt", jwk: publicJwk };
+  const keys = Array.isArray(attestedKeys) ? attestedKeys.map((k) => publicJwkWithoutPrivateMaterial(k)) : [];
   const payload = {
     iss: issuer,
     ...(subject ? { sub: subject } : {}),
@@ -306,7 +316,7 @@ export async function createWUA({
     exp: exp,
     jti: base64url(crypto.randomBytes(16)),
     eudi_wallet_info: eudiWalletInfo,
-    attested_keys: attestedKeys || [],
+    attested_keys: keys,
     ...(status ? { status } : {}),
   };
 

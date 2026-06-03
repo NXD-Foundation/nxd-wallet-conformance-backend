@@ -11,6 +11,7 @@ import {
   resolveCodeFlowOfferIssuanceOptions,
   isEtsiIssuanceProfileEnforced,
   parseBooleanEnvFlag,
+  extractWIAFromTokenRequest,
 } from '../utils/routeUtils.js';
 
 describe('Route Utils', () => {
@@ -380,6 +381,42 @@ describe('Route Utils', () => {
 
     it('rejects invalid values', () => {
       expect(() => resolvePidVpInvocationScheme('mdoc-openid4vp', false)).to.throw();
+    });
+  });
+
+  describe('extractWIAFromTokenRequest', () => {
+    it('prefers OAuth-Client-Attestation header over body client_assertion', () => {
+      const headerWia = 'header.wia.jwt';
+      const bodyWia = 'body.wia.jwt';
+      expect(
+        extractWIAFromTokenRequest(
+          {
+            client_assertion: bodyWia,
+            client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+          },
+          {
+            'OAuth-Client-Attestation': headerWia,
+            'OAuth-Client-Attestation-PoP': 'pop.jwt',
+          },
+        ),
+      ).to.equal(headerWia);
+    });
+
+    it('falls back to body client_assertion when attestation header is absent', () => {
+      const bodyWia = 'body.wia.jwt';
+      expect(
+        extractWIAFromTokenRequest(
+          {
+            client_assertion: bodyWia,
+            client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+          },
+          {},
+        ),
+      ).to.equal(bodyWia);
+    });
+
+    it('returns null when neither header nor body WIA is present', () => {
+      expect(extractWIAFromTokenRequest({}, {})).to.equal(null);
     });
   });
 }); 

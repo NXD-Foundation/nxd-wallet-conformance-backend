@@ -4,8 +4,8 @@ import {
   createDPoP,
   createWUA,
   createProofJwt,
-  createOAuthClientAttestationJwt,
-  createOAuthClientAttestationPopJwt,
+  createWiaJwt,
+  createWiaPopJwt,
 } from "../src/lib/crypto.js";
 import { decodeProtectedHeader, decodeJwt } from "jose";
 
@@ -128,9 +128,9 @@ describe("wallet-client crypto building blocks", () => {
     expect(payload).to.have.property("nonce", nonce);
   });
 
-  it("createOAuthClientAttestationJwt MUST use oauth-client-attestation+jwt typ and public cnf.jwk", async () => {
+  it("createWiaJwt MUST use oauth-client-attestation+jwt typ and public cnf.jwk", async () => {
     const { privateJwk, publicJwk } = await ensureOrCreateEcKeyPair(undefined, "ES256");
-    const jwt = await createOAuthClientAttestationJwt({
+    const jwt = await createWiaJwt({
       privateJwk,
       publicJwk,
       issuer: "wallet-client",
@@ -148,9 +148,9 @@ describe("wallet-client crypto building blocks", () => {
     expect(payload.cnf.jwk).to.not.have.property("d");
   });
 
-  it("createOAuthClientAttestationPopJwt MUST use oauth-client-attestation-pop+jwt typ", async () => {
+  it("createWiaPopJwt MUST use oauth-client-attestation-pop+jwt typ", async () => {
     const { privateJwk, publicJwk } = await ensureOrCreateEcKeyPair(undefined, "ES256");
-    const jwt = await createOAuthClientAttestationPopJwt({
+    const jwt = await createWiaPopJwt({
       privateJwk,
       publicJwk,
       issuer: "wallet-client",

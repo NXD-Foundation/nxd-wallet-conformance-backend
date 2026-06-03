@@ -2,7 +2,7 @@ import express from "express";
 import fetch from "node-fetch";
 import { generateDidJwkFromPrivateJwk, ensureOrCreateEcKeyPair, createPkcePair, createDPoP } from "./lib/crypto.js";
 import {
-  resolveAttestationForEndpoint,
+  resolveWiaForParOrToken,
   rotateWalletProviderKeyPair,
   shouldRetryTokenExchangeAfterRotatingWalletProviderKey,
 } from "./lib/walletProviderIdentity.js";
@@ -16,7 +16,6 @@ import {
   appendWalletLog,
   getWalletLogs,
   ensureWalletRedisConnected,
-  getOrCreateWalletInstanceId,
 } from "./lib/cache.js";
 import {
   extractNotificationId,
@@ -36,6 +35,8 @@ import {
   buildCredentialRequest,
   postCredentialRequest,
   pollDeferredCredential,
+  buildIssuanceAuthorizationFields,
+  resolveWalletInstanceClientId,
 } from "./lib/issuance.js";
 import { jwtVerify, decodeJwt, decodeProtectedHeader, createLocalJWKSet, importJWK, importX509 } from "jose";
 import { decodeSdJwt, getClaims } from "@sd-jwt/decode";
@@ -234,12 +235,13 @@ app.post("/issue", async (req, res) => {
       issuerMeta,
       configurationId,
       preAuthorizedCode: preAuthGrant["pre-authorized_code"],
-      txCodeConfig: preAuthGrant.tx_code, // Pass original config
-      authorizationServer: preAuthGrant.authorization_server, // Optional grant-level AS identifier
+      txCodeConfig: preAuthGrant.tx_code,
+      authorizationServer: preAuthGrant.authorization_server,
+      offer: offerConfig,
       keyPath: req.body.keyPath,
       pollTimeoutMs: req.body.pollTimeoutMs,
       pollIntervalMs: req.body.pollIntervalMs,
-      userPin: req.body.pin, // Pass the pin directly
+      userPin: req.body.pin,
     });
     return res.json(attachIssuerMetadataWalletHarness(issuerMeta, result));
   } catch (e) {
@@ -378,12 +380,13 @@ async function handleWalletTestSession(req, res, issuanceOpts = {}) {
             issuerMeta,
             configurationId,
             preAuthorizedCode: preAuthGrant["pre-authorized_code"],
-            txCodeConfig: preAuthGrant.tx_code, // Pass original config
-            authorizationServer: preAuthGrant.authorization_server, // Optional grant-level AS identifier
+            txCodeConfig: preAuthGrant.tx_code,
+            authorizationServer: preAuthGrant.authorization_server,
+            offer: offerCfg,
             keyPath: req.body.keyPath,
             pollTimeoutMs: req.body.pollTimeoutMs,
             pollIntervalMs: req.body.pollIntervalMs,
-            userPin: pin, // Pass the pin directly
+            userPin: pin,
             proofMode,
             attestKeyCount,
           }, sessionId);
@@ -408,8 +411,9 @@ async function handleWalletTestSession(req, res, issuanceOpts = {}) {
             apiBase,
             issuerMeta,
             configurationId,
-            issuerState: authGrant.issuer_state, // Optional - only included if present in offer
-            authorizationServer: authGrant.authorization_server, // Optional grant-level AS identifier
+            issuerState: authGrant.issuer_state,
+            authorizationServer: authGrant.authorization_server,
+            offer: offerCfg,
             keyPath: req.body.keyPath,
             pollTimeoutMs: req.body.pollTimeoutMs,
             pollIntervalMs: req.body.pollIntervalMs,
@@ -521,8 +525,9 @@ app.post("/issue-codeflow", async (req, res) => {
       apiBase,
       issuerMeta,
       configurationId,
-      issuerState: authGrant.issuer_state, // Optional - only included if present in offer
-      authorizationServer: authGrant.authorization_server, // Optional grant-level AS identifier
+      issuerState: authGrant.issuer_state,
+      authorizationServer: authGrant.authorization_server,
+      offer: offerCfg,
       keyPath: req.body.keyPath,
       pollTimeoutMs: req.body.pollTimeoutMs,
       pollIntervalMs: req.body.pollIntervalMs,
@@ -793,7 +798,7 @@ function validateAuthorizationServerMetadata(meta) {
 
 
 
-  // Ensure basic client attestation algorithm advertising is present and supports ES256,
+  // Ensure WIA / WIA-PoP signing algorithms are advertised (AS metadata; ES256 required here).
   // matching what the EUDI reference issuer exposes.
   const attestationAlgs = meta.client_attestation_signing_alg_values_supported;
   const attestationPopAlgs = meta.client_attestation_pop_signing_alg_values_supported;
@@ -966,6 +971,7 @@ async function runPreAuthorizedIssuance(
     preAuthorizedCode,
     txCodeConfig,
     authorizationServer,
+    offer = null,
     keyPath,
     pollTimeoutMs,
     pollIntervalMs,
@@ -1065,25 +1071,31 @@ async function runPreAuthorizedIssuance(
   console.log("[preauth] requesting token..."); try { slog("[preauth] requesting token"); } catch {}
   let dpopPrivateJwk = null;
   let dpopPublicJwk = null;
-  const tokenAuthzDetails = [
-    {
-      type: "openid_credential",
-      credential_configuration_id: configurationId,
-      ...(issuerMeta?.credential_issuer ? { locations: [issuerMeta.credential_issuer] } : {}),
-    },
-  ];
+  const walletClientId = await resolveWalletInstanceClientId();
+  const { scope, authorization_details } = buildIssuanceAuthorizationFields({
+    configurationId,
+    issuerMeta,
+    offer,
+    grantType: "urn:ietf:params:oauth:grant-type:pre-authorized_code",
+    credentialIssuer: issuerMeta?.credential_issuer || apiBase,
+  });
+  try {
+    slog("[preauth] authorization fields", { walletClientId, scope, configurationId });
+  } catch {}
   const tokenExchange = await exchangeToken({
     tokenEndpoint,
     tokenPayload: {
       grant_type: "urn:ietf:params:oauth:grant-type:pre-authorized_code",
       "pre-authorized_code": preAuthorizedCode,
+      client_id: walletClientId,
+      scope,
       ...(txCode ? { tx_code: txCode } : {}),
-      authorization_details: JSON.stringify(tokenAuthzDetails),
+      authorization_details,
     },
     authorizationServerIssuer,
     ensureOrCreateEcKeyPair,
     createDPoP,
-    resolveAttestationForEndpoint,
+    resolveWiaForParOrToken,
     shouldRetryTokenExchangeAfterRotatingWalletProviderKey,
     rotateWalletProviderKeyPair,
     postForm: (url, params, dpopHeader, extraHeaders) =>
@@ -1244,6 +1256,7 @@ async function runAuthorizationCodeIssuance(
     configurationId,
     issuerState,
     authorizationServer,
+    offer = null,
     keyPath,
     pollTimeoutMs,
     pollIntervalMs,
@@ -1330,52 +1343,48 @@ async function runAuthorizationCodeIssuance(
   const state = randomState();
   const redirectUri = "openid4vp://";
 
-  // Build common authorization request parameters
-  const authzDetails = [
-    {
-      type: "openid_credential",
-      credential_configuration_id: configurationId,
-      ...(issuerMeta?.credential_issuer ? { locations: [issuerMeta.credential_issuer] } : {}),
-    },
-  ];
-  // HAIP 1.0 / OAuth client attestation: `client_id` MUST equal the attestation JWT `sub`
-  // (wallet instance id), not a static label — see issuer `assertClientIdMatchesAttestationSub`.
-  const codeflowOAuthClientId = await getOrCreateWalletInstanceId();
+  const walletClientId = await resolveWalletInstanceClientId();
+  const { scope, authorization_details } = buildIssuanceAuthorizationFields({
+    configurationId,
+    issuerMeta,
+    offer,
+    grantType: "authorization_code",
+    credentialIssuer: issuerMeta?.credential_issuer || apiBase,
+  });
+  try {
+    slog("[codeflow] authorization fields", { walletClientId, scope, configurationId });
+  } catch {}
   const authzParams = {
     response_type: "code",
-    ...(issuerState ? { issuer_state: issuerState } : {}), // Only include if provided in offer (OIDC4VCI 1.0)
+    ...(issuerState ? { issuer_state: issuerState } : {}),
     state,
-    client_id: codeflowOAuthClientId,
+    client_id: walletClientId,
     redirect_uri: redirectUri,
     code_challenge: codeChallenge,
     code_challenge_method: codeChallengeMethod,
-    scope: configurationId,
-    authorization_details: JSON.stringify(authzDetails),
+    scope,
+    authorization_details,
   };
 
-  // Prefer PAR when endpoint available; fallback to direct GET otherwise
+  // RFC001 authorization-code flow requires PAR; direct authorization fallback is not permitted.
   let finalAuthorizeUrl = authorizeUrl.toString();
-  if (parEndpoint) {
+  if (!parEndpoint) {
+    throw new Error("par_error: RFC001 authorization-code flow requires PAR but no PAR endpoint was advertised");
+  }
+  {
     try {
-      let parWiaJwt = null;
-      let oauthClientAttestationHeaders = {};
+      const parWia = await resolveWiaForParOrToken({
+        endpointAudience: parEndpoint,
+        authorizationServerIssuer,
+        clientId: walletClientId,
+      });
+      const parWiaHeaders = parWia.wiaHeaders;
+      console.log("[codeflow][par] WIA for PAR validated");
       try {
-        const parAtt = await resolveAttestationForEndpoint({
-          endpointAudience: parEndpoint,
-          authorizationServerIssuer,
-        });
-        parWiaJwt = parAtt.clientAssertionJwt;
-        oauthClientAttestationHeaders = parAtt.oauthHeaders;
-        console.log("[codeflow][par] OAuth client attestation for PAR"); try { slog("[codeflow][par] PAR attestation", { hasClientAssertion: !!parWiaJwt }); } catch {}
-      } catch (parAttError) {
-        console.warn("[codeflow][par] Failed to resolve OAuth attestation:", parAttError?.message); try { slog("[codeflow][par] PAR attestation failed", { error: parAttError?.message }); } catch {}
-      }
-      
-      const parParams = {
-        ...authzParams,
-        ...(parWiaJwt ? { client_assertion: parWiaJwt, client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer" } : {})
-      };
-      const parRes = await httpPostForm(parEndpoint, parParams, logSessionId, null, oauthClientAttestationHeaders);
+        slog("[codeflow][par] PAR WIA", { walletInstanceId: parWia.walletInstanceId });
+      } catch {}
+
+      const parRes = await httpPostForm(parEndpoint, authzParams, logSessionId, null, parWiaHeaders);
       console.log("[codeflow][par] endpoint=", parEndpoint, "status=", parRes.status); try { slog("[codeflow][par] endpoint", { endpoint: parEndpoint, status: parRes.status }); } catch {}
       if (parRes.ok) {
         const parBody = await parRes.json().catch(() => ({}));
@@ -1390,24 +1399,16 @@ async function runAuthorizationCodeIssuance(
       } else {
         const text = await parRes.text().catch(() => "");
         console.warn("[codeflow][par] failed status=", parRes.status, "body:", text); try { slog("[codeflow][par] failed", { status: parRes.status, body: text }); } catch {}
-        if (requirePushedAuthorizationRequests) {
-          throw new Error(`par_error ${parRes.status}: PAR is required by authorization server metadata`);
-        }
+        throw new Error(`par_error ${parRes.status}: PAR failed${text ? `: ${text}` : ""}`);
       }
     } catch (e) {
       console.warn("[codeflow][par] error:", e?.message || e); try { slog("[codeflow][par] error", { error: e?.message || String(e) }); } catch {}
-      if (requirePushedAuthorizationRequests) {
-        throw e;
-      }
+      throw e;
     }
-  } else if (requirePushedAuthorizationRequests) {
-    throw new Error("par_error: authorization server metadata requires PAR but no PAR endpoint was advertised");
   }
 
   if (finalAuthorizeUrl === authorizeUrl.toString()) {
-    // No PAR or PAR failed; append params to authorization URL directly
-    Object.entries(authzParams).forEach(([k, v]) => authorizeUrl.searchParams.set(k, v));
-    finalAuthorizeUrl = authorizeUrl.toString();
+    throw new Error("par_error: RFC001 authorization-code flow requires PAR request_uri before authorization redirect");
   }
 
   console.log("[codeflow] authorizeUrl:", finalAuthorizeUrl); try { slog("[codeflow] authorizeUrl", { url: finalAuthorizeUrl }); } catch {}
@@ -1453,28 +1454,26 @@ async function runAuthorizationCodeIssuance(
   const codeflowAsIssuer = deriveAuthorizationServerIssuer(tokenEndpoint, authorizationServerIssuer);
   let dpopPrivateJwk = null;
   let dpopPublicJwk = null;
-  const tokenAuthzDetails = [
-    {
-      type: "openid_credential",
-      credential_configuration_id: configurationId,
-      ...(issuerMeta?.credential_issuer ? { locations: [issuerMeta.credential_issuer] } : {}),
-    },
-  ];
   const tokenExchange = await exchangeToken({
     tokenEndpoint,
     tokenPayload: {
       grant_type: "authorization_code",
       code,
       code_verifier: codeVerifier,
-      client_id: codeflowOAuthClientId,
+      client_id: walletClientId,
       redirect_uri: redirectUri,
-      authorization_details: JSON.stringify(tokenAuthzDetails),
+      scope,
+      authorization_details,
     },
     authorizationServerIssuer: codeflowAsIssuer,
     ensureOrCreateEcKeyPair,
     createDPoP,
-    resolveAttestationForEndpoint: ({ endpointAudience, authorizationServerIssuer: issuer }) =>
-      resolveAttestationForEndpoint({ endpointAudience, authorizationServerIssuer: issuer }),
+    resolveWiaForParOrToken: ({ endpointAudience, authorizationServerIssuer: issuer }) =>
+      resolveWiaForParOrToken({
+        endpointAudience,
+        authorizationServerIssuer: issuer,
+        clientId: walletClientId,
+      }),
     shouldRetryTokenExchangeAfterRotatingWalletProviderKey,
     rotateWalletProviderKeyPair,
     postForm: (url, params, dpopHeader, extraHeaders) =>

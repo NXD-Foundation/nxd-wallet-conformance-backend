@@ -1,5 +1,14 @@
+/**
+ * Credential endpoint proof binding (RFC001): WUA only — not WIA.
+ * - proofs.jwt: exactly one proof JWT with WUA in `key_attestation`, signed with keyPairs[0]
+ * - proofs.attestation: exactly one WUA JWT
+ */
 import { createProofJwt } from "./crypto.js";
 import { buildWalletUnitAttestationJwt } from "./walletProviderIdentity.js";
+import {
+  orderedAttestedPublicJwks,
+  validateCredentialProofsBeforeDispatch,
+} from "./wuaCredentialBinding.js";
 
 export const DEFAULT_EUDI_WALLET_INFO_FOR_WUA = {
   general_info: { name: "Test Wallet Client", version: "1.0.0" },
@@ -16,7 +25,7 @@ export function redactProofsForLog(proofs) {
 
 /**
  * @param {"jwt"|"attestation"} proofMode
- * @param {{ privateJwk: object, publicJwk: object, didJwk: string }[]} keyPairs
+ * @param {{ privateJwk: object, publicJwk: object, didJwk: string }[]} keyPairs — stable order; proof uses index 0
  */
 export async function buildCredentialRequestProofs({
   proofMode,
@@ -26,33 +35,43 @@ export async function buildCredentialRequestProofs({
   keyPairs,
   selectedAlg,
 }) {
+  const attestPub = orderedAttestedPublicJwks(keyPairs);
+  const proofKey = keyPairs[0];
   const eudiWalletInfo = DEFAULT_EUDI_WALLET_INFO_FOR_WUA;
-  const attestPub = keyPairs.map((k) => k.publicJwk);
-  let wuaJwt = null;
-  try {
-    wuaJwt = await buildWalletUnitAttestationJwt({
-      credentialEndpoint,
-      proofPublicJwks: attestPub,
-      eudiWalletInfo,
-    });
-  } catch (wuaError) {
-    console.warn("[proofs] WUA generation failed:", wuaError?.message);
-  }
+
+  const wuaJwt = await buildWalletUnitAttestationJwt({
+    credentialEndpoint,
+    proofPublicJwks: attestPub,
+    eudiWalletInfo,
+  });
+
   if (proofMode === "attestation") {
-    if (!wuaJwt) {
-      throw new Error("wua_required: proofs.attestation requires Wallet Unit Attestation JWT");
-    }
-    return { proofs: { attestation: [wuaJwt] }, proofJwt: null };
+    const proofs = { attestation: [wuaJwt] };
+    await validateCredentialProofsBeforeDispatch({
+      proofMode,
+      proofs,
+      wuaJwt,
+      keyPairs,
+    });
+    return { proofs, proofJwt: null, wuaJwt };
   }
+
   const proofJwt = await createProofJwt({
-    privateJwk: keyPairs[0].privateJwk,
-    publicJwk: keyPairs[0].publicJwk,
+    privateJwk: proofKey.privateJwk,
+    publicJwk: proofKey.publicJwk,
     audience: aud,
     nonce: c_nonce,
-    issuer: keyPairs[0].didJwk,
+    issuer: proofKey.didJwk,
     typ: "openid4vci-proof+jwt",
     alg: selectedAlg,
-    key_attestation: wuaJwt || undefined,
+    key_attestation: wuaJwt,
   });
-  return { proofs: { jwt: [proofJwt] }, proofJwt };
+  const proofs = { jwt: [proofJwt] };
+  await validateCredentialProofsBeforeDispatch({
+    proofMode,
+    proofs,
+    wuaJwt,
+    keyPairs,
+  });
+  return { proofs, proofJwt, wuaJwt };
 }

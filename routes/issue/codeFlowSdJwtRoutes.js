@@ -685,13 +685,13 @@ codeFlowRouterSDJWT.post(["/par", "/authorize/par"], async (req, res) => {
         logSoftEtsiIssuanceViolation(
           slog,
           "[ISSUER] [PAR]",
-          "Missing WIA (client_assertion)",
+          "Missing WIA (OAuth-Client-Attestation or client_assertion)",
           { check: "wia_presence" },
         );
       } else {
         if (slog) {
           try {
-            slog("[ISSUER] [PAR] [ERROR] Missing WIA (client_assertion)");
+            slog("[ISSUER] [PAR] [ERROR] Missing WIA (OAuth-Client-Attestation or client_assertion)");
           } catch {}
           logHttpResponse(
             slog,
@@ -706,7 +706,7 @@ codeFlowRouterSDJWT.post(["/par", "/authorize/par"], async (req, res) => {
         return res.status(400).json({
           error: "invalid_client",
           error_description:
-            "Wallet Instance Attestation (WIA) is required: send client_assertion with client_assertion_type urn:ietf:params:oauth:client-assertion-type:jwt-bearer (RFC001 §7.3).",
+            "Wallet Instance Attestation (WIA) is required: send OAuth-Client-Attestation and OAuth-Client-Attestation-PoP headers (RFC001 §7.3).",
         });
       }
     }

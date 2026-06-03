@@ -1,4 +1,6 @@
 import { storeWalletCredentialByType } from "./cache.js";
+import { resolveWalletInstanceClientId } from "./walletClientId.js";
+import { resolveScopeForCredentialConfiguration } from "./scopeResolution.js";
 import {
   extractNotificationId,
   resolveNotificationEndpoint,
@@ -11,6 +13,50 @@ import {
 } from "./deferredIssuancePoll.js";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * `authorization_details` for OpenID4VCI credential issuance (RFC001).
+ */
+export function buildOpenIdCredentialAuthorizationDetails(configurationId, credentialIssuer) {
+  if (!configurationId) return [];
+  return [
+    {
+      type: "openid_credential",
+      credential_configuration_id: configurationId,
+      ...(credentialIssuer ? { locations: [credentialIssuer] } : {}),
+    },
+  ];
+}
+
+/**
+ * OAuth authorization / token fields: metadata-driven `scope` plus `authorization_details`.
+ */
+export function buildIssuanceAuthorizationFields({
+  configurationId,
+  issuerMeta,
+  offer = null,
+  grantType = null,
+  credentialIssuer = null,
+}) {
+  const authorizationDetails = buildOpenIdCredentialAuthorizationDetails(
+    configurationId,
+    credentialIssuer ?? issuerMeta?.credential_issuer,
+  );
+  const scope = resolveScopeForCredentialConfiguration({
+    configurationId,
+    issuerMeta,
+    offer,
+    grantType,
+  });
+  return {
+    scope,
+    authorizationDetails,
+    authorization_details: JSON.stringify(authorizationDetails),
+  };
+}
+
+export { resolveScopeForCredentialConfiguration } from "./scopeResolution.js";
+export { resolveWalletInstanceClientId } from "./walletClientId.js";
 
 export function selectProofSigningAlg(issuerMeta, configurationId) {
   const supportedAlgs =
@@ -107,7 +153,7 @@ export async function exchangeToken({
   authorizationServerIssuer,
   ensureOrCreateEcKeyPair,
   createDPoP,
-  resolveAttestationForEndpoint,
+  resolveWiaForParOrToken,
   shouldRetryTokenExchangeAfterRotatingWalletProviderKey,
   rotateWalletProviderKeyPair,
   postForm,
@@ -122,8 +168,6 @@ export async function exchangeToken({
 
   for (let attempt = 0; attempt < 2; attempt++) {
     let dpopJwt = null;
-    let oauthClientAttestationHeaders = {};
-    let clientAssertionJwt = null;
 
     try {
       const dpopKeys = await ensureOrCreateEcKeyPair(deviceKeyPath, "ES256");
@@ -141,31 +185,24 @@ export async function exchangeToken({
       log?.(`${logPrefix} DPoP generation failed`, { error: error?.message });
     }
 
-    try {
-      const attestation = await resolveAttestationForEndpoint({
-        endpointAudience: tokenEndpoint,
-        authorizationServerIssuer,
-      });
-      clientAssertionJwt = attestation.clientAssertionJwt;
-      oauthClientAttestationHeaders = attestation.oauthHeaders;
-      log?.(`${logPrefix} OAuth client attestation`, { hasClientAssertion: !!clientAssertionJwt });
-    } catch (error) {
-      log?.(`${logPrefix} attestation failed`, { error: error?.message });
-    }
+    const walletClientId = tokenPayload?.client_id ?? (await resolveWalletInstanceClientId());
+    const wia = await resolveWiaForParOrToken({
+      endpointAudience: tokenEndpoint,
+      authorizationServerIssuer,
+      clientId: walletClientId,
+    });
+    const wiaHeaders = wia.wiaHeaders;
+    log?.(`${logPrefix} WIA for Token validated`, {
+      walletInstanceId: wia.walletInstanceId,
+      walletClientId,
+      attempt: attempt + 1,
+    });
 
     const response = await postForm(
       tokenEndpoint,
-      {
-        ...tokenPayload,
-        ...(clientAssertionJwt
-          ? {
-              client_assertion: clientAssertionJwt,
-              client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
-            }
-          : {}),
-      },
+      { ...tokenPayload, client_id: walletClientId },
       dpopJwt,
-      oauthClientAttestationHeaders,
+      wiaHeaders,
     );
     lastTokenResponseText = await response.text().catch(() => "");
     if (response.ok) {

@@ -7,7 +7,7 @@ import {
   ensureOrCreateEcKeyPair,
   createDPoP,
 } from "./lib/crypto.js";
-import { resolveAttestationForEndpoint } from "./lib/walletProviderIdentity.js";
+import { resolveWiaForParOrToken } from "./lib/walletProviderIdentity.js";
 import { resolveAttestDeviceKeyPaths } from "./lib/deviceKeyPaths.js";
 import { buildCredentialRequestProofs } from "./lib/credentialRequestProofs.js";
 import { normalizeCredentialOfferDeepLink } from "./lib/credentialOfferScheme.js";
@@ -20,7 +20,9 @@ import {
   notifyCredentialAcceptedIfNeeded,
   storeIssuedCredentials,
   buildKeyPairs,
+  buildIssuanceAuthorizationFields,
 } from "./lib/issuance.js";
+import { parseIssuerMetadataHttpResponse } from "./lib/issuerMetadataFetch.js";
 import {
   isDpopBoundAccessToken,
   computeAthForDpop,
@@ -116,28 +118,38 @@ async function main() {
   const txCode = preAuthGrant?.tx_code ? await promptTxCode(preAuthGrant.tx_code) : undefined;
 
   const tokenEndpoint = `${apiBase}/token_endpoint`;
-  const authorizationDetails = configurationId ? [{
-    type: "openid_credential",
-    credential_configuration_id: configurationId,
-    ...(credential_issuer ? { locations: [credential_issuer] } : {}),
-  }] : undefined;
+  let issuerMeta = null;
+  try {
+    issuerMeta = await fetchCredentialIssuerMetadataForCli(apiBase);
+  } catch (e) {
+    console.warn("[cli] issuer metadata fetch failed; scope may fall back:", e?.message);
+  }
+  const { scope, authorization_details } = buildIssuanceAuthorizationFields({
+    configurationId,
+    issuerMeta,
+    offer: offerConfig,
+    grantType: "urn:ietf:params:oauth:grant-type:pre-authorized_code",
+    credentialIssuer: credential_issuer || apiBase,
+  });
   let dpopPrivateJwk = null;
   let dpopPublicJwk = null;
   const authorizationServerIssuer = deriveAuthorizationServerIssuer(
     tokenEndpoint,
     credential_issuer || apiBase,
   );
+  const tokenForm = buildPreAuthorizedCodeTokenFormParams({
+    preAuthorizedCode,
+    txCode,
+    authorizationDetails: JSON.parse(authorization_details),
+  });
+  if (scope) tokenForm.set("scope", scope);
   const tokenExchange = await exchangeToken({
       tokenEndpoint,
-      tokenPayload: Object.fromEntries(buildPreAuthorizedCodeTokenFormParams({
-        preAuthorizedCode,
-        txCode,
-        authorizationDetails,
-      }).entries()),
+      tokenPayload: Object.fromEntries(tokenForm.entries()),
       authorizationServerIssuer,
       ensureOrCreateEcKeyPair,
       createDPoP,
-      resolveAttestationForEndpoint,
+      resolveWiaForParOrToken,
       shouldRetryTokenExchangeAfterRotatingWalletProviderKey: () => false,
       rotateWalletProviderKeyPair: async () => false,
       postForm: async (url, params, dpopHeader, extraHeaders = {}) => {
@@ -147,8 +159,8 @@ async function main() {
         });
         const headers = buildCliTokenEndpointHeaders({
           dpopJwt: dpopHeader,
-          oauthClientAttestation: extraHeaders["OAuth-Client-Attestation"],
-          oauthClientAttestationPop: extraHeaders["OAuth-Client-Attestation-PoP"],
+          wiaHeaderJwt: extraHeaders["OAuth-Client-Attestation"],
+          wiaPopJwt: extraHeaders["OAuth-Client-Attestation-PoP"],
         });
         return fetch(url, {
           method: "POST",
@@ -303,6 +315,26 @@ function parseCredentialOfferParam(value) {
     }
   }
   throw new Error("Unable to parse credential_offer parameter");
+}
+
+async function fetchCredentialIssuerMetadataForCli(credentialIssuerBase) {
+  const base = credentialIssuerBase.replace(/\/$/, "");
+  let origin;
+  let pathSuffix = "";
+  try {
+    const u = new URL(base);
+    origin = u.origin;
+    pathSuffix = u.pathname.replace(/\/$/, "");
+  } catch {
+    origin = base;
+  }
+  const url = `${origin}/.well-known/openid-credential-issuer${pathSuffix}`;
+  const res = await fetch(url);
+  if (!res.ok) {
+    throw new Error(`issuer metadata HTTP ${res.status}`);
+  }
+  const { meta } = await parseIssuerMetadataHttpResponse(res);
+  return meta;
 }
 
 async function promptTxCode(cfg) {
