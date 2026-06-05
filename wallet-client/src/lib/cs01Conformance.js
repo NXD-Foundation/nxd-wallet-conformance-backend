@@ -64,6 +64,18 @@ export function assertCs01ParRequestContract({
   }
 }
 
+const PRE_AUTHORIZED_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:pre-authorized_code";
+
+export function describeIssuanceRefreshTokenMetadata(tokenBody) {
+  if (tokenBody?.refresh_token) {
+    return {
+      present: true,
+      ...(tokenBody.refresh_expires_in != null ? { expires_in: tokenBody.refresh_expires_in } : {}),
+    };
+  }
+  return { present: false };
+}
+
 export function assertCs01TokenRequestContract({
   profile,
   tokenParams,
@@ -77,11 +89,19 @@ export function assertCs01TokenRequestContract({
   }
   assertCs01NoBodyClientAssertion(profile, tokenParams, { stage: "Token" });
   assertCs01WalletUnitAttestationHeaders(attestationHeaders, { stage: "Token" });
-  if (tokenParams?.grant_type !== "authorization_code") {
-    throw new Cs01ConformanceError("CS-01 token request must use authorization_code grant");
-  }
-  if (!tokenParams?.code_verifier) {
-    throw new Cs01ConformanceError("CS-01 token request must include PKCE code_verifier");
+  const grantType = tokenParams?.grant_type;
+  if (grantType === "authorization_code") {
+    if (!tokenParams?.code_verifier) {
+      throw new Cs01ConformanceError("CS-01 token request must include PKCE code_verifier");
+    }
+  } else if (grantType === PRE_AUTHORIZED_GRANT_TYPE) {
+    if (!tokenParams?.["pre-authorized_code"]) {
+      throw new Cs01ConformanceError("CS-01 pre-authorized token request must include pre-authorized_code");
+    }
+  } else {
+    throw new Cs01ConformanceError(
+      `CS-01 token request must use authorization_code or ${PRE_AUTHORIZED_GRANT_TYPE} grant`,
+    );
   }
   if (!dpopJwt) {
     throw new Cs01ConformanceError("CS-01 token request must include DPoP proof");

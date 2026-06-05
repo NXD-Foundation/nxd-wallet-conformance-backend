@@ -1,6 +1,6 @@
 import express from "express";
 import fetch from "node-fetch";
-import { ensureOrCreateEcKeyPair, createPkcePair, createDPoP } from "./lib/crypto.js";
+import { createPkcePair } from "./lib/crypto.js";
 import { performPresentation, resolveDeepLinkFromEndpoint } from "./lib/presentation.js";
 import { storeWalletCredentialByType, walletRedisClient, appendWalletLog, getWalletLogs } from "./lib/cache.js";
 import { jwtVerify, decodeJwt, decodeProtectedHeader, createLocalJWKSet, importJWK, importX509 } from "jose";
@@ -8,11 +8,12 @@ import { decodeSdJwt, getClaims } from "@sd-jwt/decode";
 import { digest } from "@sd-jwt/crypto-nodejs";
 import { verifyReceivedMdlToken } from "../utils/mdlVerification.js";
 import { didKeyToJwks } from "../utils/cryptoUtils.js";
-import { isDpopBoundAccessToken, computeAthForDpop } from "../utils/tokenUtils.js";
 import { extractMdocDocType } from "./lib/mdocDocType.js";
 import {
   resolveWalletProfile,
   isWebuildCs01Profile,
+  describeCs01GrantPolicy,
+  describeSupportedVciGrants,
   assertPreAuthorizedAllowed,
   selectVciGrantRoute,
   isParMandatory,
@@ -23,7 +24,11 @@ import {
 import {
   resolveWalletClientId,
 } from "./lib/walletClientId.js";
-import { resolveCredentialScope } from "./lib/scopeResolution.js";
+import {
+  resolveCredentialScope,
+  resolvePreAuthorizedCredentialSelection,
+  extractOfferedConfigurationIds,
+} from "./lib/scopeResolution.js";
 import {
   createTokenRequestDpopBinding,
   createResourceRequestDpopProof,
@@ -42,10 +47,16 @@ import {
   buildDeferredCredentialPollRequest,
   toKeyBindingMaterial,
 } from "./lib/credentialProofBinding.js";
+import {
+  assertCs01NoBodyClientAssertion,
+  describeIssuanceRefreshTokenMetadata,
+} from "./lib/cs01Conformance.js";
+import { pollDeferredCredentialIssuance } from "./lib/deferredIssuance.js";
 
 const activeWalletProfile = resolveWalletProfile();
 const activeWalletClientId = resolveWalletClientId();
 const activeAttestationConfiguration = describeAttestationConfiguration(activeWalletProfile);
+const activeCs01GrantPolicy = describeCs01GrantPolicy(activeWalletProfile);
 const app = express();
 app.use(express.json({ limit: "2mb" }));
 
@@ -224,8 +235,9 @@ app.post("/issue", async (req, res) => {
       return res.status(400).json({ error: "invalid_request", error_description: "No credential_configuration_id available" });
     }
 
+    let grantRoute;
     try {
-      assertPreAuthorizedAllowed(activeWalletProfile, { endpoint: "/issue" });
+      grantRoute = selectVciGrantRoute(activeWalletProfile, grants, { endpoint: "/issue" });
     } catch (profileError) {
       await logError(req.body.sessionId, "[/issue] profile violation:", profileError.message);
       return res.status(400).json({
@@ -235,28 +247,59 @@ app.post("/issue", async (req, res) => {
       });
     }
 
-    const preAuthGrant = grants?.["urn:ietf:params:oauth:grant-type:pre-authorized_code"];
-    if (!preAuthGrant) {
-      await logError(req.body.sessionId, "[/issue] OIDC4VCI  VIOLATION: Only pre-authorized_code grant type supported in this endpoint. Found grants:", Object.keys(grants || {}));
-      return res.status(400).json({ error: "unsupported_grant_type", error_description: "Only pre-authorized_code supported" });
+    if (grantRoute === "pre-authorized_code") {
+      const preAuthGrant = grants["urn:ietf:params:oauth:grant-type:pre-authorized_code"];
+      await logInfo(req.body.sessionId, "[/issue] invoking pre-authorized issuance. configurationId=", configurationId);
+      const result = await runPreAuthorizedIssuance({
+        profile: activeWalletProfile,
+        walletClientId: resolveWalletClientId(process.env, req.body.walletClientId || req.body.clientId),
+        apiBase,
+        issuerMeta,
+        offerConfig,
+        configurationId,
+        preAuthorizedCode: preAuthGrant["pre-authorized_code"],
+        txCodeConfig: preAuthGrant.tx_code,
+        authorizationServer: preAuthGrant.authorization_server,
+        keyPath: req.body.keyPath,
+        pollTimeoutMs: req.body.pollTimeoutMs,
+        pollIntervalMs: req.body.pollIntervalMs,
+        userPin: req.body.pin,
+      });
+      return res.json(result);
     }
-    
-    await logInfo(req.body.sessionId, "[/issue] invoking pre-authorized issuance. configurationId=", configurationId);
-    const result = await runPreAuthorizedIssuance({
+
+    if (grantRoute === "authorization_code") {
+      const authGrant = grants.authorization_code;
+      await logInfo(req.body.sessionId, "[/issue] invoking authorization code issuance. configurationId=", configurationId);
+      const result = await runAuthorizationCodeIssuance({
+        profile: activeWalletProfile,
+        walletClientId: resolveWalletClientId(process.env, req.body.walletClientId || req.body.clientId),
+        apiBase,
+        issuerMeta,
+        offerConfig,
+        configurationId,
+        issuerState: authGrant.issuer_state,
+        authorizationServer: authGrant.authorization_server,
+        keyPath: req.body.keyPath,
+        pollTimeoutMs: req.body.pollTimeoutMs,
+        pollIntervalMs: req.body.pollIntervalMs,
+      });
+      return res.json(result);
+    }
+
+    const supportedGrants = describeSupportedVciGrants(activeWalletProfile).join(", ");
+    await logError(
+      req.body.sessionId,
+      "[/issue] OIDC4VCI 1.0: No supported grant types found. Supported grants:",
+      supportedGrants,
+      "Found:",
+      Object.keys(grants || {}),
+    );
+    return res.status(400).json({
+      error: "unsupported_grant_type",
+      error_description: `OIDC4VCI 1.0: No supported grant types found. Supported grants: ${supportedGrants}`,
       profile: activeWalletProfile,
-      walletClientId: resolveWalletClientId(process.env, req.body.walletClientId || req.body.clientId),
-      apiBase,
-      issuerMeta,
-      configurationId,
-      preAuthorizedCode: preAuthGrant["pre-authorized_code"],
-      txCodeConfig: preAuthGrant.tx_code, // Pass original config
-      authorizationServer: preAuthGrant.authorization_server, // Optional grant-level AS identifier
-      keyPath: req.body.keyPath,
-      pollTimeoutMs: req.body.pollTimeoutMs,
-      pollIntervalMs: req.body.pollIntervalMs,
-      userPin: req.body.pin, // Pass the pin directly
     });
-    return res.json(result);
   } catch (e) {
     await logError(req.body.sessionId, "[/issue] error:", e);
     return res.status(500).json({ error: "server_error", error_description: e.message || String(e) });
@@ -268,6 +311,7 @@ app.get("/health", (req, res) =>
     status: "ok",
     profile: activeWalletProfile,
     cs01Mode: isWebuildCs01Profile(activeWalletProfile),
+    grantPolicy: activeCs01GrantPolicy,
     walletClientId: activeWalletClientId,
     attestation: activeAttestationConfiguration,
   }),
@@ -382,7 +426,7 @@ app.post("/session", async (req, res) => {
 
       let grantRoute;
       try {
-        grantRoute = selectVciGrantRoute(activeWalletProfile, grants);
+        grantRoute = selectVciGrantRoute(activeWalletProfile, grants, { endpoint: "/session" });
       } catch (profileError) {
         await logError(sessionId, "[/session] profile violation:", profileError.message);
         const failed = await setStatus("failed", { error: profileError.message });
@@ -404,6 +448,7 @@ app.post("/session", async (req, res) => {
             walletClientId: resolveWalletClientId(process.env, req.body.walletClientId || req.body.clientId),
             apiBase,
             issuerMeta,
+            offerConfig: offerCfg,
             configurationId,
             preAuthorizedCode: preAuthGrant["pre-authorized_code"],
             txCodeConfig: preAuthGrant.tx_code, // Pass original config
@@ -447,9 +492,7 @@ app.post("/session", async (req, res) => {
         }
       }
 
-      const supportedGrants = isWebuildCs01Profile(activeWalletProfile)
-        ? "authorization_code"
-        : "urn:ietf:params:oauth:grant-type:pre-authorized_code, authorization_code";
+      const supportedGrants = describeSupportedVciGrants(activeWalletProfile).join(", ");
       await logError(sessionId, "[/session] OIDC4VCI 1.0: No supported grant types found. Supported grants:", supportedGrants);
       const failed = await setStatus("failed", { error: "OIDC4VCI 1.0: No supported grant types found" });
       return res.status(400).json({
@@ -557,7 +600,13 @@ app.listen(port, () => {
   console.log(`Wallet Unit Attestation source: ${activeAttestationConfiguration.source} (trust-framework: ${activeAttestationConfiguration.trustFrameworkIntegrated})`);
   console.log(activeAttestationConfiguration.implementationNote);
   if (isWebuildCs01Profile(activeWalletProfile)) {
-    console.log("WE BUILD CS-01 mode: authorization_code issuance only");
+    if (activeCs01GrantPolicy.preAuthorizedEnabled) {
+      console.log("WE BUILD CS-01 mode: authorization_code and pre-authorized_code enabled");
+    } else {
+      console.log(
+        "WE BUILD CS-01 mode: authorization_code only (CS01_DISABLE_PRE_AUTHORIZED=true)",
+      );
+    }
   }
 });
 
@@ -625,13 +674,7 @@ function parseCredentialOfferParam(value) {
 }
 
 function getOfferedConfigurationIds(offer) {
-  if (!offer || typeof offer !== "object") return [];
-  const ids = Array.isArray(offer.credential_configuration_ids) ? offer.credential_configuration_ids : [];
-  if (ids.length > 0) return ids;
-  const legacy = offer.credentials;
-  if (Array.isArray(legacy)) return legacy;
-  if (legacy && typeof legacy === "object") return Object.keys(legacy);
-  return [];
+  return extractOfferedConfigurationIds(offer);
 }
 
 function pickConfigurationId(offer, requestedId) {
@@ -971,10 +1014,23 @@ function wrapIssuanceResult(credential, issuanceContext) {
   return { credential, issuanceContext };
 }
 
-async function runPreAuthorizedIssuance({ profile = activeWalletProfile, walletClientId = activeWalletClientId, apiBase, issuerMeta, configurationId, preAuthorizedCode, txCodeConfig, authorizationServer, keyPath, pollTimeoutMs, pollIntervalMs, userPin }, logSessionId) {
+async function runPreAuthorizedIssuance({ profile = activeWalletProfile, walletClientId = activeWalletClientId, apiBase, issuerMeta, offerConfig = null, configurationId, preAuthorizedCode, txCodeConfig, authorizationServer, keyPath, pollTimeoutMs, pollIntervalMs, userPin }, logSessionId) {
   assertPreAuthorizedAllowed(profile, { endpoint: "pre-authorized issuance" });
   const slog = logSessionId ? makeSessionLogger(logSessionId) : (() => {});
-  try { slog("[ISSUANCE] [START] Pre-authorized issuance flow", { configurationId, apiBase, hasTxCodeCfg: !!txCodeConfig }); } catch {}
+  const credentialSelection = resolvePreAuthorizedCredentialSelection({
+    configurationId,
+    issuerMeta,
+    offerConfig,
+  });
+  try {
+    slog("[ISSUANCE] [START] Pre-authorized issuance flow", {
+      configurationId,
+      apiBase,
+      hasTxCodeCfg: !!txCodeConfig,
+      credentialSelectionSource: credentialSelection.source,
+      includeAuthorizationDetails: credentialSelection.includeAuthorizationDetails,
+    });
+  } catch {}
   // Draft-15: If tx_code is indicated in offer and not provided by user, do NOT fabricate. Require user input.
   let txCode = undefined;
   if (userPin) {
@@ -1059,26 +1115,14 @@ async function runPreAuthorizedIssuance({ profile = activeWalletProfile, walletC
   console.log("[preauth] apiBase=", apiBase, "configurationId=", configurationId); try { slog("[preauth] apiBase", { apiBase, configurationId }); } catch {}
   console.log("[preauth] tokenEndpoint=", tokenEndpoint); try { slog("[preauth] tokenEndpoint", { tokenEndpoint }); } catch {}
   console.log("[preauth] requesting token..."); try { slog("[preauth] requesting token"); } catch {}
-  
-  // Generate DPoP (Demonstrating Proof-of-Possession) for token request; retain keys for /credential when token is DPoP-bound
-  let dpopJwt = null;
-  let dpopPrivateJwk = null;
-  let dpopPublicJwk = null;
-  try {
-    const dpopKeys = await ensureOrCreateEcKeyPair(keyPath, "ES256");
-    dpopPrivateJwk = dpopKeys.privateJwk;
-    dpopPublicJwk = dpopKeys.publicJwk;
-    dpopJwt = await createDPoP({
-      privateJwk: dpopPrivateJwk,
-      publicJwk: dpopPublicJwk,
-      htu: tokenEndpoint,
-      htm: "POST",
-      alg: "ES256"
-    });
-    console.log("[preauth] DPoP generated for token request"); try { slog("[preauth] DPoP generated", { hasDPoP: !!dpopJwt }); } catch {}
-  } catch (dpopError) {
-    console.warn("[preauth] Failed to generate DPoP:", dpopError?.message); try { slog("[preauth] DPoP generation failed", { error: dpopError?.message }); } catch {}
-  }
+
+  const dpopBinding = await createTokenRequestDpopBinding({
+    keyPath,
+    tokenEndpoint,
+    profile,
+  });
+  const { dpopJwt } = dpopBinding;
+  console.log("[preauth] DPoP generated for token request"); try { slog("[preauth] DPoP generated", { hasDPoP: !!dpopJwt }); } catch {}
   
   let legacyBodyClientAssertionJwt = null;
   if (allowsLegacyBodyClientAssertion(profile)) {
@@ -1110,18 +1154,13 @@ async function runPreAuthorizedIssuance({ profile = activeWalletProfile, walletC
     });
   } catch {}
   
-  const tokenAuthzDetails = [
-    {
-      type: "openid_credential",
-      credential_configuration_id: configurationId,
-      ...(issuerMeta?.credential_issuer ? { locations: [issuerMeta.credential_issuer] } : {}),
-    },
-  ];
   const tokenPayload = {
     grant_type: "urn:ietf:params:oauth:grant-type:pre-authorized_code",
     "pre-authorized_code": preAuthorizedCode,
     ...(txCode ? { tx_code: txCode } : {}),
-    authorization_details: JSON.stringify(tokenAuthzDetails),
+    ...(credentialSelection.includeAuthorizationDetails
+      ? { authorization_details: JSON.stringify(credentialSelection.authorizationDetails) }
+      : {}),
     ...(legacyBodyClientAssertionJwt
       ? {
           client_assertion: legacyBodyClientAssertionJwt,
@@ -1129,6 +1168,7 @@ async function runPreAuthorizedIssuance({ profile = activeWalletProfile, walletC
         }
       : {}),
   };
+  assertCs01NoBodyClientAssertion(profile, tokenPayload, { stage: "pre-authorized token request" });
   const tokenRes = await httpPostForm(tokenEndpoint, tokenPayload, logSessionId, dpopJwt, walletUnitAttestation.headers);
   console.log("[preauth] tokenRes.status=", tokenRes.status); 
   try { slog("[preauth] tokenRes.status", { status: tokenRes.status }); } catch {}
@@ -1159,9 +1199,21 @@ async function runPreAuthorizedIssuance({ profile = activeWalletProfile, walletC
     throw new Error(`token_error: invalid JSON response - ${e?.message}`);
   }
   const accessToken = tokenBody.access_token;
+  assertDpopBoundTokenReceived(profile, tokenBody, accessToken);
   let c_nonce = tokenBody.c_nonce;
   let c_nonce_expires_in = tokenBody.c_nonce_expires_in;
-  console.log("[preauth] got access_token=", accessToken ? "yes" : "no", "c_nonce=", c_nonce ? "yes" : "no"); try { slog("[preauth] token received", { hasAccessToken: !!accessToken, hasCNonce: !!c_nonce }); } catch {}
+  const issuanceContext = {
+    configurationId,
+    attestation: describeAttestationConfiguration(profile),
+    grantRoute: "pre-authorized_code",
+    credentialSelection: {
+      source: credentialSelection.source,
+      offeredConfigurationIds: credentialSelection.offeredConfigurationIds,
+      includeAuthorizationDetails: credentialSelection.includeAuthorizationDetails,
+    },
+    refreshToken: describeIssuanceRefreshTokenMetadata(tokenBody),
+  };
+  console.log("[preauth] got access_token=", accessToken ? "yes" : "no", "c_nonce=", c_nonce ? "yes" : "no"); try { slog("[preauth] token received", { hasAccessToken: !!accessToken, hasCNonce: !!c_nonce, refreshToken: issuanceContext.refreshToken }); } catch {}
   if (!c_nonce && issuerMeta.nonce_endpoint) {
     const nonceEndpoint = issuerMeta.nonce_endpoint;
     console.log("[preauth] nonceEndpoint=", nonceEndpoint); try { slog("[preauth] nonceEndpoint", { nonceEndpoint }); } catch {}
@@ -1194,14 +1246,23 @@ async function runPreAuthorizedIssuance({ profile = activeWalletProfile, walletC
     credentialEndpoint,
   });
   const { subjectKey, credentialRequest: credReq } = proofBundle;
+  issuanceContext.proofBinding = buildCredentialProofBindingContext({
+    profile,
+    subjectKey,
+    dpopBinding,
+    tokenBody,
+    accessToken,
+    keyAttestation: proofBundle.keyAttestation,
+  });
   try {
     slog("[preauth][credential-proof-binding]", {
       walletUnitSubjectKey: proofBundle.subjectKey.subjectDidJwk,
       proofAlg: proofBundle.proofAlg,
       keyAttestationSource: proofBundle.keyAttestation.source,
+      senderConstraining: issuanceContext.proofBinding.senderConstraining,
     });
   } catch {}
-  
+
   console.log("[preauth] credentialEndpoint=", credentialEndpoint); try { slog("[preauth] credentialEndpoint", { credentialEndpoint }); } catch {}
   console.log("[preauth] requesting credential..."); try { slog("[preauth] requesting credential"); } catch {}
   console.log("[preauth] credential request:", JSON.stringify({ ...credReq, proofs: { jwt: ["<redacted>"] } }, null, 2)); try { slog("[preauth] credential request body", { hasBody: true }); } catch {}
@@ -1211,35 +1272,21 @@ async function runPreAuthorizedIssuance({ profile = activeWalletProfile, walletC
     console.warn("[preauth] access_token missing in token response"); try { slog("[preauth] access_token missing"); } catch {}
   }
   try { slog("[preauth] credential request", { configurationId, hasProof: !!proofBundle.proofJwt }); } catch {}
-  
-  let credentialDpopJwt = null;
-  try {
-    if (
-      accessToken &&
-      dpopPrivateJwk &&
-      dpopPublicJwk &&
-      isDpopBoundAccessToken(tokenBody, accessToken)
-    ) {
-      credentialDpopJwt = await createDPoP({
-        privateJwk: dpopPrivateJwk,
-        publicJwk: dpopPublicJwk,
-        htu: credentialEndpoint,
-        htm: "POST",
-        ath: computeAthForDpop(accessToken),
-        alg: "ES256"
-      });
-    }
-  } catch (dpopCredError) {
-    console.warn("[preauth] Failed to generate DPoP for credential request:", dpopCredError?.message);
-    try { slog("[preauth] DPoP for credential failed", { error: dpopCredError?.message }); } catch {}
-  }
+
+  const credentialDpopJwt = await createResourceRequestDpopProof({
+    binding: dpopBinding,
+    tokenBody,
+    accessToken,
+    htu: credentialEndpoint,
+    profile,
+    stage: "credential request",
+  });
 
   const credReqBody = JSON.stringify(credReq);
   const credRequestId = `cred_req_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
   const credHeaders = {
     "content-type": "application/json",
-    authorization: `Bearer ${accessToken}`,
-    ...(credentialDpopJwt ? { DPoP: credentialDpopJwt } : {}),
+    ...buildBearerResourceHeaders(accessToken, credentialDpopJwt),
   };
   try { 
     slog("[CREDENTIAL] [REQUEST] Credential request", { 
@@ -1312,42 +1359,37 @@ async function runPreAuthorizedIssuance({ profile = activeWalletProfile, walletC
       try { slog("[preauth] deferred response parse failed", { error: e?.message, body: responseText }); } catch {}
       throw new Error(`credential_error ${credRes.status}: invalid JSON response`);
     }
-    const { transaction_id } = credBody;
-    console.log("[preauth] deferred issuance, transaction_id:", transaction_id); 
-    try { slog("[preauth] deferred issuance", { transaction_id }); } catch {}
-    const start = Date.now();
-    const timeout = pollTimeoutMs ?? 30000;
-    const interval = pollIntervalMs ?? 2000;
+    const { transaction_id, interval: issuerInterval } = credBody;
+    console.log("[preauth] deferred issuance, transaction_id:", transaction_id);
+    try { slog("[preauth] deferred issuance", { transaction_id, interval: issuerInterval }); } catch {}
     const deferredEndpoint = issuerMeta.credential_deferred_endpoint || `${apiBase}/credential_deferred`;
-    while (Date.now() - start < timeout) {
-      await sleep(interval);
-      const defRes = await httpPostJson(deferredEndpoint, { transaction_id }, logSessionId);
-      console.log("[preauth] deferred poll ->", defRes.status); 
-      try { slog("[preauth] deferred poll", { status: defRes.status }); } catch {}
-      if (defRes.ok) {
-        const defBodyText = await defRes.text().catch(() => "");
-        console.log("[preauth] deferred response body length:", defBodyText.length); 
-        try { slog("[preauth] deferred response", { length: defBodyText.length }); } catch {}
-        let defBody;
-        try {
-          defBody = JSON.parse(defBodyText);
-        } catch (e) {
-          console.error("[preauth] failed to parse deferred credential as JSON:", e?.message); 
-          try { slog("[preauth] deferred credential parse failed", { error: e?.message, body: defBodyText }); } catch {}
-          throw new Error(`credential_error: invalid JSON in deferred credential response`);
-        }
-        try { slog("[preauth] deferred ready"); } catch {}
-        await validateAndStoreCredential({ configurationId, credential: defBody, issuerMeta, apiBase, keyBinding: toKeyBindingMaterial(subjectKey), metadata: { configurationId, c_nonce, c_nonce_expires_in }, authorizationServerMeta: issuerMeta._authorizationServerMeta }, logSessionId);
-        try { slog("[ISSUANCE] [COMPLETE] Pre-authorized issuance flow (deferred)", { configurationId, success: true }); } catch {}
-        return defBody;
-      } else {
-        const defErrorText = await defRes.text().catch(() => "");
-        console.warn("[preauth] deferred poll error:", defRes.status, defErrorText); 
-        try { slog("[preauth] deferred poll error", { status: defRes.status, error: defErrorText }); } catch {}
-      }
-    }
-    try { slog("[preauth] deferred timeout"); } catch {}
-    throw new Error("timeout: Deferred issuance timed out");
+    const defBody = await pollDeferredCredentialIssuance({
+      transactionId: transaction_id,
+      issuerIntervalSeconds: issuerInterval,
+      pollTimeoutMs,
+      pollIntervalMs,
+      deferredEndpoint,
+      buildPollRequest: () => buildDeferredCredentialPollRequest({
+        profile,
+        dpopBinding,
+        tokenBody,
+        accessToken,
+        subjectKey,
+        deferredEndpoint,
+        transactionId: transaction_id,
+      }),
+      httpPostJson,
+      logSessionId,
+      sleep,
+      log: (msg, data) => {
+        console.log(`[preauth] ${msg}`, data ?? "");
+        try { slog(`[preauth] ${msg}`, data); } catch {}
+      },
+    });
+    try { slog("[preauth] deferred ready"); } catch {}
+    await validateAndStoreCredential({ configurationId, credential: defBody, issuerMeta, apiBase, keyBinding: toKeyBindingMaterial(subjectKey), metadata: { configurationId, c_nonce, c_nonce_expires_in, proofBinding: issuanceContext.proofBinding }, authorizationServerMeta: issuerMeta._authorizationServerMeta }, logSessionId);
+    try { slog("[ISSUANCE] [COMPLETE] Pre-authorized issuance flow (deferred)", { configurationId, success: true }); } catch {}
+    return wrapIssuanceResult(defBody, issuanceContext);
   }
 
   let credBody;
@@ -1362,13 +1404,13 @@ async function runPreAuthorizedIssuance({ profile = activeWalletProfile, walletC
   try { slog("[preauth] credential received", { hasCredential: !!credBody }); } catch {}
   
   try {
-    await validateAndStoreCredential({ configurationId, credential: credBody, issuerMeta, apiBase, keyBinding: toKeyBindingMaterial(subjectKey), metadata: { configurationId, c_nonce, c_nonce_expires_in }, authorizationServerMeta: issuerMeta._authorizationServerMeta }, logSessionId);
+    await validateAndStoreCredential({ configurationId, credential: credBody, issuerMeta, apiBase, keyBinding: toKeyBindingMaterial(subjectKey), metadata: { configurationId, c_nonce, c_nonce_expires_in, proofBinding: issuanceContext.proofBinding }, authorizationServerMeta: issuerMeta._authorizationServerMeta }, logSessionId);
   } catch (validationError) {
-    console.error("[preauth] credential validation failed:", validationError?.message || validationError); 
+    console.error("[preauth] credential validation failed:", validationError?.message || validationError);
     try { slog("[preauth] credential validation failed", { error: validationError?.message || String(validationError), stack: validationError?.stack }); } catch {}
     throw validationError;
   }
-  return credBody;
+  return wrapIssuanceResult(credBody, issuanceContext);
 }
 
 async function runAuthorizationCodeIssuance({ profile = activeWalletProfile, walletClientId = activeWalletClientId, apiBase, issuerMeta, offerConfig = null, configurationId, issuerState, authorizationServer, keyPath, pollTimeoutMs, pollIntervalMs }, logSessionId) {
@@ -1788,16 +1830,17 @@ async function runAuthorizationCodeIssuance({ profile = activeWalletProfile, wal
       try { slog("[codeflow] deferred response parse failed", { error: e?.message, body: responseText }); } catch {}
       throw new Error(`credential_error ${credRes.status}: invalid JSON response`);
     }
-    const { transaction_id } = credBody;
-    console.log("[codeflow] deferred issuance, transaction_id:", transaction_id); 
-    try { slog("[codeflow] deferred issuance", { transaction_id }); } catch {}
-    const start = Date.now();
-    const timeout = pollTimeoutMs ?? 30000;
-    const interval = pollIntervalMs ?? 2000;
+    const { transaction_id, interval: issuerInterval } = credBody;
+    console.log("[codeflow] deferred issuance, transaction_id:", transaction_id);
+    try { slog("[codeflow] deferred issuance", { transaction_id, interval: issuerInterval }); } catch {}
     const deferredEndpoint = issuerMeta.credential_deferred_endpoint || `${apiBase}/credential_deferred`;
-    while (Date.now() - start < timeout) {
-      await sleep(interval);
-      const deferredPoll = await buildDeferredCredentialPollRequest({
+    const defBody = await pollDeferredCredentialIssuance({
+      transactionId: transaction_id,
+      issuerIntervalSeconds: issuerInterval,
+      pollTimeoutMs,
+      pollIntervalMs,
+      deferredEndpoint,
+      buildPollRequest: () => buildDeferredCredentialPollRequest({
         profile,
         dpopBinding,
         tokenBody,
@@ -1805,37 +1848,17 @@ async function runAuthorizationCodeIssuance({ profile = activeWalletProfile, wal
         subjectKey,
         deferredEndpoint,
         transactionId: transaction_id,
-      });
-      const defRes = await httpPostJson(
-        deferredEndpoint,
-        deferredPoll.body,
-        logSessionId,
-        deferredPoll.headers,
-      );
-      try { slog("[codeflow] deferred poll", { status: defRes.status }); } catch {}
-      if (defRes.ok) {
-        const defBodyText = await defRes.text().catch(() => "");
-        console.log("[codeflow] deferred response body length:", defBodyText.length); 
-        try { slog("[codeflow] deferred response", { length: defBodyText.length }); } catch {}
-        let defBody;
-        try {
-          defBody = JSON.parse(defBodyText);
-        } catch (e) {
-          console.error("[codeflow] failed to parse deferred credential as JSON:", e?.message); 
-          try { slog("[codeflow] deferred credential parse failed", { error: e?.message, body: defBodyText }); } catch {}
-          throw new Error(`credential_error: invalid JSON in deferred credential response`);
-        }
-        try { slog("[codeflow] deferred ready"); } catch {}
-        await validateAndStoreCredential({ configurationId, credential: defBody, issuerMeta, apiBase, keyBinding: toKeyBindingMaterial(subjectKey), metadata: { configurationId, scope: scopeResolution.scope, scopeSource: scopeResolution.source, c_nonce, c_nonce_expires_in, proofBinding: issuanceContext.proofBinding }, authorizationServerMeta: issuerMeta._authorizationServerMeta }, logSessionId);
-        return wrapIssuanceResult(defBody, issuanceContext);
-      } else {
-        const defErrorText = await defRes.text().catch(() => "");
-        console.warn("[codeflow] deferred poll error:", defRes.status, defErrorText); 
-        try { slog("[codeflow] deferred poll error", { status: defRes.status, error: defErrorText }); } catch {}
-      }
-    }
-    try { slog("[codeflow] deferred timeout"); } catch {}
-    throw new Error("timeout: Deferred issuance timed out");
+      }),
+      httpPostJson,
+      logSessionId,
+      sleep,
+      log: (msg, data) => {
+        try { slog(`[codeflow] ${msg}`, data); } catch {}
+      },
+    });
+    try { slog("[codeflow] deferred ready"); } catch {}
+    await validateAndStoreCredential({ configurationId, credential: defBody, issuerMeta, apiBase, keyBinding: toKeyBindingMaterial(subjectKey), metadata: { configurationId, scope: scopeResolution.scope, scopeSource: scopeResolution.source, c_nonce, c_nonce_expires_in, proofBinding: issuanceContext.proofBinding }, authorizationServerMeta: issuerMeta._authorizationServerMeta }, logSessionId);
+    return wrapIssuanceResult(defBody, issuanceContext);
   }
 
   if (!credRes.ok) {

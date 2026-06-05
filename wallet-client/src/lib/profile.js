@@ -2,7 +2,8 @@
  * Wallet issuance profile selection for OpenID4VCI flows.
  *
  * - compatibility: generic OpenID4VCI testing (pre-authorized and authorization-code)
- * - webuild-cs01: WE BUILD CS-01 attestation conformance mode (authorization-code only)
+ * - webuild-cs01: WE BUILD CS-01 attestation conformance mode (authorization_code and
+ *   pre-authorized_code; pre-auth may be disabled via CS01_DISABLE_PRE_AUTHORIZED)
  */
 
 export const WALLET_PROFILES = Object.freeze({
@@ -43,6 +44,49 @@ export function isWebuildCs01Profile(profile) {
   return profile === WALLET_PROFILES.WEBUILD_CS01;
 }
 
+/** True when CS-01 pre-authorized issuance is explicitly disabled (legacy CS-01 v1.0 semantics). */
+export function isCs01PreAuthorizedDisabled(env = process.env) {
+  const raw = env.CS01_DISABLE_PRE_AUTHORIZED;
+  if (raw == null || raw === "") {
+    return false;
+  }
+  const normalized = String(raw).trim().toLowerCase();
+  return normalized === "true" || normalized === "1" || normalized === "yes";
+}
+
+/**
+ * Summarize which grant types are enabled for the active wallet profile.
+ * Used by /health and startup logging.
+ */
+export function describeCs01GrantPolicy(profile, env = process.env) {
+  if (!isWebuildCs01Profile(profile)) {
+    return {
+      profile,
+      authorizationCodeEnabled: true,
+      preAuthorizedEnabled: true,
+      preAuthorizedDisabledByEnv: false,
+    };
+  }
+
+  const preAuthorizedDisabledByEnv = isCs01PreAuthorizedDisabled(env);
+  return {
+    profile,
+    authorizationCodeEnabled: true,
+    preAuthorizedEnabled: !preAuthorizedDisabledByEnv,
+    preAuthorizedDisabledByEnv,
+    preAuthorizedDisableEnvVar: "CS01_DISABLE_PRE_AUTHORIZED",
+  };
+}
+
+const PRE_AUTHORIZED_GRANT = "urn:ietf:params:oauth:grant-type:pre-authorized_code";
+
+export function describeSupportedVciGrants(profile, env = process.env) {
+  if (isWebuildCs01Profile(profile) && isCs01PreAuthorizedDisabled(env)) {
+    return ["authorization_code"];
+  }
+  return ["authorization_code", PRE_AUTHORIZED_GRANT];
+}
+
 export function assertCs01AuthorizationCodeGrant(grants, { endpoint = "issuance" } = {}) {
   if (grants?.authorization_code) {
     return;
@@ -53,26 +97,36 @@ export function assertCs01AuthorizationCodeGrant(grants, { endpoint = "issuance"
   );
 }
 
-export function assertPreAuthorizedAllowed(profile, { endpoint = "issuance" } = {}) {
+export function assertPreAuthorizedAllowed(
+  profile,
+  { endpoint = "issuance", env = process.env } = {},
+) {
   if (!isWebuildCs01Profile(profile)) {
     return;
   }
+  if (!isCs01PreAuthorizedDisabled(env)) {
+    return;
+  }
   throw new Cs01ProfileError(
-    `WE BUILD CS-01 profile does not support pre-authorized_code at ${endpoint}. Use authorization_code grant.`,
+    `WE BUILD CS-01 profile has pre-authorized_code disabled at ${endpoint} (CS01_DISABLE_PRE_AUTHORIZED=true). Use authorization_code grant or unset the opt-out flag.`,
   );
 }
 
-export function selectVciGrantRoute(profile, grants) {
-  if (isWebuildCs01Profile(profile)) {
-    assertCs01AuthorizationCodeGrant(grants);
-    return "authorization_code";
-  }
-
-  if (grants?.["urn:ietf:params:oauth:grant-type:pre-authorized_code"]) {
-    return "pre-authorized_code";
-  }
+export function selectVciGrantRoute(profile, grants, { env = process.env, endpoint = "issuance" } = {}) {
   if (grants?.authorization_code) {
     return "authorization_code";
+  }
+  if (grants?.[PRE_AUTHORIZED_GRANT]) {
+    assertPreAuthorizedAllowed(profile, { endpoint, env });
+    return "pre-authorized_code";
+  }
+
+  const found = Object.keys(grants || {}).join(", ") || "none";
+  if (isWebuildCs01Profile(profile)) {
+    const supported = describeSupportedVciGrants(profile, env).join(", ");
+    throw new Cs01ProfileError(
+      `WE BUILD CS-01 profile found no supported grant at ${endpoint}. Supported: ${supported}. Found: ${found}`,
+    );
   }
   return null;
 }

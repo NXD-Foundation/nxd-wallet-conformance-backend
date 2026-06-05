@@ -2,7 +2,12 @@ import { expect } from "chai";
 import { decodeProtectedHeader } from "jose";
 import { createPkcePair } from "../src/lib/crypto.js";
 import { WALLET_PROFILES, Cs01ProfileError, ParRequiredError, selectVciGrantRoute, assertPreAuthorizedAllowed, assertParEndpointAvailable, assertParResponse, assertNoDirectAuthorizationFallback } from "../src/lib/profile.js";
-import { resolveCredentialScope, ScopeResolutionError } from "../src/lib/scopeResolution.js";
+import {
+  resolveCredentialScope,
+  resolvePreAuthorizedCredentialSelection,
+  ScopeResolutionError,
+  CredentialSelectionError,
+} from "../src/lib/scopeResolution.js";
 import { ClientIdAttestationMismatchError, assertOutboundClientIdAligned } from "../src/lib/walletClientId.js";
 import { DpopRequiredError, createTokenRequestDpopBinding, assertDpopJwtPresent, createResourceRequestDpopProof } from "../src/lib/dpopBinding.js";
 import { createWalletUnitAttestationClientAuth, createLegacyBodyClientAssertionJwt, allowsLegacyBodyClientAssertion } from "../src/lib/walletUnitAttestation.js";
@@ -19,6 +24,7 @@ import {
   assertCs01CredentialRequestContract,
   assertCs01DeferredRequestContract,
   assertCs01NoBodyClientAssertion,
+  describeIssuanceRefreshTokenMetadata,
   buildParAuthorizeUrl,
   compatibilityAllowsBodyClientAssertion,
 } from "../src/lib/cs01Conformance.js";
@@ -30,6 +36,10 @@ import {
   cs01IssuerInitiatedOffer,
   cs01WalletInitiatedOffer,
   cs01PreAuthorizedOffer,
+  cs01PreAuthorizedOfferWithTxCode,
+  cs01PreAuthorizedMultiConfigOffer,
+  cs01PreAuthorizedUnknownConfigOffer,
+  cs01DualGrantOffer,
   cs01UnscopedOffer,
   cs01ParSuccessResponse,
   cs01DpopTokenResponse,
@@ -54,6 +64,31 @@ describe("WE BUILD CS-01 conformance suite (Phase 10)", () => {
       });
       expect(scope.scope).to.equal("VerifiableIdCard");
       expect(scope.source).to.equal("offer+metadata");
+    });
+
+    it("routes pre-authorized-only offers to pre-authorized_code in CS-01 mode", () => {
+      const route = selectVciGrantRoute(CS01, cs01PreAuthorizedOffer.grants);
+      expect(route).to.equal("pre-authorized_code");
+    });
+
+    it("allows pre-auth by default in CS-01 and blocks only when CS01_DISABLE_PRE_AUTHORIZED is set", () => {
+      expect(() => assertPreAuthorizedAllowed(CS01, { endpoint: "/issue" })).to.not.throw();
+      expect(selectVciGrantRoute(CS01, cs01PreAuthorizedOffer.grants)).to.equal("pre-authorized_code");
+      expect(() =>
+        selectVciGrantRoute(CS01, cs01PreAuthorizedOffer.grants, {
+          env: { CS01_DISABLE_PRE_AUTHORIZED: "true" },
+        }),
+      ).to.throw(Cs01ProfileError);
+      expect(
+        selectVciGrantRoute(CS01, cs01IssuerInitiatedOffer.grants, {
+          env: { CS01_DISABLE_PRE_AUTHORIZED: "true" },
+        }),
+      ).to.equal("authorization_code");
+    });
+
+    it("prefers authorization_code when dual-grant offer is presented in CS-01 mode", () => {
+      const route = selectVciGrantRoute(CS01, cs01DualGrantOffer.grants);
+      expect(route).to.equal("authorization_code");
     });
 
     it("wallet-initiated issuance resolves scope from issuer metadata", () => {
@@ -105,6 +140,103 @@ describe("WE BUILD CS-01 conformance suite (Phase 10)", () => {
         usedPar: true,
       });
       expect(allowsLegacyBodyClientAssertion(CS01)).to.equal(false);
+    });
+
+    it("pre-authorized single-configuration offers omit token-request authorization_details", () => {
+      const selection = resolvePreAuthorizedCredentialSelection({
+        configurationId: "VerifiableIdCard",
+        issuerMeta: cs01IssuerMetadata,
+        offerConfig: cs01PreAuthorizedOffer,
+      });
+
+      expect(selection.includeAuthorizationDetails).to.equal(false);
+      expect(selection.authorizationDetails).to.equal(null);
+    });
+
+    it("pre-authorized tx_code offers use VCI v1.0 grant shape without scope", () => {
+      const grant = cs01PreAuthorizedOfferWithTxCode.grants["urn:ietf:params:oauth:grant-type:pre-authorized_code"];
+      expect(grant).to.have.property("pre-authorized_code");
+      expect(grant).to.have.property("tx_code");
+      expect(grant.tx_code).to.have.property("input_mode", "numeric");
+      expect(grant).to.not.have.property("scope");
+      expect(cs01PreAuthorizedOfferWithTxCode.credential_configuration_ids).to.include("VerifiableIdCard");
+    });
+
+    it("pre-authorized multi-configuration offers require authorization_details", () => {
+      const selection = resolvePreAuthorizedCredentialSelection({
+        configurationId: "UnscopedCredential",
+        issuerMeta: cs01IssuerMetadata,
+        offerConfig: cs01PreAuthorizedMultiConfigOffer,
+      });
+
+      expect(selection.includeAuthorizationDetails).to.equal(true);
+      expect(selection.authorizationDetails[0].credential_configuration_id).to.equal("UnscopedCredential");
+    });
+
+    it("pre-authorized token redemption uses DPoP and Wallet Unit Attestation without body client_assertion", async () => {
+      const dpopBinding = await createTokenRequestDpopBinding({
+        keyPath: undefined,
+        tokenEndpoint: cs01AuthorizationServerMetadata.token_endpoint,
+        profile: CS01,
+      });
+      const attestation = await createWalletUnitAttestationClientAuth({
+        profile: CS01,
+        keyPath: undefined,
+        clientId: CS01_CLIENT_ID,
+        endpointAudience: cs01AuthorizationServerMetadata.token_endpoint,
+        authorizationServerIssuer: cs01AuthorizationServerMetadata.issuer,
+        stage: "Token",
+      });
+      const singleConfigSelection = resolvePreAuthorizedCredentialSelection({
+        configurationId: "VerifiableIdCard",
+        issuerMeta: cs01IssuerMetadata,
+        offerConfig: cs01PreAuthorizedOffer,
+      });
+      const tokenParams = {
+        grant_type: "urn:ietf:params:oauth:grant-type:pre-authorized_code",
+        "pre-authorized_code": cs01PreAuthorizedOffer.grants["urn:ietf:params:oauth:grant-type:pre-authorized_code"]["pre-authorized_code"],
+        ...(singleConfigSelection.includeAuthorizationDetails
+          ? { authorization_details: JSON.stringify(singleConfigSelection.authorizationDetails) }
+          : {}),
+      };
+
+      assertCs01TokenRequestContract({
+        profile: CS01,
+        tokenParams,
+        attestationHeaders: attestation.headers,
+        dpopJwt: dpopBinding.dpopJwt,
+        tokenBody: cs01DpopTokenResponse,
+        accessToken: cs01DpopTokenResponse.access_token,
+      });
+      expect(tokenParams).to.not.have.property("authorization_details");
+      expect(describeIssuanceRefreshTokenMetadata(cs01DpopTokenResponse)).to.deep.equal({ present: false });
+      expect(
+        describeIssuanceRefreshTokenMetadata({
+          ...cs01DpopTokenResponse,
+          refresh_token: "rt-abc",
+          refresh_expires_in: 3600,
+        }),
+      ).to.deep.equal({ present: true, expires_in: 3600 });
+    });
+
+    it("rejects pre-auth credential selection when configuration is not offered", () => {
+      expect(() =>
+        resolvePreAuthorizedCredentialSelection({
+          configurationId: "MissingCredential",
+          issuerMeta: cs01IssuerMetadata,
+          offerConfig: cs01PreAuthorizedOffer,
+        }),
+      ).to.throw(CredentialSelectionError);
+    });
+
+    it("rejects pre-auth credential selection when configuration is missing from issuer metadata", () => {
+      expect(() =>
+        resolvePreAuthorizedCredentialSelection({
+          configurationId: "UnknownCredential",
+          issuerMeta: cs01IssuerMetadata,
+          offerConfig: cs01PreAuthorizedUnknownConfigOffer,
+        }),
+      ).to.throw(CredentialSelectionError);
     });
 
     it("token redemption uses PKCE, DPoP, and Wallet Unit Attestation", async () => {
@@ -291,10 +423,29 @@ describe("WE BUILD CS-01 conformance suite (Phase 10)", () => {
       ).to.throw(ScopeResolutionError);
     });
 
-    it("rejects attempted pre-authorized flow in CS-01 mode", () => {
-      expect(() => selectVciGrantRoute(CS01, cs01PreAuthorizedOffer.grants)).to.throw(Cs01ProfileError);
+    it("rejects pre-authorized grant routing when CS01_DISABLE_PRE_AUTHORIZED is set", () => {
       expect(() =>
-        assertPreAuthorizedAllowed(CS01, { endpoint: "/issue" }),
+        selectVciGrantRoute(CS01, cs01PreAuthorizedOffer.grants, {
+          env: { CS01_DISABLE_PRE_AUTHORIZED: "true" },
+        }),
+      ).to.throw(Cs01ProfileError);
+    });
+
+    it("keeps authorization_code routing available when pre-auth is opted out", () => {
+      expect(
+        selectVciGrantRoute(CS01, cs01IssuerInitiatedOffer.grants, {
+          env: { CS01_DISABLE_PRE_AUTHORIZED: "true" },
+        }),
+      ).to.equal("authorization_code");
+    });
+
+    it("allows pre-authorized guard unless CS01_DISABLE_PRE_AUTHORIZED is set", () => {
+      expect(() => assertPreAuthorizedAllowed(CS01, { endpoint: "/issue" })).to.not.throw();
+      expect(() =>
+        assertPreAuthorizedAllowed(CS01, {
+          endpoint: "/issue",
+          env: { CS01_DISABLE_PRE_AUTHORIZED: "true" },
+        }),
       ).to.throw(Cs01ProfileError);
     });
 

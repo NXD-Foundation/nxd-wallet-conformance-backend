@@ -8,6 +8,9 @@ import {
   isWebuildCs01Profile,
   assertCs01AuthorizationCodeGrant,
   assertPreAuthorizedAllowed,
+  isCs01PreAuthorizedDisabled,
+  describeCs01GrantPolicy,
+  describeSupportedVciGrants,
   selectVciGrantRoute,
   isParMandatory,
   assertParEndpointAvailable,
@@ -34,21 +37,53 @@ describe("wallet-client profile (WE BUILD CS-01 Phase 1)", () => {
     expect(() => normalizeWalletProfile("unknown-profile")).to.throw(/Unknown WALLET_PROFILE/);
   });
 
-  it("selects authorization_code only in CS-01 mode", () => {
+  it("selects authorization_code in CS-01 mode when offer includes it", () => {
     const grants = { authorization_code: { issuer_state: "abc" } };
     expect(selectVciGrantRoute(WALLET_PROFILES.WEBUILD_CS01, grants)).to.equal(
       "authorization_code",
     );
   });
 
-  it("rejects pre-authorized offers in CS-01 mode", () => {
+  it("selects pre-authorized_code in CS-01 mode for pre-auth-only offers", () => {
     const grants = {
       "urn:ietf:params:oauth:grant-type:pre-authorized_code": {
         "pre-authorized_code": "session-123",
       },
     };
-    expect(() => selectVciGrantRoute(WALLET_PROFILES.WEBUILD_CS01, grants)).to.throw(
-      Cs01ProfileError,
+    expect(selectVciGrantRoute(WALLET_PROFILES.WEBUILD_CS01, grants)).to.equal(
+      "pre-authorized_code",
+    );
+  });
+
+  it("rejects pre-auth-only offers in CS-01 mode when CS01_DISABLE_PRE_AUTHORIZED is set", () => {
+    const grants = {
+      "urn:ietf:params:oauth:grant-type:pre-authorized_code": {
+        "pre-authorized_code": "session-123",
+      },
+    };
+    expect(() =>
+      selectVciGrantRoute(WALLET_PROFILES.WEBUILD_CS01, grants, {
+        env: { CS01_DISABLE_PRE_AUTHORIZED: "true" },
+      }),
+    ).to.throw(Cs01ProfileError);
+  });
+
+  it("prefers authorization_code when both grants exist in CS-01 mode", () => {
+    const grants = {
+      "urn:ietf:params:oauth:grant-type:pre-authorized_code": {
+        "pre-authorized_code": "session-123",
+      },
+      authorization_code: { issuer_state: "abc" },
+    };
+    expect(selectVciGrantRoute(WALLET_PROFILES.WEBUILD_CS01, grants)).to.equal(
+      "authorization_code",
+    );
+  });
+
+  it("rejects unsupported grants in CS-01 mode", () => {
+    expect(() => selectVciGrantRoute(WALLET_PROFILES.WEBUILD_CS01, {})).to.throw(Cs01ProfileError);
+    expect(() => selectVciGrantRoute(WALLET_PROFILES.WEBUILD_CS01, { client_credentials: {} })).to.throw(
+      /no supported grant/,
     );
   });
 
@@ -70,7 +105,7 @@ describe("wallet-client profile (WE BUILD CS-01 Phase 1)", () => {
     );
   });
 
-  it("prefers pre-authorized when both grants exist in compatibility mode", () => {
+  it("prefers authorization_code when both grants exist in compatibility mode", () => {
     const grants = {
       "urn:ietf:params:oauth:grant-type:pre-authorized_code": {
         "pre-authorized_code": "session-123",
@@ -78,17 +113,77 @@ describe("wallet-client profile (WE BUILD CS-01 Phase 1)", () => {
       authorization_code: {},
     };
     expect(selectVciGrantRoute(WALLET_PROFILES.COMPATIBILITY, grants)).to.equal(
-      "pre-authorized_code",
+      "authorization_code",
     );
   });
 
-  it("blocks direct pre-authorized issuance helpers in CS-01 mode", () => {
-    expect(() =>
-      assertPreAuthorizedAllowed(WALLET_PROFILES.WEBUILD_CS01, { endpoint: "/issue" }),
-    ).to.throw(Cs01ProfileError);
-    expect(() =>
-      assertPreAuthorizedAllowed(WALLET_PROFILES.COMPATIBILITY, { endpoint: "/issue" }),
-    ).to.not.throw();
+  describe("pre-authorized opt-out (Phase 0)", () => {
+    it("allows pre-authorized in CS-01 mode unless CS01_DISABLE_PRE_AUTHORIZED is set", () => {
+      expect(() =>
+        assertPreAuthorizedAllowed(WALLET_PROFILES.WEBUILD_CS01, { endpoint: "/issue" }),
+      ).to.not.throw();
+      expect(() =>
+        assertPreAuthorizedAllowed(WALLET_PROFILES.WEBUILD_CS01, {
+          endpoint: "/issue",
+          env: { CS01_DISABLE_PRE_AUTHORIZED: "true" },
+        }),
+      ).to.throw(Cs01ProfileError);
+      expect(() =>
+        assertPreAuthorizedAllowed(WALLET_PROFILES.COMPATIBILITY, { endpoint: "/issue" }),
+      ).to.not.throw();
+    });
+
+    it("parses CS01_DISABLE_PRE_AUTHORIZED opt-out flag", () => {
+      expect(isCs01PreAuthorizedDisabled({})).to.equal(false);
+      expect(isCs01PreAuthorizedDisabled({ CS01_DISABLE_PRE_AUTHORIZED: "" })).to.equal(false);
+      expect(isCs01PreAuthorizedDisabled({ CS01_DISABLE_PRE_AUTHORIZED: "true" })).to.equal(true);
+      expect(isCs01PreAuthorizedDisabled({ CS01_DISABLE_PRE_AUTHORIZED: "1" })).to.equal(true);
+      expect(isCs01PreAuthorizedDisabled({ CS01_DISABLE_PRE_AUTHORIZED: "yes" })).to.equal(true);
+      expect(isCs01PreAuthorizedDisabled({ CS01_DISABLE_PRE_AUTHORIZED: "false" })).to.equal(false);
+    });
+
+    it("describes supported VCI grants for error messages", () => {
+      expect(describeSupportedVciGrants(WALLET_PROFILES.COMPATIBILITY)).to.deep.equal([
+        "authorization_code",
+        "urn:ietf:params:oauth:grant-type:pre-authorized_code",
+      ]);
+      expect(describeSupportedVciGrants(WALLET_PROFILES.WEBUILD_CS01)).to.deep.equal([
+        "authorization_code",
+        "urn:ietf:params:oauth:grant-type:pre-authorized_code",
+      ]);
+      expect(
+        describeSupportedVciGrants(WALLET_PROFILES.WEBUILD_CS01, {
+          CS01_DISABLE_PRE_AUTHORIZED: "true",
+        }),
+      ).to.deep.equal(["authorization_code"]);
+    });
+
+    it("describes CS-01 grant policy for health and startup logging", () => {
+      expect(describeCs01GrantPolicy(WALLET_PROFILES.COMPATIBILITY)).to.deep.equal({
+        profile: WALLET_PROFILES.COMPATIBILITY,
+        authorizationCodeEnabled: true,
+        preAuthorizedEnabled: true,
+        preAuthorizedDisabledByEnv: false,
+      });
+      expect(describeCs01GrantPolicy(WALLET_PROFILES.WEBUILD_CS01)).to.deep.equal({
+        profile: WALLET_PROFILES.WEBUILD_CS01,
+        authorizationCodeEnabled: true,
+        preAuthorizedEnabled: true,
+        preAuthorizedDisabledByEnv: false,
+        preAuthorizedDisableEnvVar: "CS01_DISABLE_PRE_AUTHORIZED",
+      });
+      expect(
+        describeCs01GrantPolicy(WALLET_PROFILES.WEBUILD_CS01, {
+          CS01_DISABLE_PRE_AUTHORIZED: "true",
+        }),
+      ).to.deep.equal({
+        profile: WALLET_PROFILES.WEBUILD_CS01,
+        authorizationCodeEnabled: true,
+        preAuthorizedEnabled: false,
+        preAuthorizedDisabledByEnv: true,
+        preAuthorizedDisableEnvVar: "CS01_DISABLE_PRE_AUTHORIZED",
+      });
+    });
   });
 
   it("requires authorization_code grant metadata in CS-01 mode", () => {

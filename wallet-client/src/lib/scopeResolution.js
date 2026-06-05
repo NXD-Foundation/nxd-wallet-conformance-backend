@@ -8,6 +8,35 @@ export class ScopeResolutionError extends Error {
   }
 }
 
+export class CredentialSelectionError extends Error {
+  constructor(message, errorCode = "invalid_credential_selection") {
+    super(message);
+    this.name = "CredentialSelectionError";
+    this.errorCode = errorCode;
+  }
+}
+
+/** Read credential_configuration_ids from a Credential Offer (VCI v1.0 + legacy credentials). */
+export function extractOfferedConfigurationIds(offerConfig) {
+  if (!offerConfig || typeof offerConfig !== "object") {
+    return [];
+  }
+  const ids = Array.isArray(offerConfig.credential_configuration_ids)
+    ? offerConfig.credential_configuration_ids
+    : [];
+  if (ids.length > 0) {
+    return ids;
+  }
+  const legacy = offerConfig.credentials;
+  if (Array.isArray(legacy)) {
+    return legacy;
+  }
+  if (legacy && typeof legacy === "object") {
+    return Object.keys(legacy);
+  }
+  return [];
+}
+
 export function extractOfferGrantScope(offerConfig) {
   const grant = offerConfig?.grants?.authorization_code;
   if (!grant || typeof grant.scope !== "string") {
@@ -93,5 +122,69 @@ export function resolveCredentialScope({
     source,
     offerScope,
     metadataScope,
+  };
+}
+
+function buildOpenIdCredentialAuthorizationDetails(configurationId, issuerMeta) {
+  return [
+    {
+      type: "openid_credential",
+      credential_configuration_id: configurationId,
+      ...(issuerMeta?.credential_issuer ? { locations: [issuerMeta.credential_issuer] } : {}),
+    },
+  ];
+}
+
+/**
+ * Resolve pre-authorized credential identification per OpenID4VCI v1.0.
+ *
+ * Pre-auth grants do not carry scope. Identification uses top-level
+ * credential_configuration_ids and optional token-request authorization_details.
+ */
+export function resolvePreAuthorizedCredentialSelection({
+  configurationId,
+  issuerMeta,
+  offerConfig = null,
+}) {
+  if (!configurationId) {
+    throw new CredentialSelectionError(
+      "credential configuration id is required for pre-authorized credential selection",
+    );
+  }
+
+  const offeredConfigurationIds = extractOfferedConfigurationIds(offerConfig);
+  if (offeredConfigurationIds.length > 0 && !offeredConfigurationIds.includes(configurationId)) {
+    throw new CredentialSelectionError(
+      `Selected credential configuration '${configurationId}' is not listed in offer credential_configuration_ids: ${offeredConfigurationIds.join(", ")}`,
+    );
+  }
+
+  const metadataConfig = issuerMeta?.credential_configurations_supported?.[configurationId];
+  if (!metadataConfig) {
+    throw new CredentialSelectionError(
+      `Selected credential configuration '${configurationId}' is not present in issuer metadata credential_configurations_supported`,
+    );
+  }
+
+  const multiConfigurationOffer = offeredConfigurationIds.length > 1;
+  const includeAuthorizationDetails = multiConfigurationOffer;
+  const authorizationDetails = includeAuthorizationDetails
+    ? buildOpenIdCredentialAuthorizationDetails(configurationId, issuerMeta)
+    : null;
+
+  let source = "metadata";
+  if (offeredConfigurationIds.length > 1) {
+    source = "offer:multi-configuration";
+  } else if (offeredConfigurationIds.length === 1) {
+    source = "offer:single-configuration";
+  }
+
+  return {
+    configurationId,
+    offeredConfigurationIds,
+    includeAuthorizationDetails,
+    authorizationDetails,
+    source,
+    metadataFormat: metadataConfig.format ?? null,
   };
 }

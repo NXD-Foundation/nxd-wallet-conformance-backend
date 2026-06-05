@@ -18,8 +18,17 @@ services:
       - WALLET_CREDENTIAL_TTL=86400
       - WALLET_TEST_SESSION_TTL=86400
       
-      # Wallet issuance profile: compatibility (default) or webuild-cs01
+      # Wallet issuance profile:
+      #   compatibility (default) — permissive VCI interop; bearer fallback allowed
+      #   webuild-cs01        — WE BUILD CS-01: supports authorization_code AND
+      #                         pre-authorized_code by default (PAR/WUA/DPoP on auth-code;
+      #                         WUA/DPoP on pre-auth; no body client_assertion)
       - WALLET_PROFILE=compatibility
+      #
+      # CS-01 only — optional opt-out for legacy strict testers:
+      #   CS01_DISABLE_PRE_AUTHORIZED=true blocks pre-authorized_code only;
+      #   authorization_code issuance remains available.
+      # - CS01_DISABLE_PRE_AUTHORIZED=true
       # OAuth client_id; must match Wallet Unit Attestation sub in outbound requests
       - WALLET_CLIENT_ID=wallet-client
       # Attestation source: local-key only (trust-framework not yet implemented)

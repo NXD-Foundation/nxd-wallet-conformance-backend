@@ -59,12 +59,54 @@ export const cs01WalletInitiatedOffer = {
   },
 };
 
+export const cs01TxCodeConfig = {
+  length: 4,
+  input_mode: "numeric",
+  description: "Please provide the one-time code that was sent via e-mail or offline",
+};
+
 export const cs01PreAuthorizedOffer = {
   credential_issuer: cs01IssuerMetadata.credential_issuer,
   credential_configuration_ids: ["VerifiableIdCard"],
   grants: {
     "urn:ietf:params:oauth:grant-type:pre-authorized_code": {
       "pre-authorized_code": "preauth-session-123",
+    },
+  },
+};
+
+/** VCI v1.0-shaped pre-auth offer that advertises tx_code (ITB+ PIN scenarios). */
+export const cs01PreAuthorizedOfferWithTxCode = {
+  credential_issuer: cs01IssuerMetadata.credential_issuer,
+  credential_configuration_ids: ["VerifiableIdCard"],
+  grants: {
+    "urn:ietf:params:oauth:grant-type:pre-authorized_code": {
+      "pre-authorized_code": "preauth-tx-session-123",
+      tx_code: cs01TxCodeConfig,
+    },
+  },
+};
+
+export const cs01PreAuthorizedMultiConfigOffer = {
+  credential_issuer: cs01IssuerMetadata.credential_issuer,
+  credential_configuration_ids: ["VerifiableIdCard", "UnscopedCredential"],
+  grants: {
+    "urn:ietf:params:oauth:grant-type:pre-authorized_code": {
+      "pre-authorized_code": "preauth-multi-session-123",
+    },
+  },
+};
+
+export const cs01DualGrantOffer = {
+  credential_issuer: cs01IssuerMetadata.credential_issuer,
+  credential_configuration_ids: ["VerifiableIdCard"],
+  grants: {
+    authorization_code: {
+      issuer_state: "dual-offer-session-123",
+      scope: "VerifiableIdCard",
+    },
+    "urn:ietf:params:oauth:grant-type:pre-authorized_code": {
+      "pre-authorized_code": "dual-preauth-session-123",
     },
   },
 };
@@ -89,6 +131,28 @@ export const cs01DpopTokenResponse = {
   c_nonce: "c-nonce-123",
 };
 
+export const cs01DpopTokenResponseWithRefresh = {
+  ...cs01DpopTokenResponse,
+  refresh_token: "rt-refresh-abc",
+  refresh_expires_in: 86400,
+};
+
 export const cs01DeferredAcceptedResponse = {
   transaction_id: "tx-deferred-456",
+  interval: 5,
+};
+
+export const cs01CredentialReadyResponse = {
+  credential: "eyJhbGciOiJFUzI1NiJ9.test-credential",
+};
+
+/** Pre-auth offer referencing a configuration missing from issuer metadata (failure fixture). */
+export const cs01PreAuthorizedUnknownConfigOffer = {
+  credential_issuer: cs01IssuerMetadata.credential_issuer,
+  credential_configuration_ids: ["UnknownCredential"],
+  grants: {
+    "urn:ietf:params:oauth:grant-type:pre-authorized_code": {
+      "pre-authorized_code": "preauth-unknown-config-123",
+    },
+  },
 };

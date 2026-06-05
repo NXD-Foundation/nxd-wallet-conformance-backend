@@ -37,12 +37,37 @@ Redis database for storing credentials and session data.
 | `NODE_ENV` | production | Node environment |
 | `WALLET_REDIS` | redis:6379 | Redis connection string |
 | `REDIS_PASSWORD` | wallet_redis_password | Redis password |
+| `WALLET_PROFILE` | `compatibility` | Issuance profile: `compatibility` (permissive) or `webuild-cs01` (CS-01 conformance) |
+| `CS01_DISABLE_PRE_AUTHORIZED` | unset | **CS-01 only.** Set `true` to block `pre-authorized_code`; `authorization_code` still works |
+| `WALLET_CLIENT_ID` | `wallet-client` | OAuth `client_id`; must match Wallet Unit Attestation subject in CS-01 mode |
+| `WALLET_ATTESTATION_SOURCE` | `local-key` | Attestation key source (`local-key` only; `trust-framework` not yet implemented) |
 | `WALLET_CREDENTIAL_TTL` | 86400 | Credential storage TTL (seconds) |
 | `WALLET_TEST_SESSION_TTL` | 86400 | Test session TTL (seconds) |
 | `WALLET_DEBUG_CREDENTIAL` | false | Enable full credential logging |
 | `WALLET_MDL_STRICT` | false | Enable strict MDL verification |
 | `WALLET_POLL_TIMEOUT_MS` | 30000 | Deferred credential polling timeout |
-| `WALLET_POLL_INTERVAL_MS` | 2000 | Deferred credential polling interval |
+| `WALLET_POLL_INTERVAL_MS` | 2000 | Deferred credential polling interval (fallback when issuer omits `interval`) |
+
+### WE BUILD CS-01 profile (`WALLET_PROFILE=webuild-cs01`)
+
+Use this profile for ITB+ and remote interop against CS-01 issuers (including Spherity-style pre-auth offers):
+
+- **Both grant types** are supported by default: `authorization_code` and `pre-authorized_code`
+- **Auth-code path:** PAR mandatory, PKCE S256, WUA headers, DPoP-bound tokens, scope from offer/metadata
+- **Pre-auth path:** WUA headers (no body `client_assertion`), DPoP mandatory, credential selection via `credential_configuration_ids`
+- **Deferred issuance:** polls `/credential_deferred` with Bearer + DPoP; honors issuer `interval` from 202 responses
+- **Opt-out:** `CS01_DISABLE_PRE_AUTHORIZED=true` disables pre-auth only (legacy strict CS-01 testers)
+
+Example `docker-compose.yml` override:
+
+```yaml
+environment:
+  - WALLET_PROFILE=webuild-cs01
+  - WALLET_CLIENT_ID=wallet-client
+  - WALLET_ATTESTATION_SOURCE=local-key
+```
+
+Check runtime policy: `curl http://localhost:4000/health` — `grantPolicy.preAuthorizedEnabled` should be `true` unless opted out.
 
 ## Usage Examples
 
