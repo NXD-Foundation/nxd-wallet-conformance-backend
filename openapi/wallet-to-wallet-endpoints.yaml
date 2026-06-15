@@ -1136,19 +1136,6 @@ components:
       type: object
     TokenErrorResponse:
       properties:
-        authorization_pending:
-          description: 'OPTIONAL. Detailed description for authorization_pending errors.
-
-            '
-          properties:
-            interval:
-              description: 'OPTIONAL. The minimum amount of time in seconds that the
-                Wallet  needs to wait before sending a new request. Default value
-                is 5 if not provided.
-
-                '
-              type: integer
-          type: object
         error:
           description: 'REQUIRED. Error code indicating the type of error that occurred.
 
@@ -1157,8 +1144,6 @@ components:
           - invalid_request
           - invalid_grant
           - invalid_client
-          - authorization_pending
-          - slow_down
           type: string
         error_description:
           description: 'OPTIONAL. Human-readable ASCII text providing additional information  about
@@ -1166,18 +1151,6 @@ components:
 
             '
           type: string
-        slow_down:
-          description: 'OPTIONAL. Detailed description for slow_down errors.
-
-            '
-          properties:
-            interval_increase:
-              description: 'OPTIONAL. The amount of time in seconds by which to increase
-                the polling interval.
-
-                '
-              type: integer
-          type: object
       required:
       - error
       title: Token Error Response

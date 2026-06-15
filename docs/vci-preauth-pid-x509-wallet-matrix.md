@@ -24,26 +24,28 @@ The PID configuration is advertised here:
 
 ## Summary Matrix
 
-| Dimension | Value for This Test Case | Other Values Advertised or Implemented Here |
-|---|---|---|
-| Grant Type | `pre-authorized_code` | `authorization_code` via standardized and code-flow routes ([routes/issue/vciStandardRoutes.js](/home/ni/code/js/rfc-issuer-v1/routes/issue/vciStandardRoutes.js#L38), [routes/issue/sharedIssuanceFlows.js](/home/ni/code/js/rfc-issuer-v1/routes/issue/sharedIssuanceFlows.js#L583)) |
-| PAR | Not applicable to this pre-authorized flow | PAR is only relevant to the authorization-code flow in this repo |
-| tx_code in Offer | `Yes` | `No` via `/offer-no-code` and `tx_code_required=false` |
-| tx_code Enforcement | `Advertised, but not actually validated at /token_endpoint in current code` | Same current behavior for pre-auth flow; wallet should still support sending it per VCI |
-| Wallet Invocation Scheme | `openid-credential-offer://` | `haip://` for HAIP routes and standardized `url_scheme=haip` |
-| Credential Configuration | `urn:eu.europa.ec.eudi:pid:1` | Multiple other IDs in issuer metadata, including `jwt_vc_json` and `mso_mdoc` entries |
-| Credential Format | `dc+sd-jwt` | `jwt_vc_json`, `mso_mdoc` |
-| Binding Method | `jwk` | `cose_key` for `urn:eu.europa.ec.eudi:pid:1:mso_mdoc` |
-| Proof Container | `proofs` object, VCI 1.0 style | Legacy `proof` is rejected |
-| Proof Type for This Case | `jwt` | Code and tests indicate `cose_key` handling is expected for `mso_mdoc`, plus optional attestation proof paths in broader wallet-attestation logic |
-| Proof Signing Alg | `ES256` | `ES256` only for the advertised PID SD-JWT config |
-| Credential Signing Alg | `ES256` | `ES256` for JWT-based credentials, `-7` and `-9` for advertised `mso_mdoc` signing |
-| Issuer Signature Reference in Credential | `x5c` JOSE header | `jwk`, `kid`, `did:web` are also implemented for issuer-side signing |
-| Access Token Type | `bearer` by default | `DPoP` if wallet sends a valid DPoP proof at `/token_endpoint` |
-| Client Authentication at Token Endpoint | `public` works | Metadata also advertises `attest_jwt_client_auth`, but current code treats WIA as optional and does not enforce it |
-| Issuance Mode | `Immediate` by default | `Deferred` supported when session is marked deferred; wallet must poll `/credential_deferred` with `transaction_id` |
-| Nonce Model | `c_nonce` from `/token_endpoint`, proof must echo it | `/nonce` endpoint also exists for fresh nonce retrieval |
-| Selective Disclosure Model | SD-JWT VC | Wallet must process SD disclosures for the PID claim set advertised in metadata |
+| Dimension | Value for This Test Case | `WALLET_PROFILE=webuild-cs01` (CS-01) | Other Values Advertised or Implemented Here |
+|---|---|---|---|
+| Grant Type | `pre-authorized_code` | Supported by default; dual-grant offers prefer `authorization_code` | `authorization_code` via standardized and code-flow routes ([routes/issue/vciStandardRoutes.js](/home/ni/code/js/rfc-issuer-v1/routes/issue/vciStandardRoutes.js#L38), [routes/issue/sharedIssuanceFlows.js](/home/ni/code/js/rfc-issuer-v1/routes/issue/sharedIssuanceFlows.js#L583)) |
+| PAR | Not applicable to this pre-authorized flow | Not used on pre-auth path; mandatory only for auth-code in CS-01 | PAR is only relevant to the authorization-code flow in this repo |
+| tx_code in Offer | `Yes` | Wallet must collect PIN when `tx_code` is advertised; issuer validates at `/token_endpoint` | `No` via `/offer-no-code`, `/cs01-offer`, and `tx_code_required=false` |
+| tx_code Enforcement | Validated when session advertises `txCodeRequired` | Wallet sends `tx_code` (or `pin` in `/issue` body); issuer rejects missing/wrong codes | CS-01 tx-code offer route: `GET /cs01-offer-tx-code` |
+| Wallet Invocation Scheme | `openid-credential-offer://` | Same | `haip://` for HAIP routes and standardized `url_scheme=haip` |
+| Credential Configuration | `urn:eu.europa.ec.eudi:pid:1` | Selected via top-level `credential_configuration_ids`; no grant `scope` | Multiple other IDs in issuer metadata, including `jwt_vc_json` and `mso_mdoc` entries |
+| Credential Format | `dc+sd-jwt` | Same | `jwt_vc_json`, `mso_mdoc` |
+| Binding Method | `jwk` | Wallet Unit subject key in proof JWT + `key_attestation` header | `cose_key` for `urn:eu.europa.ec.eudi:pid:1:mso_mdoc` |
+| Proof Container | `proofs` object, VCI 1.0 style | Required | Legacy `proof` is rejected |
+| Proof Type for This Case | `jwt` | Required with WUA key attestation binding | `cose_key` for `mso_mdoc`, plus optional attestation proof paths |
+| Proof Signing Alg | `ES256` | `ES256` (negotiated from metadata) | `ES256` only for the advertised PID SD-JWT config |
+| Credential Signing Alg | `ES256` | Same | `ES256` for JWT-based credentials, `-7` and `-9` for advertised `mso_mdoc` signing |
+| Issuer Signature Reference in Credential | `x5c` JOSE header | Same validation expectations | `jwk`, `kid`, `did:web` also implemented for issuer-side signing |
+| Access Token Type | `bearer` by default in compatibility mode | **DPoP only** — sender-constrained; DPoP generation failure is fatal | `DPoP` when wallet sends valid DPoP at `/token_endpoint` |
+| Client Authentication at Token Endpoint | `public` works | **WUA headers required** (`OAuth-Client-Attestation` + PoP); no body `client_assertion` | Issuer logs WUA non-compliance on pre-auth without hard-fail |
+| Token-request `authorization_details` | Often sent in compatibility flows | Omitted for single-config offers; required when offer lists multiple `credential_configuration_ids` | VCI v1.0 pre-auth grant does not carry `scope` |
+| Issuance Mode | `Immediate` by default | Same; deferred polls honor issuer `interval` from 202 responses | `Deferred` via `/credential_deferred` with Bearer + DPoP |
+| Nonce Model | `c_nonce` from `/token_endpoint`, proof must echo it | Same | `/nonce` endpoint also exists for fresh nonce retrieval |
+| Selective Disclosure Model | SD-JWT VC | Same | Wallet must process SD disclosures for the PID claim set advertised in metadata |
+| Pre-auth opt-out | N/A | Set `CS01_DISABLE_PRE_AUTHORIZED=true` to block pre-auth only; auth-code still works | See [cs01-pre-authorized-flow-relaxation-plan.md](./cs01-pre-authorized-flow-relaxation-plan.md) |
 
 ## Wallet Checks Required for This Test Case
 
@@ -99,29 +101,56 @@ The issuer currently enforces these at runtime:
 These are the main places where a wallet implementer should distinguish spec intent from current repo behavior:
 
 - PAR is not part of this pre-authorized flow; it applies only to the authorization-code endpoints.
-- `tx_code` is advertised in the offer config, but the token endpoint code does not currently validate a submitted `tx_code` or `user_pin`.
-- `attest_jwt_client_auth` is advertised in OAuth metadata, but WIA is currently optional and validation failure does not block issuance.
-- For pre-authorized flow, DPoP is optional. If no DPoP header is sent, the issuer falls back to bearer tokens.
+- In **compatibility** mode (`WALLET_PROFILE` unset), DPoP and WUA remain optional at the issuer; bearer tokens are still issued without DPoP.
+- In **CS-01** mode (`WALLET_PROFILE=webuild-cs01`), the wallet always sends DPoP + WUA on pre-auth; bearer fallback is unreachable client-side.
+- Issuer WUA validation on pre-auth is observability-only (`[CS01_NON_COMPLIANCE]` logs); issuance is not hard-failed for missing/invalid WUA.
+- When `HAIP_PROFILE_REQUIRE_DPOP_FOR_TOKEN=true`, the issuer rejects pre-auth token requests without DPoP.
+- `tx_code` is validated when the pre-auth session was created with `txCodeRequired` (see `createPreAuthSessionData()` in [utils/routeUtils.js](/home/ni/code/js/rfc-issuer-v1/utils/routeUtils.js)).
 - The broader codebase supports multiple issuer signing references (`x5c`, embedded `jwk`, `kid`, `did:web`), but the exact test case here sets the session to `x509`.
 
 ## Practical Wallet Conformance Matrix
 
 If you want to treat this test case as one row in a wallet test suite, the full wallet matrix for this issuer should at least cover:
 
-| Dimension | Wallet Must Implement for Full Coverage |
-|---|---|
-| Offer Transport | `openid-credential-offer://`, `haip://`, raw `credential_offer_uri` retrieval |
-| Grant Handling | `pre-authorized_code`, `authorization_code` |
-| User Secret Step | no `tx_code`, `tx_code` prompt and submission |
-| Token Binding | bearer, DPoP |
-| Client Authentication | public, optional wallet attestation paths |
-| Credential Formats | `dc+sd-jwt`, `jwt_vc_json`, `mso_mdoc` |
-| Proof Types | `jwt` for SD-JWT and JWT VC, `cose_key` path for mdoc-class requests |
-| Binding Methods | `jwk`, `cose_key` |
-| Issuer Signature Reference | `x5c`, embedded `jwk`, `kid`, `did:web` |
-| Issuance Timing | immediate, deferred polling |
-| Error Recovery | `invalid_grant`, `invalid_proof`, nonce refresh, `authorization_pending`, `slow_down`, `invalid_transaction_id` |
+| Dimension | Compatibility Mode | CS-01 (`webuild-cs01`) |
+|---|---|---|
+| Offer Transport | `openid-credential-offer://`, `haip://`, raw `credential_offer_uri` retrieval | Same |
+| Grant Handling | `pre-authorized_code`, `authorization_code` | Both supported; dual-grant prefers auth-code |
+| User Secret Step | no `tx_code`, `tx_code` prompt and submission | PIN required when offer advertises `tx_code` |
+| Token Binding | bearer or DPoP | DPoP mandatory; fatal if generation fails |
+| Client Authentication | public, optional wallet attestation | WUA headers only; no body `client_assertion` |
+| Credential Selection | `authorization_details` common | Pre-auth: `credential_configuration_ids`; `authorization_details` only for multi-config |
+| Credential Formats | `dc+sd-jwt`, `jwt_vc_json`, `mso_mdoc` | Same (per metadata) |
+| Proof Types | `jwt` for SD-JWT/JWT VC; `cose_key` for mdoc | `jwt` + WUA `key_attestation` in proof header |
+| Binding Methods | `jwk`, `cose_key` | Wallet Unit subject key |
+| Issuer Signature Reference | `x5c`, embedded `jwk`, `kid`, `did:web` | Same |
+| Issuance Timing | immediate, deferred polling | Deferred: honor issuer `interval`; stop on `invalid_transaction_id` / `credential_request_denied` |
+| Error Recovery | `invalid_grant`, `invalid_proof`, nonce refresh | Same + explicit opt-out error when `CS01_DISABLE_PRE_AUTHORIZED=true` |
+| Test Suite | `npm test` in `wallet-client/` | `npm run test:cs01` |
+
+## CS-01 Deployment Quick Reference
+
+For ITB+ or remote interop with Spherity-style pre-auth offers:
+
+```bash
+# wallet-client/docker-compose.yml or environment
+WALLET_PROFILE=webuild-cs01
+WALLET_CLIENT_ID=wallet-client
+WALLET_ATTESTATION_SOURCE=local-key
+
+# Optional: restore legacy auth-code-only CS-01 behavior
+# CS01_DISABLE_PRE_AUTHORIZED=true
+```
+
+Issuer CS-01 pre-auth offer endpoints:
+
+- `GET /cs01-offer` — pre-auth without `tx_code`
+- `GET /cs01-offer-tx-code` — pre-auth with `tx_code`
+
+Verify wallet grant policy: `GET http://localhost:4000/health` → `grantPolicy.preAuthorizedEnabled` should be `true`.
 
 ## Recommended Single-Line Test Case Description
 
-Pre-authorized VCI 1.0 issuance, `tx_code` offer variant, PID `dc+sd-jwt`, holder-bound with `proofs.jwt` (`ES256`), issuer-signed with `x5c`, immediate issuance, bearer-or-DPoP token binding, with nonce-based proof validation and optional wallet attestation checks.
+**Compatibility:** Pre-authorized VCI 1.0 issuance, `tx_code` offer variant, PID `dc+sd-jwt`, holder-bound with `proofs.jwt` (`ES256`), issuer-signed with `x5c`, immediate issuance, bearer-or-DPoP token binding, with nonce-based proof validation and optional wallet attestation checks.
+
+**CS-01:** Pre-authorized VCI 1.0 issuance with WUA + DPoP at token and credential endpoints, route-aware credential selection via `credential_configuration_ids`, optional `tx_code`, JWT proof with Wallet Unit key attestation, deferred polling with issuer `interval`, no bearer fallback.

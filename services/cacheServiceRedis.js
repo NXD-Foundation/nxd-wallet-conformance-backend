@@ -198,33 +198,52 @@ export async function getSessionAccessToken(token) {
   }
 }
 
-export async function getDeferredSessionTransactionId(transaction_id) {
+const DEFERRED_SESSION_PREFIXES = [
+  { prefix: "code-flow-sessions:", flowType: "code" },
+  { prefix: "pre-auth-sessions:", flowType: "pre-auth" },
+];
+
+export async function findDeferredSessionByTransactionId(transaction_id) {
   try {
     if (!client.isReady) {
-      console.log("Redis not ready, skipping getDeferredSessionTransactionId");
+      console.log("Redis not ready, skipping findDeferredSessionByTransactionId");
       return null;
     }
-    const keys = await client.keys("code-flow-sessions:*"); // Get all session keys
-    for (const key of keys) {
-      const session = await client.get(key);
-      if (session) {
+
+    for (const { prefix, flowType } of DEFERRED_SESSION_PREFIXES) {
+      const keys = await client.keys(`${prefix}*`);
+      for (const key of keys) {
+        const session = await client.get(key);
+        if (!session) {
+          continue;
+        }
         const parsedSession = JSON.parse(session);
         if (
           parsedSession.transaction_id &&
           parsedSession.transaction_id == transaction_id
         ) {
           console.log(
-            `Found session key for transaction_id: ${transaction_id}`
+            `Found ${flowType} session key for transaction_id: ${transaction_id}`,
           );
-          return key.replace("code-flow-sessions:", ""); // Return the session key without the prefix
+          return {
+            sessionKey: key.replace(prefix, ""),
+            flowType,
+          };
         }
       }
     }
+
     console.log("No session found for transaction_id:", transaction_id);
     return null;
   } catch (err) {
-    console.error("Error retrieving session key for access token:", err);
+    console.error("Error retrieving deferred session for transaction_id:", err);
+    return null;
   }
+}
+
+export async function getDeferredSessionTransactionId(transaction_id) {
+  const lookup = await findDeferredSessionByTransactionId(transaction_id);
+  return lookup?.sessionKey ?? null;
 }
 
 export async function storeVPSession(sessionKey, sessionValue) {

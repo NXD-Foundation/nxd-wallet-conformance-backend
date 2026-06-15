@@ -27,6 +27,7 @@ import {
   
   // Session management utilities
   createBaseSession,
+  createPreAuthSessionData,
   createSessionWithPayload,
   
   // QR code and URL generation utilities
@@ -84,7 +85,10 @@ router.get("/offer-tx-code", async (req, res) => {
     const credentialType = getCredentialType(req);
     const signatureType = getSignatureType(req);
 
-    const sessionData = createBaseSession("pre-auth", false, signatureType);
+    const sessionData = createPreAuthSessionData({
+      signatureType,
+      txCodeRequired: true,
+    });
     await manageSession(sessionId, sessionData);
 
     const credentialOffer = createPreAuthCredentialOfferUri(
@@ -133,7 +137,7 @@ router.get("/offer-no-code", async (req, res) => {
     const credentialType = getCredentialType(req);
     const signatureType = getSignatureType(req);
 
-    const sessionData = createBaseSession("pre-auth", false, signatureType);
+    const sessionData = createPreAuthSessionData({ signatureType });
     await manageSession(sessionId, sessionData);
 
     const credentialOffer = createPreAuthCredentialOfferUri(
@@ -208,6 +212,65 @@ router.get("/credential-offer-no-code/:id", async (req, res) => {
 });
 
 // ******************************************************************
+// ************* CS-01 PRE-AUTH OFFER ENDPOINTS *********************
+// ******************************************************************
+
+/**
+ * CS-01 pre-authorized offer without tx_code (OpenID4VCI v1.0 grant shape).
+ */
+router.get("/cs01-offer", async (req, res) => {
+  let sessionId;
+  try {
+    sessionId = getSessionId(req);
+    bindSessionLoggingContext(req, res, sessionId);
+
+    const credentialType = getCredentialType(req);
+    const signatureType = getSignatureType(req);
+    const sessionData = createPreAuthSessionData({ signatureType });
+    await manageSession(sessionId, sessionData);
+
+    const credentialOffer = createPreAuthCredentialOfferUri(
+      sessionId,
+      credentialType,
+      "/credential-offer-no-code",
+    );
+    const response = await createCredentialOfferResponse(credentialOffer, sessionId);
+    res.json(response);
+  } catch (error) {
+    handleRouteError(error, "CS-01 offer", res, sessionId);
+  }
+});
+
+/**
+ * CS-01 pre-authorized offer with tx_code for ITB+ PIN scenarios.
+ */
+router.get("/cs01-offer-tx-code", async (req, res) => {
+  let sessionId;
+  try {
+    sessionId = getSessionId(req);
+    bindSessionLoggingContext(req, res, sessionId);
+
+    const credentialType = getCredentialType(req);
+    const signatureType = getSignatureType(req);
+    const sessionData = createPreAuthSessionData({
+      signatureType,
+      txCodeRequired: true,
+    });
+    await manageSession(sessionId, sessionData);
+
+    const credentialOffer = createPreAuthCredentialOfferUri(
+      sessionId,
+      credentialType,
+      "/credential-offer-tx-code",
+    );
+    const response = await createCredentialOfferResponse(credentialOffer, sessionId);
+    res.json(response);
+  } catch (error) {
+    handleRouteError(error, "CS-01 offer tx-code", res, sessionId);
+  }
+});
+
+// ******************************************************************
 // ************* HAIP ENDPOINTS *************************************
 // ******************************************************************
 
@@ -231,7 +294,7 @@ router.get("/haip-offer-tx-code", async (req, res) => {
 
     const credentialType = getCredentialType(req);
 
-    const sessionData = createBaseSession("pre-auth", true);
+    const sessionData = createPreAuthSessionData({ isHaip: true, txCodeRequired: true });
     await manageSession(sessionId, sessionData);
 
     const credentialOffer = createPreAuthCredentialOfferUri(

@@ -72,6 +72,32 @@ export const TX_CODE_CONFIG = {
   description: "Please provide the one-time code that was sent via e-mail or offline",
 };
 
+/** Generate a numeric transaction code for pre-authorized offers that advertise tx_code. */
+export function generateNumericTxCode(length = TX_CODE_CONFIG.length) {
+  let code = "";
+  for (let i = 0; i < length; i += 1) {
+    code += Math.floor(Math.random() * 10).toString();
+  }
+  return code;
+}
+
+/**
+ * Create a pre-auth session, optionally recording tx_code metadata for token-endpoint validation.
+ */
+export function createPreAuthSessionData({
+  isHaip = false,
+  signatureType = null,
+  txCodeRequired = false,
+  additionalProps = {},
+} = {}) {
+  const session = createBaseSession("pre-auth", isHaip, signatureType, additionalProps);
+  if (txCodeRequired) {
+    session.txCodeRequired = true;
+    session.expectedTxCode = generateNumericTxCode();
+  }
+  return session;
+}
+
 export const URL_SCHEMES = {
   STANDARD: "openid-credential-offer://",
   HAIP: "haip://",
@@ -833,12 +859,14 @@ export const createCredentialOfferConfig = (credentialType, sessionId, includeTx
     },
   };
 
-  // For authorization code flow, use issuer_state
+  // For authorization code flow, use issuer_state and scope for the Authorization Request.
   if (grantType === "authorization_code") {
     config.grants[grantType].issuer_state = sessionId;
-    config.grants[grantType].scope = credentialType
+    config.grants[grantType].scope = credentialType;
   } else {
-    // For pre-authorized code flow, use pre-authorized_code
+    // Pre-authorized grants intentionally omit scope (OpenID4VCI v1.0). Wallets identify
+    // credentials via top-level credential_configuration_ids and optional token-request
+    // authorization_details when narrowing multi-configuration offers.
     config.grants[grantType]["pre-authorized_code"] = sessionId;
   }
 

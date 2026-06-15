@@ -350,7 +350,7 @@ Per OID4VCI v1.0 Section 9.2:
 - **Transaction ID**: Unique `transaction_id` returned in `202 Accepted` response
 - **Polling interval**: Configurable polling interval with rate limiting
 - **Status tracking**: Session-based status tracking for deferred credentials
-- **Error handling**: Supports `authorization_pending` and `slow_down` error codes
+- **Error handling**: Uses `invalid_transaction_id` / `credential_request_denied` for terminal deferred errors; pre-auth token exchange itself does not use `authorization_pending` / `slow_down`
 
 ### Demonstrating Proof-of-Possession (DPoP)
 
@@ -955,6 +955,34 @@ Once running (default `http://localhost:4000`), you can:
   - **`GET /logs/:sessionId`** to fetch detailed wallet logs
 
 This makes `wallet-client` a **comprehensive test wallet** that exercises issuer and verifier scenarios through its HTTP service (credential formats, flows, response modes, client_id_schemes, and attestation mechanisms), while remaining clearly non-production and focused on conformance experimentation.
+
+#### WE BUILD CS-01 profile (`WALLET_PROFILE=webuild-cs01`)
+
+For ITB+ and remote CS-01 interop (including Spherity-style pre-authorized offers), run the wallet in CS-01 mode:
+
+```bash
+export WALLET_PROFILE=webuild-cs01
+export WALLET_CLIENT_ID=wallet-client
+export WALLET_ATTESTATION_SOURCE=local-key
+cd wallet-client && npm start
+```
+
+Or with Docker Compose — set `WALLET_PROFILE=webuild-cs01` in `wallet-client/docker-compose.yml` (see [wallet-client/DOCKER.md](wallet-client/DOCKER.md)).
+
+**Grant policy:** CS-01 supports **both** `authorization_code` and `pre-authorized_code` by default. No opt-in flag is required for pre-auth interop.
+
+| Grant | CS-01 behavior |
+|-------|----------------|
+| `authorization_code` | PAR mandatory, PKCE S256, WUA headers, DPoP-bound token, scope from offer/metadata |
+| `pre-authorized_code` | WUA headers (no body `client_assertion`), DPoP mandatory, selection via `credential_configuration_ids` |
+
+**Optional opt-out** for legacy strict testers: `CS01_DISABLE_PRE_AUTHORIZED=true` blocks pre-auth only; auth-code issuance remains available.
+
+**Health check:** `GET /health` returns `profile`, `cs01Mode`, and `grantPolicy` (including `preAuthorizedEnabled`).
+
+**Conformance tests:** `cd wallet-client && npm run test:cs01`
+
+See also [docs/cs01-pre-authorized-flow-relaxation-plan.md](docs/cs01-pre-authorized-flow-relaxation-plan.md) and [docs/vci-preauth-pid-x509-wallet-matrix.md](docs/vci-preauth-pid-x509-wallet-matrix.md).
 
 ## References
 

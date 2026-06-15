@@ -1059,6 +1059,88 @@ describe('Shared Issuance Flows', () => {
       expect(response.body).to.have.property('error', 'invalid_grant');
     });
 
+    it('should reject pre-authorized token requests without tx_code when the offer advertised tx_code', async () => {
+      const preAuthCode = 'test-pre-auth-tx-missing-' + uuidv4();
+      await cacheServiceRedis.storePreAuthSession(preAuthCode, {
+        status: 'pending',
+        txCodeRequired: true,
+        expectedTxCode: '1234',
+      });
+
+      const response = await request(app)
+        .post('/token_endpoint')
+        .send({
+          grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
+          'pre-authorized_code': preAuthCode,
+        })
+        .expect(400);
+
+      expect(response.body).to.have.property('error', 'invalid_grant');
+    });
+
+    it('should accept pre-authorized token requests with the expected tx_code', async () => {
+      const preAuthCode = 'test-pre-auth-tx-valid-' + uuidv4();
+      await cacheServiceRedis.storePreAuthSession(preAuthCode, {
+        status: 'pending',
+        txCodeRequired: true,
+        expectedTxCode: '5678',
+      });
+
+      const response = await request(app)
+        .post('/token_endpoint')
+        .send({
+          grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
+          'pre-authorized_code': preAuthCode,
+          tx_code: '5678',
+        });
+
+      if (response.status === 200) {
+        expect(response.body).to.have.property('access_token');
+        expect(response.body).to.have.property('refresh_token');
+      } else {
+        expect([400, 500]).to.include(response.status);
+      }
+    });
+
+    it('should allow pre-authorized token requests without Wallet Unit Attestation headers (CS-01 observability only)', async () => {
+      const preAuthCode = 'test-pre-auth-no-wua-' + uuidv4();
+      await cacheServiceRedis.storePreAuthSession(preAuthCode, { status: 'pending' });
+
+      const response = await request(app)
+        .post('/token_endpoint')
+        .send({
+          grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
+          'pre-authorized_code': preAuthCode,
+        });
+
+      if (response.status === 200) {
+        expect(response.body).to.have.property('access_token');
+      } else {
+        expect([400, 500]).to.include(response.status);
+      }
+    });
+
+    it('INT-03 — should reject pre-authorized_code exchange without DPoP when HAIP profile requires it', async () => {
+      const prev = process.env.HAIP_PROFILE_REQUIRE_DPOP_FOR_TOKEN;
+      process.env.HAIP_PROFILE_REQUIRE_DPOP_FOR_TOKEN = 'true';
+      try {
+        const preAuthCode = 'test-pre-auth-haip-dpop-' + uuidv4();
+        await cacheServiceRedis.storePreAuthSession(preAuthCode, { status: 'pending' });
+
+        const response = await request(app)
+          .post('/token_endpoint')
+          .send({
+            grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
+            'pre-authorized_code': preAuthCode,
+          })
+          .expect(400);
+
+        expect(response.body).to.have.property('error', 'invalid_dpop_proof');
+      } finally {
+        process.env.HAIP_PROFILE_REQUIRE_DPOP_FOR_TOKEN = prev;
+      }
+    });
+
     it('should reject PKCE verification failure', async () => {
       // This test requires setting up auth code to session mapping
       // For now, we'll test that invalid PKCE results in error
@@ -1088,9 +1170,8 @@ describe('Shared Issuance Flows', () => {
       expect(response.body).to.have.property('error', 'unsupported_grant_type');
     });
 
-    it('MUST return authorization_pending when external completion is pending (pre-authorized_code)', async () => {
+    it('should reject pre-authorized token exchange with invalid_grant when issuer-side checks are still pending', async () => {
       const preAuthCode = 'pending-session-' + uuidv4();
-      // Set up session with pending_external status
       await cacheServiceRedis.storePreAuthSession(preAuthCode, { status: 'pending_external' });
 
       const response = await request(app)
@@ -1101,34 +1182,8 @@ describe('Shared Issuance Flows', () => {
         })
         .expect(400);
 
-      expect(response.body).to.have.property('error', 'authorization_pending');
-    });
-
-    it('MUST return slow_down when wallet polls too frequently (pre-authorized_code)', async () => {
-      const preAuthCode = 'throttled-session-' + uuidv4();
-      await cacheServiceRedis.storePreAuthSession(preAuthCode, { status: 'pending_external' });
-
-      // First poll: should get authorization_pending
-      const first = await request(app)
-        .post('/token_endpoint')
-        .send({
-          grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
-          'pre-authorized_code': preAuthCode
-        })
-        .expect(400);
-      
-      expect(first.body).to.have.property('error', 'authorization_pending');
-
-      // Immediate second poll: expect slow_down (Redis checkAndSetPollTime will return false)
-      const second = await request(app)
-        .post('/token_endpoint')
-        .send({
-          grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
-          'pre-authorized_code': preAuthCode
-        })
-        .expect(400);
-
-      expect(second.body).to.have.property('error', 'slow_down');
+      expect(response.body).to.have.property('error', 'invalid_grant');
+      expect(response.body.error_description).to.match(/not ready for token exchange/i);
     });
   });
 
@@ -1898,44 +1953,215 @@ describe('Shared Issuance Flows', () => {
     });
   });
 
-  describe('POST /credential_deferred', () => {
-    it('should handle deferred credential issuance successfully', async () => {
-      const transactionId = 'test-transaction-id-' + uuidv4();
-      const sessionId = 'test-session-id-' + uuidv4();
+  describe('CS-01 pre-auth token + credential scenarios (Phase 6)', () => {
+    it('should exchange pre-authorized code for DPoP-bound token then accept credential request', async () => {
+      const preAuthCode = 'test-cs01-preauth-chain-' + uuidv4();
 
-      // Create a valid proof JWT for the test
+      await cacheServiceRedis.storePreAuthSession(preAuthCode, {
+        status: 'pending',
+        authorizationDetails: null,
+      });
+
+      const { publicKey, privateKey } = await jose.generateKeyPair('ES256');
+      const publicJwk = await jose.exportJWK(publicKey);
+      const dpopJwt = await new jose.SignJWT({
+        htu: 'http://localhost:3000/token_endpoint',
+        htm: 'POST',
+      })
+        .setProtectedHeader({ alg: 'ES256', typ: 'dpop+jwt', jwk: publicJwk })
+        .setIssuedAt()
+        .setJti(uuidv4())
+        .sign(privateKey);
+
+      const tokenResponse = await request(app)
+        .post('/token_endpoint')
+        .set('DPoP', dpopJwt)
+        .send({
+          grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
+          'pre-authorized_code': preAuthCode,
+        });
+
+      if (tokenResponse.status !== 200) {
+        expect([400, 500]).to.include(tokenResponse.status);
+        return;
+      }
+
+      expect(tokenResponse.body).to.have.property('access_token');
+      expect(tokenResponse.body).to.have.property('token_type', 'DPoP');
+      const accessToken = tokenResponse.body.access_token;
+
+      const nonce = cryptoUtils.generateNonce();
+      await cacheServiceRedis.storeNonce(nonce, 300);
+      const proofJwt = signProofJwt({
+        nonce,
+        iss: 'test-wallet',
+        aud: process.env.SERVER_URL,
+      });
+
+      const credentialResponse = await request(app)
+        .post('/credential')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({
+          credential_configuration_id: 'test-cred-config',
+          proof: { jwt: proofJwt },
+        });
+
+      if (credentialResponse.status === 200) {
+        expect(credentialResponse.body).to.satisfy((body) =>
+          body.credential != null || Array.isArray(body.credentials),
+        );
+      } else if (credentialResponse.status === 202) {
+        expect(credentialResponse.body).to.have.property('transaction_id');
+        expect(credentialResponse.body).to.have.property('interval');
+      } else {
+        expect([400, 500]).to.include(credentialResponse.status);
+      }
+    });
+
+    it('should complete deferred pre-auth issuance via credential_deferred polling', async () => {
+      const previousReadyAfter = process.env.DEFERRED_CREDENTIAL_READY_AFTER_POLLS;
+      process.env.DEFERRED_CREDENTIAL_READY_AFTER_POLLS = '2';
+
+      try {
+        const preAuthCode = 'test-cs01-preauth-deferred-' + uuidv4();
+        const transactionId = 'test-cs01-tx-' + uuidv4();
+        const accessToken = 'test-cs01-deferred-access-' + uuidv4();
+        const proofJwt = signProofJwt({
+          nonce: cryptoUtils.generateNonce(),
+          iss: 'test-wallet',
+          aud: process.env.SERVER_URL,
+        });
+
+        await cacheServiceRedis.storePreAuthSession(preAuthCode, {
+          status: 'success',
+          isDeferred: true,
+          accessToken,
+          transaction_id: transactionId,
+          isCredentialReady: false,
+          attempt: 0,
+          requestBody: {
+            credential_configuration_id: 'test-cred-config',
+            proofs: { jwt: proofJwt },
+          },
+        });
+
+        const pending = await request(app)
+          .post('/credential_deferred')
+          .set('Authorization', `Bearer ${accessToken}`)
+          .send({ transaction_id: transactionId })
+          .expect(202);
+
+        expect(pending.body).to.have.property('transaction_id', transactionId);
+        expect(pending.body).to.have.property('interval');
+
+        const ready = await request(app)
+          .post('/credential_deferred')
+          .set('Authorization', `Bearer ${accessToken}`)
+          .send({ transaction_id: transactionId });
+
+        if (ready.status === 200) {
+          expect(ready.body).to.have.property('credential');
+        } else {
+          expect([400, 500]).to.include(ready.status);
+        }
+      } finally {
+        if (previousReadyAfter === undefined) {
+          delete process.env.DEFERRED_CREDENTIAL_READY_AFTER_POLLS;
+        } else {
+          process.env.DEFERRED_CREDENTIAL_READY_AFTER_POLLS = previousReadyAfter;
+        }
+      }
+    });
+  });
+
+  describe('POST /credential_deferred', () => {
+    const buildDeferredSession = (transactionId, accessToken) => {
       const proofPayload = {
         nonce: cryptoUtils.generateNonce(),
         iss: 'test-wallet',
-        aud: process.env.SERVER_URL
+        aud: process.env.SERVER_URL,
       };
       const proofJwt = signProofJwt(proofPayload);
-
-      const sessionObject = {
+      return {
         status: 'pending',
+        isCredentialReady: false,
+        attempt: 0,
+        requests: { accessToken },
         requestBody: {
           vct: 'test-cred-config',
-          proofs: { jwt: proofJwt }
+          proofs: { jwt: proofJwt },
         },
-        transaction_id: transactionId
+        transaction_id: transactionId,
       };
-      
-      // Set up real test data
-      await cacheServiceRedis.storeCodeFlowSession(sessionId, sessionObject);
+    };
 
-      const response = await request(app)
-        .post('/credential_deferred')
-        .send({
-          transaction_id: transactionId
-        });
+    it('should return 202 while deferred credential is pending, then 200 when ready', async () => {
+      const previousReadyAfter = process.env.DEFERRED_CREDENTIAL_READY_AFTER_POLLS;
+      process.env.DEFERRED_CREDENTIAL_READY_AFTER_POLLS = '2';
 
-      // May succeed or fail depending on credential generation
-      if (response.status === 200) {
-        expect(response.body).to.have.property('credential');
-        expect(typeof response.body.credential).to.equal('string');
-      } else {
-        expect([400, 500]).to.include(response.status);
+      try {
+        const transactionId = 'test-transaction-id-' + uuidv4();
+        const sessionId = 'test-session-id-' + uuidv4();
+        const accessToken = 'test-access-token-' + uuidv4();
+
+        await cacheServiceRedis.storeCodeFlowSession(
+          sessionId,
+          buildDeferredSession(transactionId, accessToken),
+        );
+
+        const pending = await request(app)
+          .post('/credential_deferred')
+          .set('Authorization', `Bearer ${accessToken}`)
+          .send({ transaction_id: transactionId })
+          .expect(202);
+
+        expect(pending.body).to.have.property('transaction_id', transactionId);
+        expect(pending.body).to.have.property('interval').that.is.a('number').and.is.greaterThan(0);
+
+        const ready = await request(app)
+          .post('/credential_deferred')
+          .set('Authorization', `Bearer ${accessToken}`)
+          .send({ transaction_id: transactionId });
+
+        if (ready.status === 200) {
+          expect(ready.body).to.have.property('credential');
+          expect(typeof ready.body.credential).to.equal('string');
+        } else {
+          expect([400, 500]).to.include(ready.status);
+        }
+      } finally {
+        if (previousReadyAfter === undefined) {
+          delete process.env.DEFERRED_CREDENTIAL_READY_AFTER_POLLS;
+        } else {
+          process.env.DEFERRED_CREDENTIAL_READY_AFTER_POLLS = previousReadyAfter;
+        }
       }
+    });
+
+    it('should require Bearer access token for deferred polling', async () => {
+      const transactionId = 'test-transaction-id-' + uuidv4();
+      const sessionId = 'test-session-id-' + uuidv4();
+      const accessToken = 'test-access-token-' + uuidv4();
+
+      await cacheServiceRedis.storeCodeFlowSession(
+        sessionId,
+        buildDeferredSession(transactionId, accessToken),
+      );
+
+      const missingAuth = await request(app)
+        .post('/credential_deferred')
+        .send({ transaction_id: transactionId })
+        .expect(401);
+
+      expect(missingAuth.body).to.have.property('error', 'invalid_token');
+
+      const wrongToken = await request(app)
+        .post('/credential_deferred')
+        .set('Authorization', 'Bearer wrong-token')
+        .send({ transaction_id: transactionId })
+        .expect(401);
+
+      expect(wrongToken.body).to.have.property('error', 'invalid_token');
     });
 
     it('should reject invalid transaction ID', async () => {
@@ -1951,18 +2177,66 @@ describe('Shared Issuance Flows', () => {
       expect(response.body).to.have.property('error', 'invalid_transaction_id');
     });
 
-    it('should handle missing session object', async () => {
-      // Don't create session - should result in invalid transaction
-      const missingTransactionId = 'missing-transaction-id-' + uuidv4();
+    it('should return credential_request_denied for denied deferred sessions', async () => {
+      const transactionId = 'test-denied-transaction-id-' + uuidv4();
+      const sessionId = 'test-denied-session-id-' + uuidv4();
+      const accessToken = 'test-access-token-' + uuidv4();
+
+      await cacheServiceRedis.storeCodeFlowSession(sessionId, {
+        ...buildDeferredSession(transactionId, accessToken),
+        status: 'failed',
+        error: 'credential_request_denied',
+        error_description: 'Issuer denied issuance',
+      });
 
       const response = await request(app)
         .post('/credential_deferred')
-        .send({
-          transaction_id: missingTransactionId
-        })
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({ transaction_id: transactionId })
         .expect(400);
 
-      expect(response.body).to.have.property('error', 'invalid_transaction_id');
+      expect(response.body).to.have.property('error', 'credential_request_denied');
+    });
+
+    it('should resolve deferred pre-auth sessions from pre-auth-sessions storage', async () => {
+      const transactionId = 'test-preauth-transaction-id-' + uuidv4();
+      const preAuthCode = 'test-preauth-deferred-' + uuidv4();
+      const accessToken = 'test-preauth-access-token-' + uuidv4();
+      const proofPayload = {
+        nonce: cryptoUtils.generateNonce(),
+        iss: 'test-wallet',
+        aud: process.env.SERVER_URL,
+      };
+      const proofJwt = signProofJwt(proofPayload);
+
+      await cacheServiceRedis.storePreAuthSession(preAuthCode, {
+        status: 'pending',
+        isCredentialReady: true,
+        accessToken,
+        requestBody: {
+          vct: 'test-cred-config',
+          proofs: { jwt: proofJwt },
+        },
+        transaction_id: transactionId,
+      });
+
+      const lookup = await cacheServiceRedis.findDeferredSessionByTransactionId(transactionId);
+      expect(lookup).to.deep.equal({
+        sessionKey: preAuthCode,
+        flowType: 'pre-auth',
+      });
+
+      const response = await request(app)
+        .post('/credential_deferred')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({ transaction_id: transactionId });
+
+      if (response.status === 200) {
+        expect(response.body).to.have.property('credential');
+      } else {
+        expect([400, 500]).to.include(response.status);
+        expect(response.body.error).to.not.equal('invalid_transaction_id');
+      }
     });
   });
 

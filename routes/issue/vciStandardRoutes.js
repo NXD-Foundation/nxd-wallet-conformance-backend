@@ -8,6 +8,7 @@ import {
   URL_SCHEMES,
   createCodeFlowSession,
   createBaseSession,
+  createPreAuthSessionData,
   generateQRCode,
   createCodeFlowCredentialOfferResponse,
   createPreAuthCredentialOfferUri,
@@ -120,12 +121,11 @@ vciStandardRouter.get("/vci/offer", async (req, res) => {
     }
     // Handle pre-authorized code flow
     else if (flow === "pre_authorized_code") {
-      const sessionData = createBaseSession(
-        "pre-auth",
-        false, // isHaip
-        internalSignatureType
-      );
-      
+      const sessionData = createPreAuthSessionData({
+        signatureType: internalSignatureType,
+        txCodeRequired,
+      });
+
       await storePreAuthSession(sessionId, sessionData);
 
       // Determine endpoint path based on tx_code_required

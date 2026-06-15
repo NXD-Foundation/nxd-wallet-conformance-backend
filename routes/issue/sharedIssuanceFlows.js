@@ -28,12 +28,10 @@ import {
   storeCodeFlowSession,
   getSessionKeyAuthCode,
   getSessionAccessToken,
-  getDeferredSessionTransactionId,
+  findDeferredSessionByTransactionId,
   storeNonce,
   checkNonce,
   deleteNonce,
-  checkAndSetPollTime,
-  clearPollTime,
   logError,
   logInfo,
   logWarn,
@@ -76,6 +74,12 @@ import {
   validateOAuthClientAttestationFromRequest,
   getTrustedClientAttesterJwks,
 } from "../../utils/oauthClientAttestation.js";
+import {
+  DEFERRED_CREDENTIAL_POLL_INTERVAL_SECONDS,
+  advanceDeferredCredentialPollState,
+  getDeferredSessionAccessToken,
+  isDeferredCredentialDenied,
+} from "../../utils/deferredCredentialPoll.js";
 import {
   parseProofAttestationJwtFromCredentialProofs,
   verifyKeyAttestationProofChain,
@@ -558,11 +562,65 @@ const getSessionFromToken = async (token) => {
 };
 
 
+const PRE_AUTHORIZED_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:pre-authorized_code";
+
+function reportCs01PreAuthWalletAttestationObservability({
+  slog,
+  attestationResult,
+  grantType,
+}) {
+  if (grantType !== PRE_AUTHORIZED_GRANT_TYPE) {
+    return;
+  }
+
+  const report = (message, details = {}) => {
+    console.warn(`[TOKEN] [CS01_NON_COMPLIANCE] ${message}`, details);
+    if (slog) {
+      try {
+        slog(`[TOKEN] [CS01_NON_COMPLIANCE] ${message}`, details);
+      } catch {}
+    }
+  };
+
+  if (attestationResult?.skip) {
+    report(
+      "Wallet Unit Attestation headers not sent on pre-authorized token request",
+      { grant_type: grantType },
+    );
+    return;
+  }
+
+  if (!attestationResult?.ok) {
+    report("Wallet Unit Attestation missing or invalid on pre-authorized token request", {
+      grant_type: grantType,
+      error: attestationResult?.errorDescription,
+      oauthError: attestationResult?.oauthError,
+    });
+  }
+}
+
+function validatePreAuthTxCode(existingPreAuthSession, txCode) {
+  if (!existingPreAuthSession?.txCodeRequired) {
+    return;
+  }
+
+  const submitted = txCode == null ? "" : String(txCode).trim();
+  const expected = String(existingPreAuthSession.expectedTxCode ?? "");
+  if (!submitted || submitted !== expected) {
+    const error = new Error(
+      "Invalid or missing tx_code for pre-authorized issuance when tx_code is advertised in the Credential Offer",
+    );
+    error.errorCode = "invalid_grant";
+    throw error;
+  }
+}
+
 // Handle pre-authorized code flow
 const handlePreAuthorizedCodeFlow = async (
   preAuthorizedCode,
   authorizationDetails,
-  dpopCnf = null
+  dpopCnf = null,
+  txCode = null,
 ) => {
   const existingPreAuthSession = await getPreAuthSession(preAuthorizedCode);
   
@@ -570,22 +628,17 @@ const handlePreAuthorizedCodeFlow = async (
     throw new Error(`${ERROR_MESSAGES.INVALID_GRANT}. Received: pre-authorized_code '${preAuthorizedCode}' not found or expired, expected: valid, unexpired pre-authorized_code`);
   }
 
-  // Check if authorization is still pending external completion
+  validatePreAuthTxCode(existingPreAuthSession, txCode);
+
+  // OpenID4VCI v1.0 final models waiting after token exchange via
+  // /credential -> 202 { transaction_id, interval } and /credential_deferred.
+  // A pre-authorized code at the token endpoint is therefore either redeemable
+  // now or rejected as a normal token error.
   if (existingPreAuthSession.status === 'pending_external') {
-    // Atomically check and set poll time using Redis (thread-safe)
-    // Returns false if polled too recently (within minPollIntervalSeconds)
-    const minPollIntervalSeconds = 5;
-    const pollAllowed = await checkAndSetPollTime(preAuthorizedCode, minPollIntervalSeconds);
-    
-    if (!pollAllowed) {
-      const error = new Error(ERROR_MESSAGES.SLOW_DOWN);
-      error.errorCode = 'slow_down';
-      throw error;
-    }
-    
-    // Return authorization_pending error
-    const error = new Error(ERROR_MESSAGES.AUTHORIZATION_PENDING);
-    error.errorCode = 'authorization_pending';
+    const error = new Error(
+      "Pre-authorized code is not ready for token exchange. Complete issuer-side checks before redeeming the pre-authorized code.",
+    );
+    error.errorCode = 'invalid_grant';
     throw error;
   }
 
@@ -604,9 +657,6 @@ const handlePreAuthorizedCodeFlow = async (
   existingPreAuthSession.c_nonce = cNonceForSession;
 
   await storePreAuthSession(preAuthorizedCode, existingPreAuthSession);
-
-  // Clear poll tracking for successful issuance
-  await clearPollTime(preAuthorizedCode);
 
   // Prepare response
   const tokenResponse = {
@@ -783,6 +833,7 @@ const handleDeferredCredentialIssuance = async (requestBody, sessionObject, sess
   sessionObject.requestBody = requestBody;
   sessionObject.isCredentialReady = false;
   sessionObject.attempt = 0;
+  sessionObject.deferredPollInterval = DEFERRED_CREDENTIAL_POLL_INTERVAL_SECONDS;
 
   if (flowType === "code") {
     await storeCodeFlowSession(sessionKey, sessionObject);
@@ -792,9 +843,64 @@ const handleDeferredCredentialIssuance = async (requestBody, sessionObject, sess
 
   return {
     transaction_id,
-    interval: 5 // V1.0 requirement: polling interval in seconds for deferred credential status checks
+    interval: DEFERRED_CREDENTIAL_POLL_INTERVAL_SECONDS,
   };
 };
+
+const isDpopBoundAccessTokenJwt = (accessToken) => {
+  try {
+    const decoded = jwt.decode(accessToken, { complete: true });
+    return Boolean(decoded?.payload?.cnf?.jkt);
+  } catch {
+    return false;
+  }
+};
+
+async function validateDeferredEndpointDpop(req) {
+  const dpopHeader = req.headers["dpop"];
+  if (typeof dpopHeader !== "string") {
+    const error = new Error("DPoP proof is required for deferred credential requests");
+    error.errorCode = "invalid_dpop_proof";
+    throw error;
+  }
+
+  const protectedHeader = jose.decodeProtectedHeader(dpopHeader);
+  if (!protectedHeader?.jwk) {
+    const error = new Error("DPoP proof is missing jwk in protected header");
+    error.errorCode = "invalid_dpop_proof";
+    throw error;
+  }
+
+  const publicKey = await jose.importJWK(protectedHeader.jwk, protectedHeader.alg || "ES256");
+  const { payload } = await jose.jwtVerify(dpopHeader, publicKey, {
+    clockTolerance: DPOP_MAX_FUTURE_IAT_SKEW_SECONDS,
+  });
+
+  const expectedHtm = req.method.toUpperCase();
+  const expectedHtu = `${SERVER_URL}/credential_deferred`;
+  if (payload.htm !== expectedHtm) {
+    const error = new Error(
+      `DPoP proof htm claim mismatch. Received: '${payload.htm}', expected: '${expectedHtm}'`,
+    );
+    error.errorCode = "invalid_dpop_proof";
+    throw error;
+  }
+  if (payload.htu !== expectedHtu) {
+    const error = new Error(
+      `DPoP proof htu claim mismatch. Received: '${payload.htu}', expected: '${expectedHtu}'`,
+    );
+    error.errorCode = "invalid_dpop_proof";
+    throw error;
+  }
+}
+
+async function persistDeferredSession(sessionObject, sessionKey, flowType) {
+  if (flowType === "pre-auth") {
+    await storePreAuthSession(sessionKey, sessionObject);
+  } else {
+    await storeCodeFlowSession(sessionKey, sessionObject);
+  }
+}
 
 // *****************************************************************
 // ************* TOKEN ENDPOINTS ***********************************
@@ -812,6 +918,7 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
       "pre-authorized_code": preAuthorizedCode,
       code_verifier,
       authorization_details,
+      tx_code: txCode,
     } = req.body;
 
     // Extract sessionId early for logging
@@ -871,23 +978,34 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
       authorizationServerIssuer: getServerUrl(),
       trustedJwks: getTrustedClientAttesterJwks(),
     });
+    const isPreAuthorizedGrant = grant_type === PRE_AUTHORIZED_GRANT_TYPE;
     if (!attestationResult.skip && !attestationResult.ok) {
-      if (slog) {
-        try {
-          slog("[TOKEN] Client attestation rejected", {
-            error: attestationResult.errorDescription,
-          });
-        } catch {}
+      if (isPreAuthorizedGrant) {
+        reportCs01PreAuthWalletAttestationObservability({
+          slog,
+          attestationResult,
+          grantType: grant_type,
+        });
+      } else {
+        if (slog) {
+          try {
+            slog("[TOKEN] Client attestation rejected", {
+              error: attestationResult.errorDescription,
+            });
+          } catch {}
+        }
+        return res.status(attestationResult.statusCode || 401).json({
+          error: attestationResult.oauthError || "invalid_client",
+          error_description: attestationResult.errorDescription,
+        });
       }
-      return res.status(attestationResult.statusCode || 401).json({
-        error: attestationResult.oauthError || "invalid_client",
-        error_description: attestationResult.errorDescription,
+    } else if (isPreAuthorizedGrant) {
+      reportCs01PreAuthWalletAttestationObservability({
+        slog,
+        attestationResult,
+        grantType: grant_type,
       });
     }
-
-    // TODO: Implement Wallet Unit Attestation (WUA) based client authentication for token endpoint requests
-    //       as profiled in CS-01 (token endpoint and PAR MUST be client-authenticated using WUA;
-    //       see https://github.com/webuild-consortium/wp4-architecture/blob/main/conformance-specs/cs-01-credential-issuance.md#624-wu-processes-the-offer).
 
     // Validate required parameters
     if (!(code || preAuthorizedCode)) {
@@ -1068,12 +1186,15 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
         process.env.HAIP_PROFILE_REQUIRE_DPOP_FOR_TOKEN === "true";
 
       // INT-01 — When HAIP profile demands DPoP for the token endpoint,
-      // authorization_code exchanges without DPoP MUST be rejected.
-      if (requireDpopForToken && grant_type === "authorization_code") {
+      // authorization_code and pre-authorized_code exchanges without DPoP MUST be rejected.
+      if (
+        requireDpopForToken &&
+        (grant_type === "authorization_code" || grant_type === PRE_AUTHORIZED_GRANT_TYPE)
+      ) {
         if (slog) {
           try {
             slog(
-              "[TOKEN] [ERROR] HAIP profile requires DPoP for authorization_code but DPoP header is missing",
+              "[TOKEN] [ERROR] HAIP profile requires DPoP but DPoP header is missing",
               { grant_type }
             );
           } catch {}
@@ -1081,7 +1202,7 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
         return res.status(400).json({
           error: "invalid_dpop_proof",
           error_description:
-            "DPoP proof is required for authorization_code token requests under HAIP profile.",
+            "DPoP proof is required for token requests under HAIP profile.",
         });
       }
 
@@ -1093,17 +1214,15 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
 
     let tokenResponse;
 
-    if (
-      grant_type ===
-      "urn:ietf:params:oauth:grant-type:pre-authorized_code"
-    ) {
+    if (grant_type === PRE_AUTHORIZED_GRANT_TYPE) {
       if (slog) {
         try { slog("[TOKEN] Processing pre-authorized code flow"); } catch {}
       }
       tokenResponse = await handlePreAuthorizedCodeFlow(
         preAuthorizedCode,
         authorization_details,
-        dpopCnf
+        dpopCnf,
+        txCode,
       );
     } else if (grant_type === "authorization_code") {
       if (slog) {
@@ -1139,22 +1258,6 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
     if (slog) {
       try { slog("[TOKEN] [ERROR] Token endpoint error", { error: error.message, errorCode: error.errorCode }); } catch {}
     }
-
-    // Handle authorization_pending and slow_down errors
-    if (error.errorCode === "authorization_pending") {
-      return res.status(400).json({
-        error: "authorization_pending",
-        error_description: error.message,
-      });
-    }
-
-    if (error.errorCode === "slow_down") {
-      return res.status(400).json({
-        error: "slow_down",
-        error_description: error.message,
-      });
-    }
-
 
     if (error.errorCode === "unknown_credential_configuration") {
       return res.status(400).json({
@@ -1708,6 +1811,7 @@ sharedRouter.post("/credential", async (req, res) => {
 
 sharedRouter.post("/credential_deferred", async (req, res) => {
   let sessionId = null;
+  let slog = null;
   try {
     const { transaction_id } = req.body;
 
@@ -1718,24 +1822,89 @@ sharedRouter.post("/credential_deferred", async (req, res) => {
       });
     }
 
-    sessionId = await getDeferredSessionTransactionId(transaction_id);
-
-    if (sessionId) {
-      setSessionContext(sessionId);
-      res.on("finish", () => {
-        clearSessionContext();
-      });
-      res.on("close", () => {
-        clearSessionContext();
-      });
-    }
-
-    const sessionObject = await getCodeFlowSession(sessionId);
-
-    if (!sessionObject) {
+    const deferredLookup = await findDeferredSessionByTransactionId(transaction_id);
+    if (!deferredLookup?.sessionKey) {
       return res.status(400).json({
         error: "invalid_transaction_id",
         error_description: ERROR_MESSAGES.INVALID_TRANSACTION,
+      });
+    }
+
+    sessionId = deferredLookup.sessionKey;
+    const flowType = deferredLookup.flowType;
+    setSessionContext(sessionId);
+    res.on("finish", () => clearSessionContext());
+    res.on("close", () => clearSessionContext());
+    slog = makeSessionLogger(sessionId);
+
+    const sessionObject = flowType === "pre-auth"
+      ? await getPreAuthSession(sessionId)
+      : await getCodeFlowSession(sessionId);
+
+    if (!sessionObject || sessionObject.transaction_id !== transaction_id) {
+      return res.status(400).json({
+        error: "invalid_transaction_id",
+        error_description: ERROR_MESSAGES.INVALID_TRANSACTION,
+      });
+    }
+
+    const authHeader = req.headers["authorization"];
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({
+        error: "invalid_token",
+        error_description:
+          "Missing or invalid Authorization header. Expected: Bearer <access_token>",
+      });
+    }
+
+    const accessToken = authHeader.substring(7);
+    const sessionAccessToken = getDeferredSessionAccessToken(sessionObject, flowType);
+    if (!sessionAccessToken || accessToken !== sessionAccessToken) {
+      return res.status(401).json({
+        error: "invalid_token",
+        error_description: "Invalid or expired access token for deferred credential request",
+      });
+    }
+
+    const requireDpopForDeferred =
+      process.env.HAIP_PROFILE_REQUIRE_DPOP_FOR_TOKEN === "true" ||
+      isDpopBoundAccessTokenJwt(sessionAccessToken);
+    if (requireDpopForDeferred) {
+      try {
+        await validateDeferredEndpointDpop(req);
+      } catch (dpopError) {
+        return res.status(400).json({
+          error: dpopError.errorCode || "invalid_dpop_proof",
+          error_description: dpopError.message,
+        });
+      }
+    }
+
+    if (isDeferredCredentialDenied(sessionObject)) {
+      return res.status(400).json({
+        error: "credential_request_denied",
+        error_description:
+          sessionObject.error_description || ERROR_MESSAGES.CREDENTIAL_DENIED,
+      });
+    }
+
+    const pollState = advanceDeferredCredentialPollState(sessionObject);
+    await persistDeferredSession(sessionObject, sessionId, flowType);
+
+    if (pollState.action === "pending") {
+      if (slog) {
+        try {
+          slog("[DEFERRED] Credential still pending", {
+            transaction_id,
+            attempt: pollState.attempt,
+            interval: pollState.interval,
+          });
+        } catch {}
+      }
+      res.set("Cache-Control", "no-store");
+      return res.status(202).json({
+        transaction_id: pollState.transaction_id,
+        interval: pollState.interval,
       });
     }
 
@@ -1764,11 +1933,22 @@ sharedRouter.post("/credential_deferred", async (req, res) => {
       return res.status(200).send(jwe);
     }
 
+    if (slog) {
+      try {
+        slog("[DEFERRED] Credential ready", { transaction_id, attempt: pollState.attempt });
+      } catch {}
+    }
     return res.status(200).json(payload);
   } catch (error) {
     if (error.errorCode === INVALID_ENCRYPTION_PARAMETERS) {
       return res.status(400).json({
         error: INVALID_ENCRYPTION_PARAMETERS,
+        error_description: error.message,
+      });
+    }
+    if (error.errorCode === "invalid_dpop_proof") {
+      return res.status(400).json({
+        error: "invalid_dpop_proof",
         error_description: error.message,
       });
     }

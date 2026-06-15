@@ -549,7 +549,7 @@ The current implementation already has the main building blocks:
 The main gaps are concentrated in these areas:
 
 - mixed client authentication at PAR and Token
-- weak profile separation between authorization-code and pre-authorized flows
+- profile separation between authorization-code and pre-authorized flows (addressed in revised Phase 9)
 - hard-coded `client_id`
 - `scope: configurationId` instead of a proper scope mapping
 - fallback behavior that is useful for generic VCI but too permissive for CS-01
@@ -578,7 +578,7 @@ Current code areas to change:
 Acceptance criteria:
 
 - the wallet can be started in CS-01 mode
-- in CS-01 mode, only the authorization-code path is available
+- in CS-01 mode, both `authorization_code` and `pre-authorized_code` are available by default (see revised Phase 9)
 - in non-CS-01 mode, existing compatibility flows can remain
 
 ### Phase 2: Make PAR Mandatory in CS-01 Mode
@@ -767,28 +767,40 @@ Acceptance criteria:
 - the same binding context survives through deferred issuance
 - proof generation assumptions are explicit in code and docs
 
-### Phase 9: Move Pre-Authorized Issuance out of the CS-01 Path (out of scope for now)
+### Phase 9: Dual-Grant CS-01 Support (revised — completed)
+
+> **Supersedes the original “lock pre-auth out of CS-01” plan.** ITB+ interoperability requires
+> `WALLET_PROFILE=webuild-cs01` to accept Spherity-style pre-authorized offers as well as
+> authorization-code offers. See [cs01-pre-authorized-flow-relaxation-plan.md](./cs01-pre-authorized-flow-relaxation-plan.md).
 
 Goal:
 
-- prevent accidental use of non-CS-01 flow variants during conformance testing
+- support both `authorization_code` and `pre-authorized_code` in CS-01 mode with the same HA bar (PAR excepted for pre-auth)
+- keep an explicit opt-out for legacy strict testers
 
-Implementation changes:
+Implementation (delivered):
 
-- disable or reject pre-authorized issuance in CS-01 mode
-- keep `pre-authorized_code` support only for non-CS-01 compatibility testing
-- make the top-level flow selector profile-aware
+- `selectVciGrantRoute()` prefers `authorization_code` when both grants are present; otherwise routes to pre-auth
+- `runPreAuthorizedIssuance()` applies CS-01 DPoP (fatal), WUA headers (no body `client_assertion`), and DPoP-bound token checks
+- grant-route-aware credential identification: auth-code uses scope; pre-auth uses `credential_configuration_ids` and optional token-request `authorization_details`
+- optional `CS01_DISABLE_PRE_AUTHORIZED=true` blocks only pre-auth; auth-code remains available
+- issuer pre-auth hardening: `tx_code` validation, deferred session lookup, WUA observability without hard-fail
+- deferred issuance: `/credential_deferred` returns 202 + `interval` while pending; wallet honors issuer interval
 
-Current code areas to change:
+Code areas:
 
-- `wallet-client/src/index.js`
-- pre-authorized branches in `wallet-client/src/server.js`
-- top-level session routing that currently accepts both grant types
+- `wallet-client/src/lib/profile.js` — grant policy and opt-out
+- `wallet-client/src/server.js` — dual-grant routing for `/issue` and `/session`
+- `wallet-client/src/lib/scopeResolution.js` — pre-auth credential selection
+- `routes/issue/sharedIssuanceFlows.js` — issuer token/credential/deferred endpoints
+- `routes/issue/preAuthSDjwRoutes.js` — CS-01 pre-auth offer routes (`/cs01-offer`, `/cs01-offer-tx-code`)
 
 Acceptance criteria:
 
-- CS-01 mode cannot execute the pre-authorized flow
-- pre-authorized support remains available only outside the conformance path
+- CS-01 + pre-auth-only offer → pre-auth path with WUA + DPoP
+- CS-01 + auth-code offer → unchanged PAR/PKCE/WUA/DPoP path
+- CS-01 + `CS01_DISABLE_PRE_AUTHORIZED=true` → pre-auth blocked, auth-code still works
+- remote ITB+ deployment needs no profile change or opt-in flag for pre-auth interop
 
 ### Phase 10: Add Conformance-Focused Validation and Tests
 
@@ -806,11 +818,14 @@ Implementation changes:
 Minimum success tests:
 
 - issuer-initiated authorization-code issuance via Credential Offer
+- issuer-initiated pre-authorized issuance via Credential Offer (WUA + DPoP)
 - wallet-initiated issuance
 - PAR success with attestation headers only
-- token redemption with PKCE and DPoP
+- token redemption with PKCE and DPoP (auth-code) and WUA + DPoP (pre-auth)
 - credential request with JWT proof
-- deferred issuance with `transaction_id`
+- deferred issuance with `transaction_id` and issuer `interval` polling
+- dual-grant offer routing (auth-code preferred)
+- pre-auth with `tx_code` when advertised
 
 Minimum failure tests:
 
@@ -819,8 +834,10 @@ Minimum failure tests:
 - `client_id` mismatch with attestation subject
 - DPoP generation failure in CS-01 mode
 - missing scope mapping
-- attempted pre-authorized flow in CS-01 mode
+- pre-authorized grant routing when `CS01_DISABLE_PRE_AUTHORIZED=true` (auth-code must still work)
 - accidental body `client_assertion` in CS-01 mode
+- pre-auth DPoP generation failure in CS-01 mode
+- pre-auth credential selection errors (unknown configuration, multi-config without selection)
 
 Acceptance criteria:
 
@@ -839,22 +856,26 @@ The lowest-risk order for implementation is:
 5. Add real scope resolution.
 6. Make DPoP fatal and mandatory.
 7. Separate mock attestation from conformance attestation input.
-8. Lock pre-authorized flow out of CS-01 mode.
-9. Add and pass conformance-focused tests.
+8. Enable dual-grant CS-01 support with optional `CS01_DISABLE_PRE_AUTHORIZED` opt-out.
+9. Add and pass conformance-focused tests (auth-code and pre-auth).
 
 ### Definition of Done
 
 The implementation can be treated as aligned with Option 2 when:
 
 ```text
-all CS-01 authorization flows always use PAR
-PAR and Token use Wallet Unit Attestation as the client authentication method
-the client does not send parallel body client_assertion in CS-01 mode
-client_id matches the attestation subject
-PKCE S256 is always used
-access tokens are sender-constrained
-Credential requests use JWT proof bound to the Wallet Unit subject key
-deferred issuance uses transaction_id
-pre-authorized issuance is not used in the CS-01 conformance path
+CS-01 mode supports both authorization_code and pre-authorized_code grant types
+Pre-auth opt-out (CS01_DISABLE_PRE_AUTHORIZED) blocks only pre-auth; auth-code remains available
+Auth-code CS-01 path (PAR, PKCE, WUA, DPoP, scope, JWT proof) remains unchanged and tested
+CS-01 pre-auth token requests send Wallet Unit Attestation (header-based, no body client_assertion)
+Issuers log/report WUA non-compliance on pre-auth token requests without hard-failing for now
+CS-01 pre-auth access tokens are sender-constrained (DPoP); no bearer fallback
+Credential requests on both paths use JWT proof + WUA key_attestation binding
+Credential identification is route-aware: auth-code uses scope; pre-auth uses credential_configuration_ids
+  and token-request authorization_details only when narrowing multiple offered configurations
+tx_code is enforced when advertised
+Refresh token support for pre-auth is best effort, not required for success
+Deferred issuance uses transaction_id with 202/interval polling and terminal error codes
+ITB+ can run auth-code and pre-auth scenarios with WALLET_PROFILE=webuild-cs01
 ```
 

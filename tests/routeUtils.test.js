@@ -1,6 +1,8 @@
 import { expect } from 'chai';
 import {
   createCredentialOfferConfig,
+  createPreAuthSessionData,
+  generateNumericTxCode,
   DEFAULT_MDL_DCQL_QUERY,
 } from '../utils/routeUtils.js';
 
@@ -88,6 +90,31 @@ describe('Route Utils', () => {
       expect(config).to.have.property('credential_issuer');
       expect(config.credential_issuer).to.be.a('string');
       expect(config.credential_issuer).to.match(/^https?:\/\//);
+    });
+
+    it('should not add scope to pre-authorized grants', () => {
+      const config = createCredentialOfferConfig(
+        'urn:eu.europa.ec.eudi:pid:1',
+        'test-session-123',
+        false,
+        'urn:ietf:params:oauth:grant-type:pre-authorized_code',
+      );
+
+      const grant = config.grants['urn:ietf:params:oauth:grant-type:pre-authorized_code'];
+      expect(grant).to.not.have.property('scope');
+    });
+  });
+
+  describe('pre-auth session helpers (Phase 4)', () => {
+    it('generates numeric tx_code values', () => {
+      const code = generateNumericTxCode(4);
+      expect(code).to.match(/^\d{4}$/);
+    });
+
+    it('records tx_code metadata when txCodeRequired is true', () => {
+      const session = createPreAuthSessionData({ txCodeRequired: true });
+      expect(session.txCodeRequired).to.equal(true);
+      expect(session.expectedTxCode).to.match(/^\d{4}$/);
     });
   });
 
