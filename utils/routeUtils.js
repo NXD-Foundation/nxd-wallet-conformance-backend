@@ -1572,8 +1572,13 @@ export async function verifyWuaJwtSignature(wuaJwt, decodedHeader, issuerMetadat
     return { ok: false, error: withSpecRef("WUA JWT header missing alg", WUA_SPEC_REF, OID4VCI_WALLET_ATTESTATION_SPEC_REF) };
   }
   try {
-    const verificationJwk = resolveWuaVerificationJwk(decodedHeader, meta);
-    const key = await jose.importJWK(verificationJwk, alg);
+    let key;
+    if (Array.isArray(decodedHeader?.x5c) && decodedHeader.x5c.length > 0) {
+      key = await jose.importX509(base64DerToPem(decodedHeader.x5c[0]), alg);
+    } else {
+      const verificationJwk = resolveWuaVerificationJwk(decodedHeader, meta);
+      key = await jose.importJWK(verificationJwk, alg);
+    }
     await jose.jwtVerify(wuaJwt, key, { algorithms: [alg] });
     return { ok: true };
   } catch (e) {
@@ -1730,30 +1735,40 @@ export const validateWUA = async (wuaJwt, sessionId = null, issuerMetadata = nul
       return { valid: false, error: withSpecRef('WUA JWT has expired', WUA_SPEC_REF, OID4VCI_WALLET_ATTESTATION_SPEC_REF) };
     }
 
-    // Check required claims
-    if (!decoded.payload.iss) {
-      return { valid: false, error: withSpecRef('WUA JWT missing iss claim', WUA_SPEC_REF, OID4VCI_WALLET_ATTESTATION_SPEC_REF) };
-    }
-
-    // Check for eudi_wallet_info (optional but recommended)
-    const hasEudiWalletInfo = !!decoded.payload.eudi_wallet_info;
+    const hasLegacyEudiWalletInfo = !!decoded.payload.eudi_wallet_info;
+    const hasTs03KeyAttestationInfo =
+      Array.isArray(decoded.payload.key_storage) &&
+      decoded.payload.key_storage.length > 0 &&
+      Array.isArray(decoded.payload.user_authentication) &&
+      decoded.payload.user_authentication.length > 0 &&
+      !!decoded.payload.certification &&
+      !!decoded.payload.key_storage_status?.status &&
+      typeof decoded.payload.key_storage_status?.exp === 'number';
     let generalInfo;
     let keyStorageInfo;
-    if (!hasEudiWalletInfo) {
-      return { valid: false, error: withSpecRef('eudi_wallet_info claim is missing', WUA_SPEC_REF) };
-    }else{
+    if (hasLegacyEudiWalletInfo) {
       generalInfo = decoded.payload.eudi_wallet_info.general_info;
       keyStorageInfo = decoded.payload.eudi_wallet_info.key_storage_info;
       if (!generalInfo || !keyStorageInfo) {
         return { valid: false, error: withSpecRef('general_info or key_storage_info claim is missing', WUA_SPEC_REF) };
       }
+    } else if (!hasTs03KeyAttestationInfo) {
+      return {
+        valid: false,
+        error: withSpecRef('Key Attestation missing TS03 claims key_storage, user_authentication, certification, or key_storage_status', WUA_SPEC_REF),
+      };
     }
     
     // Check for attested_keys (required per spec)
     const hasAttestedKeys = Array.isArray(decoded.payload.attested_keys) && decoded.payload.attested_keys.length > 0;
+    if (!hasAttestedKeys) {
+      return { valid: false, error: withSpecRef('Key Attestation missing attested_keys', WUA_SPEC_REF) };
+    }
     
     // Check for status/revocation information (required per spec)
-    const hasStatus = !!decoded.payload.status && !!decoded.payload.status.status_list;
+    const hasStatus =
+      (!!decoded.payload.status && !!decoded.payload.status.status_list) ||
+      !!decoded.payload.key_storage_status?.status;
 
     const meta = issuerMetadata ?? loadIssuerMetadataForWua();
     // Cryptographic: WUA must be a valid JWS from a key we resolve (JWKS or dev header.jwk).
@@ -1785,7 +1800,8 @@ export const validateWUA = async (wuaJwt, sessionId = null, issuerMetadata = nul
         wuaIssuer: decoded.payload.iss,
         wuaExp: decoded.payload.exp,
         wuaIat: decoded.payload.iat,
-        hasEudiWalletInfo,
+        hasLegacyEudiWalletInfo,
+        hasTs03KeyAttestationInfo,
         hasAttestedKeys,
         hasStatus,
         generalInfo,

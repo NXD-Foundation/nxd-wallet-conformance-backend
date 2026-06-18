@@ -146,5 +146,20 @@ describe("wallet-client crypto building blocks", () => {
     expect(payload).to.have.property("iss", "wallet-client");
     expect(payload).to.have.property("aud", "https://issuer.example.com");
     expect(payload).to.have.property("jti");
+    expect(payload).to.not.have.property("challenge");
+  });
+
+  it("createOAuthClientAttestationPopJwt includes challenge claim when provided", async () => {
+    const { privateJwk, publicJwk } = await ensureOrCreateEcKeyPair(undefined, "ES256");
+    const jwt = await createOAuthClientAttestationPopJwt({
+      privateJwk,
+      publicJwk,
+      issuer: "wallet-client",
+      audience: "https://issuer.example.com",
+      challenge: "opaque-challenge-value",
+    });
+
+    const payload = decodeJwt(jwt);
+    expect(payload).to.have.property("challenge", "opaque-challenge-value");
   });
 });

@@ -34,6 +34,7 @@ import {
   createResourceRequestDpopProof,
   buildBearerResourceHeaders,
   assertDpopBoundTokenReceived,
+  assertAccessTokenCnfMatchesWia,
 } from "./lib/dpopBinding.js";
 import {
   describeAttestationConfiguration,
@@ -52,6 +53,11 @@ import {
   describeIssuanceRefreshTokenMetadata,
 } from "./lib/cs01Conformance.js";
 import { pollDeferredCredentialIssuance } from "./lib/deferredIssuance.js";
+import {
+  createAttestationChallengeState,
+  fetchAttestationChallenge,
+  shouldRetryWithAttestationChallenge,
+} from "./lib/attestationChallenge.js";
 
 const activeWalletProfile = resolveWalletProfile();
 const activeWalletClientId = resolveWalletClientId();
@@ -833,7 +839,14 @@ function validateAuthorizationServerMetadata(meta) {
     );
   }
 
-
+  if (
+    meta.challenge_endpoint != null
+    && (typeof meta.challenge_endpoint !== "string" || meta.challenge_endpoint.length === 0)
+  ) {
+    throw new Error(
+      "invalid_as_metadata: 'challenge_endpoint' must be a non-empty string URL when present",
+    );
+  }
 
   // Ensure basic client attestation algorithm advertising is present and supports ES256,
   // matching what the EUDI reference issuer exposes.
@@ -1014,6 +1027,107 @@ function wrapIssuanceResult(credential, issuanceContext) {
   return { credential, issuanceContext };
 }
 
+function resolveAuthorizationServerBase(issuerMeta, apiBase, authorizationServer) {
+  const authorizationServers = Array.isArray(issuerMeta.authorization_servers)
+    ? issuerMeta.authorization_servers
+    : issuerMeta.authorization_server
+      ? [issuerMeta.authorization_server]
+      : [];
+
+  if (authorizationServers.length > 0) {
+    if (authorizationServer) {
+      if (!authorizationServers.includes(authorizationServer)) {
+        throw new Error(
+          "invalid_authorization_server: grant authorization_server must match one of the values in authorization_servers array",
+        );
+      }
+      return authorizationServer;
+    }
+    return authorizationServers[0];
+  }
+
+  if (authorizationServer) {
+    throw new Error(
+      "invalid_authorization_server: grant authorization_server MUST NOT be used when authorization_servers parameter is omitted",
+    );
+  }
+  return issuerMeta.credential_issuer || apiBase;
+}
+
+async function initializeAttestationChallengeState(asMeta) {
+  const state = createAttestationChallengeState();
+  if (asMeta?.challenge_endpoint) {
+    const challenge = await fetchAttestationChallenge(asMeta.challenge_endpoint);
+    state.set(challenge);
+  }
+  return state;
+}
+
+async function createAttestationHeadersForRequest({
+  profile,
+  keyPath,
+  clientId,
+  endpointAudience,
+  authorizationServerIssuer,
+  stage,
+  challengeState,
+  cnfKeyPair = null,
+}) {
+  const attestation = await createWalletUnitAttestationClientAuth({
+    profile,
+    keyPath,
+    clientId,
+    endpointAudience,
+    authorizationServerIssuer,
+    stage,
+    challenge: challengeState?.consume() ?? null,
+    cnfKeyPair,
+  });
+  return attestation.headers;
+}
+
+async function httpPostFormWithAttestationChallengeRetry({
+  url,
+  params,
+  logSessionId,
+  dpopHeader = null,
+  profile,
+  keyPath,
+  clientId,
+  endpointAudience,
+  authorizationServerIssuer,
+  stage,
+  challengeState,
+  cnfKeyPair = null,
+}) {
+  const buildHeaders = () =>
+    createAttestationHeadersForRequest({
+      profile,
+      keyPath,
+      clientId,
+      endpointAudience,
+      authorizationServerIssuer,
+      stage,
+      challengeState,
+      cnfKeyPair,
+    });
+
+  let headers = await buildHeaders();
+  let res = await httpPostForm(url, params, logSessionId, dpopHeader, headers);
+  challengeState?.updateFromResponse(res.headers);
+
+  const responseText = await res.clone().text().catch(() => "");
+  const { shouldRetry, challenge } = shouldRetryWithAttestationChallenge(res, responseText);
+  if (shouldRetry && challenge) {
+    challengeState?.set(challenge);
+    headers = await buildHeaders();
+    res = await httpPostForm(url, params, logSessionId, dpopHeader, headers);
+    challengeState?.updateFromResponse(res.headers);
+  }
+
+  return res;
+}
+
 async function runPreAuthorizedIssuance({ profile = activeWalletProfile, walletClientId = activeWalletClientId, apiBase, issuerMeta, offerConfig = null, configurationId, preAuthorizedCode, txCodeConfig, authorizationServer, keyPath, pollTimeoutMs, pollIntervalMs, userPin }, logSessionId) {
   assertPreAuthorizedAllowed(profile, { endpoint: "pre-authorized issuance" });
   const slog = logSessionId ? makeSessionLogger(logSessionId) : (() => {});
@@ -1090,6 +1204,7 @@ async function runPreAuthorizedIssuance({ profile = activeWalletProfile, walletC
       const asMeta = await discoverAuthorizationServerMetadata(asBase, logSessionId);
       tokenEndpoint = asMeta.token_endpoint;
       authorizationServerIssuer = deriveAuthorizationServerIssuer(tokenEndpoint, asMeta.issuer || asBase);
+      issuerMeta._authorizationServerMeta = asMeta;
       if (!tokenEndpoint) {
         console.error("[preauth] authorization server metadata does not contain token_endpoint");
         try { slog("[preauth] AS metadata missing token_endpoint", { asBase }); } catch {}
@@ -1116,6 +1231,19 @@ async function runPreAuthorizedIssuance({ profile = activeWalletProfile, walletC
   console.log("[preauth] tokenEndpoint=", tokenEndpoint); try { slog("[preauth] tokenEndpoint", { tokenEndpoint }); } catch {}
   console.log("[preauth] requesting token..."); try { slog("[preauth] requesting token"); } catch {}
 
+  let asMetaForAttestation = issuerMeta._authorizationServerMeta || null;
+  if (!asMetaForAttestation) {
+    try {
+      const asBase = resolveAuthorizationServerBase(issuerMeta, apiBase, authorizationServer);
+      asMetaForAttestation = await discoverAuthorizationServerMetadata(asBase, logSessionId);
+      issuerMeta._authorizationServerMeta = asMetaForAttestation;
+    } catch (e) {
+      console.warn("[preauth] AS metadata discovery for attestation challenge skipped:", e?.message || e);
+      try { slog("[preauth] attestation challenge AS discovery skipped", { error: e?.message || String(e) }); } catch {}
+    }
+  }
+  const attestationChallengeState = await initializeAttestationChallengeState(asMetaForAttestation);
+
   const dpopBinding = await createTokenRequestDpopBinding({
     keyPath,
     tokenEndpoint,
@@ -1138,22 +1266,6 @@ async function runPreAuthorizedIssuance({ profile = activeWalletProfile, walletC
       try { slog("[preauth] legacy body client_assertion failed", { error: legacyAssertionError?.message }); } catch {}
     }
   }
-  const walletUnitAttestation = await createWalletUnitAttestationClientAuth({
-    profile,
-    keyPath,
-    clientId: walletClientId,
-    endpointAudience: tokenEndpoint,
-    authorizationServerIssuer,
-    stage: "token request",
-  });
-  try {
-    slog("[preauth][wallet-unit-attestation] generated", {
-      source: walletUnitAttestation.source,
-      trustFrameworkIntegrated: walletUnitAttestation.trustFrameworkIntegrated,
-      stage: walletUnitAttestation.stage,
-    });
-  } catch {}
-  
   const tokenPayload = {
     grant_type: "urn:ietf:params:oauth:grant-type:pre-authorized_code",
     "pre-authorized_code": preAuthorizedCode,
@@ -1169,7 +1281,20 @@ async function runPreAuthorizedIssuance({ profile = activeWalletProfile, walletC
       : {}),
   };
   assertCs01NoBodyClientAssertion(profile, tokenPayload, { stage: "pre-authorized token request" });
-  const tokenRes = await httpPostForm(tokenEndpoint, tokenPayload, logSessionId, dpopJwt, walletUnitAttestation.headers);
+  const tokenRes = await httpPostFormWithAttestationChallengeRetry({
+    url: tokenEndpoint,
+    params: tokenPayload,
+    logSessionId,
+    dpopHeader: dpopJwt,
+    profile,
+    keyPath,
+    clientId: walletClientId,
+    endpointAudience: tokenEndpoint,
+    authorizationServerIssuer,
+    stage: "token request",
+    challengeState: attestationChallengeState,
+    cnfKeyPair: dpopBinding,
+  });
   console.log("[preauth] tokenRes.status=", tokenRes.status); 
   try { slog("[preauth] tokenRes.status", { status: tokenRes.status }); } catch {}
   console.log("[preauth] tokenRes.headers:", Object.fromEntries(tokenRes.headers.entries())); 
@@ -1191,6 +1316,7 @@ async function runPreAuthorizedIssuance({ profile = activeWalletProfile, walletC
   let tokenBody;
   try {
     tokenBody = JSON.parse(tokenResponseText);
+    attestationChallengeState.updateFromResponse(tokenRes.headers);
     console.log("[preauth] token response parsed successfully"); 
     try { slog("[preauth] token response parsed", { hasAccessToken: !!tokenBody.access_token, hasCNonce: !!tokenBody.c_nonce }); } catch {}
   } catch (e) {
@@ -1200,12 +1326,14 @@ async function runPreAuthorizedIssuance({ profile = activeWalletProfile, walletC
   }
   const accessToken = tokenBody.access_token;
   assertDpopBoundTokenReceived(profile, tokenBody, accessToken);
+  await assertAccessTokenCnfMatchesWia(profile, accessToken, dpopBinding.publicJwk);
   let c_nonce = tokenBody.c_nonce;
   let c_nonce_expires_in = tokenBody.c_nonce_expires_in;
   const issuanceContext = {
     configurationId,
     attestation: describeAttestationConfiguration(profile),
     grantRoute: "pre-authorized_code",
+    attestationChallenge: attestationChallengeState.current,
     credentialSelection: {
       source: credentialSelection.source,
       offeredConfigurationIds: credentialSelection.offeredConfigurationIds,
@@ -1473,6 +1601,7 @@ async function runAuthorizationCodeIssuance({ profile = activeWalletProfile, wal
   }
   
   let authorizationServerMetaForScope = null;
+  let attestationChallengeState = createAttestationChallengeState();
   try {
     const asMeta = await discoverAuthorizationServerMetadata(asBase, logSessionId);
     authorizationServerMetaForScope = asMeta;
@@ -1481,6 +1610,7 @@ async function runAuthorizationCodeIssuance({ profile = activeWalletProfile, wal
     parEndpoint = asMeta.pushed_authorization_request_endpoint || null;
     requirePushedAuthorizationRequests = asMeta.require_pushed_authorization_requests === true;
     authorizationServerIssuer = asMeta.issuer || asBase || authorizationServerIssuer;
+    attestationChallengeState = await initializeAttestationChallengeState(asMeta);
     if (!tokenEndpointFromAS) {
       console.error("[codeflow] authorization server metadata does not contain token_endpoint");
       try { slog("[codeflow] AS metadata missing token_endpoint", { asBase }); } catch {}
@@ -1535,6 +1665,7 @@ async function runAuthorizationCodeIssuance({ profile = activeWalletProfile, wal
     scope: scopeResolution.scope,
     scopeSource: scopeResolution.source,
     attestation: attestationConfiguration,
+    attestationChallenge: attestationChallengeState.current,
   };
 
   // PAR is mandatory in CS-01 mode; optional with direct-authorization fallback in compatibility mode.
@@ -1559,21 +1690,6 @@ async function runAuthorizationCodeIssuance({ profile = activeWalletProfile, wal
           try { slog("[codeflow][par] legacy body client_assertion failed", { error: legacyAssertionError?.message }); } catch {}
         }
       }
-      const parWalletUnitAttestation = await createWalletUnitAttestationClientAuth({
-        profile,
-        keyPath,
-        clientId: authzParams.client_id,
-        endpointAudience: parEndpoint,
-        authorizationServerIssuer,
-        stage: "PAR",
-      });
-      try {
-        slog("[codeflow][par][wallet-unit-attestation] generated", {
-          source: parWalletUnitAttestation.source,
-          trustFrameworkIntegrated: parWalletUnitAttestation.trustFrameworkIntegrated,
-        });
-      } catch {}
-      
       const parParams = {
         ...authzParams,
         ...(legacyParBodyClientAssertionJwt
@@ -1583,7 +1699,18 @@ async function runAuthorizationCodeIssuance({ profile = activeWalletProfile, wal
             }
           : {}),
       };
-      const parRes = await httpPostForm(parEndpoint, parParams, logSessionId, null, parWalletUnitAttestation.headers);
+      const parRes = await httpPostFormWithAttestationChallengeRetry({
+        url: parEndpoint,
+        params: parParams,
+        logSessionId,
+        profile,
+        keyPath,
+        clientId: authzParams.client_id,
+        endpointAudience: parEndpoint,
+        authorizationServerIssuer,
+        stage: "PAR",
+        challengeState: attestationChallengeState,
+      });
       console.log("[codeflow][par] endpoint=", parEndpoint, "status=", parRes.status); try { slog("[codeflow][par] endpoint", { endpoint: parEndpoint, status: parRes.status }); } catch {}
       if (parRes.ok) {
         const parBody = await parRes.json().catch(() => ({}));
@@ -1630,6 +1757,8 @@ async function runAuthorizationCodeIssuance({ profile = activeWalletProfile, wal
 
   console.log("[codeflow] authorizeUrl:", finalAuthorizeUrl); try { slog("[codeflow] authorizeUrl", { url: finalAuthorizeUrl }); } catch {}
   const authRes = await fetch(finalAuthorizeUrl, { redirect: "manual" });
+  attestationChallengeState.updateFromResponse(authRes.headers);
+  issuanceContext.attestationChallenge = attestationChallengeState.current;
   console.log("[codeflow] authRes.status:", authRes.status); try { slog("[codeflow] authRes.status", { status: authRes.status }); } catch {}
   console.log("[codeflow] authRes.headers:", Object.fromEntries(authRes.headers.entries())); try { slog("[codeflow] authRes.headers", { headers: Object.fromEntries(authRes.headers.entries()) }); } catch {}
   
@@ -1689,23 +1818,6 @@ async function runAuthorizationCodeIssuance({ profile = activeWalletProfile, wal
       try { slog("[codeflow] legacy body client_assertion failed", { error: legacyAssertionError?.message }); } catch {}
     }
   }
-  const tokenWalletUnitAttestation = await createWalletUnitAttestationClientAuth({
-    profile,
-    keyPath,
-    clientId: walletClientId,
-    endpointAudience: tokenEndpoint,
-    authorizationServerIssuer: deriveAuthorizationServerIssuer(tokenEndpoint, authorizationServerIssuer),
-    stage: "token request",
-  });
-  try {
-    slog("[codeflow][wallet-unit-attestation] generated", {
-      source: tokenWalletUnitAttestation.source,
-      trustFrameworkIntegrated: tokenWalletUnitAttestation.trustFrameworkIntegrated,
-      stage: tokenWalletUnitAttestation.stage,
-    });
-  } catch {}
-  
-  // Mirror authorization_details in token request (many issuers expect it)
   const tokenAuthzDetails = [
     {
       type: "openid_credential",
@@ -1713,20 +1825,33 @@ async function runAuthorizationCodeIssuance({ profile = activeWalletProfile, wal
       ...(issuerMeta?.credential_issuer ? { locations: [issuerMeta.credential_issuer] } : {}),
     },
   ];
-  const tokenRes = await httpPostForm(tokenEndpoint, {
-    grant_type: "authorization_code",
-    code,
-    code_verifier: codeVerifier,
-    client_id: walletClientId,
-    redirect_uri: redirectUri,
-    authorization_details: JSON.stringify(tokenAuthzDetails),
-    ...(legacyTokenBodyClientAssertionJwt
-      ? {
-          client_assertion: legacyTokenBodyClientAssertionJwt,
-          client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
-        }
-      : {}),
-  }, logSessionId, dpopJwt, tokenWalletUnitAttestation.headers);
+  const tokenRes = await httpPostFormWithAttestationChallengeRetry({
+    url: tokenEndpoint,
+    params: {
+      grant_type: "authorization_code",
+      code,
+      code_verifier: codeVerifier,
+      client_id: walletClientId,
+      redirect_uri: redirectUri,
+      authorization_details: JSON.stringify(tokenAuthzDetails),
+      ...(legacyTokenBodyClientAssertionJwt
+        ? {
+            client_assertion: legacyTokenBodyClientAssertionJwt,
+            client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+          }
+        : {}),
+    },
+    logSessionId,
+    dpopHeader: dpopJwt,
+    profile,
+    keyPath,
+    clientId: walletClientId,
+    endpointAudience: tokenEndpoint,
+    authorizationServerIssuer: deriveAuthorizationServerIssuer(tokenEndpoint, authorizationServerIssuer),
+    stage: "token request",
+    challengeState: attestationChallengeState,
+    cnfKeyPair: dpopBinding,
+  });
   console.log("[codeflow] tokenRes.status=", tokenRes.status); try { slog("[codeflow] tokenRes.status", { status: tokenRes.status }); } catch {}
   if (!tokenRes.ok) {
     const text = await tokenRes.text().catch(() => "");
@@ -1737,8 +1862,11 @@ async function runAuthorizationCodeIssuance({ profile = activeWalletProfile, wal
     throw new Error(`token_error ${tokenRes.status}: ${JSON.stringify(err)}`);
   }
   const tokenBody = await tokenRes.json();
+  attestationChallengeState.updateFromResponse(tokenRes.headers);
+  issuanceContext.attestationChallenge = attestationChallengeState.current;
   const accessToken = tokenBody.access_token;
   assertDpopBoundTokenReceived(profile, tokenBody, accessToken);
+  await assertAccessTokenCnfMatchesWia(profile, accessToken, dpopBinding.publicJwk);
   let c_nonce = tokenBody.c_nonce;
   let c_nonce_expires_in = tokenBody.c_nonce_expires_in;
   console.log("[codeflow] got access_token=", accessToken ? "yes" : "no", "c_nonce=", c_nonce ? "yes" : "no"); try { slog("[codeflow] token received", { hasAccessToken: !!accessToken, hasCNonce: !!c_nonce }); } catch {}

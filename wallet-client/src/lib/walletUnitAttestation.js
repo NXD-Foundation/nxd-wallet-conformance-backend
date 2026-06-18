@@ -1,15 +1,15 @@
 /**
  * Wallet Unit Attestation (WUA) material for OAuth client authentication and credential binding.
  *
- * Current implementation status:
- * - CS-01 and compatibility mode both use locally generated keys as the attestation source.
- * - Trust-framework-backed attestation (external attester, provisioned material) is NOT implemented.
- * - The request shape follows WE BUILD CS-01 (OAuth-Client-Attestation headers at PAR/Token).
- *
- * Future trust-framework integration should implement a new attestation source behind
- * `createWalletUnitAttestationClientAuth()` without changing call sites in the issuance flow.
+ * CS-01 uses local Wallet Provider fixture-signed WIA/KA material. The trust framework
+ * and trusted-list validation are intentionally not implemented yet; local fixture
+ * signatures and token shape are enough for conformance development.
  */
 
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
+import { decodeJwt } from "jose";
 import {
   ensureOrCreateEcKeyPair,
   generateDidJwkFromPrivateJwk,
@@ -21,6 +21,14 @@ import {
 import { assertOutboundClientIdAligned } from "./walletClientId.js";
 import { isWebuildCs01Profile } from "./profile.js";
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const WALLET_PROVIDER_KEY_PATH = path.resolve(__dirname, "../../x509EC/ec_private_pkcs8.key");
+const WALLET_PROVIDER_CERT_PATH = path.resolve(__dirname, "../../x509EC/client_certificate.crt");
+const STATUS_MAINTENANCE_SECONDS = 31 * 24 * 60 * 60;
+const CS01_WIA_TTL_SECONDS = 23 * 60 * 60;
+const CS01_KA_TTL_HOURS = 23;
+const issuedAttestationIds = new Set();
+
 export const ATTESTATION_SOURCES = Object.freeze({
   LOCAL_KEY: "local-key",
   /** Reserved for future trust-framework-backed Wallet Unit Attestation. */
@@ -28,7 +36,7 @@ export const ATTESTATION_SOURCES = Object.freeze({
 });
 
 export const LOCAL_KEY_ATTESTATION_NOTE =
-  "Wallet Unit Attestation is generated from locally generated keys. Trust-framework-backed attestation is not yet implemented.";
+  "Wallet Unit Attestation is generated from local Wallet Provider fixture keys. Trust-framework-backed attestation is not yet implemented.";
 
 export class AttestationSourceError extends Error {
   constructor(message) {
@@ -59,7 +67,7 @@ export function resolveAttestationSource(profile, env = process.env) {
   }
   if (isWebuildCs01Profile(profile) && requested !== ATTESTATION_SOURCES.LOCAL_KEY) {
     throw new AttestationSourceError(
-      "WE BUILD CS-01 profile currently supports only local-key Wallet Unit Attestation",
+      "WE BUILD CS-01 profile currently supports only local Wallet Provider fixture attestation",
     );
   }
   return ATTESTATION_SOURCES.LOCAL_KEY;
@@ -103,22 +111,97 @@ export async function createLegacyBodyClientAssertionJwt({
   });
 }
 
+function pemCertificateToX5c(certPem) {
+  return certPem
+    .replace(/-----BEGIN CERTIFICATE-----/g, "")
+    .replace(/-----END CERTIFICATE-----/g, "")
+    .replace(/\s+/g, "");
+}
+
+function loadWalletProviderFixtureMaterial() {
+  const privateKeyPem = fs.readFileSync(WALLET_PROVIDER_KEY_PATH, "utf8");
+  const certPem = fs.readFileSync(WALLET_PROVIDER_CERT_PATH, "utf8");
+  return {
+    privateKeyPem,
+    x5c: [pemCertificateToX5c(certPem)],
+  };
+}
+
+function statusListReference(kind) {
+  return {
+    status_list: {
+      idx: Math.floor(Math.random() * 1000000),
+      uri: `https://wallet-provider.example/status/${kind}`,
+    },
+  };
+}
+
+function statusMaintenanceObject(kind, now) {
+  return {
+    status: statusListReference(kind),
+    exp: now + STATUS_MAINTENANCE_SECONDS,
+  };
+}
+
+function markAttestationJwtUsedOnce(jwt, label) {
+  const payload = decodeJwt(jwt);
+  const jti = payload?.jti;
+  if (!jti) {
+    throw new AttestationSourceError(`${label} is missing jti for single-use lifecycle tracking`);
+  }
+  if (issuedAttestationIds.has(jti)) {
+    throw new AttestationSourceError(`${label} jti '${jti}' was already used in this wallet-client process`);
+  }
+  issuedAttestationIds.add(jti);
+  return jti;
+}
+
+export function resetWalletUnitAttestationLifecycleForTests() {
+  issuedAttestationIds.clear();
+}
+
+export function getWalletUnitAttestationLifecycleStateForTests() {
+  return { usedJwtIds: Array.from(issuedAttestationIds) };
+}
+
 async function createLocalKeyWalletUnitAttestationClientAuth({
   keyPath,
   clientId,
   endpointAudience,
   authorizationServerIssuer,
   alg = "ES256",
+  challenge = null,
+  cnfKeyPair = null,
+  cs01 = false,
 }) {
-  const { privateJwk, publicJwk } = await ensureOrCreateEcKeyPair(keyPath, alg);
+  const cnfKeys = cnfKeyPair || (await ensureOrCreateEcKeyPair(keyPath, alg));
+  const { privateJwk, publicJwk } = cnfKeys;
+  const now = Math.floor(Date.now() / 1000);
+  const walletProvider = cs01 ? loadWalletProviderFixtureMaterial() : null;
   const attestationJwt = await createOAuthClientAttestationJwt({
     privateJwk,
+    privateKeyPem: walletProvider?.privateKeyPem || null,
     publicJwk,
-    issuer: clientId,
+    issuer: cs01 ? null : clientId,
     subject: clientId,
     audience: endpointAudience,
     cnfJwk: publicJwk,
     alg,
+    ttlSeconds: cs01 ? CS01_WIA_TTL_SECONDS : 300,
+    includeJwkHeader: !cs01,
+    headerParams: cs01 ? { x5c: walletProvider.x5c } : null,
+    extraClaims: cs01
+      ? {
+          wallet_name: "Test Wallet Client",
+          wallet_version: "1.0.0",
+          wallet_link: "https://wallet-provider.example/wallet-client",
+          wallet_solution_certification_information: {
+            scheme: "local-dev-fixture",
+            assurance: "not-trust-framework-validated",
+          },
+          client_status: statusMaintenanceObject("wia", now),
+        }
+      : null,
   });
   const popJwt = await createOAuthClientAttestationPopJwt({
     privateJwk,
@@ -126,11 +209,15 @@ async function createLocalKeyWalletUnitAttestationClientAuth({
     issuer: clientId,
     audience: authorizationServerIssuer,
     alg,
+    challenge,
   });
   assertOutboundClientIdAligned({ clientId, attestationJwt, popJwt });
+  const attestationJti = markAttestationJwtUsedOnce(attestationJwt, "WIA");
   return {
     source: ATTESTATION_SOURCES.LOCAL_KEY,
     trustFrameworkIntegrated: false,
+    cnfKeyPair: cnfKeys,
+    attestationJti,
     headers: {
       "OAuth-Client-Attestation": attestationJwt,
       "OAuth-Client-Attestation-PoP": popJwt,
@@ -149,6 +236,8 @@ export async function createWalletUnitAttestationClientAuth({
   authorizationServerIssuer,
   alg = "ES256",
   stage = "client authentication",
+  challenge = null,
+  cnfKeyPair = null,
 }) {
   const source = resolveAttestationSource(profile);
   switch (source) {
@@ -160,6 +249,9 @@ export async function createWalletUnitAttestationClientAuth({
           endpointAudience,
           authorizationServerIssuer,
           alg,
+          challenge,
+          cnfKeyPair,
+          cs01: isWebuildCs01Profile(profile),
         })),
         stage,
         implementationNote: LOCAL_KEY_ATTESTATION_NOTE,
@@ -172,8 +264,7 @@ export async function createWalletUnitAttestationClientAuth({
 }
 
 /**
- * Wallet Unit Attestation JWT used as proof key_attestation at the Credential Endpoint.
- * Generated from local keys until trust-framework integration exists.
+ * Wallet Unit Key Attestation JWT used as proof key_attestation at the Credential Endpoint.
  */
 export async function createWalletUnitCredentialKeyAttestation({
   profile,
@@ -186,35 +277,56 @@ export async function createWalletUnitCredentialKeyAttestation({
   ttlHours = 24,
 }) {
   const source = resolveAttestationSource(profile);
+  const cs01 = isWebuildCs01Profile(profile);
   const signingKeys =
     subjectPrivateJwk && subjectPublicJwk
       ? { privateJwk: subjectPrivateJwk, publicJwk: subjectPublicJwk }
       : await ensureOrCreateEcKeyPair(keyPath, alg);
   const { privateJwk, publicJwk } = signingKeys;
-  const issuer = generateDidJwkFromPrivateJwk(publicJwk);
+  const now = Math.floor(Date.now() / 1000);
+  const walletProvider = cs01 ? loadWalletProviderFixtureMaterial() : null;
+  const issuer = cs01 ? null : generateDidJwkFromPrivateJwk(publicJwk);
   const attestationJwt = await createWUA({
     privateJwk,
+    privateKeyPem: walletProvider?.privateKeyPem || null,
     publicJwk,
     issuer,
-    audience: credentialEndpoint,
+    audience: cs01 ? null : credentialEndpoint,
     attestedKeys: [proofPublicJwk],
-    eudiWalletInfo: {
-      general_info: {
-        name: "Test Wallet Client",
-        version: "1.0.0",
-      },
-      key_storage_info: {
-        storage_type: "software",
-        protection_level: "software",
-      },
-    },
+    eudiWalletInfo: cs01
+      ? null
+      : {
+          general_info: {
+            name: "Test Wallet Client",
+            version: "1.0.0",
+          },
+          key_storage_info: {
+            storage_type: "software",
+            protection_level: "software",
+          },
+        },
+    headerParams: cs01 ? { x5c: walletProvider.x5c } : null,
+    includeJwkHeader: !cs01,
+    extraClaims: cs01
+      ? {
+          key_storage: ["iso_18045_high"],
+          user_authentication: ["iso_18045_high"],
+          certification: {
+            scheme: "local-dev-fixture",
+            assurance: "software-test-key",
+          },
+          key_storage_status: statusMaintenanceObject("ka", now),
+        }
+      : null,
     alg,
-    ttlHours,
+    ttlHours: cs01 ? CS01_KA_TTL_HOURS : ttlHours,
   });
+  const attestationJti = markAttestationJwtUsedOnce(attestationJwt, "KA");
   return {
     source,
     trustFrameworkIntegrated: false,
     attestationJwt,
+    attestationJti,
     implementationNote: LOCAL_KEY_ATTESTATION_NOTE,
   };
 }

@@ -1,3 +1,4 @@
+import { calculateJwkThumbprint, decodeJwt } from "jose";
 import { createDPoP, ensureOrCreateEcKeyPair } from "./crypto.js";
 import { isDpopBoundAccessToken, computeAthForDpop } from "../../utils/tokenUtils.js";
 import { isWebuildCs01Profile } from "./profile.js";
@@ -39,6 +40,39 @@ export function assertDpopBoundTokenReceived(profile, tokenBody, accessToken) {
   );
 }
 
+function extractAccessTokenJkt(accessToken) {
+  if (typeof accessToken !== "string" || accessToken.split(".").length < 2) {
+    return null;
+  }
+  try {
+    const payload = decodeJwt(accessToken);
+    return typeof payload?.cnf?.jkt === "string" ? payload.cnf.jkt : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function assertAccessTokenCnfMatchesWia(profile, accessToken, wiaCnfJwk) {
+  if (!isSenderConstrainingMandatory(profile)) {
+    return;
+  }
+  const tokenJkt = extractAccessTokenJkt(accessToken);
+  if (!tokenJkt) {
+    return;
+  }
+  if (!wiaCnfJwk) {
+    throw new DpopRequiredError(
+      "WE BUILD CS-01 profile requires access-token cnf.jkt to match WIA cnf.jwk; WIA cnf key is missing",
+    );
+  }
+  const expectedJkt = await calculateJwkThumbprint(wiaCnfJwk, "sha256");
+  if (tokenJkt !== expectedJkt) {
+    throw new DpopRequiredError(
+      "WE BUILD CS-01 profile requires access-token cnf.jkt to match the WIA cnf.jwk thumbprint",
+    );
+  }
+}
+
 export function assertDpopHeaderOnRequest(profile, dpopJwt, { stage = "request" } = {}) {
   if (!isSenderConstrainingMandatory(profile)) {
     return;
@@ -67,9 +101,10 @@ export async function createTokenRequestDpopBinding({
   tokenEndpoint,
   profile,
   alg = "ES256",
+  cnfKeyPair = null,
 }) {
   try {
-    const { privateJwk, publicJwk } = await ensureOrCreateEcKeyPair(keyPath, alg);
+    const { privateJwk, publicJwk } = cnfKeyPair || (await ensureOrCreateEcKeyPair(keyPath, alg));
     const dpopJwt = await createDPoP({
       privateJwk,
       publicJwk,
