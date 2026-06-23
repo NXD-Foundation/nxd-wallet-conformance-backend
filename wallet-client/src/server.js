@@ -982,6 +982,8 @@ async function httpPostForm(url, params, logSessionId, dpopHeader = null, extraH
     responseBody = responseText ? JSON.parse(responseText) : null;
   } catch {}
   
+  res.bodyText = responseText;
+  res.parsedBody = responseBody;
   try { console.log("[http] <-", url, res.status); } catch {}
   try { 
     slog("[HTTP] [RESPONSE] POST FORM", { 
@@ -1116,7 +1118,7 @@ async function httpPostFormWithAttestationChallengeRetry({
   let res = await httpPostForm(url, params, logSessionId, dpopHeader, headers);
   challengeState?.updateFromResponse(res.headers);
 
-  const responseText = await res.clone().text().catch(() => "");
+  const responseText = typeof res.bodyText === "string" ? res.bodyText : await res.clone().text().catch(() => "");
   const { shouldRetry, challenge } = shouldRetryWithAttestationChallenge(res, responseText);
   if (shouldRetry && challenge) {
     challengeState?.set(challenge);
@@ -1713,7 +1715,7 @@ async function runAuthorizationCodeIssuance({ profile = activeWalletProfile, wal
       });
       console.log("[codeflow][par] endpoint=", parEndpoint, "status=", parRes.status); try { slog("[codeflow][par] endpoint", { endpoint: parEndpoint, status: parRes.status }); } catch {}
       if (parRes.ok) {
-        const parBody = await parRes.json().catch(() => ({}));
+        const parBody = parRes.parsedBody || await parRes.json().catch(() => ({}));
         const requestUri = parBody.request_uri;
         console.log("[codeflow][par] request_uri=", requestUri, "expires_in=", parBody.expires_in); try { slog("[codeflow][par] request_uri", { requestUri, expiresIn: parBody.expires_in }); } catch {}
         assertParResponse(profile, {

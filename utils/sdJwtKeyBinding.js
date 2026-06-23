@@ -74,17 +74,8 @@ export async function validateSdJwtKeyBindingMatchesCredential({
     throw new Error("invalid_key_binding_jwt_header");
   }
 
-  const kbJwk = header?.jwk;
-  if (!kbJwk) {
-    throw new Error("key_binding_jwk_missing");
-  }
-
-  if (!jwkPublicEquals(kbJwk, cnfJwk)) {
-    throw new Error("key_binding_cnf_mismatch");
-  }
-
   try {
-    const verificationKey = await importJWK(kbJwk, header.alg || kbJwk.alg);
+    const verificationKey = await importJWK(cnfJwk, header.alg || cnfJwk.alg);
     await jwtVerify(kbJwt, verificationKey, { clockTolerance });
   } catch {
     throw new Error("key_binding_signature_invalid");
@@ -93,6 +84,6 @@ export async function validateSdJwtKeyBindingMatchesCredential({
   return {
     ok: true,
     cnfJwk: publicJwk(cnfJwk),
-    keyBindingJwk: publicJwk(kbJwk),
+    keyBindingJwk: publicJwk(cnfJwk),
   };
 }
