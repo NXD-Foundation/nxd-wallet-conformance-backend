@@ -52,8 +52,9 @@ For SD-JWT presentations with a KB-JWT, it verifies:
 - KB-JWT `nonce` matches the VP request nonce
 - KB-JWT `aud` matches verifier `client_id`
 - KB-JWT `sd_hash` matches the presented SD-JWT
-- KB-JWT signature verifies with the public JWK in the KB-JWT protected header
-- KB-JWT protected header `jwk` matches the credential `cnf.jwk`
+- KB-JWT signature verifies with the public key in the credential `cnf.jwk`
+
+Optional `jwk` in the KB-JWT protected header is not required; verification uses `cnf.jwk` from the issuer-signed SD-JWT per SD-JWT VC / RFC 9901.
 
 On `aptitude`, failures are returned via `sendVerifierRfc002Error` with `VErr.FAILED_VALIDATION` or `VErr.MISSING_REQUIRED_PROOF` as appropriate.
 
@@ -67,9 +68,9 @@ Files:
 
 If a wallet presents an SD-JWT whose KB-JWT is signed with a different key than the credential `cnf.jwk`, the local verifier now rejects it with a message such as:
 
-`Key Binding JWT signer key does not match credential cnf.jwk`
+`Key Binding JWT signature does not verify with credential cnf.jwk`
 
-Other key-binding failures return more specific errors, for example a missing `cnf.jwk`, a missing header `jwk`, or an invalid KB-JWT signature.
+Other key-binding failures return more specific errors, for example a missing `cnf.jwk` or an invalid KB-JWT signature.
 
 ## Validation
 

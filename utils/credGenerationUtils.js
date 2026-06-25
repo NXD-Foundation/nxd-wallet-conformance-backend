@@ -44,6 +44,8 @@ import {
   createPCDAttestationPayload,
   getPIDSDJWTDataMsoMdoc,
   getLoyaltyCardSDJWTDataWithPayload,
+  getBookingReferenceSDJWTData,
+  getBookingReferenceSDJWTDataWithPayload,
 } from "../utils/credPayloadUtil.js";
 
 import { issueX509AttrCredentialWithDefaultKey } from "./issueX509AttrCredential.js";
@@ -640,6 +642,13 @@ export async function handleCredentialGenerationBasedOnFormat(
       credPayload = getLoyaltyCardSDJWTDataWithPayload(
         sessionObject.credentialPayload,
       );
+      break;
+    case "booking_reference_credential":
+      credPayload = sessionObject
+        ? getBookingReferenceSDJWTDataWithPayload(
+            sessionObject.credentialPayload,
+          )
+        : getBookingReferenceSDJWTData();
       break;
     default:
       throw new Error(`Unsupported credential type: ${credType}`);
@@ -1476,6 +1485,13 @@ export async function handleCredentialGenerationBasedOnFormatDeferred(
       break;
     case "eu.europa.ec.eudi.pcd.1":
       credPayload = createPCDAttestationPayload(issuerName);
+      break;
+    case "booking_reference_credential":
+      credPayload = sessionObject
+        ? getBookingReferenceSDJWTDataWithPayload(
+            sessionObject.credentialPayload,
+          )
+        : getBookingReferenceSDJWTData();
       break;
     default:
       throw new Error(`Unsupported credential type: ${credType}`);

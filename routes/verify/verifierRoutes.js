@@ -120,12 +120,8 @@ function describeSdJwtKeyBindingError(errorCode) {
       return "Credential is missing cnf.jwk required for SD-JWT key binding.";
     case "invalid_key_binding_jwt_header":
       return "Key Binding JWT protected header is invalid.";
-    case "key_binding_jwk_missing":
-      return "Key Binding JWT protected header is missing jwk.";
-    case "key_binding_cnf_mismatch":
-      return "Key Binding JWT signer key does not match credential cnf.jwk.";
     case "key_binding_signature_invalid":
-      return "Key Binding JWT signature does not verify with its protected header jwk.";
+      return "Key Binding JWT signature does not verify with credential cnf.jwk.";
     default:
       return "SD-JWT key binding validation failed.";
   }

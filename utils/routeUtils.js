@@ -735,6 +735,29 @@ export const DEFAULT_DCQL_QUERY = {
   ],
 };
 
+// Full PID DCQL query — all attributes the PID issuer provides
+export const FULL_PID_DCQL_QUERY = {
+  credentials: [
+    {
+      id: "cmwallet",
+      format: "dc+sd-jwt",
+      meta: {
+        vct_values: ["urn:eu.europa.ec.eudi:pid:1"],
+      },
+      claims: [
+        { path: ["given_name"] },
+        { path: ["family_name"] },
+        { path: ["birth_date"] },
+        { path: ["age_over_18"] },
+        { path: ["issuance_date"] },
+        { path: ["expiry_date"] },
+        { path: ["issuing_authority"] },
+        { path: ["issuing_country"] },
+      ],
+    },
+  ],
+};
+
 /** CS-03 / CSC remote signing: DCQL credential id must match qesRequest.credential_ids */
 export const CS03_SIGNING_CREDENTIAL_ID = "signing-cert-01";
 

@@ -2469,6 +2469,54 @@
           "proof_signing_alg_values_supported": ["ES256"]
         }
       }
+    },
+
+    "booking_reference_credential": {
+      "scope": "booking_reference_credential",
+      "cryptographic_binding_methods_supported": ["jwk"],
+      "credential_metadata": {
+        "display": [
+          {
+            "name": "Hotel Booking Reference",
+            "locale": "en-GB",
+            "description": "SD-JWT credential containing hotel booking reference details."
+          }
+        ],
+        "claims": [
+          {
+            "path": ["booking_reference"],
+            "display": [{ "name": "Booking Reference", "locale": "en-GB" }]
+          },
+          {
+            "path": ["hotel_id"],
+            "display": [{ "name": "Hotel ID", "locale": "en-GB" }]
+          },
+          {
+            "path": ["hotel_name"],
+            "display": [{ "name": "Hotel Name", "locale": "en-GB" }]
+          },
+          {
+            "path": ["arrival_date"],
+            "display": [{ "name": "Arrival Date", "locale": "en-GB" }]
+          },
+          {
+            "path": ["departure_date"],
+            "display": [{ "name": "Departure Date", "locale": "en-GB" }]
+          },
+          {
+            "path": ["booking_platform"],
+            "display": [{ "name": "Booking Platform", "locale": "en-GB" }]
+          }
+        ]
+      },
+      "credential_signing_alg_values_supported": ["ES256"],
+      "format": "dc+sd-jwt",
+      "vct": "booking_reference_credential",
+      "proof_types_supported": {
+        "jwt": {
+          "proof_signing_alg_values_supported": ["ES256"]
+        }
+      }
     }
   }
 }

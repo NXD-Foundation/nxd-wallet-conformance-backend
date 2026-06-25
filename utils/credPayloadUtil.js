@@ -1126,3 +1126,59 @@ export const getLoyaltyCardSDJWTDataWithPayload = (
 
   return { claims, disclosureFrame };
 };
+
+const DEFAULT_BOOKING_REFERENCE_CLAIMS = {
+  booking_reference: "BR-2026-00042",
+  hotel_id: "hotel-123",
+  hotel_name: "Example Hotel Athens",
+  arrival_date: "2026-06-12",
+  departure_date: "2026-06-15",
+  booking_platform: "Example Booking Portal",
+};
+
+export const getBookingReferenceSDJWTData = (decodedHeaderSubjectDID) => {
+  return getBookingReferenceSDJWTDataWithPayload(null, decodedHeaderSubjectDID);
+};
+
+export const getBookingReferenceSDJWTDataWithPayload = (
+  payload,
+  decodedHeaderSubjectDID
+) => {
+  const sourceClaims =
+    payload?.claims && typeof payload.claims === "object"
+      ? payload.claims
+      : payload || {};
+
+  const claims = {
+    id: decodedHeaderSubjectDID || uuidv4(),
+    booking_reference:
+      sourceClaims.booking_reference ??
+      DEFAULT_BOOKING_REFERENCE_CLAIMS.booking_reference,
+    hotel_id:
+      sourceClaims.hotel_id ?? DEFAULT_BOOKING_REFERENCE_CLAIMS.hotel_id,
+    hotel_name:
+      sourceClaims.hotel_name ?? DEFAULT_BOOKING_REFERENCE_CLAIMS.hotel_name,
+    arrival_date:
+      sourceClaims.arrival_date ?? DEFAULT_BOOKING_REFERENCE_CLAIMS.arrival_date,
+    departure_date:
+      sourceClaims.departure_date ??
+      DEFAULT_BOOKING_REFERENCE_CLAIMS.departure_date,
+    booking_platform:
+      sourceClaims.booking_platform ??
+      DEFAULT_BOOKING_REFERENCE_CLAIMS.booking_platform,
+  };
+
+  const disclosureFrame = {
+    _sd: [
+      "id",
+      "booking_reference",
+      "hotel_id",
+      "hotel_name",
+      "arrival_date",
+      "departure_date",
+      "booking_platform",
+    ],
+  };
+
+  return { claims, disclosureFrame };
+};

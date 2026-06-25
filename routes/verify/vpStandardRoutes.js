@@ -5,6 +5,7 @@ import {
   CONFIG,
   DEFAULT_DCQL_QUERY,
   DEFAULT_MDL_DCQL_QUERY,
+  FULL_PID_DCQL_QUERY,
   DEFAULT_TRANSACTION_DATA,
   loadConfigurationFiles,
   generateDidIdentifiers,
@@ -57,7 +58,7 @@ vpStandardRouter.use((req, res, next) => {
  * - session_id: Session identifier
  * - client_id_scheme: x509 | did:web | did:jwk
  * - profile: dcql | tx | mdl
- * - credential_profile: pid | mdl
+ * - credential_profile: pid | pidfull | mdl
  * - request_uri_method: get | post
  * - response_mode: direct_post | direct_post.jwt
  * - tx_data: true | false
@@ -126,8 +127,10 @@ vpStandardRouter.get("/vp/request", async (req, res) => {
       } else {
         dcqlQuery = DEFAULT_MDL_DCQL_QUERY;
       }
+    } else if (credentialProfile === "pidfull") {
+      dcqlQuery = FULL_PID_DCQL_QUERY;
     } else {
-      // For PID, use PID presentation definition or DCQL query
+      // PID (minimal) — presentation definition or default DCQL fallback
       presentationDefinitionPath = "./data/presentation_definition_pid.json";
       try {
         presentationDefinition = JSON.parse(
@@ -143,7 +146,12 @@ vpStandardRouter.get("/vp/request", async (req, res) => {
     if (profile === "dcql" || profile === "tx") {
       presentationDefinition = null;
       if (!dcqlQuery) {
-        dcqlQuery = credentialProfile === "mdl" ? DEFAULT_MDL_DCQL_QUERY : DEFAULT_DCQL_QUERY;
+        dcqlQuery =
+          credentialProfile === "mdl"
+            ? DEFAULT_MDL_DCQL_QUERY
+            : credentialProfile === "pidfull"
+              ? FULL_PID_DCQL_QUERY
+              : DEFAULT_DCQL_QUERY;
       }
     }
 

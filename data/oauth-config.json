@@ -24,7 +24,8 @@
     "PaymentWalletAttestation",
     "PhotoID",
     "PCD",
-    "LoyaltyCard"
+    "LoyaltyCard",
+    "booking_reference_credential"
   ],
   "response_types_supported": ["code"],
   "response_modes_supported": ["query"],
