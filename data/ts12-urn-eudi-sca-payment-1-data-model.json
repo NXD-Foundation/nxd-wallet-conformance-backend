@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:eudi:sca:payment:1",
+  "title": "TS12 Payment Confirmation Payload",
+  "type": "object",
+  "required": ["transaction_id", "payee", "currency", "amount"],
+  "properties": {
+    "transaction_id": { "type": "string" },
+    "date_time": { "type": "string", "format": "date-time" },
+    "payee": {
+      "type": "object",
+      "required": ["name", "id"],
+      "properties": {
+        "name": { "type": "string" },
+        "id": { "type": "string" },
+        "logo": { "type": "string" },
+        "website": { "type": "string" }
+      }
+    },
+    "pisp": {
+      "type": "object",
+      "required": ["legal_name", "brand_name", "domain_name"],
+      "properties": {
+        "legal_name": { "type": "string" },
+        "brand_name": { "type": "string" },
+        "domain_name": { "type": "string" }
+      }
+    },
+    "execution_date": { "type": "string", "format": "date" },
+    "currency": { "type": "string", "minLength": 3, "maxLength": 3 },
+    "amount": { "type": "number" },
+    "amount_estimated": { "type": "boolean" },
+    "amount_earmarked": { "type": "boolean" },
+    "sct_inst": { "type": "boolean" },
+    "recurrence": {
+      "type": "object",
+      "required": ["frequency"],
+      "properties": {
+        "start_date": { "type": "string", "format": "date" },
+        "end_date": { "type": "string", "format": "date" },
+        "number": { "type": "integer" },
+        "frequency": { "type": "string" }
+      }
+    },
+    "purpose": { "type": "string" }
+  }
+}

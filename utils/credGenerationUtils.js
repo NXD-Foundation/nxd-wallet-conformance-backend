@@ -39,6 +39,7 @@ import {
   getVReceiptSDJWTData,
   getVReceiptSDJWTDataWithPayload,
   createPaymentWalletAttestationPayload,
+  createTs12PaymentScaAttestationPayload,
   createPhotoIDAttestationPayload,
   getFerryBoardingPassSDJWTData,
   createPCDAttestationPayload,
@@ -306,6 +307,7 @@ function mapClaimsToMsoMdoc(claims, vct) {
     claims.unique_id &&
     (vct === "VerifiablePIDSDJWT" ||
       vct === "VerifiablePIDSDJWTAttestation" ||
+      vct === "VerifiablePIDSDJWTWUA" ||
       vct === "urn:eu.europa.ec.eudi:pid:1")
   ) {
     msoMdocClaims.unique_identifier = claims.unique_id; // Example mapping for PID
@@ -530,6 +532,7 @@ export async function handleCredentialGenerationBasedOnFormat(
     case "VerifiableIdCardJwtVc":
     case "VerifiablePIDSDJWT":
     case "VerifiablePIDSDJWTAttestation":
+    case "VerifiablePIDSDJWTWUA":
     case "urn:eu.europa.ec.eudi:pid:1":
     case "test-cred-config": // For testing purposes
       credPayload = getPIDSDJWTData();
@@ -551,6 +554,9 @@ export async function handleCredentialGenerationBasedOnFormat(
       break;
     case "PaymentWalletAttestation":
       credPayload = createPaymentWalletAttestationPayload(issuerName);
+      break;
+    case "urn:eudi:sca:payment:1":
+      credPayload = createTs12PaymentScaAttestationPayload(issuerName);
       break;
     case "VerifiablevReceiptSDJWT":
       credPayload = sessionObject
@@ -1364,6 +1370,7 @@ export async function handleCredentialGenerationBasedOnFormatDeferred(
     case "VerifiableIdCardJwtVc":
     case "VerifiablePIDSDJWT":
     case "VerifiablePIDSDJWTAttestation":
+    case "VerifiablePIDSDJWTWUA":
     case "urn:eu.europa.ec.eudi:pid:1":
     case "test-cred-config": // For testing purposes
       credPayload = getPIDSDJWTData();
@@ -1383,6 +1390,9 @@ export async function handleCredentialGenerationBasedOnFormatDeferred(
       break;
     case "PaymentWalletAttestation":
       credPayload = createPaymentWalletAttestationPayload(issuerName);
+      break;
+    case "urn:eudi:sca:payment:1":
+      credPayload = createTs12PaymentScaAttestationPayload(issuerName);
       break;
     case "VerifiablevReceiptSDJWT":
       credPayload = sessionObject

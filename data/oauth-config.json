@@ -12,6 +12,7 @@
     "VerifiableIdCard",
     "PID",
     "VerifiablePIDSDJWTAttestation",
+    "VerifiablePIDSDJWTWUA",
     "ePassportCredential",
     "StudentID",
     "ferryBoardingPassCredential",
@@ -19,6 +20,7 @@
     "urn:eu.europa.ec.eudi:pid:1",
     "urn:eu.europa.ec.eudi:pid:1:mso_mdoc",
     "PaymentWalletAttestation",
+    "urn:eudi:sca:payment:1",
     "PhotoID",
     "PCD",
     "LoyaltyCard"

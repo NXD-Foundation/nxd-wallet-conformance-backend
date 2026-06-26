@@ -26,9 +26,7 @@ import {
   getSignatureType,
   
   // Session management utilities
-  createBaseSession,
   createPreAuthSessionData,
-  createSessionWithPayload,
   
   // QR code and URL generation utilities
   generateQRCode,
@@ -87,6 +85,7 @@ router.get("/offer-tx-code", async (req, res) => {
 
     const sessionData = createPreAuthSessionData({
       signatureType,
+      credentialType,
       txCodeRequired: true,
     });
     await manageSession(sessionId, sessionData);
@@ -137,7 +136,7 @@ router.get("/offer-no-code", async (req, res) => {
     const credentialType = getCredentialType(req);
     const signatureType = getSignatureType(req);
 
-    const sessionData = createPreAuthSessionData({ signatureType });
+    const sessionData = createPreAuthSessionData({ signatureType, credentialType });
     await manageSession(sessionId, sessionData);
 
     const credentialOffer = createPreAuthCredentialOfferUri(
@@ -169,7 +168,10 @@ router.post("/offer-no-code", async (req, res) => {
       return sendErrorResponse(res, "invalid_request", "Credential payload is required", 400);
     }
 
-    const sessionData = createSessionWithPayload(credentialPayload, true);
+    const sessionData = createPreAuthSessionData({
+      credentialType,
+      additionalProps: { credentialPayload },
+    });
     await manageSession(sessionId, sessionData);
 
     const credentialOffer = createPreAuthCredentialOfferUri(
@@ -226,7 +228,7 @@ router.get("/cs01-offer", async (req, res) => {
 
     const credentialType = getCredentialType(req);
     const signatureType = getSignatureType(req);
-    const sessionData = createPreAuthSessionData({ signatureType });
+    const sessionData = createPreAuthSessionData({ signatureType, credentialType });
     await manageSession(sessionId, sessionData);
 
     const credentialOffer = createPreAuthCredentialOfferUri(
@@ -254,6 +256,7 @@ router.get("/cs01-offer-tx-code", async (req, res) => {
     const signatureType = getSignatureType(req);
     const sessionData = createPreAuthSessionData({
       signatureType,
+      credentialType,
       txCodeRequired: true,
     });
     await manageSession(sessionId, sessionData);
@@ -294,7 +297,7 @@ router.get("/haip-offer-tx-code", async (req, res) => {
 
     const credentialType = getCredentialType(req);
 
-    const sessionData = createPreAuthSessionData({ isHaip: true, txCodeRequired: true });
+    const sessionData = createPreAuthSessionData({ isHaip: true, credentialType, txCodeRequired: true });
     await manageSession(sessionId, sessionData);
 
     const credentialOffer = createPreAuthCredentialOfferUri(

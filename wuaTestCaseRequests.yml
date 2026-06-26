@@ -1,0 +1,358 @@
+# WUA (CS-04) Enforcement Test Case Requests
+# Focused on VerifiablePIDSDJWTWUA — PID payload with mandatory WIA (PAR/token) and KA (credential)
+# Base URL: http://localhost:3000 (or your SERVER_URL environment variable)
+#
+# Spec references:
+#   - CS-04: Individual Wallet Unit Attestation (WUA) Lifecycle
+#   - CS-01: Credential Issuance (WIA at PAR/token, KA at credential)
+#   - TS-03: Wallet Unit Attestations
+#
+# Unlike ts12TestCaseRequests.yml, this file covers ONLY flows that trigger WUA enforcement.
+
+base_url: "http://localhost:3000"
+
+wua_flow_overview:
+  credential_configuration_id: "VerifiablePIDSDJWTWUA"
+  vct: "VerifiablePIDSDJWTWUA"
+  scope: "VerifiablePIDSDJWTWUA"
+  format: "dc+sd-jwt"
+  enforcement:
+    par: "OAuth-Client-Attestation + PoP headers required (WIA)"
+    token: "WIA headers + DPoP bound to WIA cnf.jwk"
+    credential: "proofs.jwt with key_attestation header (KA) + PoP under attested_keys[0]"
+  relaxations:
+    trusted_list: "stubbed — signature verified via JWKS/x5c/header.jwk only"
+    revocation: "warning-only when client_status / key_storage_status absent"
+
+# ==============================================================================
+# METADATA — verify WUA-required credential is advertised
+# ==============================================================================
+issuer_metadata:
+  - id: "WUA-META-01"
+    name: "Issuer metadata includes VerifiablePIDSDJWTWUA"
+    description: >
+      Fetch OID4VCI issuer metadata and confirm credential_configurations_supported
+      contains VerifiablePIDSDJWTWUA with proof_types_supported.jwt.key_attestations_required.
+    method: "GET"
+    path: "/.well-known/openid-credential-issuer"
+    url: "http://localhost:3000/.well-known/openid-credential-issuer"
+    spec_reference: "CS-01 §7.7 / CS-04 §7.2"
+    expected_metadata_fields:
+      - "credential_configurations_supported.VerifiablePIDSDJWTWUA"
+      - "credential_configurations_supported.VerifiablePIDSDJWTWUA.proof_types_supported.jwt.key_attestations_required"
+      - "credential_configurations_supported.VerifiablePIDSDJWTWUA.preferred_client_status_period"
+
+  - id: "WUA-META-02"
+    name: "OAuth AS metadata includes VerifiablePIDSDJWTWUA scope"
+    description: >
+      Verify scopes_supported lists VerifiablePIDSDJWTWUA and token_endpoint_auth_methods_supported
+      includes attest_jwt_client_auth for WIA-based client authentication.
+    method: "GET"
+    path: "/.well-known/oauth-authorization-server"
+    url: "http://localhost:3000/.well-known/oauth-authorization-server"
+    spec_reference: "CS-01 §7.4"
+    expected_metadata_fields:
+      - "scopes_supported (includes VerifiablePIDSDJWTWUA)"
+      - "token_endpoint_auth_methods_supported (includes attest_jwt_client_auth)"
+
+# ==============================================================================
+# ISSUANCE OFFER — start auth-code flow for WUA-required PID
+# ==============================================================================
+credential_issuance:
+  authorization_code_flow:
+    - id: "WUA-ISSUE-01"
+      name: "WUA-required PID — authorization code offer"
+      description: >
+        Primary issuance entry point for VerifiablePIDSDJWTWUA. Same PID claims as
+        VerifiablePIDSDJWT but metadata requires key_attestations_required and
+        issuer enforces WIA at PAR/token and KA at credential.
+      method: "GET"
+      path: "/offer-code-sd-jwt"
+      url: "http://localhost:3000/offer-code-sd-jwt?credentialType=VerifiablePIDSDJWTWUA&sessionId=wua-session-001&client_id_scheme=redirect_uri"
+      parameters:
+        credentialType: "VerifiablePIDSDJWTWUA"
+        sessionId: "wua-session-001"
+        client_id_scheme: "redirect_uri"
+      spec_reference: "CS-04 §5.3 / CS-01 §6.1"
+      expected_response_fields:
+        - qr
+        - deepLink
+        - sessionId
+
+    - id: "WUA-ISSUE-02"
+      name: "Credential offer payload for WUA-required PID"
+      description: >
+        Wallet fetches the credential offer JSON after scanning WUA-ISSUE-01 deep link.
+      method: "GET"
+      path: "/credential-offer-code-sd-jwt/:id"
+      url: "http://localhost:3000/credential-offer-code-sd-jwt/wua-session-001?credentialType=VerifiablePIDSDJWTWUA"
+      parameters:
+        sessionId: "wua-session-001"
+        credentialType: "VerifiablePIDSDJWTWUA"
+      spec_reference: "OID4VCI"
+      prerequisite: "WUA-ISSUE-01"
+
+# ==============================================================================
+# PAR — WIA (Wallet Instance Attestation) enforcement
+# ==============================================================================
+par_endpoint:
+  - id: "WUA-PAR-NEG-01"
+    name: "PAR rejects missing WIA for VerifiablePIDSDJWTWUA"
+    description: >
+      POST /par with scope=VerifiablePIDSDJWTWUA but WITHOUT OAuth-Client-Attestation
+      headers. Issuer MUST return 401 invalid_client.
+    method: "POST"
+    path: "/par"
+    url: "http://localhost:3000/par"
+    body:
+      client_id: "wua-test-client"
+      scope: "VerifiablePIDSDJWTWUA"
+      response_type: "code"
+      redirect_uri: "openid4vp://"
+      code_challenge: "<pkce-challenge-s256>"
+      code_challenge_method: "S256"
+      state: "wua-par-state-001"
+    headers_required: []
+    spec_reference: "CS-04 §7.3 / CS-01 §7.3"
+    expected_error:
+      status: 401
+      error: "invalid_client"
+
+  - id: "WUA-PAR-POS-01"
+    name: "PAR accepts valid WIA headers for VerifiablePIDSDJWTWUA"
+    description: >
+      POST /par with scope=VerifiablePIDSDJWTWUA and both WIA headers present.
+      Replace placeholders with wallet-generated JWTs before running manually.
+    method: "POST"
+    path: "/par"
+    url: "http://localhost:3000/par"
+    body:
+      client_id: "wua-test-client"
+      scope: "VerifiablePIDSDJWTWUA"
+      response_type: "code"
+      redirect_uri: "openid4vp://"
+      code_challenge: "<pkce-challenge-s256>"
+      code_challenge_method: "S256"
+      state: "wua-par-state-002"
+      issuer_state: "wua-session-001"
+    headers_required:
+      - name: "OAuth-Client-Attestation"
+        value: "<WIA JWT typ oauth-client-attestation+jwt>"
+      - name: "OAuth-Client-Attestation-PoP"
+        value: "<PoP JWT typ oauth-client-attestation-pop+jwt signed with WIA cnf key>"
+    spec_reference: "CS-04 §5.3 Stage A / CS-01 §7.4"
+    expected_response_fields:
+      - request_uri
+      - expires_in
+
+# ==============================================================================
+# TOKEN — WIA + DPoP session binding
+# ==============================================================================
+token_endpoint:
+  - id: "WUA-TOKEN-NEG-01"
+    name: "Token rejects missing DPoP for WUA-bound session"
+    description: >
+      After completing PAR+authorize for VerifiablePIDSDJWTWUA, exchange authorization
+      code WITHOUT DPoP header. Issuer MUST return 400 invalid_dpop_proof.
+    method: "POST"
+    path: "/token_endpoint"
+    url: "http://localhost:3000/token_endpoint"
+    body:
+      grant_type: "authorization_code"
+      code: "<authorization-code-from-authorize>"
+      redirect_uri: "openid4vp://"
+      code_verifier: "<pkce-verifier>"
+      client_id: "wua-test-client"
+    headers_required:
+      - name: "OAuth-Client-Attestation"
+        value: "<same WIA JWT as PAR>"
+      - name: "OAuth-Client-Attestation-PoP"
+        value: "<fresh PoP JWT>"
+    spec_reference: "CS-04 §7.3 / CS-01 §7.4"
+    expected_error:
+      status: 400
+      error: "invalid_dpop_proof"
+    prerequisite: "WUA-PAR-POS-01 and completed /authorize"
+
+  - id: "WUA-TOKEN-NEG-02"
+    name: "Token rejects DPoP jkt mismatch against WIA cnf"
+    description: >
+      Token request with DPoP signed by a key different from WIA cnf.jwk.
+      Issuer MUST return 400 invalid_dpop_proof.
+    method: "POST"
+    path: "/token_endpoint"
+    url: "http://localhost:3000/token_endpoint"
+    body:
+      grant_type: "authorization_code"
+      code: "<authorization-code>"
+      redirect_uri: "openid4vp://"
+      code_verifier: "<pkce-verifier>"
+      client_id: "wua-test-client"
+    headers_required:
+      - name: "OAuth-Client-Attestation"
+        value: "<WIA JWT>"
+      - name: "OAuth-Client-Attestation-PoP"
+        value: "<PoP JWT>"
+      - name: "DPoP"
+        value: "<DPoP JWT signed with WRONG key (not WIA cnf)>"
+    spec_reference: "CS-04 §7.3 item 1"
+    expected_error:
+      status: 400
+      error: "invalid_dpop_proof"
+
+  - id: "WUA-TOKEN-POS-01"
+    name: "Token accepts WIA + DPoP bound to WIA cnf.jwk"
+    description: >
+      Successful token exchange: DPoP MUST use the same key as WIA cnf.jwk;
+      access token carries cnf.jkt matching that thumbprint.
+    method: "POST"
+    path: "/token_endpoint"
+    url: "http://localhost:3000/token_endpoint"
+    body:
+      grant_type: "authorization_code"
+      code: "<authorization-code>"
+      redirect_uri: "openid4vp://"
+      code_verifier: "<pkce-verifier>"
+      client_id: "wua-test-client"
+    headers_required:
+      - name: "OAuth-Client-Attestation"
+        value: "<WIA JWT>"
+      - name: "OAuth-Client-Attestation-PoP"
+        value: "<PoP JWT>"
+      - name: "DPoP"
+        value: "<DPoP JWT signed with WIA cnf.jwk private key>"
+    spec_reference: "CS-04 §5.3 Stage A"
+    expected_response_fields:
+      - access_token
+      - token_type
+
+# ==============================================================================
+# CREDENTIAL — KA (Key Attestation) enforcement
+# ==============================================================================
+credential_endpoint:
+  - id: "WUA-CRED-NEG-01"
+    name: "Credential rejects missing key_attestation for VerifiablePIDSDJWTWUA"
+    description: >
+      POST /credential with proofs.jwt but WITHOUT key_attestation in the JWT header.
+      Issuer MUST return 400 invalid_proof.
+    method: "POST"
+    path: "/credential"
+    url: "http://localhost:3000/credential"
+    headers_required:
+      - name: "Authorization"
+        value: "Bearer <access-token>"
+    body:
+      credential_configuration_id: "VerifiablePIDSDJWTWUA"
+      proofs:
+        jwt: "<proof JWT WITHOUT key_attestation header>"
+    spec_reference: "CS-04 §5.3 Stage B / CS-01 §7.5"
+    expected_error:
+      status: 400
+      error: "invalid_proof"
+
+  - id: "WUA-CRED-NEG-02"
+    name: "Credential rejects invalid KA signature"
+    description: >
+      POST /credential with key_attestation JWT that fails signature verification.
+    method: "POST"
+    path: "/credential"
+    url: "http://localhost:3000/credential"
+    headers_required:
+      - name: "Authorization"
+        value: "Bearer <access-token>"
+    body:
+      credential_configuration_id: "VerifiablePIDSDJWTWUA"
+      proofs:
+        jwt: "<proof JWT with invalid/tampered key_attestation>"
+    spec_reference: "CS-04 §7.3"
+    expected_error:
+      status: 400
+      error: "invalid_proof"
+
+  - id: "WUA-CRED-NEG-03"
+    name: "Credential rejects proof key not matching attested_keys[0]"
+    description: >
+      Proof JWT signed with a key that does not match the first entry in KA attested_keys.
+    method: "POST"
+    path: "/credential"
+    url: "http://localhost:3000/credential"
+    headers_required:
+      - name: "Authorization"
+        value: "Bearer <access-token>"
+    body:
+      credential_configuration_id: "VerifiablePIDSDJWTWUA"
+      proofs:
+        jwt: "<proof JWT: key_attestation valid but PoP signed with wrong key>"
+    spec_reference: "CS-04 §7.3 item 1"
+    expected_error:
+      status: 400
+      error: "invalid_proof"
+
+  - id: "WUA-CRED-POS-01"
+    name: "Credential accepts valid KA + PoP for VerifiablePIDSDJWTWUA"
+    description: >
+      Successful credential request: proofs.jwt header includes key_attestation (KA),
+      proof signed with attested_keys[0], nonce valid. Returns PID-shaped SD-JWT-VC.
+    method: "POST"
+    path: "/credential"
+    url: "http://localhost:3000/credential"
+    headers_required:
+      - name: "Authorization"
+        value: "Bearer <access-token>"
+    body:
+      credential_configuration_id: "VerifiablePIDSDJWTWUA"
+      proofs:
+        jwt: "<proof JWT with key_attestation header + valid PoP>"
+    spec_reference: "CS-04 §5.3 Stage B"
+    expected_response_fields:
+      - credentials
+    expected_credential_claims:
+      - given_name
+      - family_name
+      - birth_date
+
+# ==============================================================================
+# TEST SCENARIO MAPPING
+# ==============================================================================
+wua_test_scenarios:
+  WUA-E2E-01:
+    description: "Full WUA enforcement loop for VerifiablePIDSDJWTWUA"
+    steps:
+      - "WUA-META-01"
+      - "WUA-META-02"
+      - "WUA-ISSUE-01"
+      - "WUA-ISSUE-02"
+      - "WUA-PAR-POS-01"
+      - "WUA-TOKEN-POS-01"
+      - "WUA-CRED-POS-01"
+
+  WUA-NEG-PAR:
+    description: "PAR negative — missing WIA headers"
+    steps:
+      - "WUA-PAR-NEG-01"
+
+  WUA-NEG-TOKEN:
+    description: "Token negative — missing or mismatched DPoP"
+    steps:
+      - "WUA-TOKEN-NEG-01"
+      - "WUA-TOKEN-NEG-02"
+
+  WUA-NEG-CREDENTIAL:
+    description: "Credential negative — missing or invalid KA"
+    steps:
+      - "WUA-CRED-NEG-01"
+      - "WUA-CRED-NEG-02"
+      - "WUA-CRED-NEG-03"
+
+wua_reference:
+  credential_configuration_id: "VerifiablePIDSDJWTWUA"
+  key_attestations_required:
+    key_storage: ["iso_18045_high"]
+    user_authentication: ["iso_18045_high"]
+  wia_headers:
+    attestation: "OAuth-Client-Attestation"
+    pop: "OAuth-Client-Attestation-PoP"
+  ka_location: "proofs.jwt protected header key_attestation"
+  binding:
+    stage_a: "WIA cnf.jwk == DPoP key; access token cnf.jkt == thumbprint(WIA cnf.jwk)"
+    stage_b: "proof JWT signed with attested_keys[0]; credential cnf bound to that key"

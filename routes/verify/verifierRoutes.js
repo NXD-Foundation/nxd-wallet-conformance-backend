@@ -49,6 +49,7 @@ import {
   validateCs03CredentialResponses,
 } from "../../utils/cs03Validation.js";
 import { validateSdJwtKeyBindingMatchesCredential } from "../../utils/sdJwtKeyBinding.js";
+import { validateTs12PaymentPresentationResponse } from "../../utils/ts12Validation.js";
 
 const getSessionTranscriptBytes = (
   oid4vpData,
@@ -250,6 +251,63 @@ let verificationSessions = []; //TODO these should be redis or something a prope
 let sessions = [];
 let sessionHistory = new TimedArray(30000); //cache data for 30sec
 let verificationResultsHistory = new TimedArray(30000); //cache data for 30sec
+const ts12JtiCache = new TimedArray(5 * 60 * 1000);
+
+async function validateTs12PaymentSessionOrRespond({
+  sessionId,
+  vpSession,
+  jwtFromKeybind,
+  claimsFromExtraction,
+  res,
+  slog,
+}) {
+  if (!vpSession?.ts12_payment) {
+    return true;
+  }
+
+  const result = validateTs12PaymentPresentationResponse({
+    kbPayload: jwtFromKeybind?.payload,
+    extractedClaims: claimsFromExtraction,
+    vpSession,
+    seenJti: new Set(ts12JtiCache.getCurrentArray()),
+  });
+
+  if (result.ok) {
+    ts12JtiCache.addElement(result.jti);
+    vpSession.ts12_authentication_code = result.jti;
+    vpSession.ts12_credential = result.credential;
+    return true;
+  }
+
+  await logError(sessionId, "TS12 payment presentation validation failed", {
+    code: result.code,
+    error: result.error,
+  }).catch(() => {});
+
+  try {
+    vpSession.status = "failed";
+    vpSession.error = result.code || "ts12_validation_failed";
+    vpSession.error_description = result.error;
+    await storeVPSession(sessionId, vpSession);
+  } catch (storageError) {
+    await logError(sessionId, "Failed to update session status after TS12 validation failure", {
+      error: storageError.message,
+      stack: storageError.stack,
+    }).catch(() => {});
+  }
+
+  if (slog) {
+    try {
+      slog("[PRESENTATION] TS12 payment validation failed", {
+        code: result.code,
+        error: result.error,
+      });
+    } catch {}
+  }
+
+  res.status(400).json({ error: result.error, code: result.code });
+  return false;
+}
 
 // This should be replaced with the actual trusted root certificate(s) for the mDL issuers.
 const trustedCerts = [fs.readFileSync(
@@ -1521,6 +1579,18 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
           });
         }
 
+        const ts12Valid = await validateTs12PaymentSessionOrRespond({
+          sessionId,
+          vpSession,
+          jwtFromKeybind,
+          claimsFromExtraction,
+          res,
+          slog,
+        });
+        if (!ts12Valid) {
+          return;
+        }
+
         vpSession.status = "success";
         vpSession.claims = { ...claimsFromExtraction };
         await storeVPSession(sessionId, vpSession);
@@ -2206,6 +2276,18 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
         return res.status(400).json({
           error: `Claims mismatch. Received: ${receivedClaims}, expected: ${requestedClaims}`,
         });
+      }
+
+      const ts12Valid = await validateTs12PaymentSessionOrRespond({
+        sessionId,
+        vpSession,
+        jwtFromKeybind,
+        claimsFromExtraction,
+        res,
+        slog,
+      });
+      if (!ts12Valid) {
+        return;
       }
 
       vpSession.status = "success";

@@ -75,6 +75,12 @@ import {
   getTrustedClientAttesterJwks,
 } from "../../utils/oauthClientAttestation.js";
 import {
+  isWuaRequiredCredentialId,
+  credentialConfigRequiresKeyAttestation,
+  validateKaLevelsAgainstMetadata,
+  sessionRequiresWua,
+} from "../../utils/wuaEnforcementPolicy.js";
+import {
   DEFERRED_CREDENTIAL_POLL_INTERVAL_SECONDS,
   advanceDeferredCredentialPollState,
   getDeferredSessionAccessToken,
@@ -723,6 +729,21 @@ const handleAuthorizationCodeFlow = async (
   const parsedAuthDetails = parseAuthorizationDetails(authorizationDetails);
   const chosenCredentialConfigurationId = parsedAuthDetails?.[0]?.credential_configuration_id;
 
+  if (existingCodeSession.requiresWua) {
+    if (!dpopCnf?.jkt) {
+      const err = new Error("DPoP proof is required for WUA-bound issuance sessions");
+      err.errorCode = "invalid_dpop_proof";
+      throw err;
+    }
+    if (existingCodeSession.wiaCnfJkt && dpopCnf.jkt !== existingCodeSession.wiaCnfJkt) {
+      const err = new Error(
+        "DPoP key thumbprint does not match WIA cnf.jwk from the same issuance session"
+      );
+      err.errorCode = "invalid_dpop_proof";
+      throw err;
+    }
+  }
+
   // HAIP profile: when enabled and an expected DPoP thumbprint is stored on the session,
   // ensure the incoming DPoP-bound token (dpopCnf.jkt) matches that thumbprint.
   const requireDpopForToken =
@@ -945,7 +966,20 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
       try { slog("[TOKEN] [START] Token endpoint request", { grant_type, hasCode: !!code, hasPreAuthCode: !!preAuthorizedCode }); } catch {}
     }
 
-    // Extract and validate Wallet Instance Attestation (WIA) if present
+    // Resolve issuance session early for WUA-required enforcement.
+    let codeFlowSessionForWua = null;
+    let preAuthSessionForWua = null;
+    if (grant_type === "authorization_code" && code) {
+      const issuanceSessionId = await getSessionKeyAuthCode(code);
+      if (issuanceSessionId) {
+        codeFlowSessionForWua = await getCodeFlowSession(issuanceSessionId);
+      }
+    } else if (grant_type === PRE_AUTHORIZED_GRANT_TYPE && preAuthorizedCode) {
+      preAuthSessionForWua = await getPreAuthSession(preAuthorizedCode);
+    }
+    const tokenRequiresWua = sessionRequiresWua(codeFlowSessionForWua || preAuthSessionForWua);
+
+    // Extract and validate Wallet Instance Attestation (WIA) if present (legacy body path)
     // Based on TS3 spec: https://github.com/eu-digital-identity-wallet/eudi-doc-standards-and-technical-specifications/blob/main/docs/technical-specifications/ts3-wallet-unit-attestation.md
     const wiaJwt = extractWIAFromTokenRequest(req.body, req.headers);
     if (wiaJwt) {
@@ -977,8 +1011,37 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
       clientId: req.body?.client_id,
       authorizationServerIssuer: getServerUrl(),
       trustedJwks: getTrustedClientAttesterJwks(),
+      requireAttestation: tokenRequiresWua,
+      strictWiaSignature: tokenRequiresWua,
     });
     const isPreAuthorizedGrant = grant_type === PRE_AUTHORIZED_GRANT_TYPE;
+    if (tokenRequiresWua && attestationResult.skip) {
+      if (slog) {
+        try { slog("[TOKEN] WUA-required session but WIA headers missing"); } catch {}
+      }
+      return res.status(401).json({
+        error: "invalid_client",
+        error_description: "Wallet Instance Attestation is required for this issuance session",
+      });
+    }
+    if (tokenRequiresWua && !attestationResult.ok) {
+      if (slog) {
+        try {
+          slog("[TOKEN] Required WIA rejected", {
+            error: attestationResult.errorDescription,
+          });
+        } catch {}
+      }
+      return res.status(attestationResult.statusCode || 401).json({
+        error: attestationResult.oauthError || "invalid_client",
+        error_description: attestationResult.errorDescription,
+      });
+    }
+    if (tokenRequiresWua && attestationResult.ok && attestationResult.wiaWarnings?.length && slog) {
+      for (const w of attestationResult.wiaWarnings) {
+        try { slog("[TOKEN] [WARN] WIA validation warning", { warning: w }); } catch {}
+      }
+    }
     if (!attestationResult.skip && !attestationResult.ok) {
       if (isPreAuthorizedGrant) {
         reportCs01PreAuthWalletAttestationObservability({
@@ -1212,6 +1275,36 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
       }
     }
 
+    if (tokenRequiresWua && !dpopCnf?.jkt) {
+      if (slog) {
+        try { slog("[TOKEN] [ERROR] WUA-required session but DPoP proof missing or invalid"); } catch {}
+      }
+      return res.status(400).json({
+        error: "invalid_dpop_proof",
+        error_description: "DPoP proof is required for WUA-bound issuance sessions",
+      });
+    }
+
+    if (
+      tokenRequiresWua &&
+      ((codeFlowSessionForWua?.wiaCnfJkt) || (preAuthSessionForWua && attestationResult?.wiaCnfJkt)) &&
+      dpopCnf?.jkt &&
+      dpopCnf.jkt !== (codeFlowSessionForWua?.wiaCnfJkt || attestationResult.wiaCnfJkt)
+    ) {
+      if (slog) {
+        try {
+          slog("[TOKEN] [ERROR] DPoP jkt does not match WIA cnf.jkt from issuance session", {
+            expected: codeFlowSessionForWua?.wiaCnfJkt || attestationResult.wiaCnfJkt,
+            received: dpopCnf.jkt,
+          });
+        } catch {}
+      }
+      return res.status(400).json({
+        error: "invalid_dpop_proof",
+        error_description: "DPoP key thumbprint must match WIA cnf.jwk from the same issuance session",
+      });
+    }
+
     let tokenResponse;
 
     if (grant_type === PRE_AUTHORIZED_GRANT_TYPE) {
@@ -1283,6 +1376,7 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
     }
 
     if (
+      error.errorCode === "invalid_grant" ||
       error.message.includes(ERROR_MESSAGES.INVALID_GRANT) ||
       error.message.includes(ERROR_MESSAGES.INVALID_GRANT_CODE) ||
       error.message.includes(ERROR_MESSAGES.PKCE_FAILED)
@@ -1363,6 +1457,24 @@ sharedRouter.post("/credential", async (req, res) => {
     // TS3: https://github.com/eu-digital-identity-wallet/eudi-doc-standards-and-technical-specifications/blob/main/docs/technical-specifications/ts3-wallet-unit-attestation.md
     const wuaJwt = extractWUAFromCredentialRequest(requestBody);
     let wuaValidationResult = null;
+    const issuerConfigForWua = loadIssuerConfig();
+    const credConfigForWua =
+      issuerConfigForWua.credential_configurations_supported[effectiveConfigurationId];
+    const credentialRequiresWua =
+      isWuaRequiredCredentialId(effectiveConfigurationId) ||
+      credentialConfigRequiresKeyAttestation(credConfigForWua);
+
+    if (credentialRequiresWua && !wuaJwt) {
+      if (slog) {
+        try { slog("[CREDENTIAL] [ERROR] Key Attestation required but missing in proof JWT header"); } catch {}
+      }
+      return res.status(400).json({
+        error: "invalid_proof",
+        error_description:
+          "Key Attestation (KA) in proofs.jwt key_attestation header is required for VerifiablePIDSDJWTWUA",
+      });
+    }
+
     if (wuaJwt) {
       if (slog) {
         try {
@@ -1371,12 +1483,26 @@ sharedRouter.post("/credential", async (req, res) => {
           slog("[CREDENTIAL] WUA received", { length: wuaJwt.length, iss: p?.iss, aud: p?.aud, iat: p?.iat, exp: p?.exp, jti: p?.jti, hasAttestedKeys: Array.isArray(p?.attested_keys) && p.attested_keys.length > 0 });
         } catch {}
       }
-      wuaValidationResult = await validateWUA(wuaJwt, sessionId, loadIssuerConfig());
+      wuaValidationResult = await validateWUA(wuaJwt, sessionId, issuerConfigForWua);
       if (wuaValidationResult.valid) {
         if (slog) {
           try { slog("[CREDENTIAL] WUA validated successfully", { wuaIssuer: wuaValidationResult.payload?.iss, wuaExp: wuaValidationResult.payload?.exp, hasAttestedKeys: Array.isArray(wuaValidationResult.payload?.attested_keys) && wuaValidationResult.payload.attested_keys.length > 0 }); } catch {}
         }
+        if (wuaValidationResult.warnings?.length && slog) {
+          for (const w of wuaValidationResult.warnings) {
+            try { slog("[CREDENTIAL] [WARN] KA validation warning", { warning: w }); } catch {}
+          }
+        }
       } else {
+        if (credentialRequiresWua) {
+          if (slog) {
+            try { slog("[CREDENTIAL] [ERROR] Required KA validation failed", { error: wuaValidationResult.error }); } catch {}
+          }
+          return res.status(400).json({
+            error: "invalid_proof",
+            error_description: wuaValidationResult.error || "Key Attestation validation failed",
+          });
+        }
         if (slog) {
           try { slog("[CREDENTIAL] [WARN] WUA validation failed (continuing without WUA)", { error: wuaValidationResult.error }); } catch {}
         }
@@ -1384,6 +1510,22 @@ sharedRouter.post("/credential", async (req, res) => {
     } else {
       if (slog) {
         try { slog("[CREDENTIAL] WUA not found in credential request (continuing without WUA)"); } catch {}
+      }
+    }
+
+    if (credentialRequiresWua && wuaValidationResult?.valid) {
+      const levelCheck = validateKaLevelsAgainstMetadata(
+        wuaValidationResult.payload,
+        credConfigForWua
+      );
+      if (!levelCheck.ok) {
+        if (slog) {
+          try { slog("[CREDENTIAL] [ERROR] KA levels do not meet metadata requirements", { error: levelCheck.error }); } catch {}
+        }
+        return res.status(400).json({
+          error: "invalid_proof",
+          error_description: levelCheck.error,
+        });
       }
     }
 
@@ -1484,7 +1626,16 @@ sharedRouter.post("/credential", async (req, res) => {
 
           // Mode (2): JWT proof + validated WUA — PoP key must match the first attested key ("possession + assurance").
           // EUDI Wallet ARF / ETSI-style binding: credential cnf aligns with the primary attested key.
-          if (wuaJwt && wuaValidationResult?.valid && wuaValidationResult?.payload) {
+          const mustBindToWua =
+            credentialRequiresWua ||
+            (wuaJwt && wuaValidationResult?.valid && wuaValidationResult?.payload);
+
+          if (mustBindToWua) {
+            if (!wuaValidationResult?.valid || !wuaValidationResult?.payload) {
+              throw new Error(
+                `${ERROR_MESSAGES.INVALID_PROOF}: Valid Key Attestation is required but missing or invalid`
+              );
+            }
             if (slog) {
               try {
                 const attestedKeysCount = Array.isArray(wuaValidationResult.payload.attested_keys)
