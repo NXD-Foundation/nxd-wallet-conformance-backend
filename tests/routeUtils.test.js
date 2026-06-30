@@ -2,6 +2,7 @@ import { expect } from 'chai';
 import {
   createCredentialOfferConfig,
   DEFAULT_MDL_DCQL_QUERY,
+  BOOKING_REFERENCE_PID_DCQL_QUERY,
   URL_SCHEMES,
   resolveCredentialOfferUrlScheme,
   getCredentialOfferSchemeFromRequest,
@@ -145,6 +146,18 @@ describe('Route Utils', () => {
         expect(path[0]).to.equal('urn:eu.europa.ec.eudi:pid:1');
         expect(path[0]).to.not.equal('urn:eu.europa.ec.eudi:pid:1:mso_mdoc');
       });
+    });
+  });
+
+  describe('BOOKING_REFERENCE_PID_DCQL_QUERY', () => {
+    it('requests both booking reference and PID credentials', () => {
+      const [bookingQuery, pidQuery] = BOOKING_REFERENCE_PID_DCQL_QUERY.credentials;
+
+      expect(bookingQuery.meta.vct_values).to.deep.equal(['booking_reference_credential']);
+      expect(bookingQuery.claims.map(({ path }) => path)).to.deep.equal([['booking_reference']]);
+
+      expect(pidQuery.meta.vct_values).to.deep.equal(['urn:eu.europa.ec.eudi:pid:1']);
+      expect(pidQuery.claims.map(({ path }) => path)).to.deep.equal([['family_name']]);
     });
   });
 

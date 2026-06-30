@@ -758,6 +758,36 @@ export const FULL_PID_DCQL_QUERY = {
   ],
 };
 
+// Combined Booking Reference + PID DCQL query
+export const BOOKING_REFERENCE_PID_DCQL_QUERY = {
+  credentials: [
+    {
+      id: "booking-reference",
+      format: "dc+sd-jwt",
+      meta: {
+        vct_values: ["booking_reference_credential"],
+      },
+      claims: [{ path: ["booking_reference"] }],
+    },
+    {
+      id: "pid",
+      format: "dc+sd-jwt",
+      meta: {
+        vct_values: ["urn:eu.europa.ec.eudi:pid:1"],
+      },
+      claims: [ { path: ["given_name"] },
+      { path: ["family_name"] },
+      { path: ["birth_date"] },
+      { path: ["age_over_18"] },
+      { path: ["issuance_date"] },
+      { path: ["expiry_date"] },
+      { path: ["issuing_authority"] },
+      { path: ["issuing_country"] },],
+        
+    },
+  ],
+};
+
 /** CS-03 / CSC remote signing: DCQL credential id must match qesRequest.credential_ids */
 export const CS03_SIGNING_CREDENTIAL_ID = "signing-cert-01";
 

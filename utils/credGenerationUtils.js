@@ -46,6 +46,8 @@ import {
   getLoyaltyCardSDJWTDataWithPayload,
   getBookingReferenceSDJWTData,
   getBookingReferenceSDJWTDataWithPayload,
+  getRoomKeySDJWTData,
+  getRoomKeySDJWTDataWithPayload,
 } from "../utils/credPayloadUtil.js";
 
 import { issueX509AttrCredentialWithDefaultKey } from "./issueX509AttrCredential.js";
@@ -649,6 +651,14 @@ export async function handleCredentialGenerationBasedOnFormat(
             sessionObject.credentialPayload,
           )
         : getBookingReferenceSDJWTData();
+      break;
+    case "room_key_credential":
+      console.log("!!!!!!!!!!room_key_credential!!!!!!");
+      credPayload = sessionObject
+        ? await getRoomKeySDJWTDataWithPayload(
+            sessionObject.credentialPayload,
+          )
+        : await getRoomKeySDJWTData();
       break;
     default:
       throw new Error(`Unsupported credential type: ${credType}`);
@@ -1492,6 +1502,13 @@ export async function handleCredentialGenerationBasedOnFormatDeferred(
             sessionObject.credentialPayload,
           )
         : getBookingReferenceSDJWTData();
+      break;
+    case "room_key_credential":
+      credPayload = sessionObject
+        ? await getRoomKeySDJWTDataWithPayload(
+            sessionObject.credentialPayload,
+          )
+        : await getRoomKeySDJWTData();
       break;
     default:
       throw new Error(`Unsupported credential type: ${credType}`);

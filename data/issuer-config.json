@@ -2517,6 +2517,38 @@
           "proof_signing_alg_values_supported": ["ES256"]
         }
       }
+    },
+
+    "room_key_credential": {
+      "scope": "room_key_credential",
+      "cryptographic_binding_methods_supported": ["jwk"],
+      "credential_metadata": {
+        "display": [
+          {
+            "name": "Room Key",
+            "locale": "en-GB",
+            "description": "SD-JWT credential containing hotel room access details."
+          }
+        ],
+        "claims": [
+          {
+            "path": ["room_number"],
+            "display": [{ "name": "Room Number", "locale": "en-GB" }]
+          },
+          {
+            "path": ["qr_code"],
+            "display": [{ "name": "QR Code", "locale": "en-GB" }]
+          }
+        ]
+      },
+      "credential_signing_alg_values_supported": ["ES256"],
+      "format": "dc+sd-jwt",
+      "vct": "room_key_credential",
+      "proof_types_supported": {
+        "jwt": {
+          "proof_signing_alg_values_supported": ["ES256"]
+        }
+      }
     }
   }
 }

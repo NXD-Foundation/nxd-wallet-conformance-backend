@@ -1182,3 +1182,52 @@ export const getBookingReferenceSDJWTDataWithPayload = (
 
   return { claims, disclosureFrame };
 };
+
+const DEFAULT_ROOM_KEY_CLAIMS = {
+  room_number: "412",
+  reservationId: "RES-2026-001234",
+};
+
+const ROOM_KEY_QR_CONFIG = {
+  type: "png",
+  ec_level: "H",
+  size: 10,
+  margin: 10,
+};
+
+async function encodeTextAsQrDataUri(text) {
+  const code = qr.image(String(text), ROOM_KEY_QR_CONFIG);
+  return imageDataURI.encode(await streamToBuffer(code), "PNG");
+}
+
+export const getRoomKeySDJWTData = async (decodedHeaderSubjectDID) => {
+  return getRoomKeySDJWTDataWithPayload(null, decodedHeaderSubjectDID);
+};
+
+export const getRoomKeySDJWTDataWithPayload = async (
+  payload,
+  decodedHeaderSubjectDID,
+) => {
+  const sourceClaims =
+    payload?.claims && typeof payload.claims === "object"
+      ? payload.claims
+      : payload || {};
+
+  const reservationId =
+    sourceClaims.reservationId ?? DEFAULT_ROOM_KEY_CLAIMS.reservationId;
+  const room_number =
+    sourceClaims.room_number ?? DEFAULT_ROOM_KEY_CLAIMS.room_number;
+  const qr_code = await encodeTextAsQrDataUri(reservationId);
+
+  const claims = {
+    id: decodedHeaderSubjectDID || uuidv4(),
+    room_number,
+    qr_code,
+  };
+
+  const disclosureFrame = {
+    _sd: ["id", "room_number", "qr_code"],
+  };
+
+  return { claims, disclosureFrame };
+};

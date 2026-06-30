@@ -745,7 +745,7 @@ Per OpenID4VP v1.0 Section 7.2.2:
 - **`GET /vp/request`**: Unified endpoint supporting various client identification schemes and query formats
   - `client_id_scheme`: `x509`, `did:web`, `did:jwk`
   - `profile`: `dcql`, `tx`, `mdl`
-  - `credential_profile`: `pid`, `mdl`
+  - `credential_profile`: `pid`, `pidfull`, `booking_pid`, `mdl`
   - `request_uri_method`: `get`, `post`
   - `response_mode`: `direct_post`, `direct_post.jwt`
   - `tx_data`: `true`, `false`

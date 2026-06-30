@@ -30,6 +30,12 @@ http://localhost:3000/vp/request?profile=dcql&credential_profile=pid&client_id_s
 http://localhost:3000/vp/request?profile=dcql&credential_profile=mdl&client_id_scheme=x509_hash&request_uri_method=post&response_mode=direct_post.jwt&invocation_scheme=mdoc-openid4vp
 ```
 
+**Booking reference + PID · combined DCQL**
+
+```
+http://localhost:3000/vp/request?profile=dcql&credential_profile=booking_pid&client_id_scheme=x509_hash&request_uri_method=post&response_mode=direct_post.jwt&scheme=openid4vp
+```
+
 **PID · transaction-data profile (`tx`)** **IGNORE FOR NOW**
 
 ```
@@ -105,7 +111,7 @@ Returns JSON: **`qr`**, **`deepLink`**, **`sessionId`**, and sometimes **`invoca
 | | | **`mdl`** + **`credential_profile=mdl`**: tries `./data/presentation_definition_mdl.json`; if missing, default mDL DCQL. |
 | | | **`etsi`**: PID invocation defaults to **`eu-eaap`** when **`scheme` / `invocation_scheme`** omitted. |
 | | | **`rfc002`**: like **`etsi`** for **`x509` → `x509_hash`** mapping; PID invocation still defaults to **`openid4vp`**. |
-| **`credential_profile`** | PID vs mDL | **`pid`** (default), **`mdl`**. |
+| **`credential_profile`** | Credential query preset | **`pid`** (default), **`pidfull`**, **`booking_pid`** (booking_reference_credential + PID), **`mdl`**. |
 | **`client_id_scheme`** | Verifier identity | **`x509`**, **`x509_hash`**, **`x509_san_dns`**, **`did:web`**, **`did:jwk`**. |
 | | | **`x509`** with **`profile=etsi` or `rfc002`** → **`x509_hash`**; else **`x509_san_dns`**. |
 | **`request_uri_method`** | Wallet fetch of JAR | **`post`** (default). Only **`post`** (lowercase) adds POST semantics; otherwise GET. |

@@ -6,6 +6,7 @@ import {
   DEFAULT_DCQL_QUERY,
   DEFAULT_MDL_DCQL_QUERY,
   FULL_PID_DCQL_QUERY,
+  BOOKING_REFERENCE_PID_DCQL_QUERY,
   DEFAULT_TRANSACTION_DATA,
   loadConfigurationFiles,
   generateDidIdentifiers,
@@ -58,7 +59,7 @@ vpStandardRouter.use((req, res, next) => {
  * - session_id: Session identifier
  * - client_id_scheme: x509 | did:web | did:jwk
  * - profile: dcql | tx | mdl
- * - credential_profile: pid | pidfull | mdl
+ * - credential_profile: pid | pidfull | booking_pid | mdl
  * - request_uri_method: get | post
  * - response_mode: direct_post | direct_post.jwt
  * - tx_data: true | false
@@ -90,6 +91,7 @@ vpStandardRouter.get("/vp/request", async (req, res) => {
     sessionId = normalizedVpSessionIdFromQuery(req.query) || uuidv4();
     slog = makeSessionLogger(sessionId);
     bindSessionLoggingContext(req, res, sessionId);
+    
 
     const profile = req.query.profile || "dcql";
     const isRfc002Profile = profile === "etsi" || profile === "rfc002";
@@ -99,6 +101,7 @@ vpStandardRouter.get("/vp/request", async (req, res) => {
     const clientIdScheme =
       rawClientIdScheme === "x509" ? defaultX509ClientIdScheme : rawClientIdScheme;
     const credentialProfile = req.query.credential_profile || "pid";
+    console.log("credentialProfile!!!!!", credentialProfile);
     const requestUriMethod = req.query.request_uri_method || "post";
     const responseMode = resolveVerifierResponseMode(req.query.response_mode, isRfc002Profile);
     const jarAlg = req.query.jar_alg || CONFIG.DEFAULT_JAR_ALG;
@@ -129,6 +132,9 @@ vpStandardRouter.get("/vp/request", async (req, res) => {
       }
     } else if (credentialProfile === "pidfull") {
       dcqlQuery = FULL_PID_DCQL_QUERY;
+    } else if (credentialProfile === "booking_pid") {
+      console.log("BOOKING_REFERENCE_PID_DCQL_QUERY", BOOKING_REFERENCE_PID_DCQL_QUERY);
+      dcqlQuery = BOOKING_REFERENCE_PID_DCQL_QUERY;
     } else {
       // PID (minimal) — presentation definition or default DCQL fallback
       presentationDefinitionPath = "./data/presentation_definition_pid.json";
@@ -151,6 +157,8 @@ vpStandardRouter.get("/vp/request", async (req, res) => {
             ? DEFAULT_MDL_DCQL_QUERY
             : credentialProfile === "pidfull"
               ? FULL_PID_DCQL_QUERY
+              : credentialProfile === "booking_pid"
+                ? BOOKING_REFERENCE_PID_DCQL_QUERY
               : DEFAULT_DCQL_QUERY;
       }
     }
