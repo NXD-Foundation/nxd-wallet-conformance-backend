@@ -33,6 +33,7 @@ export const TS12_DCQL_QUERY = {
         vct_values: [TS12_PAYMENT_VCT],
       },
       claims: [
+        { path: ["vct"] },
         { path: ["sub"] },
         { path: ["iban"] },
         { path: ["bic"] },

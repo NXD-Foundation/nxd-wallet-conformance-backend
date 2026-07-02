@@ -22,7 +22,7 @@ import {
 describe("TS12 payment helpers", () => {
   it("requests account attestation claims that match the issued credential payload", () => {
     const claimPaths = TS12_DCQL_QUERY.credentials[0].claims.map((c) => c.path.join("."));
-    expect(claimPaths).to.deep.equal(["sub", "iban", "bic", "currency"]);
+    expect(claimPaths).to.deep.equal(["vct", "sub", "iban", "bic", "currency"]);
     expect(claimPaths).to.not.include("pan_last_four");
   });
 
