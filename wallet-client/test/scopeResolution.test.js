@@ -90,18 +90,6 @@ describe("wallet-client scopeResolution (Phase 5)", () => {
     ).to.throw(/Conflicting scope mapping/);
   });
 
-  it("rejects scopes not advertised by the authorization server", () => {
-    expect(() =>
-      resolveCredentialScope({
-        profile: WALLET_PROFILES.WEBUILD_CS01,
-        configurationId: "PID",
-        issuerMeta,
-        offerConfig: { grants: { authorization_code: { scope: "PID" } } },
-        scopesSupported: ["openid"],
-      }),
-    ).to.throw(/not listed in authorization server scopes_supported/);
-  });
-
   it("allows compatibility fallback to configurationId", () => {
     const resolved = resolveCredentialScope({
       profile: WALLET_PROFILES.COMPATIBILITY,

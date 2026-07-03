@@ -55,16 +55,20 @@ export function extractMetadataScope(issuerMeta, configurationId) {
   return scope || null;
 }
 
-function assertScopeSupported(scope, scopesSupported, configurationId) {
-  if (!Array.isArray(scopesSupported) || scopesSupported.length === 0) {
-    return;
-  }
-  if (!scopesSupported.includes(scope)) {
-    throw new ScopeResolutionError(
-      `Resolved scope '${scope}' for credential configuration '${configurationId}' is not listed in authorization server scopes_supported`,
-    );
-  }
-}
+// CS-01 requires scope from Credential Offer or issuer metadata (§7.2, §7.3, §7.7).
+// OpenID4VCI v1.0 §5.1.2 MAY combine issuer and AS scopes but does not require
+// rejecting a resolved scope absent from AS scopes_supported. Removed to avoid
+// stricter-than-CS-01 enforcement.
+// function assertScopeSupported(scope, scopesSupported, configurationId) {
+//   if (!Array.isArray(scopesSupported) || scopesSupported.length === 0) {
+//     return;
+//   }
+//   if (!scopesSupported.includes(scope)) {
+//     throw new ScopeResolutionError(
+//       `Resolved scope '${scope}' for credential configuration '${configurationId}' is not listed in authorization server scopes_supported`,
+//     );
+//   }
+// }
 
 /**
  * Resolve the OAuth scope for a selected credential configuration.
@@ -114,7 +118,7 @@ export function resolveCredentialScope({
     }
   }
 
-  assertScopeSupported(scope, scopesSupported, configurationId);
+  // assertScopeSupported(scope, scopesSupported, configurationId);
 
   return {
     configurationId,
