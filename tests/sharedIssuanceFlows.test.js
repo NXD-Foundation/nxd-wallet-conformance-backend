@@ -1076,6 +1076,8 @@ describe('Shared Issuance Flows', () => {
         .expect(400);
 
       expect(response.body).to.have.property('error', 'invalid_grant');
+      expect(response.body).to.have.property('error_description');
+      expect(response.body.error_description).to.match(/tx_code/i);
     });
 
     it('should accept pre-authorized token requests with the expected tx_code', async () => {

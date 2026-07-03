@@ -137,6 +137,36 @@ function makeSessionLogger(sessionId) {
   };
 }
 
+function logFlowError(slog, label, error, extra = {}) {
+  try {
+    console.error(label, error?.message || error);
+    slog(label, {
+      error: error?.message || String(error),
+      errorCode: error?.errorCode || error?.name || undefined,
+      stack: error?.stack,
+      ...extra,
+    });
+  } catch {}
+}
+
+function runGuardedSync(slog, label, fn, extra = {}) {
+  try {
+    return fn();
+  } catch (error) {
+    logFlowError(slog, label, error, extra);
+    throw error;
+  }
+}
+
+async function runGuardedAsync(slog, label, fn, extra = {}) {
+  try {
+    return await fn();
+  } catch (error) {
+    logFlowError(slog, label, error, extra);
+    throw error;
+  }
+}
+
 // Helper function to log errors to both console and Redis (if sessionId available)
 async function logError(sessionId, ...args) {
   // Always log to console
@@ -1131,13 +1161,20 @@ async function httpPostFormWithAttestationChallengeRetry({
 }
 
 async function runPreAuthorizedIssuance({ profile = activeWalletProfile, walletClientId = activeWalletClientId, apiBase, issuerMeta, offerConfig = null, configurationId, preAuthorizedCode, txCodeConfig, authorizationServer, keyPath, pollTimeoutMs, pollIntervalMs, userPin }, logSessionId) {
-  assertPreAuthorizedAllowed(profile, { endpoint: "pre-authorized issuance" });
   const slog = logSessionId ? makeSessionLogger(logSessionId) : (() => {});
-  const credentialSelection = resolvePreAuthorizedCredentialSelection({
-    configurationId,
-    issuerMeta,
-    offerConfig,
-  });
+  runGuardedSync(slog, "[preauth] profile violation", () =>
+    assertPreAuthorizedAllowed(profile, { endpoint: "pre-authorized issuance" }),
+  );
+  const credentialSelection = runGuardedSync(
+    slog,
+    "[preauth] credential selection failed",
+    () => resolvePreAuthorizedCredentialSelection({
+      configurationId,
+      issuerMeta,
+      offerConfig,
+    }),
+    { configurationId },
+  );
   try {
     slog("[ISSUANCE] [START] Pre-authorized issuance flow", {
       configurationId,
@@ -1154,7 +1191,9 @@ async function runPreAuthorizedIssuance({ profile = activeWalletProfile, walletC
     console.log("[preauth] using provided userPin for tx_code"); try { slog("[preauth] using userPin for tx_code"); } catch {}
   } else if (txCodeConfig) {
     console.warn("[preauth] tx_code indicated in offer but no user PIN provided. Aborting per draft-15."); try { slog("[preauth] tx_code required but pin missing"); } catch {}
-    throw new Error("tx_code_required: offer indicates tx_code; provide 'pin' in request body");
+    const error = new Error("tx_code_required: offer indicates tx_code; provide 'pin' in request body");
+    logFlowError(slog, "[preauth] tx_code required but pin missing", error);
+    throw error;
   }
   let tokenEndpoint = issuerMeta.token_endpoint || null;
   let authorizationServerIssuer = deriveAuthorizationServerIssuer(tokenEndpoint, issuerMeta.credential_issuer || apiBase);
@@ -1244,7 +1283,11 @@ async function runPreAuthorizedIssuance({ profile = activeWalletProfile, walletC
       try { slog("[preauth] attestation challenge AS discovery skipped", { error: e?.message || String(e) }); } catch {}
     }
   }
-  const attestationChallengeState = await initializeAttestationChallengeState(asMetaForAttestation);
+  const attestationChallengeState = await runGuardedAsync(
+    slog,
+    "[preauth] attestation challenge initialization failed",
+    () => initializeAttestationChallengeState(asMetaForAttestation),
+  );
 
   const dpopBinding = await createTokenRequestDpopBinding({
     keyPath,
@@ -1282,7 +1325,12 @@ async function runPreAuthorizedIssuance({ profile = activeWalletProfile, walletC
         }
       : {}),
   };
-  assertCs01NoBodyClientAssertion(profile, tokenPayload, { stage: "pre-authorized token request" });
+  runGuardedSync(
+    slog,
+    "[preauth] CS-01 body client_assertion violation",
+    () => assertCs01NoBodyClientAssertion(profile, tokenPayload, { stage: "pre-authorized token request" }),
+    { stage: "pre-authorized token request" },
+  );
   const tokenRes = await httpPostFormWithAttestationChallengeRetry({
     url: tokenEndpoint,
     params: tokenPayload,
@@ -1327,8 +1375,12 @@ async function runPreAuthorizedIssuance({ profile = activeWalletProfile, walletC
     throw new Error(`token_error: invalid JSON response - ${e?.message}`);
   }
   const accessToken = tokenBody.access_token;
-  assertDpopBoundTokenReceived(profile, tokenBody, accessToken);
-  await assertAccessTokenCnfMatchesWia(profile, accessToken, dpopBinding.publicJwk);
+  runGuardedSync(slog, "[preauth] DPoP-bound token validation failed", () =>
+    assertDpopBoundTokenReceived(profile, tokenBody, accessToken),
+  );
+  await runGuardedAsync(slog, "[preauth] access token cnf validation failed", () =>
+    assertAccessTokenCnfMatchesWia(profile, accessToken, dpopBinding.publicJwk),
+  );
   let c_nonce = tokenBody.c_nonce;
   let c_nonce_expires_in = tokenBody.c_nonce_expires_in;
   const issuanceContext = {
@@ -1361,20 +1413,27 @@ async function runPreAuthorizedIssuance({ profile = activeWalletProfile, walletC
     c_nonce_expires_in = nonceJson.c_nonce_expires_in;
     console.log("[preauth] obtained c_nonce from nonce endpoint"); try { slog("[preauth] obtained c_nonce from nonce endpoint", { hasExpiresIn: !!c_nonce_expires_in }); } catch {}
   } else if (!c_nonce) {
-    throw new Error("nonce_error: issuer did not provide c_nonce and no nonce_endpoint is available");
+    const error = new Error("nonce_error: issuer did not provide c_nonce and no nonce_endpoint is available");
+    logFlowError(slog, "[preauth] nonce unavailable", error);
+    throw error;
   }
 
   // Algorithm negotiation and Wallet Unit subject key proof (see credentialProofBinding.js)
   const credentialEndpoint = issuerMeta.credential_endpoint || `${apiBase}/credential`;
-  const proofBundle = await buildCredentialProofRequest({
-    profile,
-    keyPath,
-    issuerMeta,
-    apiBase,
-    configurationId,
-    cNonce: c_nonce,
-    credentialEndpoint,
-  });
+  const proofBundle = await runGuardedAsync(
+    slog,
+    "[preauth] credential proof request failed",
+    () => buildCredentialProofRequest({
+      profile,
+      keyPath,
+      issuerMeta,
+      apiBase,
+      configurationId,
+      cNonce: c_nonce,
+      credentialEndpoint,
+    }),
+    { configurationId, credentialEndpoint },
+  );
   const { subjectKey, credentialRequest: credReq } = proofBundle;
   issuanceContext.proofBinding = buildCredentialProofBindingContext({
     profile,
@@ -1631,13 +1690,21 @@ async function runAuthorizationCodeIssuance({ profile = activeWalletProfile, wal
   const state = randomState();
   const redirectUri = "openid4vp://";
 
-  const scopeResolution = resolveCredentialScope({
-    profile,
-    configurationId,
-    issuerMeta,
-    offerConfig,
-    scopesSupported: authorizationServerMetaForScope?.scopes_supported ?? null,
-  });
+  const scopeResolution = runGuardedSync(
+    slog,
+    "[codeflow] scope resolution failed",
+    () => resolveCredentialScope({
+      profile,
+      configurationId,
+      issuerMeta,
+      offerConfig,
+      scopesSupported: authorizationServerMetaForScope?.scopes_supported ?? null,
+    }),
+    {
+      configurationId,
+      scopesSupported: authorizationServerMetaForScope?.scopes_supported ?? null,
+    },
+  );
   try {
     slog("[codeflow] scope resolved", scopeResolution);
   } catch {}
@@ -1672,7 +1739,12 @@ async function runAuthorizationCodeIssuance({ profile = activeWalletProfile, wal
 
   // PAR is mandatory in CS-01 mode; optional with direct-authorization fallback in compatibility mode.
   const parRequired = isParMandatory(profile, requirePushedAuthorizationRequests);
-  assertParEndpointAvailable(profile, parEndpoint, { asRequiresPar: requirePushedAuthorizationRequests });
+  runGuardedSync(
+    slog,
+    "[codeflow] PAR endpoint unavailable",
+    () => assertParEndpointAvailable(profile, parEndpoint, { asRequiresPar: requirePushedAuthorizationRequests }),
+    { parEndpoint, parRequired },
+  );
 
   let finalAuthorizeUrl = authorizeUrl.toString();
   let usedPar = false;
@@ -1750,7 +1822,12 @@ async function runAuthorizationCodeIssuance({ profile = activeWalletProfile, wal
     }
   }
 
-  assertNoDirectAuthorizationFallback(profile, usedPar);
+  runGuardedSync(
+    slog,
+    "[codeflow] direct authorization fallback rejected",
+    () => assertNoDirectAuthorizationFallback(profile, usedPar),
+    { usedPar, parRequired },
+  );
   if (!usedPar) {
     // Compatibility mode only: append params to authorization URL directly when PAR was not used.
     Object.entries(authzParams).forEach(([k, v]) => authorizeUrl.searchParams.set(k, v));
@@ -1783,7 +1860,11 @@ async function runAuthorizationCodeIssuance({ profile = activeWalletProfile, wal
   console.log("[codeflow] redirectUrl:", redirectUrl); try { slog("[codeflow] redirectUrl", { url: redirectUrl }); } catch {}
   const redirect = new URL(redirectUrl);
   const code = redirect.searchParams.get("code");
-  if (!code) throw new Error("invalid_response: Authorization code missing");
+  if (!code) {
+    const error = new Error("invalid_response: Authorization code missing");
+    logFlowError(slog, "[codeflow] authorization code missing", error, { redirectUrl });
+    throw error;
+  }
 
   let tokenEndpoint = issuerMeta.token_endpoint || tokenEndpointFromAS || null;
   
@@ -1863,12 +1944,22 @@ async function runAuthorizationCodeIssuance({ profile = activeWalletProfile, wal
     try { slog("[codeflow] token error", { status: tokenRes.status, err, body: text }); } catch {}
     throw new Error(`token_error ${tokenRes.status}: ${JSON.stringify(err)}`);
   }
-  const tokenBody = await tokenRes.json();
-  attestationChallengeState.updateFromResponse(tokenRes.headers);
-  issuanceContext.attestationChallenge = attestationChallengeState.current;
+  let tokenBody;
+  try {
+    tokenBody = await tokenRes.json();
+    attestationChallengeState.updateFromResponse(tokenRes.headers);
+    issuanceContext.attestationChallenge = attestationChallengeState.current;
+  } catch (e) {
+    logFlowError(slog, "[codeflow] token response parse failed", e);
+    throw new Error(`token_error: invalid JSON response - ${e?.message}`);
+  }
   const accessToken = tokenBody.access_token;
-  assertDpopBoundTokenReceived(profile, tokenBody, accessToken);
-  await assertAccessTokenCnfMatchesWia(profile, accessToken, dpopBinding.publicJwk);
+  runGuardedSync(slog, "[codeflow] DPoP-bound token validation failed", () =>
+    assertDpopBoundTokenReceived(profile, tokenBody, accessToken),
+  );
+  await runGuardedAsync(slog, "[codeflow] access token cnf validation failed", () =>
+    assertAccessTokenCnfMatchesWia(profile, accessToken, dpopBinding.publicJwk),
+  );
   let c_nonce = tokenBody.c_nonce;
   let c_nonce_expires_in = tokenBody.c_nonce_expires_in;
   console.log("[codeflow] got access_token=", accessToken ? "yes" : "no", "c_nonce=", c_nonce ? "yes" : "no"); try { slog("[codeflow] token received", { hasAccessToken: !!accessToken, hasCNonce: !!c_nonce }); } catch {}
@@ -1889,20 +1980,27 @@ async function runAuthorizationCodeIssuance({ profile = activeWalletProfile, wal
     c_nonce = nonceJson.c_nonce;
     c_nonce_expires_in = nonceJson.c_nonce_expires_in;
   } else {
-    throw new Error("nonce_error: issuer did not provide c_nonce and no nonce_endpoint is available");
+    const error = new Error("nonce_error: issuer did not provide c_nonce and no nonce_endpoint is available");
+    logFlowError(slog, "[codeflow] nonce unavailable", error);
+    throw error;
   }
 
   // Wallet Unit subject key proof for credential binding (see credentialProofBinding.js)
   const credentialEndpoint = issuerMeta.credential_endpoint || `${apiBase}/credential`;
-  const proofBundle = await buildCredentialProofRequest({
-    profile,
-    keyPath,
-    issuerMeta,
-    apiBase,
-    configurationId,
-    cNonce: c_nonce,
-    credentialEndpoint,
-  });
+  const proofBundle = await runGuardedAsync(
+    slog,
+    "[codeflow] credential proof request failed",
+    () => buildCredentialProofRequest({
+      profile,
+      keyPath,
+      issuerMeta,
+      apiBase,
+      configurationId,
+      cNonce: c_nonce,
+      credentialEndpoint,
+    }),
+    { configurationId, credentialEndpoint },
+  );
   const { subjectKey, credentialRequest: credReq } = proofBundle;
   issuanceContext.proofBinding = buildCredentialProofBindingContext({
     profile,

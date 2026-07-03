@@ -1,6 +1,7 @@
 import { expect } from 'chai';
 import {
   createCredentialOfferConfig,
+  createCredentialOfferResponse,
   createPreAuthSessionData,
   generateNumericTxCode,
   DEFAULT_MDL_DCQL_QUERY,
@@ -115,6 +116,41 @@ describe('Route Utils', () => {
       const session = createPreAuthSessionData({ txCodeRequired: true });
       expect(session.txCodeRequired).to.equal(true);
       expect(session.expectedTxCode).to.match(/^\d{4}$/);
+    });
+  });
+
+  describe('createCredentialOfferResponse', () => {
+    it('returns qr, deepLink, and sessionId without txCode by default', async () => {
+      const response = await createCredentialOfferResponse(
+        'openid-credential-offer://?credential_offer_uri=https%3A%2F%2Fexample.test%2Foffer%2Fabc',
+        'abc',
+      );
+
+      expect(response).to.include.keys('qr', 'deepLink', 'sessionId');
+      expect(response).to.not.have.property('txCode');
+      expect(response.sessionId).to.equal('abc');
+      expect(response.qr).to.match(/^data:image\/PNG;base64,/);
+    });
+
+    it('includes txCode when provided for tx-code offer endpoints', async () => {
+      const response = await createCredentialOfferResponse(
+        'openid-credential-offer://?credential_offer_uri=https%3A%2F%2Fexample.test%2Foffer%2Fabc',
+        'abc',
+        '9876',
+      );
+
+      expect(response).to.include.keys('qr', 'deepLink', 'sessionId', 'txCode');
+      expect(response.txCode).to.equal('9876');
+    });
+
+    it('omits txCode when the value is undefined', async () => {
+      const response = await createCredentialOfferResponse(
+        'openid-credential-offer://?credential_offer_uri=https%3A%2F%2Fexample.test%2Foffer%2Fabc',
+        'abc',
+        undefined,
+      );
+
+      expect(response).to.not.have.property('txCode');
     });
   });
 
