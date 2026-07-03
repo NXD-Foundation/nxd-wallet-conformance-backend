@@ -139,7 +139,11 @@ vciStandardRouter.get("/vci/offer", async (req, res) => {
         endpointPath
       );
 
-      const response = await createCredentialOfferResponse(credentialOffer, sessionId);
+      const response = await createCredentialOfferResponse(
+        credentialOffer,
+        sessionId,
+        txCodeRequired ? sessionData.expectedTxCode : undefined
+      );
 
       if (slog) {
         logHttpResponse(slog, requestId, "/vci/offer", 200, "OK", res.getHeaders(), response);

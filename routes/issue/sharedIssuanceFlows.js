@@ -1282,6 +1282,13 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
       });
     }
 
+    if (error.errorCode === "invalid_grant") {
+      return res.status(400).json({
+        error: "invalid_grant",
+        error_description: error.message,
+      });
+    }
+
     if (
       error.message.includes(ERROR_MESSAGES.INVALID_GRANT) ||
       error.message.includes(ERROR_MESSAGES.INVALID_GRANT_CODE) ||

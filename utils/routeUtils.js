@@ -826,16 +826,21 @@ export const createPreAuthCredentialOfferUri = (sessionId, credentialType, endpo
  * Create credential offer response with QR code
  * @param {string} credentialOffer - Credential offer string
  * @param {string} sessionId - Session ID
+ * @param {string} [txCode] - Generated transaction code (test/conformance backends only)
  * @returns {Promise<Object>} Response object with QR code and deep link
  */
-export const createCredentialOfferResponse = async (credentialOffer, sessionId) => {
+export const createCredentialOfferResponse = async (credentialOffer, sessionId, txCode) => {
   try {
     const qr = await generateQRCode(credentialOffer);
-    return {
+    const response = {
       qr,
       deepLink: credentialOffer,
       sessionId,
     };
+    if (txCode != null) {
+      response.txCode = txCode;
+    }
+    return response;
   } catch (error) {
     logUtilityError("createCredentialOfferResponse", error);
     throw error;
