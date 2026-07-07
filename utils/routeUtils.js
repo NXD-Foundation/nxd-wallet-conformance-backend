@@ -20,6 +20,7 @@ import base64url from "base64url";
 import jwt from "jsonwebtoken";
 import path from "path";
 import * as jose from "jose";
+import { issuanceRequestRequiresWua } from "./wuaEnforcementPolicy.js";
 
 const WUA_SPEC_REF =
   "TS3 Wallet Unit Attestation";
@@ -88,9 +89,17 @@ export function createPreAuthSessionData({
   isHaip = false,
   signatureType = null,
   txCodeRequired = false,
+  credentialType = null,
   additionalProps = {},
 } = {}) {
-  const session = createBaseSession("pre-auth", isHaip, signatureType, additionalProps);
+  const requestedCredentialConfigurationIds = credentialType ? [credentialType] : [];
+  const requiresWua = issuanceRequestRequiresWua({ credential_configuration_id: credentialType });
+  const session = createBaseSession("pre-auth", isHaip, signatureType, {
+    ...additionalProps,
+    ...(requestedCredentialConfigurationIds.length ? { requestedCredentialConfigurationIds } : {}),
+    ...(credentialType ? { credentialConfigurationId: credentialType } : {}),
+    ...(requiresWua ? { requiresWua: true } : {}),
+  });
   if (txCodeRequired) {
     session.txCodeRequired = true;
     session.expectedTxCode = generateNumericTxCode();
@@ -1110,6 +1119,9 @@ export async function generateVPRequest(params) {
     cs03Signing = false,
     cs03Oob = false,
     cs03CallbackToken = null,
+    ts12Payment = false,
+    ts12PaymentPayload = null,
+    ts12ExpectedVct = null,
   } = params;
 
   await logInfo(sessionId, "Starting VP request generation in routeUtils", {
@@ -1182,6 +1194,22 @@ export async function generateVPRequest(params) {
     });
     await logDebug(sessionId, "CS-03 qesRequest is carried in transaction_data (base64url JSON)", {
       qesType: "https://cloudsignatureconsortium.org/2025/qes",
+    });
+  }
+
+  if (ts12Payment) {
+    sessionData.ts12_payment = true;
+    sessionData.ts12_payment_payload = ts12PaymentPayload || null;
+    sessionData.ts12_encoded_transaction_data =
+      typeof transactionData === "string" ? transactionData : null;
+    sessionData.ts12_expected_vct = ts12ExpectedVct || null;
+    sessionData.ts12_expected_credential_ids =
+      dcqlQuery?.credentials?.map((cred) => cred.id).filter(Boolean) || [];
+    await logInfo(sessionId, "TS12 payment session configured", {
+      hasEncodedTransactionData: !!sessionData.ts12_encoded_transaction_data,
+      expectedCredentialIds: sessionData.ts12_expected_credential_ids,
+      expectedVct: sessionData.ts12_expected_vct,
+      transactionId: ts12PaymentPayload?.transaction_id || null,
     });
   }
 
@@ -1746,9 +1774,7 @@ export const validateWUA = async (wuaJwt, sessionId = null, issuerMetadata = nul
       decoded.payload.key_storage.length > 0 &&
       Array.isArray(decoded.payload.user_authentication) &&
       decoded.payload.user_authentication.length > 0 &&
-      !!decoded.payload.certification &&
-      !!decoded.payload.key_storage_status?.status &&
-      typeof decoded.payload.key_storage_status?.exp === 'number';
+      !!decoded.payload.certification;
     let generalInfo;
     let keyStorageInfo;
     if (hasLegacyEudiWalletInfo) {
@@ -1774,6 +1800,24 @@ export const validateWUA = async (wuaJwt, sessionId = null, issuerMetadata = nul
     const hasStatus =
       (!!decoded.payload.status && !!decoded.payload.status.status_list) ||
       !!decoded.payload.key_storage_status?.status;
+
+    const warnings = [];
+    if (!hasStatus) {
+      return { valid: false, error: withSpecRef("Key Attestation missing required key_storage_status", WUA_SPEC_REF) };
+    } else if (decoded.payload.key_storage_status) {
+      const kss = decoded.payload.key_storage_status;
+      if (!kss.status?.status_list?.uri || typeof kss.status?.status_list?.idx !== "number") {
+        warnings.push("KA key_storage_status.status_list incomplete (warning only)");
+      }
+      if (typeof kss.exp !== "number") {
+        warnings.push("KA key_storage_status.exp missing (warning only)");
+      } else {
+        const now = Math.floor(Date.now() / 1000);
+        if (kss.exp < now) {
+          return { valid: false, error: withSpecRef("Key Attestation key_storage_status.exp is expired", WUA_SPEC_REF) };
+        }
+      }
+    }
 
     const meta = issuerMetadata ?? loadIssuerMetadataForWua();
     // Cryptographic: WUA must be a valid JWS from a key we resolve (JWKS or dev header.jwk).
@@ -1830,7 +1874,7 @@ export const validateWUA = async (wuaJwt, sessionId = null, issuerMetadata = nul
       }
     }
 
-    return { valid: true, payload: decoded.payload };
+    return { valid: true, payload: decoded.payload, warnings };
   } catch (error) {
     const errorMsg = `WUA validation error: ${error.message}`;
     if (sessionId) {

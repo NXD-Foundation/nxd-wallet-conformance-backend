@@ -1,0 +1,87 @@
+# WUA (CS-04) end-to-end issuance test cases
+# Credential: VerifiablePIDSDJWTWUA (PID payload + mandatory WUA enforcement)
+# Base URL: http://localhost:3000 (or your SERVER_URL environment variable)
+#
+# Two flows are enough to exercise CS-04 issuance binding end-to-end:
+#   Stage A — WIA at token (and PAR for auth-code): session bound via DPoP = WIA cnf.jwk
+#   Stage B — KA at credential: proof JWT with key_attestation + PoP under attested_keys[0]
+
+base_url: "http://localhost:3000"
+
+credential:
+  configuration_id: "VerifiablePIDSDJWTWUA"
+  vct: "VerifiablePIDSDJWTWUA"
+  scope: "VerifiablePIDSDJWTWUA"
+  format: "dc+sd-jwt"
+
+wua_test_cases:
+  - id: "WUA-E2E-AUTHCODE-01"
+    name: "Authorization code issuance — VerifiablePIDSDJWTWUA"
+    description: >
+      Full CS-04 issuance via authorization code + PAR. Wallet scans the offer QR,
+      completes PAR with WIA headers, authorizes, exchanges the code at the token
+      endpoint (WIA + DPoP bound to WIA cnf.jwk), then requests the credential with
+      a proof JWT carrying KA in the key_attestation header.
+    grant_type: "authorization_code"
+    spec_reference: "CS-04 §5.3 / CS-01 §6.1"
+    start:
+      method: "GET"
+      path: "/offer-code-sd-jwt"
+      url: "http://localhost:3000/offer-code-sd-jwt?credentialType=VerifiablePIDSDJWTWUA&sessionId=wua-auth-001&client_id_scheme=redirect_uri"
+      parameters:
+        credentialType: "VerifiablePIDSDJWTWUA"
+        sessionId: "wua-auth-001"
+        client_id_scheme: "redirect_uri"
+      expected_response_fields:
+        - qr
+        - deepLink
+        - sessionId
+    wallet_journey:
+      - "Fetch credential offer from deepLink → GET /credential-offer-code-sd-jwt/wua-auth-001?credentialType=VerifiablePIDSDJWTWUA"
+      - "POST /par with scope=VerifiablePIDSDJWTWUA + OAuth-Client-Attestation + PoP headers (WIA)"
+      - "GET /authorize with request_uri → receive authorization code"
+      - "POST /token_endpoint with code, WIA headers, DPoP signed with WIA cnf.jwk"
+      - "POST /credential with access token, proofs.jwt including key_attestation (KA)"
+    cs04_coverage:
+      stage_a: "WIA at PAR + token; access token cnf.jkt matches WIA cnf.jwk"
+      stage_b: "KA validated; credential bound to attested_keys[0]"
+    expected_outcome:
+      credential_issued: true
+      credential_claims:
+        - given_name
+        - family_name
+        - birth_date
+
+  - id: "WUA-E2E-PREAUTH-01"
+    name: "Pre-authorized code issuance — VerifiablePIDSDJWTWUA"
+    description: >
+      Full CS-04 issuance via pre-authorized_code (issuer-initiated). No PAR step;
+      WIA is enforced at token redemption and KA at the credential endpoint. Wallet
+      scans the offer, redeems pre-authorized_code with WIA headers + DPoP (WIA cnf key),
+      then requests the credential with KA in the proof JWT header.
+    grant_type: "urn:ietf:params:oauth:grant-type:pre-authorized_code"
+    spec_reference: "CS-04 §5.3 / CS-01 §6.2"
+    start:
+      method: "GET"
+      path: "/cs01-offer"
+      url: "http://localhost:3000/cs01-offer?credentialType=VerifiablePIDSDJWTWUA&sessionId=wua-preauth-001"
+      parameters:
+        credentialType: "VerifiablePIDSDJWTWUA"
+        sessionId: "wua-preauth-001"
+      expected_response_fields:
+        - qr
+        - deepLink
+        - sessionId
+    wallet_journey:
+      - "Fetch credential offer from deepLink → GET /credential-offer-no-code/wua-preauth-001?credentialType=VerifiablePIDSDJWTWUA"
+      - "POST /token_endpoint with pre-authorized_code, WIA headers, DPoP signed with WIA cnf.jwk"
+      - "POST /credential with access token, proofs.jwt including key_attestation (KA)"
+    cs04_coverage:
+      stage_a: "WIA at token; DPoP bound to WIA cnf.jwk (no PAR in this flow)"
+      stage_b: "KA validated; credential bound to attested_keys[0]"
+    expected_outcome:
+      credential_issued: true
+      credential_claims:
+        - given_name
+        - family_name
+        - birth_date

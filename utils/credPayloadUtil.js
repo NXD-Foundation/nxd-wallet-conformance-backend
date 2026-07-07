@@ -853,6 +853,30 @@ export const createPaymentWalletAttestationPayload = (serverURL) => {
   return { claims, disclosureFrame };
 };
 
+export const createTs12PaymentScaAttestationPayload = (serverURL) => {
+  const claims = {
+    aud: `${serverURL}/.well-known/oauth-authorization-server`,
+    sub: "d9c28888-b166-4cf4-bb75-0d374b6214d4",
+    iban: "DE99370501981234567890",
+    bic: "COLSDE33XXX",
+    currency: "EUR",
+    psp_name: "Demo ASPSP",
+    account_holder_name: "Demo Account Holder",
+  };
+
+  const disclosureFrame = {
+    _sd: [
+      "iban",
+      "bic",
+      "currency",
+      "psp_name",
+      "account_holder_name",
+    ],
+  };
+
+  return { claims, disclosureFrame };
+};
+
 export const createPhotoIDAttestationPayload = (serverURL) => {
   // Generate basic timestamps for demonstration
   const currentTime = Math.floor(Date.now() / 1000);

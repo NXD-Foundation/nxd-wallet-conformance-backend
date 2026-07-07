@@ -224,14 +224,125 @@ export function assertPopIssMatchesAttestationSub(popIss, attestationSub) {
   }
 }
 
+function base64DerToPem(b64) {
+  const lines = String(b64).match(/.{1,64}/g) || [];
+  return `-----BEGIN CERTIFICATE-----\n${lines.join("\n")}\n-----END CERTIFICATE-----`;
+}
+
+/**
+ * Resolve verification key for WIA JWS: trusted JWKS, x5c chain, or header.jwk (dev).
+ */
+export async function resolveWiaVerificationKey(attestationJwt, trustedJwks, protectedHeader) {
+  const header = protectedHeader ?? jose.decodeProtectedHeader(attestationJwt);
+  const alg = header?.alg || "ES256";
+
+  if (trustedJwks?.keys?.length) {
+    const JWKS = jose.createLocalJWKSet(trustedJwks);
+    const { protectedHeader: verifiedHeader } = await jose.jwtVerify(attestationJwt, JWKS, {
+      typ: CLIENT_ATTESTATION_JWT_TYP,
+      algorithms: [alg],
+    });
+    return { verified: true, protectedHeader: verifiedHeader, alg };
+  }
+
+  if (Array.isArray(header?.x5c) && header.x5c.length > 0) {
+    const key = await jose.importX509(base64DerToPem(header.x5c[0]), alg);
+    await jose.jwtVerify(attestationJwt, key, { algorithms: [alg], typ: CLIENT_ATTESTATION_JWT_TYP });
+    return { verified: true, protectedHeader: header, alg };
+  }
+
+  if (header?.jwk) {
+    const key = await jose.importJWK(header.jwk, alg);
+    await jose.jwtVerify(attestationJwt, key, { algorithms: [alg], typ: CLIENT_ATTESTATION_JWT_TYP });
+    return { verified: true, protectedHeader: header, alg };
+  }
+
+  throw new Error(
+    withSpecRef(
+      "Cannot verify WIA signature: configure client_attestation_trusted_jwks or provide x5c/jwk in WIA header",
+      SPEC_REFS.OAUTH_CLIENT_ATTESTATION
+    )
+  );
+}
+
+/**
+ * Structural validation for CS-04 WIA claims (without Trusted List check).
+ * @returns {{ warnings: string[] }}
+ */
+export function validateWiaStructureClaims(payload, { requireClientStatus = false } = {}) {
+  const warnings = [];
+  if (!payload || typeof payload !== "object") {
+    throw new Error(withSpecRef("WIA payload missing or invalid", SPEC_REFS.OAUTH_CLIENT_ATTESTATION));
+  }
+  if (!payload.sub || typeof payload.sub !== "string") {
+    throw new Error(withSpecRef("WIA missing sub claim", SPEC_REFS.OAUTH_CLIENT_ATTESTATION));
+  }
+  if (typeof payload.exp !== "number" || typeof payload.iat !== "number") {
+    throw new Error(withSpecRef("WIA missing exp or iat claim", SPEC_REFS.OAUTH_CLIENT_ATTESTATION));
+  }
+  const ttlHours = (payload.exp - payload.iat) / 3600;
+  if (ttlHours < 0) {
+    throw new Error(withSpecRef("WIA has invalid expiration (exp < iat)", SPEC_REFS.OAUTH_CLIENT_ATTESTATION));
+  }
+  if (ttlHours >= 24) {
+    throw new Error(
+      withSpecRef(
+        `WIA TTL (${ttlHours.toFixed(2)} hours) exceeds maximum allowed (24 hours)`,
+        SPEC_REFS.OAUTH_CLIENT_ATTESTATION
+      )
+    );
+  }
+  const now = Math.floor(Date.now() / 1000);
+  if (payload.exp < now) {
+    throw new Error(withSpecRef("WIA JWT has expired", SPEC_REFS.OAUTH_CLIENT_ATTESTATION));
+  }
+  if (!payload.cnf?.jwk) {
+    throw new Error(withSpecRef("WIA missing cnf.jwk", SPEC_REFS.OAUTH_CLIENT_ATTESTATION));
+  }
+  assertCnfJwkIsPublicOnly(payload.cnf.jwk);
+
+  if (!payload.client_status) {
+    if (requireClientStatus) {
+      throw new Error(withSpecRef("WIA missing required client_status claim", SPEC_REFS.OAUTH_CLIENT_ATTESTATION));
+    }
+    warnings.push("WIA missing client_status; revocation maintenance not asserted (warning only)");
+  } else {
+    const cs = payload.client_status;
+    if (!cs.status?.status_list?.uri || typeof cs.status?.status_list?.idx !== "number") {
+      warnings.push("WIA client_status.status_list incomplete (warning only)");
+    }
+    if (typeof cs.exp !== "number") {
+      warnings.push("WIA client_status.exp missing (warning only)");
+    } else if (cs.exp < now) {
+      throw new Error(withSpecRef("WIA client_status.exp is expired", SPEC_REFS.OAUTH_CLIENT_ATTESTATION));
+    }
+  }
+
+  return { warnings };
+}
+
+/**
+ * Stub: Wallet Provider trusted via Trusted List — always true until TL is wired.
+ */
+export function isWalletProviderTrustedByPolicy(_payload, _header) {
+  return true;
+}
+
+/**
+ * @returns {Promise<string>} JWK thumbprint (sha256) of WIA cnf.jwk
+ */
+export async function computeWiaCnfJkt(cnfJwk) {
+  assertCnfJwkIsPublicOnly(cnfJwk);
+  return jose.calculateJwkThumbprint(cnfJwk, "sha256");
+}
+
 /**
  * Full validation for PAR / token when OAuth-Client-Attestation headers are used.
  *
- * - If neither header is sent → { skip: true } (e.g. public client without attestation).
+ * - If neither header is sent → { skip: true } unless requireAttestation is true.
  * - If exactly one header is sent → invalid_client (malformed client auth).
- * - If both are sent → verify PoP against `cnf.jwk` from the attestation JWT. When
- *   `client_attestation_trusted_jwks` is non-empty, the attestation JWT signature is verified
- *   against those keys; when empty, the attester signature is not verified (PoP still is).
+ * - If both are sent → verify PoP against `cnf.jwk` from the attestation JWT.
+ * - When strictWiaSignature is true, verify WIA JWS via JWKS, x5c, or header.jwk.
  */
 export async function validateOAuthClientAttestationFromRequest({
   headers,
@@ -240,6 +351,8 @@ export async function validateOAuthClientAttestationFromRequest({
   trustedJwks,
   clockTolerance = 120,
   maxPopIatAgeSeconds = 600,
+  requireAttestation = false,
+  strictWiaSignature = false,
 }) {
   const { attestationJwt, popJwt } = getOAuthClientAttestationHeaders(headers);
 
@@ -247,6 +360,19 @@ export async function validateOAuthClientAttestationFromRequest({
   const hasPop = Boolean(popJwt);
 
   if (!hasAtt && !hasPop) {
+    if (requireAttestation) {
+      return {
+        skip: false,
+        ok: false,
+        statusCode: 401,
+        oauthError: "invalid_client",
+        errorDescription: withSpecRef(
+          "Wallet Instance Attestation headers are required for this credential",
+          SPEC_REFS.HAIP_WALLET_ATTESTATION,
+          SPEC_REFS.OAUTH_CLIENT_ATTESTATION
+        ),
+      };
+    }
     return { skip: true };
   }
 
@@ -269,12 +395,32 @@ export async function validateOAuthClientAttestationFromRequest({
 
   try {
     let attestationPayload;
-    if (jwks?.keys?.length) {
-      const { payload } = await verifyClientAttestationJwt(attestationJwt, jwks, { clockTolerance });
-      attestationPayload = payload;
+    let protectedHeader;
+    const useStrictSig = strictWiaSignature || requireAttestation;
+
+    if (useStrictSig) {
+      const sig = await resolveWiaVerificationKey(attestationJwt, jwks?.keys?.length ? jwks : null, null);
+      protectedHeader = sig.protectedHeader;
+      attestationPayload = jose.decodeJwt(attestationJwt);
+      assertAsymmetricJwtAlg(protectedHeader.alg);
+    } else if (jwks?.keys?.length) {
+      const verified = await verifyClientAttestationJwt(attestationJwt, jwks, { clockTolerance });
+      attestationPayload = verified.payload;
+      protectedHeader = verified.protectedHeader;
     } else {
       const decoded = decodeClientAttestationJwtPayloadUnverified(attestationJwt);
       attestationPayload = decoded.payload;
+      protectedHeader = decoded.protectedHeader;
+    }
+
+    const { warnings: wiaWarnings } = validateWiaStructureClaims(attestationPayload, {
+      requireClientStatus: requireAttestation,
+    });
+
+    if (!isWalletProviderTrustedByPolicy(attestationPayload, protectedHeader)) {
+      throw new Error(
+        withSpecRef("WIA rejected: Wallet Provider not trusted by issuer policy", SPEC_REFS.OAUTH_CLIENT_ATTESTATION)
+      );
     }
 
     const cnfJwk = attestationPayload.cnf?.jwk;
@@ -289,11 +435,16 @@ export async function validateOAuthClientAttestationFromRequest({
     assertClientIdMatchesAttestationSub(clientId, attestationPayload.sub);
     assertPopIssMatchesAttestationSub(popPayload.iss, attestationPayload.sub);
 
+    const wiaCnfJkt = await computeWiaCnfJkt(cnfJwk);
+
     return {
       skip: false,
       ok: true,
       attestationPayload,
       popPayload,
+      wiaCnfJkt,
+      wiaWarnings,
+      clientStatusPresent: Boolean(attestationPayload.client_status),
     };
   } catch (err) {
     return {

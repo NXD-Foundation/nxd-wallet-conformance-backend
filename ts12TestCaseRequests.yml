@@ -1,0 +1,412 @@
+# TS12 Strong Customer Authentication (SCA) Payment Test Case Requests
+# End-to-end mock flows for issuing and presenting TS12 SCA Payment Attestations
+# Base URL: http://localhost:3000 (or your SERVER_URL environment variable)
+#
+# Spec references:
+#   - TS12: Electronic Payments SCA Implementation with the Wallet
+#   - ARF §2.6.4: Strong User Authentication for electronic payments
+#   - OID4VCI / OID4VP 1.0 + HAIP for transport
+#
+# Typical wallet journey:
+#   1. Issue SCA attestation via GET /offer-code-sd-jwt (authorization code + x509_san_dns)
+#   2. Relying party creates TS12 payment authorization request with transaction_data
+#   3. Wallet validates request, shows payee/amount, user consents with SCA
+#   4. Wallet POSTs VP to /direct_post/{session_id} with TS12 KB-JWT claims
+#   5. Verifier validates dynamic linking + jti (authentication code) + amr + response_mode
+
+base_url: "http://localhost:3000"
+
+# ==============================================================================
+# TS12 END-TO-END FLOW OVERVIEW
+# ==============================================================================
+ts12_flow_overview:
+  registration_issuance:
+    description: >
+      ASPSP issues a device-bound SCA attestation (category urn:eu:europa:ec:eudi:sua:sca)
+      with vct urn:eudi:sca:payment:1 via authorization code flow (GET /offer-code-sd-jwt,
+      client_id_scheme=x509_san_dns). Wallet stores IBAN/BIC/currency claims for later
+      selective disclosure during payment authorization.
+    offer_endpoint: "/offer-code-sd-jwt"
+    credential_config_id: "urn:eudi:sca:payment:1"
+    vct: "urn:eudi:sca:payment:1"
+    sca_category: "urn:eu:europa:ec:eudi:sua:sca"
+    format: "dc+sd-jwt"
+
+  payment_authorization:
+    description: >
+      Merchant/PSP requests presentation of the SCA attestation together with
+      urn:eudi:sca:payment:1 transactional data (amount, payee, transaction_id).
+      Wallet signs transaction_data_hashes in the KB-JWT for PSD2 dynamic linking.
+    transaction_data_type: "urn:eudi:sca:payment:1"
+    dcql_credential_id: "ts12-payment-sca-01"
+    response_endpoint: "/direct_post/{session_id}"
+    kb_jwt_required_claims:
+      - jti          # PSD2 authentication code (TS12 §3.6)
+      - response_mode # echo of OID4VP authorization request (TS12 §3.6)
+      - amr          # ≥2 PSD2 factor categories: knowledge, possession, inherence
+      - transaction_data_hashes
+      - nonce
+      - aud
+      - sd_hash
+
+# ==============================================================================
+# TS12 SCA ATTESTATION ISSUANCE (OID4VCI authorization code flow)
+# ==============================================================================
+credential_issuance:
+
+  authorization_code_flow:
+    - id: "TS12-ISSUE-01"
+      name: "TS12 SCA attestation - authorization code + x509_san_dns"
+      description: >
+        Primary TS12 issuance flow. Returns openid-credential-offer:// QR/deepLink for
+        urn:eudi:sca:payment:1 (SCA payment attestation) using authorization code flow
+        with x509_san_dns client authentication. Mimics ASPSP registration of a payment
+        account authenticator into the EUDI Wallet per ARF §2.6.4 / TS12 §5.1.
+      method: "GET"
+      path: "/offer-code-sd-jwt"
+      url: "http://localhost:3000/offer-code-sd-jwt?credentialType=urn:eudi:sca:payment:1&sessionId=1232&client_id_scheme=x509_san_dns&signatureType=x509"
+      parameters:
+        credentialType: "urn:eudi:sca:payment:1"
+        sessionId: "1232"
+        client_id_scheme: "x509_san_dns"
+        signatureType: "x509"
+      spec_reference: "TS12 §4.1 / OID4VCI authorization_code"
+      expected_response_fields:
+        - qr
+        - deepLink
+        - sessionId
+      expected_credential_claims:
+        - sub
+        - iban
+        - bic
+        - currency
+        - psp_name
+        - account_holder_name
+
+    - id: "TS12-ISSUE-02"
+      name: "TS12 credential offer payload (wallet fetches offer by sessionId)"
+      description: >
+        Wallet follow-up after scanning TS12-ISSUE-01 deep link. Returns the credential
+        offer JSON referenced by credential_issuer in the openid-credential-offer URL.
+      method: "GET"
+      path: "/credential-offer-code-sd-jwt/:id"
+      url: "http://localhost:3000/credential-offer-code-sd-jwt/1232?credentialType=urn:eudi:sca:payment:1"
+      parameters:
+        sessionId: "1232"
+        credentialType: "urn:eudi:sca:payment:1"
+      spec_reference: "OID4VCI / TS12 §4.1"
+      prerequisite: "TS12-ISSUE-01"
+
+# ==============================================================================
+# TS12 ISSUER / VCT METADATA
+# ==============================================================================
+issuer_metadata:
+  - id: "TS12-META-01"
+    name: "OpenID Credential Issuer metadata"
+    description: >
+      Standard OID4VCI issuer metadata. Verify urn:eudi:sca:payment:1 appears under
+      credential_configurations_supported with category urn:eu:europa:ec:eudi:sua:sca and
+      transaction_data_types for payment authorization flows.
+    method: "GET"
+    path: "/.well-known/openid-credential-issuer"
+    url: "http://localhost:3000/.well-known/openid-credential-issuer"
+    spec_reference: "OID4VCI / TS12 §4.1"
+
+  - id: "TS12-META-02"
+    name: "TS12 payment SCA attestation VCT metadata"
+    description: >
+      SD-JWT-VC type metadata for urn:eudi:sca:payment:1. Wallet uses category and
+      transaction_data_types to recognise the credential as an SCA attestation (TS12 §3).
+    method: "GET"
+    path: "/.well-known/vct/urn:eudi:sca:payment:1"
+    url: "http://localhost:3000/.well-known/vct/urn%3Aeudi%3Asca%3Apayment%3A1"
+    parameters:
+      vct: "urn:eudi:sca:payment:1"
+    spec_reference: "TS12 §3 / SD-JWT-VC §6"
+
+  - id: "TS12-META-03"
+    name: "TS12 payment payload JSON schema asset"
+    description: >
+      Embedded JSON schema for transaction_data.payload (transaction_id, payee, currency,
+      amount) referenced by issuer transaction_data_types metadata.
+    method: "GET"
+    path: "/data/ts12-urn-eudi-sca-payment-1-data-model.json"
+    url: "http://localhost:3000/data/ts12-urn-eudi-sca-payment-1-data-model.json"
+    spec_reference: "TS12 §4.3.1"
+
+# ==============================================================================
+# TS12 PAYMENT AUTHORIZATION / PRESENTATION (OID4VP)
+# ==============================================================================
+ts12_payment_authorization:
+
+  payment_request_generation:
+    - id: "TS12-PAY-01"
+      name: "Default TS12 payment authorization (Coffee Shop €12.34)"
+      description: >
+        Generate a signed OID4VP authorization request for PSD2 payment confirmation.
+        Includes DCQL query for ts12-payment-sca-01 (vct urn:eudi:sca:payment:1) and
+        base64url transaction_data with payee, amount, and transaction_id for dynamic linking.
+        Wallet must echo response_mode and include amr + jti in the KB-JWT (TS12 §3.6).
+      method: "GET"
+      path: "/ts12/payment/request"
+      url: "http://localhost:3000/ts12/payment/request?session_id=ts12-pay-001&merchant=Coffee%20Shop&payee_id=shop-42&currency=EUR&amount=12.34&transaction_id=tx-coffee-001&response_mode=direct_post&request_uri_method=post"
+      parameters:
+        session_id: "ts12-pay-001"
+        merchant: "Coffee Shop"
+        payee_id: "shop-42"
+        currency: "EUR"
+        amount: "12.34"
+        transaction_id: "tx-coffee-001"
+        response_mode: "direct_post"
+        request_uri_method: "post"
+      spec_reference: "TS12 §3.3 / §3.6 / OID4VP"
+      expected_response_fields:
+        - deepLink
+        - request_uri
+        - qr
+        - payment
+        - transactionDataType
+
+    - id: "TS12-PAY-02"
+      name: "TS12 payment authorization - high-value transfer"
+      description: >
+        Payment authorization with a larger amount to exercise TS12 transactional data
+        display rules (payee name, currency, amount visualisation per issuer metadata claims).
+      method: "GET"
+      path: "/ts12/payment/request"
+      url: "http://localhost:3000/ts12/payment/request?session_id=ts12-pay-002&merchant=Electronics%20Store&payee_id=merchant-999&currency=EUR&amount=1499.99&transaction_id=tx-high-value-002&purpose=Online%20purchase&response_mode=direct_post"
+      parameters:
+        session_id: "ts12-pay-002"
+        merchant: "Electronics Store"
+        payee_id: "merchant-999"
+        currency: "EUR"
+        amount: "1499.99"
+        transaction_id: "tx-high-value-002"
+        purpose: "Online purchase"
+        response_mode: "direct_post"
+      spec_reference: "TS12 §3.3.3 / §4.3.1"
+
+    - id: "TS12-PAY-03"
+      name: "TS12 payment authorization - POST body parameters"
+      description: >
+        Same TS12 payment flow initiated via POST /ts12/payment/request. Useful for
+        merchant backends embedding payment initiation in JSON rather than query strings.
+      method: "POST"
+      path: "/ts12/payment/request"
+      url: "http://localhost:3000/ts12/payment/request"
+      body:
+        session_id: "ts12-pay-003"
+        merchant: "Demo Merchant"
+        payee_id: "merchant-001"
+        currency: "EUR"
+        amount: 42.5
+        transaction_id: "tx-post-003"
+        response_mode: "direct_post"
+        request_uri_method: "post"
+      spec_reference: "TS12 §3 / OID4VP"
+
+    - id: "TS12-PAY-04"
+      name: "TS12 payment authorization - request_uri GET method"
+      description: >
+        TS12 payment request where the wallet retrieves the signed authorization request
+        via GET on request_uri (cross-device QR flow variant).
+      method: "GET"
+      path: "/ts12/payment/request"
+      url: "http://localhost:3000/ts12/payment/request?session_id=ts12-pay-004&merchant=QR%20Payee&amount=5.00&currency=EUR&transaction_id=tx-qr-004&request_uri_method=get&response_mode=direct_post"
+      parameters:
+        session_id: "ts12-pay-004"
+        merchant: "QR Payee"
+        amount: "5.00"
+        currency: "EUR"
+        transaction_id: "tx-qr-004"
+        request_uri_method: "get"
+        response_mode: "direct_post"
+      spec_reference: "TS12 / OID4VP / CS-02 §6.2"
+
+    - id: "TS12-PAY-05"
+      name: "TS12 payment authorization - minimal defaults"
+      description: >
+        Minimal TS12 payment request relying on server-side defaults (Demo Merchant,
+        EUR 42.50, auto-generated transaction_id). Exercises default mock payee payload
+        from buildTs12PaymentPayload().
+      method: "GET"
+      path: "/ts12/payment/request"
+      url: "http://localhost:3000/ts12/payment/request?session_id=ts12-pay-005"
+      parameters:
+        session_id: "ts12-pay-005"
+      spec_reference: "TS12 §4.3.1"
+
+  request_uri_resolution:
+    - id: "TS12-REQ-01"
+      name: "Fetch signed authorization request (GET request_uri)"
+      description: >
+        Wallet retrieves the JAR-signed OID4VP authorization request after scanning the
+        openid4vp:// QR or deep link from TS12-PAY-04. Session must exist from a prior
+        /ts12/payment/request call with the same session_id.
+      method: "GET"
+      path: "/ts12/payment/x509VPrequest/:id"
+      url: "http://localhost:3000/ts12/payment/x509VPrequest/ts12-pay-004"
+      parameters:
+        session_id: "ts12-pay-004"
+      spec_reference: "OID4VP JAR / TS12 §3.5"
+      prerequisite: "TS12-PAY-04"
+
+    - id: "TS12-REQ-02"
+      name: "Fetch signed authorization request (POST request_uri + wallet metadata)"
+      description: >
+        HAIP-style POST to request_uri with wallet_nonce and wallet_metadata. Returns the
+        signed authorization request JWT for same-device TS12 payment authorization.
+      method: "POST"
+      path: "/ts12/payment/x509VPrequest/:id"
+      url: "http://localhost:3000/ts12/payment/x509VPrequest/ts12-pay-001"
+      body:
+        wallet_nonce: "<wallet-generated-nonce>"
+        wallet_metadata: "<base64url-encoded-wallet-metadata>"
+      parameters:
+        session_id: "ts12-pay-001"
+      spec_reference: "OID4VP / HAIP / TS12 §3.5"
+      prerequisite: "TS12-PAY-01"
+
+  presentation_submission:
+    - id: "TS12-VP-01"
+      name: "Wallet submits TS12 payment presentation (direct_post)"
+      description: >
+        Expected wallet callback after user SCA consent. POST vp_token (SD-JWT + KB-JWT)
+        to the response_uri from the authorization request. Verifier validates nonce,
+        dynamic linking hash, vct urn:eudi:sca:payment:1, jti, response_mode, and amr.
+        On success, jti is stored as ts12_authentication_code (PSD2 auth code).
+      method: "POST"
+      path: "/direct_post/:id"
+      url: "http://localhost:3000/direct_post/ts12-pay-001"
+      parameters:
+        session_id: "ts12-pay-001"
+      body_example:
+        vp_token: "<SD-JWT presentation with KB-JWT appended>"
+        state: "<state from authorization request>"
+      spec_reference: "TS12 §3.6 / OID4VP direct_post / CS-02 §8.3"
+      prerequisite: "TS12-PAY-01 and completed wallet presentation"
+      expected_success_response:
+        status: "ok"
+      expected_validation_errors:
+        - code: "missing_response_mode"
+          when: "KB-JWT omits response_mode claim required by TS12 §3.6"
+        - code: "insufficient_amr"
+          when: "KB-JWT amr does not cover ≥2 PSD2 factor categories"
+        - code: "transaction_data_hash_mismatch"
+          when: "KB-JWT transaction_data_hashes do not match authorization request"
+        - code: "missing_sca_credential"
+          when: "Presented credential vct is not urn:eudi:sca:payment:1"
+
+# ==============================================================================
+# STATUS ENDPOINTS (TS12 sessions)
+# ==============================================================================
+status_endpoints:
+  - id: "TS12-STATUS-01"
+    name: "Check TS12 issuance session status"
+    description: "Poll credential issuance outcome after wallet completes OID4VCI for urn:eudi:sca:payment:1"
+    method: "GET"
+    path: "/issuance-status"
+    url: "http://localhost:3000/issuance-status?sessionId=1232"
+    parameters:
+      sessionId: "1232"
+    prerequisite: "TS12-ISSUE-01"
+
+  - id: "TS12-STATUS-02"
+    name: "Check TS12 payment authorization session status"
+    description: >
+      Poll VP verification outcome after wallet POSTs to /direct_post/{session_id}.
+      On successful TS12 validation, session includes ts12_authentication_code (= KB-JWT jti).
+    method: "GET"
+    path: "/verificationStatus"
+    url: "http://localhost:3000/verificationStatus?sessionId=ts12-pay-001"
+    parameters:
+      sessionId: "ts12-pay-001"
+    prerequisite: "TS12-PAY-01"
+
+  - id: "TS12-STATUS-03"
+    name: "Check TS12 payment authorization session history"
+    description: "Historical verification events for a TS12 payment authorization session"
+    method: "GET"
+    path: "/verificationStatusHistory"
+    url: "http://localhost:3000/verificationStatusHistory?sessionId=ts12-pay-001"
+    parameters:
+      sessionId: "ts12-pay-001"
+    prerequisite: "TS12-PAY-01"
+
+# ==============================================================================
+# TS12 REFERENCE DATA
+# ==============================================================================
+ts12_reference:
+  credential:
+    configuration_id: "urn:eudi:sca:payment:1"
+    vct: "urn:eudi:sca:payment:1"
+    category: "urn:eu:europa:ec:eudi:sua:sca"
+    format: "dc+sd-jwt"
+    dcql_credential_id: "ts12-payment-sca-01"
+    requested_claims:
+      - sub
+      - iban
+      - bic
+      - currency
+
+  transaction_data:
+    type: "urn:eudi:sca:payment:1"
+    hash_algorithm: "sha-256"
+    payload_required_fields:
+      - transaction_id
+      - payee
+      - currency
+      - amount
+
+  kb_jwt_ts12_extensions:
+    jti:
+      purpose: "PSD2 authentication code; must be unique per presentation"
+    response_mode:
+      purpose: "Echo OID4VP authorization request response_mode (e.g. direct_post)"
+    amr:
+      purpose: "Document ≥2 PSD2 authentication factor categories applied by wallet"
+      allowed_categories:
+        - knowledge
+        - possession
+        - inherence
+
+  client_id_scheme: "x509_san_dns"
+  default_response_mode: "direct_post"
+
+# ==============================================================================
+# TS12 TEST SCENARIO MAPPING
+# ==============================================================================
+ts12_test_scenarios:
+  TS12-E2E-01:
+    description: "Full TS12 loop: issue SCA attestation (auth code) then authorize a coffee payment"
+    steps:
+      - "TS12-ISSUE-01"
+      - "TS12-ISSUE-02"
+      - "TS12-STATUS-01"
+      - "TS12-PAY-01"
+      - "TS12-VP-01"
+      - "TS12-STATUS-02"
+
+  TS12-E2E-02:
+    description: "Issue SCA attestation then high-value payment with purpose field"
+    steps:
+      - "TS12-ISSUE-01"
+      - "TS12-PAY-02"
+      - "TS12-VP-01"
+      - "TS12-STATUS-02"
+
+  TS12-E2E-03:
+    description: "Cross-device QR payment authorization (GET request_uri)"
+    steps:
+      - "TS12-ISSUE-01"
+      - "TS12-PAY-04"
+      - "TS12-REQ-01"
+      - "TS12-VP-01"
+      - "TS12-STATUS-02"
+
+  TS12-META-CHK:
+    description: "Verify issuer advertises TS12 SCA metadata before interoperability testing"
+    steps:
+      - "TS12-META-01"
+      - "TS12-META-02"
+      - "TS12-META-03"

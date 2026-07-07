@@ -76,6 +76,10 @@ import {
   validateOAuthClientAttestationFromRequest,
   getTrustedClientAttesterJwks,
 } from "../../utils/oauthClientAttestation.js";
+import {
+  issuanceRequestRequiresWua,
+  extractRequestedCredentialConfigurationIds,
+} from "../../utils/wuaEnforcementPolicy.js";
 
 const codeFlowRouterSDJWT = express.Router();
 
@@ -111,6 +115,10 @@ function createPARRequest(requestData) {
     clientMetadata: requestData.clientMetadata,
     wallet_issuer_id: requestData.wallet_issuer_id,
     user_hint: requestData.user_hint,
+    requiresWua: requestData.requiresWua === true,
+    wiaCnfJkt: requestData.wiaCnfJkt || null,
+    clientStatusPresent: requestData.clientStatusPresent === true,
+    requestedCredentialConfigurationIds: requestData.requestedCredentialConfigurationIds || [],
   });
 
   return {
@@ -218,6 +226,17 @@ function updateSessionForAuthorization(existingCodeSession, requestData) {
   existingCodeSession.status = "pending";
   existingCodeSession.isPIDIssuanceFlow = requestData.isPIDIssuanceFlow;
   existingCodeSession.flowType = "code";
+  if (requestData.requiresWua === true) {
+    existingCodeSession.requiresWua = true;
+    existingCodeSession.wiaCnfJkt = requestData.wiaCnfJkt || null;
+    existingCodeSession.clientStatusPresent = requestData.clientStatusPresent === true;
+  }
+  if (Array.isArray(requestData.requestedCredentialConfigurationIds)) {
+    existingCodeSession.requestedCredentialConfigurationIds = requestData.requestedCredentialConfigurationIds;
+  }
+  if (requestData.credentialsRequested?.length) {
+    existingCodeSession.credentials = requestData.credentialsRequested;
+  }
 
   return existingCodeSession;
 }
@@ -588,11 +607,22 @@ codeFlowRouterSDJWT.post(["/par", "/authorize/par"], async (req, res) => {
       try { slog("[ISSUER] [PAR] [START] Processing PAR request", { hasIssuerState: !!issuerState, hasState: !!requestData.state }); } catch {}
     }
 
+    const requiresWua = issuanceRequestRequiresWua({
+      scope: req.body.scope,
+      authorization_details: req.body.authorization_details,
+    });
+    const requestedCredentialConfigurationIds = extractRequestedCredentialConfigurationIds({
+      scope: req.body.scope,
+      authorization_details: req.body.authorization_details,
+    });
+
     const attestationResult = await validateOAuthClientAttestationFromRequest({
       headers: req.headers,
       clientId: requestData.client_id,
       authorizationServerIssuer: SERVER_URL,
       trustedJwks: getTrustedClientAttesterJwks(),
+      requireAttestation: requiresWua,
+      strictWiaSignature: requiresWua,
     });
     if (!attestationResult.skip && !attestationResult.ok) {
       if (slog) {
@@ -620,7 +650,32 @@ codeFlowRouterSDJWT.post(["/par", "/authorize/par"], async (req, res) => {
       });
     }
 
-    // Extract and validate Wallet Instance Attestation (WIA) if present
+    if (requiresWua && attestationResult.skip) {
+      if (slog) {
+        try {
+          slog("[ISSUER] [PAR] WUA-required credential but WIA headers missing", {
+            requestedCredentialConfigurationIds,
+          });
+        } catch {}
+      }
+      return res.status(401).json({
+        error: "invalid_client",
+        error_description: "Wallet Instance Attestation is required for VerifiablePIDSDJWTWUA",
+      });
+    }
+
+    if (requiresWua && attestationResult.ok && attestationResult.wiaWarnings?.length && slog) {
+      for (const w of attestationResult.wiaWarnings) {
+        try { slog("[ISSUER] [PAR] [WARN] WIA validation warning", { warning: w }); } catch {}
+      }
+    }
+
+    requestData.requiresWua = requiresWua;
+    requestData.wiaCnfJkt = attestationResult.wiaCnfJkt || null;
+    requestData.clientStatusPresent = attestationResult.clientStatusPresent === true;
+    requestData.requestedCredentialConfigurationIds = requestedCredentialConfigurationIds;
+
+    // Legacy body client_assertion path (optional observability only)
     // Based on TS3 spec: https://github.com/eu-digital-identity-wallet/eudi-doc-standards-and-technical-specifications/blob/main/docs/technical-specifications/ts3-wallet-unit-attestation.md
     const wiaJwt = extractWIAFromTokenRequest(req.body, req.headers);
     if (wiaJwt) {

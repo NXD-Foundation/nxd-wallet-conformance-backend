@@ -136,6 +136,41 @@ which contains the Issuer's public keys. The value of this field MUST be a JSON 
   }
 );
 
+metadataRouter.get(
+  ["/.well-known/vct/:vct(*)", "/vct/:vct(*)"],
+  async (req, res) => {
+    const requestedVct = decodeURIComponent(req.params.vct || "");
+    const supported = issuerConfig.credential_configurations_supported || {};
+    const configEntry =
+      supported[requestedVct] ||
+      Object.values(supported).find((entry) => entry?.vct === requestedVct);
+
+    if (!configEntry) {
+      return res.status(404).json({ error: "Unknown vct" });
+    }
+
+    const metadata = {
+      vct: configEntry.vct || requestedVct,
+      name:
+        configEntry.credential_metadata?.display?.[0]?.name ||
+        configEntry.vct ||
+        requestedVct,
+      description:
+        configEntry.credential_metadata?.display?.[0]?.name ||
+        "TS12 SCA attestation",
+    };
+
+    if (configEntry.category) {
+      metadata.category = configEntry.category;
+    }
+    if (configEntry.transaction_data_types) {
+      metadata.transaction_data_types = configEntry.transaction_data_types;
+    }
+
+    res.type("application/json").send(metadata);
+  },
+);
+
 
 
 export default metadataRouter;
