@@ -58,6 +58,10 @@ import {
   fetchAttestationChallenge,
   shouldRetryWithAttestationChallenge,
 } from "./lib/attestationChallenge.js";
+import {
+  OPENID4VP_PRESENT_URI,
+  isOpenId4VpDeepLink,
+} from "./lib/openid4vpUri.js";
 
 const activeWalletProfile = resolveWalletProfile();
 const activeWalletClientId = resolveWalletClientId();
@@ -425,7 +429,7 @@ app.post("/session", async (req, res) => {
 
   try {
     // VP request
-    if (/^openid4vp:\/\//.test(deepLink)) {
+    if (isOpenId4VpDeepLink(deepLink)) {
       const verifierBase = (req.body.verifier || "http://localhost:3000").replace(/\/$/, "");
       const result = await performPresentation({ deepLink, verifierBase, credentialType: req.body.credential, keyPath: req.body.keyPath }, sessionId);
       const okPayload = await setStatus("ok", { result: result || { status: "ok" } });
@@ -1688,7 +1692,7 @@ async function runAuthorizationCodeIssuance({ profile = activeWalletProfile, wal
   const authorizeUrl = new URL((authorizeEndpoint || apiBase + "/authorize"));
   const { codeVerifier, codeChallenge, codeChallengeMethod } = createPkcePair();
   const state = randomState();
-  const redirectUri = "openid4vp://";
+  const redirectUri = OPENID4VP_PRESENT_URI;
 
   const scopeResolution = runGuardedSync(
     slog,
@@ -1850,7 +1854,7 @@ async function runAuthorizationCodeIssuance({ profile = activeWalletProfile, wal
     const redirectPayload = safeParseJson(bodyText);
     console.log("[codeflow] parsed redirect payload:", redirectPayload); try { slog("[codeflow] parsed redirect payload", { payload: redirectPayload }); } catch {}
     if (redirectPayload?.redirect_uri) redirectUrl = redirectPayload.redirect_uri;
-    else if (/^openid4vp:\/\//.test(bodyText)) redirectUrl = bodyText;
+    else if (isOpenId4VpDeepLink(bodyText)) redirectUrl = bodyText;
   }
   
   if (!redirectUrl) {

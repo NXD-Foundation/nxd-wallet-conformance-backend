@@ -28,6 +28,7 @@ import {
   buildParAuthorizeUrl,
   compatibilityAllowsBodyClientAssertion,
 } from "../src/lib/cs01Conformance.js";
+import { OPENID4VP_PRESENT_URI } from "../src/lib/openid4vpUri.js";
 import {
   CS01_CLIENT_ID,
   cs01IssuerMetadata,
@@ -121,7 +122,7 @@ describe("WE BUILD CS-01 conformance suite (Phase 10)", () => {
         scope: scope.scope,
         code_challenge: pkce.codeChallenge,
         code_challenge_method: pkce.codeChallengeMethod,
-        redirect_uri: "openid4vp://",
+        redirect_uri: OPENID4VP_PRESENT_URI,
         state: "state-123",
       };
       const attestation = await createWalletUnitAttestationClientAuth({
@@ -259,7 +260,7 @@ describe("WE BUILD CS-01 conformance suite (Phase 10)", () => {
         code: "auth-code-123",
         code_verifier: pkce.codeVerifier,
         client_id: CS01_CLIENT_ID,
-        redirect_uri: "openid4vp://",
+        redirect_uri: OPENID4VP_PRESENT_URI,
       };
 
       assertCs01TokenRequestContract({
