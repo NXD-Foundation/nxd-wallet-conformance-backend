@@ -33,6 +33,10 @@ import {
   sdJwtWithoutKbJwt,
 } from "./sdJwtDisclosureSelection.js";
 import { resolvePresentationKeyBinding } from "./presentationKeyBinding.js";
+import {
+  OPENID4VP_PRESENT_HOST,
+  isOpenId4VpPresentInvocation,
+} from "./openid4vpUri.js";
 
 function makeSessionLogger(sessionId) {
   return function sessionLog(...args) {
@@ -102,6 +106,16 @@ function parseOpenId4VpDeepLink(deepLink) {
   const url = new URL(deepLink);
   if (url.protocol !== "openid4vp:")
     throw new Error("Unsupported request scheme");
+  if (url.hostname && url.hostname !== OPENID4VP_PRESENT_HOST) {
+    throw new Error(
+      `Unsupported openid4vp authority "${url.hostname}"; expected "${OPENID4VP_PRESENT_HOST}" (CS-02) or bare openid4vp://`,
+    );
+  }
+  if (isOpenId4VpPresentInvocation(url)) {
+    console.log("[present] CS-02 openid4vp://present invocation");
+  } else {
+    console.log("[present] Legacy bare openid4vp:// invocation (empty authority)");
+  }
   const requestUri = url.searchParams.get("request_uri");
   const clientId = url.searchParams.get("client_id");
   const method = url.searchParams.get("request_uri_method") || "get";
