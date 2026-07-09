@@ -4,6 +4,11 @@
 
 import * as jose from "jose";
 import { validateCs02DcqlQuery } from "../wallet-client/src/lib/cs02DcqlValidation.js";
+import {
+  filterClientMetadataForCs02Enforcement,
+  validateX509SanDnsTrustAnchor as validateX509SanDnsTrustForRequestGeneration,
+  validateVerifierAttestationTrust as validateVerifierAttestationForRequestGeneration,
+} from "./cs02TrustPolicy.js";
 
 export const CS02_JAR_TYP = "oauth-authz-req+jwt";
 export const CS02_JAR_ALG = "ES256";
@@ -304,33 +309,13 @@ export function validateCs02SignedJar(requestJwt, options = { strict: true }) {
 }
 
 export function filterClientMetadataForCs02(clientMetadata, responseMode) {
-  const metadata = { ...(clientMetadata || {}) };
-  if (metadata.vp_formats_supported && typeof metadata.vp_formats_supported === "object") {
-    metadata.vp_formats_supported = Object.fromEntries(
-      Object.entries(metadata.vp_formats_supported).filter(([format]) =>
-        CS02_ADVERTISED_VP_FORMATS.has(format),
-      ),
-    );
-  }
-
-  if (responseMode === "direct_post") {
-    delete metadata.encrypted_response_enc_values_supported;
-  }
-
-  return metadata;
+  return filterClientMetadataForCs02Enforcement(clientMetadata, responseMode, { strict: true });
 }
 
-export async function validateX509SanDnsTrustForRequestGeneration(_clientId, _header) {
-  // TODO(CS-02 trust framework): validate x5c chain against configured trust anchors.
-  // TODO(CS-02 trust framework): enforce SAN DNS match to client_id host.
-  return { trusted: true, placeholder: true };
-}
-
-export async function validateVerifierAttestationForRequestGeneration(_header, _clientId) {
-  // TODO(CS-02 trust framework): validate trusted verifier-attestation issuers in production.
-  // Development self-signed attestation remains non-production.
-  return { trusted: true, placeholder: true, nonProduction: true };
-}
+export {
+  validateX509SanDnsTrustForRequestGeneration,
+  validateVerifierAttestationForRequestGeneration,
+};
 
 export function resolveCs02JarSigningPolicy({
   client_id,

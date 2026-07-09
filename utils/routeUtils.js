@@ -1168,6 +1168,7 @@ export async function generateVPRequest(params) {
     response_mode: responseMode,
     state,
     jar_alg: jarAlg || CONFIG.DEFAULT_JAR_ALG,
+    client_id: clientId,
   };
 
   if (effectivePresentationDefinition) {

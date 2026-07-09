@@ -736,7 +736,7 @@ export async function performPresentation(
       });
     } catch {}
     const cs02Options = resolveCs02ValidationOptions(process.env);
-    const { requestUri, clientId, method } = parseOpenId4VpDeepLink(deepLink, {
+    const { requestUri, clientId, method, url: deepLinkUrl } = parseOpenId4VpDeepLink(deepLink, {
       cs02Options,
       log: slog,
     });
@@ -752,6 +752,7 @@ export async function performPresentation(
       requestJwt = fetched.requestJwt;
       ({ header, payload } = await validateAndVerifyCs02AuthorizationRequest(requestJwt, {
         deepLinkClientId: clientId,
+        deepLinkUrl,
         options: cs02Options,
         log: slog,
       }));

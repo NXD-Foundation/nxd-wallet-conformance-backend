@@ -4,6 +4,7 @@
  */
 
 import { Cs02ValidationError } from "./cs02RequestValidation.js";
+import { validateCs02TrustedAuthoritiesPolicy } from "../../../utils/cs02TrustPolicy.js";
 
 export const CS02_ALLOWED_DCQL_FORMATS = new Set(["dc+sd-jwt", "vc+sd-jwt", "mso_mdoc"]);
 export const CS02_COMPATIBILITY_DCQL_FORMATS = new Set(["jwt_vc_json", "jwt_vc_json-ld"]);
@@ -166,14 +167,7 @@ function validateHolderBindingPolicy(credQuery, log = () => {}) {
 }
 
 export async function validateCs02TrustedAuthorities(credQuery, log = () => {}) {
-  // TODO(CS-02 trust registry): enforce trusted_authorities against configured trust registry.
-  try {
-    log?.("[CS02] trusted_authorities ignored (no trust registry configured)", {
-      credentialId: credQuery?.id,
-      trustedAuthorities: credQuery?.meta?.trusted_authorities,
-    });
-  } catch {}
-  return { enforced: false, placeholder: true };
+  return validateCs02TrustedAuthoritiesPolicy(credQuery, log);
 }
 
 function validateDcqlCredentialQuery(credQuery, index, options, log = () => {}) {

@@ -16,6 +16,18 @@ import {
   isOpenId4VpPresentInvocation,
 } from "./openid4vpUri.js";
 import { isWebuildCs02Profile, resolveWalletProfile } from "./profile.js";
+import {
+  validateX509SanDnsTrustAnchor,
+  validateVerifierAttestationTrust,
+  validateCs02ClientMetadata,
+  validateCs02RequestUriQueryPrecedence,
+  Cs02TrustPolicyError,
+} from "../../../utils/cs02TrustPolicy.js";
+
+export {
+  validateX509SanDnsTrustAnchor,
+  validateVerifierAttestationTrust,
+} from "../../../utils/cs02TrustPolicy.js";
 
 export const CS02_JAR_TYP = "oauth-authz-req+jwt";
 export const CS02_ALLOWED_ALGS = new Set(["ES256"]);
@@ -347,6 +359,21 @@ export function validateCs02JarPayload(payload, options, log = () => {}) {
   }
 
   validateCs02ClientId(payload.client_id, log);
+
+  if (payload.client_metadata != null && options.strict) {
+    try {
+      validateCs02ClientMetadata(payload.client_metadata, {
+        responseMode: payload.response_mode,
+        strict: true,
+      });
+    } catch (error) {
+      if (error instanceof Cs02TrustPolicyError) {
+        logValidationFailure(log, "client_metadata", { message: error.message });
+        throw new Cs02ValidationError(error.message, error.errorCode);
+      }
+      throw error;
+    }
+  }
 }
 
 export function validateCs02ClientId(clientId, log = () => {}) {
@@ -372,18 +399,6 @@ export function validateCs02DeepLinkClientIdConsistency(deepLinkClientId, jarCli
       "invalid_client",
     );
   }
-}
-
-export async function validateX509SanDnsTrustAnchor(_clientId, _header, _leafCertPem) {
-  // TODO(CS-02 trust framework): validate x5c chain against configured trust anchors.
-  // TODO(CS-02 trust framework): enforce SAN DNS match to client_id host.
-  return { trusted: true, placeholder: true };
-}
-
-export async function validateVerifierAttestationTrust(_header, _clientId) {
-  // TODO(CS-02 trust framework): validate VA-JWT issuer against trusted verifier-attestation issuers.
-  // TODO(CS-02 trust framework): enforce sub match, exp/iat, and JAR signing-key binding.
-  return { trusted: true, placeholder: true };
 }
 
 async function resolveDidDocument(did) {
@@ -531,7 +546,7 @@ export async function verifyCs02JarSignature(requestJwt, header, payload, option
 
 export async function validateAndVerifyCs02AuthorizationRequest(
   requestJwt,
-  { deepLinkClientId, options, log = () => {} } = {},
+  { deepLinkClientId, deepLinkUrl, options, log = () => {} } = {},
 ) {
   if (!requestJwt || typeof requestJwt !== "string") {
     logValidationFailure(log, "unsigned_or_malformed_jar");
@@ -547,6 +562,16 @@ export async function validateAndVerifyCs02AuthorizationRequest(
   validateCs02JarHeader(header, log);
   validateCs02JarPayload(payload, options, log);
   validateCs02DeepLinkClientIdConsistency(deepLinkClientId, payload.client_id, log);
+  if (deepLinkUrl && options.strict) {
+    try {
+      validateCs02RequestUriQueryPrecedence(deepLinkUrl, payload, log);
+    } catch (error) {
+      if (error instanceof Cs02TrustPolicyError) {
+        throw new Cs02ValidationError(error.message, error.errorCode);
+      }
+      throw error;
+    }
+  }
 
   const verified = await verifyCs02JarSignature(requestJwt, header, payload, options, log);
   return {

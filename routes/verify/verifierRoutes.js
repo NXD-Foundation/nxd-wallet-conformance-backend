@@ -23,6 +23,7 @@ import qr from "qr-image";
 import imageDataURI from "image-data-uri";
 import { streamToBuffer } from "@jorgeferrero/stream-to-buffer";
 import jwt from "jsonwebtoken";
+import { decodeProtectedHeader } from "jose";
 import TimedArray from "../../utils/timedArray.js";
 
 import { 
@@ -50,6 +51,17 @@ import {
 } from "../../utils/cs03Validation.js";
 import { validateSdJwtKeyBindingMatchesCredential } from "../../utils/sdJwtKeyBinding.js";
 import { validateTs12PaymentPresentationResponse } from "../../utils/ts12Validation.js";
+import {
+  Cs02VerifierResponseError,
+  buildCs02FailedSessionPatch,
+  resolveCs02ResponseOptions,
+  validateCs02DcqlVpTokenResponse,
+  validateCs02JweResponseHeader,
+  validateCs02KeyBindingJwtClaims,
+  validateCs02ResponseSubmission,
+  validateCs02SdJwtEntriesInVpToken,
+  verifyCs02OuterResponseJwt,
+} from "../../utils/cs02VerifierResponse.js";
 
 const getSessionTranscriptBytes = (
   oid4vpData,
@@ -120,6 +132,44 @@ function describeSdJwtKeyBindingError(errorCode) {
       return "Key Binding JWT signature does not verify with credential cnf.jwk.";
     default:
       return "SD-JWT key binding validation failed.";
+  }
+}
+
+async function failVpSessionAndRespond(res, sessionId, vpSession, errorCode, errorDescription) {
+  try {
+    Object.assign(vpSession, buildCs02FailedSessionPatch(errorCode, errorDescription));
+    await storeVPSession(sessionId, vpSession);
+  } catch (storageError) {
+    await logError(sessionId, "Failed to update session status after CS-02 response validation error", {
+      error: storageError.message,
+      stack: storageError.stack,
+    }).catch(() => {});
+  }
+  return res.status(400).json({ error: errorCode, error_description: errorDescription });
+}
+
+async function runCs02SdJwtVpTokenChecks(sessionId, vpSession, vpTokenObject, cs02ResponseOptions) {
+  if (!cs02ResponseOptions.strict || !vpSession.dcql_query) return;
+  try {
+    await validateCs02SdJwtEntriesInVpToken(
+      vpTokenObject,
+      vpSession.dcql_query,
+      {
+        sessionNonce: vpSession.nonce,
+        clientId: vpSession.client_id,
+        computeSdHash: computeSdHashFromPresentedToken,
+      },
+      cs02ResponseOptions,
+    );
+  } catch (error) {
+    if (error instanceof Cs02VerifierResponseError) {
+      await logError(sessionId, "CS-02 SD-JWT presentation validation failed", {
+        error: error.message,
+        errorCode: error.errorCode,
+      }).catch(() => {});
+      throw error;
+    }
+    throw error;
   }
 }
 
@@ -393,6 +443,37 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
       } catch {}
     }
 
+    const cs02ResponseOptions = resolveCs02ResponseOptions();
+    try {
+      const submissionCheck = validateCs02ResponseSubmission(
+        req.body,
+        vpSession,
+        cs02ResponseOptions,
+      );
+      if (submissionCheck?.walletError) {
+        await logError(sessionId, "Wallet reported protocol error", submissionCheck.walletError).catch(
+          () => {},
+        );
+        return failVpSessionAndRespond(
+          res,
+          sessionId,
+          vpSession,
+          submissionCheck.walletError.error,
+          submissionCheck.walletError.error_description ||
+            `Wallet reported ${submissionCheck.walletError.error}`,
+        );
+      }
+    } catch (error) {
+      if (error instanceof Cs02VerifierResponseError) {
+        await logError(sessionId, "CS-02 response submission validation failed", {
+          error: error.message,
+          errorCode: error.errorCode,
+        }).catch(() => {});
+        return failVpSessionAndRespond(res, sessionId, vpSession, error.errorCode, error.message);
+      }
+      throw error;
+    }
+
     // Check if this is an MDL presentation in multiple ways:
     // 1. From presentation definition format (PEX - explicit format declaration)
     // 2. From DCQL query format (DCQL - credentials format field)
@@ -508,28 +589,58 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
         .filter(id => typeof id === 'string' && id.length > 0);
       
       if (expectedCredentialIds.length > 0) {
-        const receivedKeys = Object.keys(vpTokenToValidate);
-        const missingIds = expectedCredentialIds.filter(id => !receivedKeys.includes(id));
-        
-        if (missingIds.length > 0) {
-          await logWarn(sessionId, "vp_token object missing some credential query IDs", {
-            expectedCredentialIds,
-            receivedKeys,
-            missingIds,
-            specRef: "https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#name-response-parameters"
-          });
-          // Note: This is a warning, not an error, as the spec allows returning only matching credentials
+        try {
+          vpTokenToValidate = validateCs02DcqlVpTokenResponse(
+            vpTokenToValidate,
+            vpSession.dcql_query,
+            cs02ResponseOptions,
+          );
+          await runCs02SdJwtVpTokenChecks(
+            sessionId,
+            vpSession,
+            vpTokenToValidate,
+            cs02ResponseOptions,
+          );
+        } catch (error) {
+          if (error instanceof Cs02VerifierResponseError) {
+            await logError(sessionId, "CS-02 DCQL vp_token validation failed", {
+              error: error.message,
+              errorCode: error.errorCode,
+              expectedCredentialIds,
+            }).catch(() => {});
+            return failVpSessionAndRespond(
+              res,
+              sessionId,
+              vpSession,
+              error.errorCode,
+              error.message,
+            );
+          }
+          throw error;
         }
-        
+
+        const receivedKeys = Object.keys(vpTokenToValidate);
+        if (!cs02ResponseOptions.strict) {
+          const missingIds = expectedCredentialIds.filter((id) => !receivedKeys.includes(id));
+          if (missingIds.length > 0) {
+            await logWarn(sessionId, "vp_token object missing some credential query IDs", {
+              expectedCredentialIds,
+              receivedKeys,
+              missingIds,
+              specRef: SPEC_REFS.VP_RESPONSE_PARAMS,
+            });
+          }
+        }
+
         await logDebug(sessionId, "DCQL vp_token format validation passed", {
           expectedCredentialIds,
           receivedKeys,
           vpTokenValueTypes: Object.fromEntries(
             Object.entries(vpTokenToValidate).map(([k, v]) => [
-              k, 
-              Array.isArray(v) ? `array[${v.length}]` : typeof v
-            ])
-          )
+              k,
+              Array.isArray(v) ? `array[${v.length}]` : typeof v,
+            ]),
+          ),
         });
       }
     }
@@ -963,7 +1074,13 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
           error: req.body.error,
           error_description: req.body.error_description
         });
-        return res.status(400).json({ error: req.body.error, error_description: req.body.error_description });
+        return failVpSessionAndRespond(
+          res,
+          sessionId,
+          vpSession,
+          req.body.error,
+          req.body.error_description || `Wallet reported ${req.body.error}`,
+        );
       }
 
       // According to OpenID4VP spec, direct_post.jwt sends response in 'response' parameter
@@ -1000,6 +1117,10 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
         if (jwtResponse.split('.').length === 5) {
           await logInfo(sessionId, "Processing encrypted JWE response for direct_post.jwt");
 
+          if (cs02ResponseOptions.strict) {
+            validateCs02JweResponseHeader(decodeProtectedHeader(jwtResponse), clientMetadata);
+          }
+
           // Decrypt the JWE - this may return JWT string (per spec) or payload object (wallet-specific)
           const decrypted = await decryptJWE(jwtResponse, privateKey, "direct_post.jwt");
           await logDebug(sessionId, "JWE decryption completed", {
@@ -1009,7 +1130,18 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
           if (typeof decrypted === 'string') {
             // OpenID4VP spec compliant: JWE decrypted to JWT string
             await logInfo(sessionId, "Processing JWT string from JWE (per OpenID4VP spec)");
-            const decodedPayload = jwt.decode(decrypted);
+            let decodedPayload;
+            if (cs02ResponseOptions.strict) {
+              const verified = await verifyCs02OuterResponseJwt(decrypted, {
+                clientId: vpSession.client_id,
+                state: vpSession.state,
+              });
+              decodedPayload = verified.payload;
+              outerJwtPayload = verified.payload;
+            } else {
+              decodedPayload = jwt.decode(decrypted);
+              outerJwtPayload = decodedPayload;
+            }
             vpToken = decodedPayload?.vp_token;
             
             // In VP 1.0, nonce may be in the decoded JWT payload itself
@@ -1057,6 +1189,25 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
                   error_description: `Invalid vp_token format for DCQL query. When DCQL is used, vp_token MUST be a JSON object mapping credential query IDs to presentations. Received: ${received}. See ${specRef}`
                 });
               }
+              try {
+                vpToken = validateCs02DcqlVpTokenResponse(
+                  vpToken,
+                  vpSession.dcql_query,
+                  cs02ResponseOptions,
+                );
+                await runCs02SdJwtVpTokenChecks(sessionId, vpSession, vpToken, cs02ResponseOptions);
+              } catch (error) {
+                if (error instanceof Cs02VerifierResponseError) {
+                  return failVpSessionAndRespond(
+                    res,
+                    sessionId,
+                    vpSession,
+                    error.errorCode,
+                    error.message,
+                  );
+                }
+                throw error;
+              }
             }
             
             if (typeof vpToken === 'string') {
@@ -1064,6 +1215,15 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
             }
           } else if (decrypted && decrypted.vp_token) {
             // Wallet-specific behavior: JWE decrypted to payload object
+            if (cs02ResponseOptions.strict) {
+              return failVpSessionAndRespond(
+                res,
+                sessionId,
+                vpSession,
+                "invalid_response",
+                "direct_post.jwt JWE plaintext must be a signed response JWT in CS-02 mode",
+              );
+            }
             await logInfo(sessionId, "Processing payload object from JWE (wallet-specific behavior)");
             await logDebug(sessionId, "Decrypted payload keys", {
               allKeys: Object.keys(decrypted),
@@ -1115,6 +1275,25 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
                   error: "invalid_request",
                   error_description: `Invalid vp_token format for DCQL query. When DCQL is used, vp_token MUST be a JSON object mapping credential query IDs to presentations. Received: ${received}. See ${specRef}`
                 });
+              }
+              try {
+                vpToken = validateCs02DcqlVpTokenResponse(
+                  vpToken,
+                  vpSession.dcql_query,
+                  cs02ResponseOptions,
+                );
+                await runCs02SdJwtVpTokenChecks(sessionId, vpSession, vpToken, cs02ResponseOptions);
+              } catch (error) {
+                if (error instanceof Cs02VerifierResponseError) {
+                  return failVpSessionAndRespond(
+                    res,
+                    sessionId,
+                    vpSession,
+                    error.errorCode,
+                    error.message,
+                  );
+                }
+                throw error;
               }
             }
             // await logDebug(sessionId, "vp_token object received", {
@@ -1262,8 +1441,18 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
           });
         } else {
           await logInfo(sessionId, "Processing unencrypted JWT response for direct_post.jwt");
-          // If not encrypted, just verify the signed JWT
-          const decodedJWT = jwt.decode(jwtResponse);
+          let decodedJWT;
+          if (cs02ResponseOptions.strict) {
+            const verified = await verifyCs02OuterResponseJwt(jwtResponse, {
+              clientId: vpSession.client_id,
+              state: vpSession.state,
+            });
+            decodedJWT = verified.payload;
+            outerJwtPayload = verified.payload;
+          } else {
+            decodedJWT = jwt.decode(jwtResponse);
+            outerJwtPayload = decodedJWT;
+          }
 
           // Extract VP token from the JWT payload
           vpToken = decodedJWT?.vp_token;
@@ -1280,6 +1469,31 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
                 SPEC_REFS.VP_CREDENTIAL_RESPONSE
               ),
             });
+          }
+          const hasDcqlQueryUnencrypted =
+            vpSession.dcql_query &&
+            Array.isArray(vpSession.dcql_query.credentials) &&
+            vpSession.dcql_query.credentials.length > 0;
+          if (hasDcqlQueryUnencrypted) {
+            try {
+              vpToken = validateCs02DcqlVpTokenResponse(
+                vpToken,
+                vpSession.dcql_query,
+                cs02ResponseOptions,
+              );
+              await runCs02SdJwtVpTokenChecks(sessionId, vpSession, vpToken, cs02ResponseOptions);
+            } catch (error) {
+              if (error instanceof Cs02VerifierResponseError) {
+                return failVpSessionAndRespond(
+                  res,
+                  sessionId,
+                  vpSession,
+                  error.errorCode,
+                  error.message,
+                );
+              }
+              throw error;
+            }
           }
           if (typeof vpToken === 'string') {
             primaryVpJwt = vpToken;
@@ -1440,6 +1654,27 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
         if (jwtFromKeybind && jwtFromKeybind.payload) {
           const kbPayload = jwtFromKeybind.payload;
           const kbHeader = jwtFromKeybind.header || {};
+
+          try {
+            validateCs02KeyBindingJwtClaims({
+              kbHeader,
+              kbPayload,
+              sessionNonce: vpSession.nonce,
+              clientId: vpSession.client_id,
+              options: cs02ResponseOptions,
+            });
+          } catch (error) {
+            if (error instanceof Cs02VerifierResponseError) {
+              return failVpSessionAndRespond(
+                res,
+                sessionId,
+                vpSession,
+                error.errorCode,
+                `${error.message}. See ${SPEC_REFS.SD_JWT_KEY_BINDING}`,
+              );
+            }
+            throw error;
+          }
 
           if (!kbPayload.sd_hash) {
             await logError(sessionId, "SD-JWT Key Binding JWT missing sd_hash claim", {
@@ -1625,7 +1860,13 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
             error: req.body.error,
             error_description: req.body.error_description
           });
-          return res.status(400).json({ error: req.body.error, error_description: req.body.error_description });
+          return failVpSessionAndRespond(
+            res,
+            sessionId,
+            vpSession,
+            req.body.error,
+            req.body.error_description || `Wallet reported ${req.body.error}`,
+          );
         }
 
         // Enforce state parameter presence and matching
@@ -2150,6 +2391,27 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
       if (jwtFromKeybind && jwtFromKeybind.payload) {
         const kbPayload = jwtFromKeybind.payload;
         const kbHeader = jwtFromKeybind.header || {};
+
+        try {
+          validateCs02KeyBindingJwtClaims({
+            kbHeader,
+            kbPayload,
+            sessionNonce: vpSession.nonce,
+            clientId: vpSession.client_id,
+            options: cs02ResponseOptions,
+          });
+        } catch (error) {
+          if (error instanceof Cs02VerifierResponseError) {
+            return failVpSessionAndRespond(
+              res,
+              sessionId,
+              vpSession,
+              error.errorCode,
+              `${error.message}. See ${SPEC_REFS.SD_JWT_KEY_BINDING}`,
+            );
+          }
+          throw error;
+        }
 
         if (!kbPayload.sd_hash) {
           await logError(sessionId, "SD-JWT Key Binding JWT missing sd_hash claim", {
