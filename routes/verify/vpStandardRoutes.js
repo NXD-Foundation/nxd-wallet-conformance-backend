@@ -25,6 +25,7 @@ import {
   clearSessionContext,
 } from "../../services/cacheServiceRedis.js";
 import { makeSessionLogger, logHttpRequest, logHttpResponse } from "../../utils/sessionLogger.js";
+import { isVerifierCs02StrictMode } from "../../utils/cs02VerifierRequest.js";
 
 const vpStandardRouter = express.Router();
 
@@ -45,21 +46,22 @@ vpStandardRouter.use((req, res, next) => {
  * 
  * Maps standardized parameters to existing verification logic:
  * - session_id: Session identifier
- * - client_id_scheme: x509 | did:web | did:jwk
+ * - client_id_scheme: x509 | did:web | did:jwk | verifier_attestation
  * - profile: dcql | tx | mdl
  * - credential_profile: pid | mdl
  * - request_uri_method: get | post
- * - response_mode: direct_post | direct_post.jwt
+ * - response_mode: direct_post | direct_post.jwt | dc_api | dc_api.jwt
  * - tx_data: true | false
  */
 vpStandardRouter.get("/vp/request", async (req, res) => {
   let sessionId;
   let requestId = null;
+  let slog = null;
   
   try {
     // Extract standardized parameters
     sessionId = req.query.session_id || uuidv4();
-    const slog = makeSessionLogger(sessionId);
+    slog = makeSessionLogger(sessionId);
     bindSessionLoggingContext(req, res, sessionId);
 
     const clientIdScheme = req.query.client_id_scheme || "x509";
@@ -68,6 +70,7 @@ vpStandardRouter.get("/vp/request", async (req, res) => {
     const requestUriMethod = req.query.request_uri_method || "post";
     const responseMode = req.query.response_mode || "direct_post";
     const txData = req.query.tx_data === "true";
+    const cs02Strict = isVerifierCs02StrictMode();
 
     requestId = logHttpRequest(slog, "GET", "/vp/request", req.headers, req.query);
     try { slog("[VERIFIER] [START] Processing standardized VP request", { clientIdScheme, profile, credentialProfile, requestUriMethod, responseMode, txData }); } catch {}
@@ -77,7 +80,10 @@ vpStandardRouter.get("/vp/request", async (req, res) => {
     let presentationDefinition;
     let dcqlQuery = null;
 
-    if (credentialProfile === "mdl") {
+    if (cs02Strict) {
+      presentationDefinition = null;
+      dcqlQuery = credentialProfile === "mdl" ? DEFAULT_MDL_DCQL_QUERY : DEFAULT_DCQL_QUERY;
+    } else if (credentialProfile === "mdl") {
       // For mDL, use mDL-specific presentation definition or DCQL query
       if (profile === "mdl") {
         presentationDefinitionPath = "./data/presentation_definition_mdl.json";
@@ -141,9 +147,12 @@ vpStandardRouter.get("/vp/request", async (req, res) => {
       kid = didJwkIdentifiers.kid;
       privateKey = didJwkPrivateKey;
       routePath = "/vp/didJwkVPrequest";
+    } else if (clientIdScheme === "verifier_attestation") {
+      clientId = CONFIG.VERIFIER_ATTESTATION_CLIENT_ID;
+      routePath = "/va/verifierAttestationVPrequest";
     } else {
       throw new Error(
-        `Invalid client_id_scheme. Received: '${clientIdScheme}', expected: 'x509', 'did:web', or 'did:jwk'`
+        `Invalid client_id_scheme. Received: '${clientIdScheme}', expected: 'x509', 'did:web', 'did:jwk', or 'verifier_attestation'`
       );
     }
 
@@ -529,5 +538,4 @@ vpStandardRouter
   });
 
 export default vpStandardRouter;
-
 

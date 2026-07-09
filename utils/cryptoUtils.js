@@ -10,6 +10,18 @@ import { generateRefreshToken } from "./tokenUtils.js";
 import { Resolver } from "did-resolver";
 import { getResolver } from "@cef-ebsi/key-did-resolver";
 import fetch from "node-fetch";
+import {
+  resolveVerifierCs02Options,
+  validateCs02JarGenerationInput,
+  validateCs02TransactionDataEntries,
+  applyCs02JarTimestamps,
+  validateCs02SignedJar,
+  filterClientMetadataForCs02,
+  resolveCs02JarSigningPolicy,
+  validateVerifierAttestationForRequestGeneration,
+  validateX509SanDnsTrustForRequestGeneration,
+  Cs02VerifierRequestError,
+} from "./cs02VerifierRequest.js";
 
 /**
  * Extract certificate chain from a PEM file (fullchain or single cert)
@@ -324,6 +336,24 @@ export async function buildVpRequestJWT(
   state = null, // Add state parameter (last param to match test ordering)
   jar_alg = null // Optional JAR signature algorithm override (e.g., 'ES256') for x509 schemes
 ) {
+  const cs02Options = resolveVerifierCs02Options(process.env);
+  const signingPolicy = resolveCs02JarSigningPolicy({
+    client_id,
+    jar_alg,
+    response_mode,
+    options: cs02Options,
+  });
+
+  validateCs02JarGenerationInput({
+    client_id,
+    presentation_definition,
+    dcql_query,
+    response_mode,
+    response_type,
+    transaction_data,
+    options: cs02Options,
+  });
+
   if (!nonce) nonce = generateNonce(16);
   if (!state) {
     // State is REQUIRED for direct_post modes per OpenID4VP spec
@@ -353,8 +383,11 @@ export async function buildVpRequestJWT(
   // for direct_post.jwt (encrypted response). Per OpenID4VP 5.1.2.4.2.2,
   // encrypted_response_enc_values_supported MUST be absent when using direct_post (non-JWT) response mode.
   let clientMetadataForPayload = client_metadata;
-  if (response_mode === "direct_post" && client_metadata && typeof client_metadata === "object") {
-    const { encrypted_response_enc_values_supported, ...rest } = client_metadata;
+  if (cs02Options.strict) {
+    clientMetadataForPayload = filterClientMetadataForCs02(client_metadata, response_mode);
+  }
+  if (response_mode === "direct_post" && clientMetadataForPayload && typeof clientMetadataForPayload === "object") {
+    const { encrypted_response_enc_values_supported, ...rest } = clientMetadataForPayload;
     clientMetadataForPayload = rest;
   }
 
@@ -364,11 +397,7 @@ export async function buildVpRequestJWT(
     schemeSeparatorIdx > 0 ? client_id.substring(0, schemeSeparatorIdx) : null;
   const isRedirectUriScheme = schemePrefix === "redirect_uri";
   const isDecentralizedIdScheme = schemePrefix === "decentralized_identifier";
-  const effectiveClientId = isDecentralizedIdScheme
-    ? client_id.substring("decentralized_identifier:".length)
-    : isRedirectUriScheme
-    ? client_id.substring("redirect_uri:".length)
-    : client_id;
+  const effectiveClientId = signingPolicy.effectiveClientId;
 
   // Construct the JWT payload
   let jwtPayload = {
@@ -401,22 +430,17 @@ export async function buildVpRequestJWT(
 
   // Add required timestamp claims for Digital Credentials API
   if (response_mode === "dc_api.jwt" || response_mode === "dc_api") {
-    const now = Math.floor(Date.now() / 1000);
-    jwtPayload.iat = now; // issued at time
-    jwtPayload.exp = now + 60 * 60; // expires in 1 hour
     jwtPayload.expected_origins = ["https://dss.aegean.gr"];
     jwtPayload.state = state;
   }
 
-  const now = Math.floor(Date.now() / 1000);
-  jwtPayload.iat = now; // issued at time
-  jwtPayload.exp = now + 60 * 5; // expires in 5 minutes
+  applyCs02JarTimestamps(jwtPayload, response_mode);
 
   // console.log("wallet_nonce", wallet_nonce);
   if (wallet_nonce) jwtPayload.wallet_nonce = wallet_nonce;
 
-  // OpenID4VP v1.0: Only DCQL is supported; PEX (presentation_definition) is not supported
-  if (presentation_definition) {
+  // CS-02 requests use DCQL only. Compatibility mode may still emit legacy PEX requests.
+  if (presentation_definition && cs02Options.strict) {
     throw new Error(
       "Presentation Exchange (presentation_definition) is not supported; use dcql_query per OpenID4VP 1.0"
     );
@@ -425,59 +449,13 @@ export async function buildVpRequestJWT(
   // Add dcql_query if provided (required in place of PEX)
   if (dcql_query) {
     jwtPayload.dcql_query = dcql_query;
+  } else if (presentation_definition) {
+    jwtPayload.presentation_definition = presentation_definition;
   }
 
   // Add transaction_data if provided
   if (transaction_data) {
-    // Validate credential_ids match DCQL query when both are present
-    // Per OpenID4VP 5.1.2.8.2.2: credential_ids must match id field in DCQL Credential Query
-    if (dcql_query && dcql_query.credentials && Array.isArray(dcql_query.credentials)) {
-      const dcqlCredentialIds = dcql_query.credentials
-        .map((cred) => cred.id)
-        .filter((id) => id !== undefined);
-      
-      if (dcqlCredentialIds.length > 0 && Array.isArray(transaction_data)) {
-        // Decode and validate each transaction_data entry
-        for (const txDataEntry of transaction_data) {
-          if (typeof txDataEntry === 'string') {
-            // Decode base64url encoded transaction_data
-            try {
-              const decodedTxData = JSON.parse(
-                Buffer.from(txDataEntry, 'base64url').toString('utf8')
-              );
-              if (decodedTxData.credential_ids && Array.isArray(decodedTxData.credential_ids)) {
-                // Validate all credential_ids in transaction_data are present in DCQL query
-                const invalidIds = decodedTxData.credential_ids.filter(
-                  (id) => !dcqlCredentialIds.includes(id)
-                );
-                if (invalidIds.length > 0) {
-                  throw new Error(
-                    `Invalid credential_ids in transaction_data: ${invalidIds.join(', ')}. ` +
-                    `credential_ids must match id fields from dcql_query.credentials[].id. ` +
-                    `Expected: ${dcqlCredentialIds.join(', ')}, Found: ${decodedTxData.credential_ids.join(', ')}`
-                  );
-                }
-                // Validate credential_ids is non-empty as per spec
-                if (decodedTxData.credential_ids.length === 0) {
-                  throw new Error(
-                    'credential_ids in transaction_data must be a non-empty array per OpenID4VP 5.1.2.8.2.2'
-                  );
-                }
-              }
-            } catch (error) {
-              // If decoding fails, it might be a different format - let it pass through
-              // but log a warning
-              if (error.message.includes('Invalid credential_ids') || error.message.includes('non-empty array')) {
-                throw error; // Re-throw validation errors
-              }
-              // Otherwise, decoding error - might be malformed, but don't fail here
-              console.warn('Warning: Could not decode transaction_data for credential_ids validation:', error.message);
-            }
-          }
-        }
-      }
-    }
-    
+    validateCs02TransactionDataEntries(transaction_data, dcql_query, cs02Options);
     jwtPayload.transaction_data = transaction_data;
   }
 
@@ -500,16 +478,23 @@ export async function buildVpRequestJWT(
     effectiveClientId.startsWith("x509_san_dns:") ||
     effectiveClientId.startsWith("x509_san_uri:")
   ) {
-    // Allow overriding the default RS256 JAR signature with ES256 using EC keys
     const useEs256 =
-      typeof jar_alg === "string" && jar_alg.toUpperCase() === "ES256";
+      signingPolicy.forceEs256 ||
+      (typeof jar_alg === "string" && jar_alg.toUpperCase() === "ES256");
 
     let certChain;
     if (useEs256) {
       const p12 = loadVerifierP12();
       privateKey = p12.privateKeyPkcs8;
-      certChain = p12.certChain;
+      certChain = appendCaCertsIfNeeded([...p12.certChain]);
+      await validateX509SanDnsTrustForRequestGeneration(client_id, { x5c: certChain });
     } else {
+      if (cs02Options.strict) {
+        throw new Cs02VerifierRequestError(
+          "CS-02 x509_san_dns requests must use ES256/P-256 signing",
+          "invalid_request",
+        );
+      }
       privateKey = fs.readFileSync("./x509/client_private_pkcs8.key", "utf8");
       const certificate = fs.readFileSync("./x509/client_certificate.crt", "utf8");
       const certBase64 = certificate
@@ -529,9 +514,15 @@ export async function buildVpRequestJWT(
       .setProtectedHeader(header)
       .sign(await jose.importPKCS8(privateKey, useEs256 ? "ES256" : "RS256"));
   } else if (effectiveClientId.startsWith("x509_hash:")) {
-    // Allow overriding the default RS256 JAR signature with ES256 using EC keys
+    if (cs02Options.strict) {
+      throw new Cs02VerifierRequestError(
+        "x509_hash client identifier scheme is not supported in CS-02 mode",
+        "invalid_client",
+      );
+    }
     const useEs256 =
-      typeof jar_alg === "string" && jar_alg.toUpperCase() === "ES256";
+      signingPolicy.forceEs256 ||
+      (typeof jar_alg === "string" && jar_alg.toUpperCase() === "ES256");
 
     let certChain;
     if (useEs256) {
@@ -625,6 +616,12 @@ export async function buildVpRequestJWT(
   } else {
     // For redirect_uri scheme, unsigned JAR is allowed; still sign with default if private key available
     if (isRedirectUriScheme) {
+      if (cs02Options.strict) {
+        throw new Cs02VerifierRequestError(
+          "CS-02 mode forbids unsigned redirect_uri authorization requests",
+          "invalid_client",
+        );
+      }
       const header = {
         alg: "none",
         typ: "oauth-authz-req+jwt",
@@ -634,13 +631,12 @@ export async function buildVpRequestJWT(
         JSON.stringify(header)
       )}.${base64url.encode(JSON.stringify(jwtPayload))}.`;
     } else if (schemePrefix === "verifier_attestation") {
-      // Use provided VA-JWT or generate one for development/testing
-      const nonPrefixedId = client_id.substring('verifier_attestation:'.length);
+      const nonPrefixedId = client_id.substring("verifier_attestation:".length);
       if (!va_jwt) {
         va_jwt = await generateTestVAJWT(nonPrefixedId);
       }
 
-      const parts = va_jwt.split('.');
+      const parts = va_jwt.split(".");
       let vaPayload;
       try {
         vaPayload = JSON.parse(base64url.decode(parts[1]));
@@ -648,38 +644,54 @@ export async function buildVpRequestJWT(
         throw new Error("Invalid VA-JWT payload format");
       }
 
-      // Validate sub matches non-prefixed client identifier (VP 1.0 spec requirement)
       if (vaPayload.sub !== nonPrefixedId) {
         throw new Error("VA-JWT sub does not match non-prefixed client_id");
       }
 
-      // For verifier attestation, use the same x509 private key as other x509 schemes
-      // this is the same key as the one used in the cnf claim of the va_jwt
-      privateKey = fs.readFileSync("./x509/client_private_pkcs8.key", "utf8");
-      // For RSA certificates: Use only leaf certificate
-      const certificate = fs.readFileSync("./x509/client_certificate.crt", "utf8");
-      const certBase64 = certificate
-        .replace("-----BEGIN CERTIFICATE-----", "")
-        .replace("-----END CERTIFICATE-----", "")
-        .replace(/\s+/g, "");
+      await validateVerifierAttestationForRequestGeneration({ jwt: va_jwt }, client_id);
 
-      // Include VA-JWT in JOSE header as 'jwt' (VP 1.0 spec requirement)
-      const header = {
-        alg: "RS256",
-        typ: "oauth-authz-req+jwt",
-        x5c: [certBase64],
-        jwt: va_jwt, // Verifier Attestation JWT in JOSE header
-      };
+      const useEs256 = signingPolicy.forceEs256;
+      let header;
+      if (useEs256) {
+        const p12 = loadVerifierP12();
+        privateKey = p12.privateKeyPkcs8;
+        const certChain = appendCaCertsIfNeeded([...p12.certChain]);
+        header = {
+          alg: "ES256",
+          typ: "oauth-authz-req+jwt",
+          x5c: certChain,
+          jwt: va_jwt,
+        };
+        signedJwt = await new jose.SignJWT(jwtPayload)
+          .setProtectedHeader(header)
+          .sign(await jose.importPKCS8(privateKey, "ES256"));
+      } else {
+        privateKey = fs.readFileSync("./x509/client_private_pkcs8.key", "utf8");
+        const certificate = fs.readFileSync("./x509/client_certificate.crt", "utf8");
+        const certBase64 = certificate
+          .replace("-----BEGIN CERTIFICATE-----", "")
+          .replace("-----END CERTIFICATE-----", "")
+          .replace(/\s+/g, "");
 
-      signedJwt = await new jose.SignJWT(jwtPayload)
-        .setProtectedHeader(header)
-        .sign(await jose.importPKCS8(privateKey, "RS256"));
+        header = {
+          alg: "RS256",
+          typ: "oauth-authz-req+jwt",
+          x5c: [certBase64],
+          jwt: va_jwt,
+        };
+
+        signedJwt = await new jose.SignJWT(jwtPayload)
+          .setProtectedHeader(header)
+          .sign(await jose.importPKCS8(privateKey, "RS256"));
+      }
     } else {
       throw new Error(
         "not supported client_id scheme for client_id:" + client_id
       );
     }
   }
+
+  validateCs02SignedJar(signedJwt, cs02Options);
 
   // If wallet_metadata with jwks is provided, encrypt the request object
   if (wallet_metadata && wallet_metadata.jwks) {
@@ -714,7 +726,7 @@ export async function buildVpRequestJWT(
 
     return encryptedRequest;
   }
-  // console.log("signedJwt", signedJwt);
+
   return signedJwt;
 }
 

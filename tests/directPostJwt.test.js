@@ -10,6 +10,20 @@ describe('Direct Post JWT Fixes', () => {
   let sandbox;
   let mockPrivateKey;
   let mockPublicKey;
+  let previousVerifierCs02Compatibility;
+
+  before(function () {
+    previousVerifierCs02Compatibility = process.env.VERIFIER_CS02_COMPATIBILITY;
+    process.env.VERIFIER_CS02_COMPATIBILITY = 'true';
+  });
+
+  after(function () {
+    if (previousVerifierCs02Compatibility === undefined) {
+      delete process.env.VERIFIER_CS02_COMPATIBILITY;
+    } else {
+      process.env.VERIFIER_CS02_COMPATIBILITY = previousVerifierCs02Compatibility;
+    }
+  });
 
   beforeEach(() => {
     sandbox = sinon.createSandbox();

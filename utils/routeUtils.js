@@ -4,6 +4,11 @@ import qr from "qr-image";
 import imageDataURI from "image-data-uri";
 import { streamToBuffer } from "@jorgeferrero/stream-to-buffer";
 import { generateNonce, buildVpRequestJWT } from "./cryptoUtils.js";
+import {
+  filterClientMetadataForCs02,
+  createOpenId4VpRequestUrl,
+  isVerifierCs02StrictMode,
+} from "./cs02VerifierRequest.js";
 import { getSDsFromPresentationDef } from "./vpHeplers.js";
 import {
   storeVPSession,
@@ -147,8 +152,7 @@ export const CONFIG = {
     return `verifier_attestation:${hostname}`;
   },
   DEFAULT_RESPONSE_MODE: "direct_post",
-  // Default JAR signature algorithm for VP requests (x509 flows)
-  // RS256 is kept as default for backward compatibility; can be overridden per-request.
+  // Default JAR signature algorithm for VP requests (CS-02 uses ES256/P-256).
   DEFAULT_JAR_ALG: "ES256",
   DEFAULT_NONCE_LENGTH: 16,
   QR_CONFIG: {
@@ -1123,12 +1127,24 @@ export async function generateVPRequest(params) {
     ts12PaymentPayload = null,
     ts12ExpectedVct = null,
   } = params;
+  const cs02StrictMode = isVerifierCs02StrictMode();
+  let effectivePresentationDefinition = presentationDefinition;
+  let effectiveDcqlQuery = dcqlQuery;
+
+  if (cs02StrictMode) {
+    effectivePresentationDefinition = null;
+    if (!effectiveDcqlQuery) {
+      effectiveDcqlQuery = routePath?.includes("/mdl/")
+        ? DEFAULT_MDL_DCQL_QUERY
+        : DEFAULT_DCQL_QUERY;
+    }
+  }
 
   await logInfo(sessionId, "Starting VP request generation in routeUtils", {
     responseMode,
     jarAlg: jarAlg || CONFIG.DEFAULT_JAR_ALG,
     clientId,
-    hasDcqlQuery: !!dcqlQuery,
+    hasDcqlQuery: !!effectiveDcqlQuery,
     hasTransactionData: !!transactionData,
     cs03Signing,
     cs03Oob,
@@ -1154,18 +1170,18 @@ export async function generateVPRequest(params) {
     jar_alg: jarAlg || CONFIG.DEFAULT_JAR_ALG,
   };
 
-  if (presentationDefinition) {
-    sessionData.presentation_definition = presentationDefinition;
-    sessionData.sdsRequested = getSDsFromPresentationDef(presentationDefinition);
+  if (effectivePresentationDefinition) {
+    sessionData.presentation_definition = effectivePresentationDefinition;
+    sessionData.sdsRequested = getSDsFromPresentationDef(effectivePresentationDefinition);
     await logDebug(sessionId, "Added presentation definition to session", {
-      inputDescriptors: presentationDefinition.input_descriptors?.length || 0
+      inputDescriptors: effectivePresentationDefinition.input_descriptors?.length || 0
     });
   }
 
-  if (dcqlQuery) {
-    sessionData.dcql_query = dcqlQuery;
+  if (effectiveDcqlQuery) {
+    sessionData.dcql_query = effectiveDcqlQuery;
     await logDebug(sessionId, "Added DCQL query to session", {
-      credentialsCount: dcqlQuery.credentials?.length || 0
+      credentialsCount: effectiveDcqlQuery.credentials?.length || 0
     });
   }
 
@@ -1184,12 +1200,12 @@ export async function generateVPRequest(params) {
     sessionData.cs03_oob = cs03Oob;
     sessionData.cs03_callback_token = cs03CallbackToken;
     sessionData.cs03_expected_credential_ids =
-      dcqlQuery?.credentials?.map((cred) => cred.id).filter(Boolean) || [CS03_SIGNING_CREDENTIAL_ID];
+      effectiveDcqlQuery?.credentials?.map((cred) => cred.id).filter(Boolean) || [CS03_SIGNING_CREDENTIAL_ID];
     await logInfo(sessionId, "CS-03 signing session configured", {
       cs03Oob: cs03Oob,
       hasCallbackToken: !!cs03CallbackToken,
       expectedCredentialIds: sessionData.cs03_expected_credential_ids,
-      dcqlCredentialFormats: (dcqlQuery?.credentials || []).map((c) => c.format).filter(Boolean),
+      dcqlCredentialFormats: (effectiveDcqlQuery?.credentials || []).map((c) => c.format).filter(Boolean),
       hasEncodedQesTransactionData: typeof transactionData === "string" && transactionData.length > 0,
     });
     await logDebug(sessionId, "CS-03 qesRequest is carried in transaction_data (base64url JSON)", {
@@ -1204,7 +1220,7 @@ export async function generateVPRequest(params) {
       typeof transactionData === "string" ? transactionData : null;
     sessionData.ts12_expected_vct = ts12ExpectedVct || null;
     sessionData.ts12_expected_credential_ids =
-      dcqlQuery?.credentials?.map((cred) => cred.id).filter(Boolean) || [];
+      effectiveDcqlQuery?.credentials?.map((cred) => cred.id).filter(Boolean) || [];
     await logInfo(sessionId, "TS12 payment session configured", {
       hasEncodedTransactionData: !!sessionData.ts12_encoded_transaction_data,
       expectedCredentialIds: sessionData.ts12_expected_credential_ids,
@@ -1220,21 +1236,26 @@ export async function generateVPRequest(params) {
 
   // Build VP request JWT (key is determined from client_id scheme)
   await logDebug(sessionId, "Building VP request JWT");
+  const metadataForRequest = isVerifierCs02StrictMode()
+    ? filterClientMetadataForCs02(clientMetadata, responseMode)
+    : clientMetadata;
   await buildVpRequestJWT(
     clientId,
     responseUri,
-    presentationDefinition,
+    effectivePresentationDefinition,
     null, // privateKey - only used for verifier_attestation scheme
-    clientMetadata,
+    metadataForRequest,
     kid,
     serverURL,
     "vp_token",
     nonce,
-    dcqlQuery,
+    effectiveDcqlQuery,
     transactionData ? [transactionData] : null,
     responseMode,
     undefined,
     undefined,
+    null,
+    null,
     state,
     jarAlg || CONFIG.DEFAULT_JAR_ALG
   );
@@ -1312,12 +1333,16 @@ export async function processVPRequest(params) {
       responseMode: vpSession.response_mode
     });
 
+    const metadataForRequest = isVerifierCs02StrictMode()
+      ? filterClientMetadataForCs02(clientMetadata, vpSession.response_mode)
+      : clientMetadata;
+
     const vpRequestJWT = await buildVpRequestJWT(
       clientId,
       responseUri,
       vpSession.presentation_definition,
       null, // privateKey - only used for verifier_attestation scheme
-      clientMetadata,
+      metadataForRequest,
       kid,
       serverURL,
       "vp_token",
@@ -1391,8 +1416,7 @@ export function createTransactionData(presentationDefinitionOrDcqlQuery) {
  * @returns {string} - The OpenID4VP request URL
  */
 export function createOpenID4VPRequestUrl(requestUri, clientId, usePostMethod = false) {
-  const baseUrl = `openid4vp://?request_uri=${encodeURIComponent(requestUri)}&client_id=${encodeURIComponent(clientId)}`;
-  return usePostMethod ? `${baseUrl}&request_uri_method=post` : baseUrl;
+  return createOpenId4VpRequestUrl(requestUri, clientId, usePostMethod, process.env);
 }
 
 /**
