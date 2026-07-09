@@ -52,12 +52,65 @@ function requestedSdJwtClaimNames(dcqlCredentialQuery) {
   );
 }
 
+function availableSdJwtClaimNames(issuerJwt, disclosures) {
+  const available = new Set();
+  const clearPayload = readJwtPayload(issuerJwt) || {};
+  for (const key of Object.keys(clearPayload)) {
+    if (!key.startsWith("_")) available.add(key);
+  }
+  for (const disclosure of disclosures) {
+    const decoded = decodeSdJwtDisclosure(disclosure);
+    if (typeof decoded?.[1] === "string" && decoded[1].length > 0) {
+      available.add(decoded[1]);
+    }
+  }
+  return available;
+}
+
+function selectedClaimSetNames(dcqlCredentialQuery, availableNames) {
+  const claimSets = Array.isArray(dcqlCredentialQuery?.claim_sets)
+    ? dcqlCredentialQuery.claim_sets
+    : [];
+  if (claimSets.length === 0) return null;
+
+  const claimsById = new Map(
+    (dcqlCredentialQuery?.claims || [])
+      .filter((claim) => typeof claim?.id === "string" && claim.id.length > 0)
+      .map((claim) => [claim.id, claim]),
+  );
+
+  for (const claimSet of claimSets) {
+    const references = Array.isArray(claimSet) ? claimSet : claimSet?.ids;
+    if (!Array.isArray(references) || references.length === 0) continue;
+    const referencedClaims = references
+      .map((claimId) => claimsById.get(claimId))
+      .filter(Boolean);
+    if (referencedClaims.length !== references.length) continue;
+
+    const claimNames = referencedClaims
+      .map((claim) => (Array.isArray(claim.path) ? claim.path[0] : null))
+      .filter((name) => typeof name === "string" && name.length > 0);
+    if (claimNames.length !== references.length) continue;
+    if (claimNames.every((name) => availableNames.has(name))) {
+      return new Set(claimNames);
+    }
+  }
+
+  throw new Error("Stored SD-JWT does not satisfy any DCQL claim_sets option");
+}
+
 export function filterSdJwtByDcqlClaims(sdJwt, dcqlCredentialQuery) {
-  const requestedNames = requestedSdJwtClaimNames(dcqlCredentialQuery);
+  let requestedNames = requestedSdJwtClaimNames(dcqlCredentialQuery);
   if (requestedNames.length === 0) return sdJwt;
 
-  const requested = new Set(requestedNames);
   const { issuerJwt, disclosures } = sdJwtWithoutKbJwt(sdJwt);
+  const availableNames = availableSdJwtClaimNames(issuerJwt, disclosures);
+  const claimSetNames = selectedClaimSetNames(dcqlCredentialQuery, availableNames);
+  if (claimSetNames) {
+    requestedNames = requestedNames.filter((name) => claimSetNames.has(name));
+  }
+
+  const requested = new Set(requestedNames);
   const filteredDisclosures = disclosures.filter((disclosure) => {
     const decoded = decodeSdJwtDisclosure(disclosure);
     return typeof decoded?.[1] === "string" && requested.has(decoded[1]);

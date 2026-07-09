@@ -1,4 +1,5 @@
 import { expect } from "chai";
+import { encode } from "cbor-x";
 import * as jose from "jose";
 import { createHash } from "crypto";
 import {
@@ -6,6 +7,7 @@ import {
   validateCs02DcqlVpTokenResponse,
   validateCs02JweResponseHeader,
   validateCs02KeyBindingJwtClaims,
+  validateCs02MdocPresentation,
   validateCs02ResponseSubmission,
   validateCs02SdJwtIssuerAuthenticity,
   validateCs02SdJwtPresentation,
@@ -78,6 +80,21 @@ async function buildSdJwtPresentation({
     .sign(holderKey);
 
   return `${issuerJwt}~${disclosures.join("~")}~${kbJwt}`;
+}
+
+function buildMdocB64ForTests(docType) {
+  return Buffer.from(
+    encode({
+      version: "1.0",
+      documents: [
+        {
+          docType,
+          issuerSigned: { nameSpaces: {}, issuerAuth: new Uint8Array([1]) },
+          deviceSigned: { nameSpaces: {}, deviceAuth: {} },
+        },
+      ],
+    }),
+  ).toString("base64url");
 }
 
 describe("CS-02 verifier response validation (Phase 4)", () => {
@@ -179,6 +196,18 @@ describe("CS-02 verifier response validation (Phase 4)", () => {
       { strict: true },
     );
     expect(vpToken.cmwallet).to.deep.equal(["one", "two"]);
+  });
+
+  it("rejects unrelated credential ids when a required credential_set option is satisfied", () => {
+    expect(() =>
+      validateCs02DcqlVpTokenResponse(
+        { cmwallet: "eyJ...", "mdoc-id": "mdoc-data" },
+        sampleDcqlQuery({
+          credential_sets: [{ required: true, options: [["cmwallet"]] }],
+        }),
+        { strict: true },
+      ),
+    ).to.throw(Cs02VerifierResponseError, /Unexpected DCQL credential id/);
   });
 
   it("validates JWE header alg, enc, and kid against metadata", () => {
@@ -616,5 +645,32 @@ describe("CS-02 verifier response validation (Phase 4)", () => {
     });
 
     it.skip("rejects untrusted SD-JWT issuers once configured issuer trust exists", () => {});
+  });
+
+  describe("mso_mdoc request constraints (Phase G)", () => {
+    it("accepts mso_mdoc when doctype_value matches", () => {
+      const result = validateCs02MdocPresentation({
+        presentation: buildMdocB64ForTests("test"),
+        credQuery: {
+          id: "mdoc-id",
+          format: "mso_mdoc",
+          meta: { doctype_value: "test" },
+        },
+      });
+      expect(result).to.include({ ok: true, doctype: "test" });
+    });
+
+    it("rejects wrong mso_mdoc doctype when requested by DCQL", () => {
+      expect(() =>
+        validateCs02MdocPresentation({
+          presentation: buildMdocB64ForTests("wrong"),
+          credQuery: {
+            id: "mdoc-id",
+            format: "mso_mdoc",
+            meta: { doctype_value: "test" },
+          },
+        }),
+      ).to.throw(Cs02VerifierResponseError, /doctype/);
+    });
   });
 });

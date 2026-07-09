@@ -19,6 +19,7 @@ import {
   validateCs02IssuerTrust,
   resolveCs02TrustPolicyOptions,
 } from "./cs02TrustPolicy.js";
+import { extractMdocDocType } from "../wallet-client/src/lib/mdocDocType.js";
 
 export { resolveVerifierCs02Options, isVerifierCs02StrictMode } from "./cs02VerifierRequest.js";
 
@@ -59,6 +60,7 @@ function isPlainObject(value) {
 
 const SD_JWT_FORMATS = new Set(["dc+sd-jwt", "vc+sd-jwt"]);
 const CS02_ISSUER_SD_JWT_ALGS = new Set(["ES256", "ES384"]);
+const MDOC_FORMAT = "mso_mdoc";
 
 export function normalizeDcqlVpToken(vpToken) {
   if (vpToken == null) return vpToken;
@@ -809,11 +811,21 @@ export async function validateCs02SdJwtEntriesInVpToken(
   if (!options.strict || !isPlainObject(vpTokenObject)) return;
 
   for (const credQuery of dcqlQuery?.credentials || []) {
-    if (!SD_JWT_FORMATS.has(String(credQuery?.format || ""))) continue;
     const value = vpTokenObject[credQuery.id];
     if (value == null) continue;
 
     const presentations = Array.isArray(value) ? value : [value];
+    if (String(credQuery?.format || "") === MDOC_FORMAT) {
+      for (const presentation of presentations) {
+        validateCs02MdocPresentation({
+          presentation,
+          credQuery,
+        });
+      }
+      continue;
+    }
+
+    if (!SD_JWT_FORMATS.has(String(credQuery?.format || ""))) continue;
     for (const presentation of presentations) {
       await validateCs02SdJwtPresentation({
         sdJwt: presentation,
@@ -835,6 +847,39 @@ export async function validateCs02SdJwtEntriesInVpToken(
       });
     }
   }
+}
+
+export function validateCs02MdocPresentation({ presentation, credQuery } = {}) {
+  if (typeof presentation !== "string" || presentation.length === 0) {
+    throw new Cs02VerifierResponseError(
+      `DCQL credential "${credQuery?.id || "unknown"}" mdoc presentation must be a non-empty string`,
+      "invalid_vp_token",
+    );
+  }
+
+  const expectedDocType = credQuery?.meta?.doctype_value;
+  if (typeof expectedDocType !== "string" || expectedDocType.length === 0) {
+    return { ok: true, skipped: true };
+  }
+
+  let actualDocType;
+  try {
+    actualDocType = extractMdocDocType(presentation);
+  } catch {
+    throw new Cs02VerifierResponseError(
+      `Unable to decode mso_mdoc presentation for DCQL credential "${credQuery?.id || "unknown"}"`,
+      "invalid_credential",
+    );
+  }
+
+  if (actualDocType !== expectedDocType) {
+    throw new Cs02VerifierResponseError(
+      `mso_mdoc doctype does not satisfy DCQL request for credential "${credQuery?.id || "unknown"}"`,
+      "invalid_credential",
+    );
+  }
+
+  return { ok: true, doctype: actualDocType };
 }
 
 export { validateCs02IssuerTrust } from "./cs02TrustPolicy.js";
