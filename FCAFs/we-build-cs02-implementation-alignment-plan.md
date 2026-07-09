@@ -114,7 +114,7 @@ Required verifier request checks:
 - Request JWT payload must not include `presentation_definition` in CS-02 mode.
 - Default request lifetime should remain short, with `exp` no more than five minutes after `iat`.
 - `response_mode` must be one of the modes the verifier actually validates. Default CS-02 mode should be `direct_post`; `direct_post.jwt` is allowed only when response JWT/JWE validation is enforced.
-- `dc_api` and `dc_api.jwt` should remain outside the initial CS-02 alignment unless the verifier validation path is brought to the same standard.
+- Continue supporting `dc_api` and `dc_api.jwt`. Do not reject these modes solely because CS-02 does not currently emphasize them; they are expected to be added to CS-02 later. Track any stricter validation needed for those modes as follow-up work.
 - Generated `dcql_query` must satisfy the same structural rules expected from external requests.
 - Verifier metadata must advertise only the algorithms, credential formats, response modes, and encryption algorithms that are actually enforced.
 
@@ -129,10 +129,10 @@ Transaction data checks:
 
 Client identifier generation checks:
 
-- `x509_san_dns` CS-02 requests must use an ES256/P-256 certificate chain whose SAN DNS matches the configured verifier host.
+- `x509_san_dns` CS-02 requests should use ES256/P-256 signing. SAN DNS and certificate-chain trust-anchor validation should remain placeholder/TODO work until trust anchors are configured.
 - `did:web` CS-02 requests must use a resolvable DID document and a `kid` that resolves to the signing key.
 - `did:jwk` CS-02 requests must embed a P-256 public JWK in the DID.
-- `verifier_attestation` CS-02 requests must use a production trusted VA-JWT, not a self-signed development attestation.
+- `verifier_attestation` CS-02 requests may continue using the current development attestation path until trusted verifier-attestation issuers are configured. Keep a placeholder production validation method and clearly mark self-signed attestation as non-production.
 
 ## Phase 4: Verifier Response Validation Hardening
 
@@ -184,32 +184,30 @@ Required SD-JWT-VC checks:
 Session and result checks:
 
 - On any validation failure, set the session status to failed and store a precise error code.
-- On success, store validated claims only after all response, holder-binding, credential, and status checks pass.
+- On success, store validated claims only after all response, holder-binding, and credential checks pass. Invoke status/trust placeholder checks, but do not require trust-framework-dependent status enforcement until that framework exists.
 - Avoid persisting raw credentials, private keys, or full status-list tokens in session logs.
 
 ## Phase 5: Trust, Status, And Metadata Policy
 
-Implement shared trust and status policy used by both wallet and verifier.
+Prepare shared trust and status policy used by both wallet and verifier. Because this repo does not currently have configured trust anchors or trusted verifier-attestation issuers, Phase 5 implementation should add stubs, TODOs, and integration points rather than enforcing trust-anchor-backed validation immediately.
 
 Status-list validation:
 
-- Add JOSE `status.status_list` validation for SD-JWT-VC credentials.
-- Require `status.status_list.idx` to be a non-negative integer.
-- Require `status.status_list.uri` to be an absolute HTTPS URI.
-- Fetch status-list tokens with timeout and maximum response-size limits.
-- Validate the status-list token signature against configured trusted issuers.
-- Decode the status-list bitstring and determine whether the credential is valid, suspended, or revoked.
-- In CS-02 conformance mode, reject missing, malformed, suspended, or revoked status.
-- In legacy compatibility mode, missing status may be warning-only, but malformed or revoked status should still fail.
-- Cache status-list responses by URI with a bounded TTL.
+- Add a placeholder JOSE `status.status_list` validation module for SD-JWT-VC credentials.
+- Stub checks for `status.status_list.idx` as a non-negative integer and `status.status_list.uri` as an absolute HTTPS URI.
+- Leave status-list token fetch, signature validation, bitstring decoding, and revoked/suspended decisions as TODOs until trusted status-list issuers are configured.
+- Do not fail presentations solely for missing status in the current implementation unless a CS-02 strict status-validation flag is explicitly enabled.
+- Document the intended future behavior: in full CS-02 conformance mode, reject missing, malformed, suspended, or revoked status once the trust framework exists.
+- Leave cache/timeout/maximum response-size behavior as TODOs attached to the placeholder status-list validator.
 
 Trust policy:
 
-- Define configured trust anchors for `x509_san_dns`.
-- Validate x5c chains to those trust anchors.
-- Require SAN DNS match to `client_id` host.
-- Define trusted verifier-attestation issuers.
-- Require verifier attestation `iss`, `sub`, `exp`, `iat`, and key-binding claims.
+- Add placeholder methods for configured trust anchors for `x509_san_dns`.
+- Add placeholder methods for x5c chain validation and SAN DNS match to `client_id` host.
+- Do not enforce x5c trust-chain or SAN DNS validation until trust anchors are configured.
+- Add placeholder methods for trusted verifier-attestation issuers.
+- Add placeholder methods for verifier attestation `iss`, `sub`, `exp`, `iat`, and key-binding claims.
+- Do not enforce verifier-attestation trusted-issuer validation until trusted issuers are configured.
 - Define DID trust rules for `did:web` and `did:jwk`.
 - For `did:web`, require HTTPS resolution and reject unresolved or mismatched `kid`.
 - For `did:jwk`, require allowed key type, curve, and algorithm.
@@ -242,7 +240,7 @@ Verifier tests:
 - Extend `tests/directPostJwt.test.js` and `tests/verifierRoutesDirectPostJwt.test.js` for response JWT/JWE validation.
 - Extend `tests/sdJwtKeyBinding.test.js` for KB-JWT negative cases.
 - Add tests around `utils/cryptoUtils.js` request generation for CS-02 JAR constraints.
-- Add status-list validation tests for SD-JWT-VC credentials.
+- Add placeholder status-list validation tests for SD-JWT-VC credentials. Mark network fetch, issuer trust, and revoked/suspended status decisions as TODO until the trust framework exists.
 
 Required negative scenarios:
 
@@ -273,8 +271,8 @@ Required negative scenarios:
 - Reject `direct_post.jwt` with wrong `aud`.
 - Reject DCQL response missing an expected credential id.
 - Reject unknown DCQL response credential ids.
-- Reject malformed status-list claims.
-- Reject revoked or suspended credentials.
+- Stub malformed status-list claim handling and document the intended future rejection behavior.
+- Stub revoked or suspended credential handling and document the intended future rejection behavior.
 
 Required positive scenario:
 
@@ -286,7 +284,7 @@ Required positive scenario:
   - valid DCQL SD-JWT-VC query
   - valid SD-JWT-VC disclosure set
   - valid KB-JWT with nonce, audience, `sd_hash`, and `cnf.jwk` binding
-  - valid JOSE status-list result
+  - status-list validation stub invoked without enforcing trust-framework-dependent decisions
   - successful verifier response
 
 Commands:
@@ -306,7 +304,7 @@ The implementation is aligned with this plan when:
 - CS-02 strict mode rejects unsigned, weakly signed, expired, incomplete, or unverifiable authorization requests.
 - CS-02 strict mode requires DCQL and rejects malformed DCQL before credential selection.
 - Wallet-generated SD-JWT-VC presentations include a valid KB-JWT bound to nonce, audience, `sd_hash`, and credential `cnf.jwk`.
-- Verifier validates response mode, state, nonce, audience, DCQL response shape, KB-JWT, SD-JWT issuer authenticity, disclosure integrity, and status-list state before marking a session successful.
+- Verifier validates response mode, state, nonce, audience, DCQL response shape, KB-JWT, SD-JWT issuer authenticity, and disclosure integrity before marking a session successful. Status-list and trust-anchor-backed checks have callable placeholders/TODOs until the trust framework exists.
 - Verifier metadata accurately reflects the runtime-supported CS-02 algorithms, formats, response modes, and encryption options.
 - Tests cover the required positive and negative scenarios listed above.
 - Legacy compatibility behavior is isolated behind explicit flags or routes and is not silently accepted in CS-02 conformance mode.
@@ -315,10 +313,10 @@ The implementation is aligned with this plan when:
 
 - CS-02 conformance mode is strict by default.
 - Legacy compatibility exceptions must be explicitly named and must not weaken CS-02 routes.
-- Allowed CS-02 credential formats are `dc+sd-jwt` and `vc+sd-jwt`.
+- Allowed current credential formats are `dc+sd-jwt`, `vc+sd-jwt`, and `mso_mdoc`.
 - Allowed CS-02 signing algorithm is ES256.
 - Required signing curve is P-256.
 - Allowed CS-02 client identifier schemes are `x509_san_dns`, `verifier_attestation`, `did:web`, and `did:jwk`.
 - Default wallet audience policy accepts `https://self-issued.me/v2` until a wallet-specific audience identifier is configured.
-- Missing SD-JWT-VC status is rejected in CS-02 conformance mode.
-- mdoc, CWT, JSON serialization credentials, multiple mdoc DeviceResponses, and OpenID Federation remain lower-priority broader FCAF work unless the project scope is expanded.
+- Missing SD-JWT-VC status is not rejected by default until the status/trust framework exists. The plan keeps placeholder validators and documents future strict behavior.
+- CWT, JSON serialization credentials, multiple mdoc DeviceResponses, and OpenID Federation remain lower-priority broader FCAF work unless the project scope is expanded. Single `mso_mdoc` presentation remains in current practical scope.

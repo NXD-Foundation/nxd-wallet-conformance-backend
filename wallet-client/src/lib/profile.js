@@ -4,11 +4,13 @@
  * - compatibility: generic OpenID4VCI testing (pre-authorized and authorization-code)
  * - webuild-cs01: WE BUILD CS-01 attestation conformance mode (authorization_code and
  *   pre-authorized_code; pre-auth may be disabled via CS01_DISABLE_PRE_AUTHORIZED)
+ * - webuild-cs02: WE BUILD CS-02 presentation conformance mode (strict wallet JAR validation)
  */
 
 export const WALLET_PROFILES = Object.freeze({
   COMPATIBILITY: "compatibility",
   WEBUILD_CS01: "webuild-cs01",
+  WEBUILD_CS02: "webuild-cs02",
 });
 
 const SUPPORTED_PROFILES = new Set(Object.values(WALLET_PROFILES));
@@ -31,6 +33,9 @@ export function normalizeWalletProfile(value) {
   if (value === "cs01" || value === WALLET_PROFILES.WEBUILD_CS01) {
     return WALLET_PROFILES.WEBUILD_CS01;
   }
+  if (value === "cs02" || value === WALLET_PROFILES.WEBUILD_CS02) {
+    return WALLET_PROFILES.WEBUILD_CS02;
+  }
   throw new Error(
     `Unknown WALLET_PROFILE '${value}'. Supported values: ${[...SUPPORTED_PROFILES].join(", ")}`,
   );
@@ -42,6 +47,10 @@ export function resolveWalletProfile(env = process.env) {
 
 export function isWebuildCs01Profile(profile) {
   return profile === WALLET_PROFILES.WEBUILD_CS01;
+}
+
+export function isWebuildCs02Profile(profile) {
+  return profile === WALLET_PROFILES.WEBUILD_CS02;
 }
 
 /** True when CS-01 pre-authorized issuance is explicitly disabled (legacy CS-01 v1.0 semantics). */

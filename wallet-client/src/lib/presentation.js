@@ -37,6 +37,13 @@ import {
   OPENID4VP_PRESENT_HOST,
   isOpenId4VpPresentInvocation,
 } from "./openid4vpUri.js";
+import {
+  Cs02ValidationError,
+  resolveCs02ValidationOptions,
+  validateCs02DeepLink,
+  fetchCs02AuthorizationRequestJwt,
+  validateAndVerifyCs02AuthorizationRequest,
+} from "./cs02RequestValidation.js";
 
 function makeSessionLogger(sessionId) {
   return function sessionLog(...args) {
@@ -101,8 +108,18 @@ function makeSessionLogger(sessionId) {
   };
 }
 
-function parseOpenId4VpDeepLink(deepLink) {
+function parseOpenId4VpDeepLink(deepLink, { cs02Options, log } = {}) {
   console.log("[present] Parsing deep link:", deepLink);
+  if (cs02Options?.strict) {
+    const parsed = validateCs02DeepLink(deepLink, cs02Options, log);
+    console.log("[present] Parsed deep link (CS-02) →", {
+      requestUri: parsed.requestUri,
+      clientId: parsed.clientId,
+      method: parsed.method,
+    });
+    return parsed;
+  }
+
   const url = new URL(deepLink);
   if (url.protocol !== "openid4vp:")
     throw new Error("Unsupported request scheme");
@@ -500,14 +517,40 @@ export async function performPresentation(
         credentialType,
       });
     } catch {}
-    const { requestUri, clientId, method } = parseOpenId4VpDeepLink(deepLink);
-    try {
-      slog("[PRESENTATION] Parsed deep link", { requestUri, clientId, method });
-    } catch {}
-    const requestJwt = await fetchAuthorizationRequestJwt(requestUri, method);
-    const { payload } = await verifyAuthorizationRequestJwt(requestJwt, {
-      expectedClientId: clientId,
+    const cs02Options = resolveCs02ValidationOptions(process.env);
+    const { requestUri, clientId, method } = parseOpenId4VpDeepLink(deepLink, {
+      cs02Options,
+      log: slog,
     });
+    try {
+      slog("[PRESENTATION] Parsed deep link", { requestUri, clientId, method, cs02Strict: cs02Options.strict });
+    } catch {}
+
+    let requestJwt;
+    let header;
+    let payload;
+    if (cs02Options.strict) {
+      const fetched = await fetchCs02AuthorizationRequestJwt(requestUri, method, cs02Options, slog);
+      requestJwt = fetched.requestJwt;
+      ({ header, payload } = await validateAndVerifyCs02AuthorizationRequest(requestJwt, {
+        deepLinkClientId: clientId,
+        options: cs02Options,
+        log: slog,
+      }));
+      try {
+        slog("[PRESENTATION] CS-02 JAR validated", {
+          alg: header?.alg,
+          typ: header?.typ,
+          client_id: payload?.client_id,
+          response_type: payload?.response_type,
+        });
+      } catch {}
+    } else {
+      requestJwt = await fetchAuthorizationRequestJwt(requestUri, method);
+      ({ header, payload } = await verifyAuthorizationRequestJwt(requestJwt, {
+        expectedClientId: clientId,
+      }));
+    }
 
     let responseMode = payload.response_mode || "direct_post";
     const responseUri = payload.response_uri; // our routes embed this
@@ -1464,7 +1507,11 @@ export async function performPresentation(
     return result;
   } catch (e) {
     try {
-      slog("[PRESENTATION] [ERROR] ", { status: 500, error: e.message });
+      const errorPayload =
+        e instanceof Cs02ValidationError
+          ? { status: 400, error: e.errorCode, error_description: e.message }
+          : { status: 500, error: e.message };
+      slog("[PRESENTATION] [ERROR] ", errorPayload);
     } catch(e2) {console.log("[present] Error:", e2);}
     throw e;
   }

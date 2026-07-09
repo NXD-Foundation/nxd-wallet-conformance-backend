@@ -25,6 +25,14 @@ describe("wallet-client profile (WE BUILD CS-01 Phase 1)", () => {
     expect(normalizeWalletProfile("default")).to.equal(WALLET_PROFILES.COMPATIBILITY);
   });
 
+  it("accepts webuild-cs02 and cs02 aliases", () => {
+    expect(normalizeWalletProfile("webuild-cs02")).to.equal(WALLET_PROFILES.WEBUILD_CS02);
+    expect(normalizeWalletProfile("cs02")).to.equal(WALLET_PROFILES.WEBUILD_CS02);
+    expect(resolveWalletProfile({ WALLET_PROFILE: "webuild-cs02" })).to.equal(
+      WALLET_PROFILES.WEBUILD_CS02,
+    );
+  });
+
   it("accepts webuild-cs01 and cs01 aliases", () => {
     expect(normalizeWalletProfile("webuild-cs01")).to.equal(WALLET_PROFILES.WEBUILD_CS01);
     expect(normalizeWalletProfile("cs01")).to.equal(WALLET_PROFILES.WEBUILD_CS01);
