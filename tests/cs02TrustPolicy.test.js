@@ -6,6 +6,7 @@ import {
   validateCs02ClientMetadata,
   validateCs02RequestUriQueryPrecedence,
   validateDidJwkTrustRules,
+  validateDidWebKidResolution,
   validateX509SanDnsTrustAnchor,
 } from "../utils/cs02TrustPolicy.js";
 
@@ -83,5 +84,97 @@ describe("CS-02 trust and metadata policy (Phase 5)", () => {
       response_mode: "direct_post",
     });
     expect(result.ok).to.equal(true);
+  });
+});
+
+describe("CS-02 DID trust policy (Phase A)", () => {
+  const did = "did:web:example.org";
+  const p256Jwk = { kty: "EC", crv: "P-256", x: "abc", y: "def" };
+  const otherP256Jwk = { kty: "EC", crv: "P-256", x: "ghi", y: "jkl" };
+
+  function didDocumentWithKeys() {
+    return {
+      id: did,
+      verificationMethod: [
+        { id: `${did}#keys-1`, type: "JsonWebKey2020", publicKeyJwk: p256Jwk },
+        { id: `${did}#keys-2`, type: "JsonWebKey2020", publicKeyJwk: otherP256Jwk },
+      ],
+    };
+  }
+
+  it("requires did:web JAR kid", () => {
+    expect(() =>
+      validateDidWebKidResolution(didDocumentWithKeys(), undefined, did, {
+        resolutionUrl: "https://example.org/.well-known/did.json",
+      }),
+    ).to.throw(Cs02TrustPolicyError, /must include kid/);
+  });
+
+  it("requires HTTPS did:web resolution URL", () => {
+    expect(() =>
+      validateDidWebKidResolution(didDocumentWithKeys(), `${did}#keys-1`, did, {
+        resolutionUrl: "http://example.org/.well-known/did.json",
+      }),
+    ).to.throw(Cs02TrustPolicyError, /HTTPS/);
+  });
+
+  it("requires resolvedOverHttps when no resolution URL is provided", () => {
+    expect(() =>
+      validateDidWebKidResolution(didDocumentWithKeys(), `${did}#keys-1`, did),
+    ).to.throw(Cs02TrustPolicyError, /HTTPS/);
+  });
+
+  it("requires did:web document id to match the resolved DID when present", () => {
+    expect(() =>
+      validateDidWebKidResolution(
+        { ...didDocumentWithKeys(), id: "did:web:attacker.example" },
+        `${did}#keys-1`,
+        did,
+        { resolvedOverHttps: true },
+      ),
+    ).to.throw(Cs02TrustPolicyError, /document id/);
+  });
+
+  it("accepts exact did:web kid with HTTPS resolution URL", () => {
+    const result = validateDidWebKidResolution(
+      didDocumentWithKeys(),
+      `${did}#keys-1`,
+      did,
+      { resolutionUrl: "https://example.org/.well-known/did.json" },
+    );
+    expect(result.ok).to.equal(true);
+    expect(result.verificationMethod.publicKeyJwk).to.deep.equal(p256Jwk);
+  });
+
+  it("accepts canonical fragment did:web kid form", () => {
+    const result = validateDidWebKidResolution(didDocumentWithKeys(), "keys-1", did, {
+      resolvedOverHttps: true,
+    });
+    expect(result.verificationMethod.id).to.equal(`${did}#keys-1`);
+  });
+
+  it("rejects did:web kid pointing to a different verification method", () => {
+    expect(() =>
+      validateDidWebKidResolution(didDocumentWithKeys(), `${did}#keys-99`, did, {
+        resolvedOverHttps: true,
+      }),
+    ).to.throw(Cs02TrustPolicyError, /does not resolve/);
+  });
+
+  it("rejects did:web kid belonging to a different DID", () => {
+    expect(() =>
+      validateDidWebKidResolution(didDocumentWithKeys(), "did:web:attacker.example#keys-1", did, {
+        resolvedOverHttps: true,
+      }),
+    ).to.throw(Cs02TrustPolicyError, /client_id DID/);
+  });
+
+  it("rejects did:jwk keys that are not EC/P-256 ES256", () => {
+    expect(() =>
+      validateDidJwkTrustRules({ kty: "EC", crv: "P-384", x: "a", y: "b" }),
+    ).to.throw(Cs02TrustPolicyError, /EC\/P-256/);
+    expect(() =>
+      validateDidJwkTrustRules({ kty: "EC", crv: "P-256", alg: "ES384", x: "a", y: "b" }),
+    ).to.throw(Cs02TrustPolicyError, /ES256/);
   });
 });

@@ -82,7 +82,44 @@ export function validateDidJwkTrustRules(jwk, context = "did:jwk") {
   return { ok: true };
 }
 
-export function validateDidWebKidResolution(didDocument, kid, did) {
+function canonicalDidWebVerificationMethodId(kid, did) {
+  if (!kid || typeof kid !== "string") return null;
+  if (kid.startsWith("did:")) {
+    const kidDid = kid.split("#")[0];
+    if (kidDid !== did) {
+      throw new Cs02TrustPolicyError("did:web JAR kid must belong to the client_id DID", "invalid_client");
+    }
+    return kid;
+  }
+  const fragment = kid.startsWith("#") ? kid.slice(1) : kid;
+  if (!fragment) return null;
+  return `${did}#${fragment}`;
+}
+
+export function validateDidWebKidResolution(
+  didDocument,
+  kid,
+  did,
+  { resolutionUrl, resolvedOverHttps } = {},
+) {
+  if (resolutionUrl != null) {
+    let parsed;
+    try {
+      parsed = new URL(resolutionUrl);
+    } catch {
+      throw new Cs02TrustPolicyError("did:web resolution URL must be absolute", "invalid_client");
+    }
+    if (parsed.protocol !== "https:") {
+      throw new Cs02TrustPolicyError("did:web document must be resolved over HTTPS", "invalid_client");
+    }
+  } else if (resolvedOverHttps !== true) {
+    throw new Cs02TrustPolicyError("did:web resolution must occur over HTTPS", "invalid_client");
+  }
+
+  if (didDocument?.id != null && didDocument.id !== did) {
+    throw new Cs02TrustPolicyError("did:web document id must match client_id DID", "invalid_client");
+  }
+
   const vms = Array.isArray(didDocument?.verificationMethod)
     ? didDocument.verificationMethod
     : [];
@@ -93,12 +130,13 @@ export function validateDidWebKidResolution(didDocument, kid, did) {
     throw new Cs02TrustPolicyError("did:web JAR must include kid", "invalid_client");
   }
 
-  const match = vms.find(
-    (vm) =>
-      vm?.id === kid ||
-      vm?.id === `${did}#${kid}` ||
-      (typeof kid === "string" && vm?.id?.endsWith(`#${kid.split("#").pop()}`)),
-  );
+  const canonicalKid = canonicalDidWebVerificationMethodId(kid, did);
+  const match = vms.find((vm) => {
+    if (!vm?.id) return false;
+    if (vm.id === kid) return true;
+    if (canonicalKid && vm.id === canonicalKid) return true;
+    return false;
+  });
   if (!match?.publicKeyJwk) {
     throw new Cs02TrustPolicyError("did:web kid does not resolve to a verification method", "invalid_client");
   }

@@ -21,6 +21,8 @@ import {
   validateVerifierAttestationTrust,
   validateCs02ClientMetadata,
   validateCs02RequestUriQueryPrecedence,
+  validateDidJwkTrustRules,
+  validateDidWebKidResolution,
   Cs02TrustPolicyError,
 } from "../../../utils/cs02TrustPolicy.js";
 
@@ -401,36 +403,32 @@ export function validateCs02DeepLinkClientIdConsistency(deepLinkClientId, jarCli
   }
 }
 
-async function resolveDidDocument(did) {
-  if (did.startsWith("did:web:")) {
-    const withoutPrefix = did.replace(/^did:web:/, "");
-    const parts = withoutPrefix.split(":");
-    const host = parts.shift();
-    const path = parts.length ? `/${parts.join("/")}` : "";
-    const urls = [`https://${host}/.well-known/did.json`, `https://${host}${path}/did.json`];
-    for (const url of urls) {
-      try {
-        const res = await fetch(url);
-        if (res.ok) return res.json();
-      } catch {}
-    }
-    throw new Cs02ValidationError("did:web resolution failed", "invalid_client");
+function fromCs02TrustPolicyError(error) {
+  if (error instanceof Cs02TrustPolicyError) {
+    throw new Cs02ValidationError(error.message, error.errorCode);
   }
+  throw error;
+}
 
-  if (did.startsWith("did:jwk:")) {
+async function resolveDidWebDocument(did, options = {}) {
+  const fetchImpl = options.fetchImpl || fetch;
+  if (!did.startsWith("did:web:")) {
+    throw new Cs02ValidationError(`Expected did:web identifier, received: ${did}`, "invalid_client");
+  }
+  const withoutPrefix = did.replace(/^did:web:/, "");
+  const parts = withoutPrefix.split(":");
+  const host = parts.shift();
+  const path = parts.length ? `/${parts.join("/")}` : "";
+  const urls = [`https://${host}/.well-known/did.json`, `https://${host}${path}/did.json`];
+  for (const url of urls) {
     try {
-      const json = JSON.parse(
-        Buffer.from(did.substring("did:jwk:".length), "base64url").toString("utf8"),
-      );
-      return {
-        verificationMethod: [{ id: `${did}#0`, type: "JsonWebKey2020", publicKeyJwk: json }],
-      };
-    } catch {
-      throw new Cs02ValidationError("did:jwk decode failed", "invalid_client");
-    }
+      const res = await fetchImpl(url);
+      if (res.ok) {
+        return { document: await res.json(), resolutionUrl: url };
+      }
+    } catch {}
   }
-
-  throw new Cs02ValidationError(`Unsupported DID method in client_id: ${did}`, "invalid_client");
+  throw new Cs02ValidationError("did:web resolution failed", "invalid_client");
 }
 
 function x5cLeafPem(header) {
@@ -451,38 +449,20 @@ async function verifyJarWithX5cLeaf(requestJwt, header, clientId, context) {
 }
 
 async function verifyJarWithDidWeb(requestJwt, header, clientId, options) {
-  const did =
-    (header?.kid && String(header.kid).startsWith("did:") && String(header.kid).split("#")[0]) ||
-    String(clientId).split("#")[0];
-  const doc = await resolveDidDocument(did);
-  const vms = Array.isArray(doc.verificationMethod) ? doc.verificationMethod : [];
-  if (vms.length === 0) {
-    throw new Cs02ValidationError("did:web document has no verification methods", "invalid_client");
-  }
-
   const kid = header?.kid;
-  const candidates = kid
-    ? vms.filter(
-        (vm) =>
-          vm?.id === kid ||
-          vm?.id === `${did}#${kid}` ||
-          (typeof kid === "string" && vm?.id?.endsWith(`#${kid.split("#").pop()}`)),
-      )
-    : vms;
+  const did = String(clientId).split("#")[0];
 
-  const selected = candidates.length > 0 ? candidates : vms;
-  let lastError = null;
-  for (const vm of selected) {
-    if (!vm?.publicKeyJwk) continue;
-    try {
-      assertEs256P256Jwk(vm.publicKeyJwk, "did:web verification method");
-      const key = await importJWK(vm.publicKeyJwk, "ES256");
-      return await jwtVerify(requestJwt, key, { clockTolerance: options.clockSkewSec });
-    } catch (error) {
-      lastError = error;
-    }
+  try {
+    const { document, resolutionUrl } = await resolveDidWebDocument(did, options);
+    const { verificationMethod } = validateDidWebKidResolution(document, kid, did, {
+      resolutionUrl,
+    });
+    const key = await importJWK(verificationMethod.publicKeyJwk, "ES256");
+    return await jwtVerify(requestJwt, key, { clockTolerance: options.clockSkewSec });
+  } catch (error) {
+    if (error instanceof Cs02ValidationError) throw error;
+    fromCs02TrustPolicyError(error);
   }
-  throw lastError || new Cs02ValidationError("did:web JAR signature verification failed", "invalid_client");
 }
 
 async function verifyJarWithDidJwk(requestJwt, header, clientId, options) {
@@ -494,7 +474,11 @@ async function verifyJarWithDidJwk(requestJwt, header, clientId, options) {
   } catch {
     throw new Cs02ValidationError("did:jwk client_id is malformed", "invalid_client");
   }
-  assertEs256P256Jwk(jwk, "did:jwk client_id");
+  try {
+    validateDidJwkTrustRules(jwk, "did:jwk client_id");
+  } catch (error) {
+    fromCs02TrustPolicyError(error);
+  }
   const key = await importJWK(jwk, header?.alg || "ES256");
   return jwtVerify(requestJwt, key, { clockTolerance: options.clockSkewSec });
 }
@@ -518,13 +502,13 @@ export async function verifyCs02JarSignature(requestJwt, header, payload, option
   try {
     switch (scheme) {
       case "x509_san_dns":
-        return verifyJarWithX5cLeaf(requestJwt, header, clientId, "x509_san_dns x5c");
+        return await verifyJarWithX5cLeaf(requestJwt, header, clientId, "x509_san_dns x5c");
       case "did:web":
-        return verifyJarWithDidWeb(requestJwt, header, clientId, options);
+        return await verifyJarWithDidWeb(requestJwt, header, clientId, options);
       case "did:jwk":
-        return verifyJarWithDidJwk(requestJwt, header, clientId, options);
+        return await verifyJarWithDidJwk(requestJwt, header, clientId, options);
       case "verifier_attestation":
-        return verifyJarWithVerifierAttestation(requestJwt, header, clientId, options);
+        return await verifyJarWithVerifierAttestation(requestJwt, header, clientId, options);
       default:
         throw new Cs02ValidationError(
           `Unsupported CS-02 client identifier scheme "${scheme}"`,
@@ -533,6 +517,9 @@ export async function verifyCs02JarSignature(requestJwt, header, payload, option
     }
   } catch (error) {
     if (error instanceof Cs02ValidationError) throw error;
+    if (error instanceof Cs02TrustPolicyError) {
+      throw new Cs02ValidationError(error.message, error.errorCode);
+    }
     logValidationFailure(log, "jar_signature_verification", {
       scheme,
       message: error?.message || String(error),

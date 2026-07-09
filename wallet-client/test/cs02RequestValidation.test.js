@@ -1,7 +1,7 @@
 import { expect } from "chai";
 import fs from "fs";
 import path from "path";
-import { SignJWT, importPKCS8, exportJWK } from "jose";
+import { SignJWT, importPKCS8, exportJWK, generateKeyPair } from "jose";
 import {
   Cs02ValidationError,
   CS02_JAR_TYP,
@@ -316,6 +316,154 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
       } catch (error) {
         expect(error).to.be.instanceOf(Cs02ValidationError);
         expect(error.errorCode).to.equal("invalid_client");
+      }
+    });
+  });
+
+  describe("did:web and did:jwk trust policy (Phase A)", () => {
+    const didWebClientId = "did:web:example.org";
+    const didWebKid = `${didWebClientId}#keys-1`;
+    const alternateKid = `${didWebClientId}#keys-2`;
+
+    let privateKey;
+    let publicJwk;
+    let alternateJwk;
+
+    before(async function () {
+      if (!fs.existsSync(ecKeyPath)) {
+        this.skip();
+      }
+      privateKey = await importPKCS8(fs.readFileSync(ecKeyPath, "utf8"), "ES256");
+      publicJwk = await exportJWK(privateKey);
+      delete publicJwk.d;
+      const alternateKeyPair = await generateKeyPair("ES256");
+      alternateJwk = await exportJWK(alternateKeyPair.publicKey);
+      delete alternateJwk.d;
+    });
+
+    function mockDidWebFetch(document) {
+      return async () => ({
+        ok: true,
+        json: async () => document,
+      });
+    }
+
+    function didWebDocument() {
+      return {
+        id: didWebClientId,
+        verificationMethod: [
+          { id: didWebKid, type: "JsonWebKey2020", publicKeyJwk: publicJwk },
+          { id: alternateKid, type: "JsonWebKey2020", publicKeyJwk: alternateJwk },
+        ],
+      };
+    }
+
+    async function signDidWebJar(headerOverrides = {}) {
+      return new SignJWT(baseJarPayload({ client_id: didWebClientId }))
+        .setProtectedHeader({ alg: "ES256", typ: CS02_JAR_TYP, kid: didWebKid, ...headerOverrides })
+        .sign(privateKey);
+    }
+
+    it("accepts a valid did:web signed JAR with exact kid", async () => {
+      const requestJwt = await signDidWebJar();
+      const verified = await validateAndVerifyCs02AuthorizationRequest(requestJwt, {
+        options: strictOptions({ fetchImpl: mockDidWebFetch(didWebDocument()) }),
+      });
+      expect(verified.payload.client_id).to.equal(didWebClientId);
+      expect(verified.header.kid).to.equal(didWebKid);
+    });
+
+    it("rejects did:web JAR without kid", async () => {
+      const requestJwt = await signDidWebJar({ kid: undefined });
+      try {
+        await validateAndVerifyCs02AuthorizationRequest(requestJwt, {
+          options: strictOptions({ fetchImpl: mockDidWebFetch(didWebDocument()) }),
+        });
+        expect.fail("expected missing did:web kid rejection");
+      } catch (error) {
+        expect(error).to.be.instanceOf(Cs02ValidationError);
+        expect(error.errorCode).to.equal("invalid_client");
+        expect(error.message).to.match(/kid/i);
+      }
+    });
+
+    it("rejects did:web kid pointing to a different verification method", async () => {
+      const requestJwt = await signDidWebJar({ kid: alternateKid });
+      try {
+        await validateAndVerifyCs02AuthorizationRequest(requestJwt, {
+          options: strictOptions({ fetchImpl: mockDidWebFetch(didWebDocument()) }),
+        });
+        expect.fail("expected mismatched did:web kid rejection");
+      } catch (error) {
+        expect(error).to.be.instanceOf(Cs02ValidationError);
+        expect(error.errorCode).to.equal("invalid_client");
+      }
+    });
+
+    it("rejects did:web kid belonging to a different DID than client_id", async () => {
+      const attackerKid = "did:web:attacker.example#keys-1";
+      const requestJwt = await signDidWebJar({ kid: attackerKid });
+      try {
+        await validateAndVerifyCs02AuthorizationRequest(requestJwt, {
+          options: strictOptions({ fetchImpl: mockDidWebFetch(didWebDocument()) }),
+        });
+        expect.fail("expected cross-DID kid rejection");
+      } catch (error) {
+        expect(error).to.be.instanceOf(Cs02ValidationError);
+        expect(error.errorCode).to.equal("invalid_client");
+        expect(error.message).to.match(/client_id DID/);
+      }
+    });
+
+    it("rejects did:web documents whose id does not match client_id", async () => {
+      const requestJwt = await signDidWebJar();
+      try {
+        await validateAndVerifyCs02AuthorizationRequest(requestJwt, {
+          options: strictOptions({
+            fetchImpl: mockDidWebFetch({ ...didWebDocument(), id: "did:web:attacker.example" }),
+          }),
+        });
+        expect.fail("expected DID document id mismatch rejection");
+      } catch (error) {
+        expect(error).to.be.instanceOf(Cs02ValidationError);
+        expect(error.errorCode).to.equal("invalid_client");
+        expect(error.message).to.match(/document id/);
+      }
+    });
+
+    it("does not fall back to unrelated did:web verification methods", async () => {
+      const requestJwt = await signDidWebJar();
+      const onlyAlternateKeyDoc = {
+        id: didWebClientId,
+        verificationMethod: [
+          { id: alternateKid, type: "JsonWebKey2020", publicKeyJwk: alternateJwk },
+        ],
+      };
+      try {
+        await validateAndVerifyCs02AuthorizationRequest(requestJwt, {
+          options: strictOptions({ fetchImpl: mockDidWebFetch(onlyAlternateKeyDoc) }),
+        });
+        expect.fail("expected rejection without kid fallback");
+      } catch (error) {
+        expect(error).to.be.instanceOf(Cs02ValidationError);
+        expect(error.errorCode).to.equal("invalid_client");
+      }
+    });
+
+    it("rejects did:jwk client_id with non-P-256 key material", async () => {
+      const rsaJwk = { kty: "RSA", n: "abc", e: "AQAB" };
+      const clientId = `did:jwk:${Buffer.from(JSON.stringify(rsaJwk)).toString("base64url")}`;
+      const requestJwt = await new SignJWT(baseJarPayload({ client_id: clientId }))
+        .setProtectedHeader({ alg: "ES256", typ: CS02_JAR_TYP })
+        .sign(privateKey);
+
+      try {
+        await validateAndVerifyCs02AuthorizationRequest(requestJwt, { options: strictOptions() });
+        expect.fail("expected non-P-256 did:jwk rejection");
+      } catch (error) {
+        expect(error).to.be.instanceOf(Cs02ValidationError);
+        expect(error.errorCode).to.equal("invalid_client");
+        expect(error.message).to.match(/EC\/P-256/);
       }
     });
   });
