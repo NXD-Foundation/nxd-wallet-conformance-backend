@@ -5,7 +5,9 @@ import { PROXY_PATH } from "../utils/routeUtils.js";
 import { buildStrictCs02ClientMetadata } from "../utils/cs02TrustPolicy.js";
 const metadataRouter = express.Router();
 
-const serverURL = process.env.SERVER_URL || "http://localhost:3000";
+function getServerURL() {
+  return process.env.SERVER_URL || "http://localhost:3000";
+}
 
 const privateKey = fs.readFileSync("./private-key.pem", "utf-8");
 const publicKeyPem = fs.readFileSync("./public-key.pem", "utf-8");
@@ -49,6 +51,7 @@ metadataRouter.get(
     const normalizedSuffix = rawSuffix.replace(/^\/+/, "");
 
     // If the suffix matches PROXY_PATH, don't add it again since SERVER_URL already includes it
+    const serverURL = getServerURL();
     const issuerBase = (normalizedSuffix && normalizedSuffix !== PROXY_PATH) ? `${serverURL}/${normalizedSuffix}` : serverURL;
 
     issuerConfig.credential_issuer = issuerBase;
@@ -88,6 +91,7 @@ metadataRouter.get(
     "/oauth-authorization-server/rfc-issuer", //this is required in case the issuer is behind a reverse proxy: see https://www.rfc-editor.org/rfc/rfc8414.html
   ],
   async (req, res) => {
+    const serverURL = getServerURL();
     oauthConfig.issuer = serverURL;
     oauthConfig.authorization_endpoint = serverURL + "/authorize";
     oauthConfig.pushed_authorization_request_endpoint = serverURL + "/par";
@@ -142,6 +146,7 @@ which contains the Issuer's public keys. The value of this field MUST be a JSON 
   */
   
   async (req, res) => {
+    const serverURL = getServerURL();
     const metadata ={
       issuer: serverURL,
       jwks : {

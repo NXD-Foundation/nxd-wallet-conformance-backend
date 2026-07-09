@@ -18,6 +18,8 @@ describe("CS-02 status-list validation (Phase 5 placeholder)", () => {
   it("allows missing status by default", () => {
     const result = validateCs02StatusListReference(undefined, { strictMissingStatus: false });
     expect(result.present).to.equal(false);
+    expect(result.statusState).to.equal("absent");
+    expect(result.enforced).to.equal(false);
     expect(result.placeholder).to.equal(true);
   });
 
@@ -51,8 +53,12 @@ describe("CS-02 status-list validation (Phase 5 placeholder)", () => {
       { strictMissingStatus: false },
     );
     expect(result.present).to.equal(true);
+    expect(result.statusState).to.equal("structurally_valid_placeholder");
+    expect(result.enforced).to.equal(false);
     expect(result.idx).to.equal(42);
     expect(result.todos).to.be.an("array").that.is.not.empty;
+    expect(result.todos.join(" ")).to.match(/trusted status-list issuers/);
+    expect(result.todos.join(" ")).to.match(/maximum response size/);
   });
 
   it("decodes issuer payload from SD-JWT and validates status placeholder", async () => {
@@ -65,6 +71,62 @@ describe("CS-02 status-list validation (Phase 5 placeholder)", () => {
 
     const result = await validateCs02CredentialStatusList(sdJwt, {});
     expect(result.present).to.equal(true);
+    expect(result.statusState).to.equal("structurally_valid_placeholder");
     expect(result.placeholder).to.equal(true);
+    expect(result.trustPolicy.strictStatus).to.equal(false);
   });
+
+  it("uses trust-policy strictStatus for missing status decisions", async () => {
+    const sdJwt = sdJwtWithPayload({ iss: "https://issuer.example" });
+
+    try {
+      await validateCs02CredentialStatusList(sdJwt, {
+        trustPolicyOptions: { strictStatus: true },
+      });
+      expect.fail("expected strict missing status rejection");
+    } catch (error) {
+      expect(error).to.be.instanceOf(Cs02StatusListError);
+      expect(error.statusState).to.equal("structurally_invalid");
+      expect(error.message).to.match(/missing required status/);
+    }
+  });
+
+  it("does not let local status options weaken trust-policy strictStatus", async () => {
+    const sdJwt = sdJwtWithPayload({ iss: "https://issuer.example" });
+
+    try {
+      await validateCs02CredentialStatusList(sdJwt, {
+        strictMissingStatus: false,
+        trustPolicyOptions: { strictStatus: true },
+      });
+      expect.fail("expected trust-policy strict status rejection");
+    } catch (error) {
+      expect(error).to.be.instanceOf(Cs02StatusListError);
+      expect(error.message).to.match(/missing required status/);
+    }
+  });
+
+  it("logs placeholder decisions without treating them as enforced status proof", async () => {
+    const logs = [];
+    const sdJwt = sdJwtWithPayload({
+      iss: "https://issuer.example",
+      status: { status_list: { idx: 1, uri: "https://issuer.example/status/1" } },
+    });
+
+    const result = await validateCs02CredentialStatusList(sdJwt, {
+      trustPolicyOptions: { strictStatus: false, hasTrustRegistry: false },
+      log: (...args) => logs.push(args),
+    });
+
+    expect(result.enforced).to.equal(false);
+    expect(logs).to.have.length(1);
+    expect(logs[0][0]).to.equal("[CS02] status-list placeholder decision");
+    expect(logs[0][1].level).to.equal("debug");
+    expect(logs[0][1].statusState).to.equal("structurally_valid_placeholder");
+  });
+
+  it.skip("rejects revoked SD-JWT-VC credentials once status-list trust exists", () => {});
+  it.skip("rejects suspended SD-JWT-VC credentials once status-list trust exists", () => {});
+  it.skip("fails closed on status-list fetch timeout once fetching is implemented", () => {});
+  it.skip("fails closed on oversized status-list responses once fetching is implemented", () => {});
 });

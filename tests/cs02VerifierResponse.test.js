@@ -374,6 +374,77 @@ describe("CS-02 verifier response validation (Phase 4)", () => {
       });
       expect(result.issuerTrust).to.include({ placeholder: true });
       expect(result.issuerAuthenticity.claims.family_name).to.equal("Neslo");
+      expect(result.credentialStatus).to.include({
+        statusState: "absent",
+        enforced: false,
+        placeholder: true,
+      });
+    });
+
+    it("invokes the status-list placeholder for SD-JWT presentations", async () => {
+      const keys = await keyMaterial();
+      const sdJwt = await buildSdJwtPresentation({
+        ...keys,
+        issuerPayload: {
+          status: { status_list: { idx: 7, uri: "https://issuer.example/status/1" } },
+        },
+      });
+
+      const result = await validateCs02SdJwtPresentation({
+        sdJwt,
+        sessionNonce: "nonce-1",
+        clientId: "x509_san_dns:verifier.example",
+        credQuery: {
+          id: "cmwallet",
+          format: "dc+sd-jwt",
+          meta: { vct_values: ["test"] },
+          claims: [{ path: ["family_name"] }],
+        },
+        options: {
+          strict: true,
+          issuerVerificationJwk: keys.issuerPublicJwk,
+          trustPolicyOptions: { strictStatus: false, hasTrustRegistry: false },
+        },
+      });
+
+      expect(result.credentialStatus).to.include({
+        statusState: "structurally_valid_placeholder",
+        enforced: false,
+        placeholder: true,
+        idx: 7,
+      });
+      expect(result.credentialStatus.trustPolicy).to.deep.equal({
+        hasTrustRegistry: false,
+        strictStatus: false,
+      });
+    });
+
+    it("rejects missing status through the verifier SD-JWT path when strict status is enabled", async () => {
+      const keys = await keyMaterial();
+      const sdJwt = await buildSdJwtPresentation(keys);
+
+      try {
+        await validateCs02SdJwtPresentation({
+          sdJwt,
+          sessionNonce: "nonce-1",
+          clientId: "x509_san_dns:verifier.example",
+          credQuery: {
+            id: "cmwallet",
+            format: "dc+sd-jwt",
+            meta: { vct_values: ["test"] },
+            claims: [{ path: ["family_name"] }],
+          },
+          options: {
+            strict: true,
+            issuerVerificationJwk: keys.issuerPublicJwk,
+            trustPolicyOptions: { strictStatus: true, hasTrustRegistry: false },
+          },
+        });
+        expect.fail("expected strict missing status rejection");
+      } catch (error) {
+        expect(error).to.be.instanceOf(Cs02VerifierResponseError);
+        expect(error.message).to.match(/missing required status/);
+      }
     });
 
     it("rejects SD-JWT with invalid issuer signature when a local issuer key is available", async () => {

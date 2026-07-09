@@ -38,6 +38,23 @@ export class Cs02TrustPolicyError extends Error {
   }
 }
 
+let trustPlaceholderRecorder = null;
+
+export function setCs02TrustPlaceholderRecorder(recorder) {
+  trustPlaceholderRecorder = typeof recorder === "function" ? recorder : null;
+}
+
+function recordTrustPlaceholder(kind, details) {
+  try {
+    trustPlaceholderRecorder?.({
+      kind,
+      enforced: false,
+      placeholder: true,
+      ...details,
+    });
+  } catch {}
+}
+
 function truthyEnv(value) {
   if (value == null || value === "") return false;
   const normalized = String(value).trim().toLowerCase();
@@ -174,15 +191,43 @@ export function validateDidWebKidResolution(
 }
 
 export async function validateX509SanDnsTrustAnchor(_clientId, _header, _leafCertPem) {
-  // TODO(CS-02 trust framework): validate x5c chain against configured trust anchors.
-  // TODO(CS-02 trust framework): enforce SAN DNS match to client_id host.
-  return { trusted: true, placeholder: true, enforced: false };
+  // TODO(CS-02 x509 trust framework): load CS02_X509_TRUST_ANCHORS_PATH.
+  // TODO(CS-02 x509 trust framework): parse full x5c chain and validate against trust anchors.
+  // TODO(CS-02 x509 trust framework): verify certificate validity period and P-256/ES256 leaf key.
+  // TODO(CS-02 x509 trust framework): require SAN DNS match to x509_san_dns client_id host.
+  // TODO(CS-02 x509 trust framework): reject wildcard or missing SAN DNS unless policy allows it.
+  const result = {
+    trusted: true,
+    placeholder: true,
+    enforced: false,
+    trustConfigured: false,
+    futureBehavior:
+      "Validate x5c chain, certificate validity, ES256/P-256 leaf key, and SAN DNS against configured trust anchors.",
+    clientId: _clientId ?? null,
+    hasX5c: Array.isArray(_header?.x5c) && _header.x5c.length > 0,
+  };
+  recordTrustPlaceholder("x509_san_dns", result);
+  return result;
 }
 
 export async function validateVerifierAttestationTrust(_header, _clientId) {
-  // TODO(CS-02 trust framework): validate VA-JWT iss against trusted verifier-attestation issuers.
-  // TODO(CS-02 trust framework): enforce sub match, exp/iat, and JAR signing-key binding.
-  return { trusted: true, placeholder: true, enforced: false, nonProduction: true };
+  // TODO(CS-02 verifier-attestation trust framework): load CS02_VERIFIER_ATTESTATION_ISSUERS_PATH.
+  // TODO(CS-02 verifier-attestation trust framework): verify VA-JWT signature and trusted issuer.
+  // TODO(CS-02 verifier-attestation trust framework): enforce sub, exp, iat, and JAR signing-key binding.
+  // TODO(CS-02 verifier-attestation trust framework): reject development/self-signed attestation when trust is configured.
+  const result = {
+    trusted: true,
+    placeholder: true,
+    enforced: false,
+    trustConfigured: false,
+    nonProduction: true,
+    futureBehavior:
+      "Verify verifier-attestation JWT issuer, subject, expiry, issuance time, and JAR signing-key binding against configured trusted issuers.",
+    clientId: _clientId ?? null,
+    hasJwtHeader: typeof _header?.jwt === "string" && _header.jwt.length > 0,
+  };
+  recordTrustPlaceholder("verifier_attestation", result);
+  return result;
 }
 
 export async function validateCs02TrustedAuthoritiesPolicy(credQuery, log = () => {}) {

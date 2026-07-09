@@ -21,6 +21,7 @@ import {
 } from "../src/lib/cs02RequestValidation.js";
 import { OPENID4VP_PRESENT_URI } from "../src/lib/openid4vpUri.js";
 import { WALLET_PROFILES } from "../src/lib/profile.js";
+import { setCs02TrustPlaceholderRecorder } from "../../utils/cs02TrustPolicy.js";
 
 const ecKeyPath = path.join(process.cwd(), "x509EC", "ec_private_pkcs8.key");
 const ecCertPath = path.join(process.cwd(), "x509EC", "client_certificate.crt");
@@ -82,6 +83,10 @@ async function signJar(payload, headerOverrides = {}, { includeX5c = true } = {}
 }
 
 describe("CS-02 wallet request validation (Phase 1)", () => {
+  afterEach(() => {
+    setCs02TrustPlaceholderRecorder(null);
+  });
+
   describe("resolveCs02ValidationOptions", () => {
     it("is strict by default", () => {
       const options = resolveCs02ValidationOptions({});
@@ -261,12 +266,19 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
     });
 
     it("accepts a valid ES256 x509_san_dns signed JAR", async () => {
+      const records = [];
+      setCs02TrustPlaceholderRecorder((record) => records.push(record));
       const requestJwt = await signJar(baseJarPayload());
       const verified = await validateAndVerifyCs02AuthorizationRequest(requestJwt, {
         options: strictOptions(),
       });
       expect(verified.payload.response_type).to.equal("vp_token");
       expect(verified.header.typ).to.equal(CS02_JAR_TYP);
+      expect(records.some((record) =>
+        record.kind === "x509_san_dns" &&
+        record.placeholder === true &&
+        record.enforced === false
+      )).to.equal(true);
     });
 
     it("accepts a valid did:jwk signed JAR", async () => {
@@ -317,6 +329,27 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
         expect(error).to.be.instanceOf(Cs02ValidationError);
         expect(error.errorCode).to.equal("invalid_client");
       }
+    });
+
+    it("invokes verifier_attestation placeholder when JOSE header jwt is present", async () => {
+      const records = [];
+      setCs02TrustPlaceholderRecorder((record) => records.push(record));
+      const requestJwt = await signJar(
+        baseJarPayload({ client_id: "verifier_attestation:verifier-1" }),
+        { jwt: "header.payload.signature" },
+      );
+
+      const verified = await validateAndVerifyCs02AuthorizationRequest(requestJwt, {
+        options: strictOptions(),
+      });
+
+      expect(verified.payload.client_id).to.equal("verifier_attestation:verifier-1");
+      expect(records.some((record) =>
+        record.kind === "verifier_attestation" &&
+        record.placeholder === true &&
+        record.enforced === false &&
+        record.hasJwtHeader === true
+      )).to.equal(true);
     });
   });
 

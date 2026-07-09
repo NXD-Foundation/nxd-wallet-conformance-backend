@@ -10,6 +10,7 @@ import {
   resolveVerifierCs02Options,
   validateCs02TransactionDataEntries,
 } from "../utils/cs02VerifierRequest.js";
+import { setCs02TrustPlaceholderRecorder } from "../utils/cs02TrustPolicy.js";
 
 function validDcqlQuery() {
   return structuredClone(DEFAULT_DCQL_QUERY);
@@ -53,6 +54,7 @@ describe("CS-02 verifier request generation (Phase 3)", () => {
   const originalCompatibility = process.env.VERIFIER_CS02_COMPATIBILITY;
 
   afterEach(() => {
+    setCs02TrustPlaceholderRecorder(null);
     if (originalCompatibility === undefined) {
       delete process.env.VERIFIER_CS02_COMPATIBILITY;
     } else {
@@ -82,6 +84,20 @@ describe("CS-02 verifier request generation (Phase 3)", () => {
     expect(payload.state).to.equal("state-phase3");
     expect(payload.exp - payload.iat).to.be.at.most(300);
     expect(payload.presentation_definition).to.equal(undefined);
+  });
+
+  it("invokes x509 trust placeholder during strict verifier request generation", async () => {
+    const records = [];
+    setCs02TrustPlaceholderRecorder((record) => records.push(record));
+
+    await buildStandardCs02Jar();
+
+    expect(records.some((record) =>
+      record.kind === "x509_san_dns" &&
+      record.placeholder === true &&
+      record.enforced === false &&
+      record.hasX5c === true
+    )).to.equal(true);
   });
 
   it("rejects missing dcql_query in strict mode", async () => {

@@ -11,7 +11,9 @@ import {
   mergeCs02ClientMetadata,
   resolveCs02EffectiveClientMetadata,
   validateCs02ClientMetadataUri,
+  validateVerifierAttestationTrust,
   validateX509SanDnsTrustAnchor,
+  setCs02TrustPlaceholderRecorder,
 } from "../utils/cs02TrustPolicy.js";
 
 describe("CS-02 trust and metadata policy (Phase 5)", () => {
@@ -26,6 +28,20 @@ describe("CS-02 trust and metadata policy (Phase 5)", () => {
     const result = await validateX509SanDnsTrustAnchor("x509_san_dns:example.com", {}, "pem");
     expect(result.placeholder).to.equal(true);
     expect(result.enforced).to.equal(false);
+    expect(result.trustConfigured).to.equal(false);
+    expect(result.futureBehavior).to.match(/SAN DNS/);
+  });
+
+  it("returns placeholder trust for verifier_attestation until trusted issuers are configured", async () => {
+    const result = await validateVerifierAttestationTrust(
+      { jwt: "header.payload.signature" },
+      "verifier_attestation:verifier-1",
+    );
+    expect(result.placeholder).to.equal(true);
+    expect(result.enforced).to.equal(false);
+    expect(result.trustConfigured).to.equal(false);
+    expect(result.nonProduction).to.equal(true);
+    expect(result.hasJwtHeader).to.equal(true);
   });
 
   it("requires did:jwk keys to be EC/P-256 ES256", () => {
@@ -124,6 +140,54 @@ describe("CS-02 trust and metadata policy (Phase 5)", () => {
     });
     expect(result.ok).to.equal(true);
   });
+});
+
+describe("CS-02 production trust placeholders (Phase F)", () => {
+  afterEach(() => {
+    setCs02TrustPlaceholderRecorder(null);
+  });
+
+  it("records x509_san_dns placeholder decisions", async () => {
+    const records = [];
+    setCs02TrustPlaceholderRecorder((record) => records.push(record));
+
+    await validateX509SanDnsTrustAnchor(
+      "x509_san_dns:example.com",
+      { x5c: ["leaf"] },
+      "pem",
+    );
+
+    expect(records).to.have.length(1);
+    expect(records[0]).to.include({
+      kind: "x509_san_dns",
+      enforced: false,
+      placeholder: true,
+      hasX5c: true,
+    });
+  });
+
+  it("records verifier_attestation placeholder decisions", async () => {
+    const records = [];
+    setCs02TrustPlaceholderRecorder((record) => records.push(record));
+
+    await validateVerifierAttestationTrust(
+      { jwt: "header.payload.signature" },
+      "verifier_attestation:verifier-1",
+    );
+
+    expect(records).to.have.length(1);
+    expect(records[0]).to.include({
+      kind: "verifier_attestation",
+      enforced: false,
+      placeholder: true,
+      hasJwtHeader: true,
+    });
+  });
+
+  it.skip("enforces configured x509 trust anchors when CS02_X509_TRUST_ANCHORS_PATH exists", () => {});
+  it.skip("rejects x509_san_dns when SAN DNS does not match the client_id host", () => {});
+  it.skip("enforces configured trusted verifier-attestation issuers", () => {});
+  it.skip("rejects verifier_attestation when VA-JWT is not bound to the JAR signing key", () => {});
 });
 
 describe("CS-02 DID trust policy (Phase A)", () => {

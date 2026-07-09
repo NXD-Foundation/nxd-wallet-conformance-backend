@@ -9,10 +9,11 @@
 import { decodeJwt } from "jose";
 
 export class Cs02StatusListError extends Error {
-  constructor(message, errorCode = "invalid_credential") {
+  constructor(message, errorCode = "invalid_credential", statusState = "structurally_invalid") {
     super(message);
     this.name = "Cs02StatusListError";
     this.errorCode = errorCode;
+    this.statusState = statusState;
   }
 }
 
@@ -26,6 +27,33 @@ export function resolveCs02StatusListOptions(env = process.env) {
   return {
     strictMissingStatus: truthyEnv(env.CS02_STRICT_STATUS_VALIDATION),
   };
+}
+
+function normalizeStatusListOptions(optionsOrEnv = process.env) {
+  const input = optionsOrEnv || {};
+  const env = input.env || input;
+  const trustPolicyOptions = input.trustPolicyOptions || {};
+  const envOptions = resolveCs02StatusListOptions(env);
+  const strictMissingStatus =
+    trustPolicyOptions.strictStatus === true ||
+    (typeof input.strictMissingStatus === "boolean"
+      ? input.strictMissingStatus
+      : envOptions.strictMissingStatus);
+  return {
+    strictMissingStatus,
+    trustPolicyOptions,
+    log: typeof input.log === "function" ? input.log : () => {},
+  };
+}
+
+function logStatusPlaceholder(log, message, details) {
+  try {
+    log?.("[CS02] status-list placeholder decision", {
+      level: "debug",
+      message,
+      ...details,
+    });
+  } catch {}
 }
 
 export function decodeSdJwtIssuerPayload(sdJwt) {
@@ -50,6 +78,8 @@ export function validateCs02StatusListReference(status, options = { strictMissin
     return {
       ok: true,
       present: false,
+      statusState: "absent",
+      enforced: false,
       placeholder: true,
       futureBehavior:
         "When CS02_STRICT_STATUS_VALIDATION=true and trust framework exists, missing status will be rejected.",
@@ -71,6 +101,8 @@ export function validateCs02StatusListReference(status, options = { strictMissin
     return {
       ok: true,
       present: false,
+      statusState: "absent",
+      enforced: false,
       placeholder: true,
       futureBehavior:
         "When CS02_STRICT_STATUS_VALIDATION=true and trust framework exists, missing status_list will be rejected.",
@@ -108,28 +140,47 @@ export function validateCs02StatusListReference(status, options = { strictMissin
   return {
     ok: true,
     present: true,
+    statusState: "structurally_valid_placeholder",
+    enforced: false,
     idx,
     uri,
     placeholder: true,
     todos: [
+      "Load trusted status-list issuers from trust framework configuration",
+      "Define allowed status-list JWT algorithms",
       "Fetch status-list token from uri with cache/timeout/max-size policy",
+      "Apply fetch timeout and maximum response size limits",
       "Verify status-list token signature against trusted issuers",
       "Decode bitstring and evaluate revoked/suspended bit for idx",
     ],
   };
 }
 
-export async function validateCs02CredentialStatusList(sdJwt, env = process.env) {
-  const options = resolveCs02StatusListOptions(env);
+export async function validateCs02CredentialStatusList(sdJwt, optionsOrEnv = process.env) {
+  const options = normalizeStatusListOptions(optionsOrEnv);
   const payload = decodeSdJwtIssuerPayload(sdJwt);
   if (!payload) {
     throw new Cs02StatusListError("Unable to decode SD-JWT issuer payload", "invalid_credential");
   }
 
   const reference = validateCs02StatusListReference(payload.status, options);
-  // TODO(CS-02 status framework): fetch, verify, and evaluate status-list token when trusted issuers exist.
+  if (reference.placeholder) {
+    logStatusPlaceholder(options.log, "status-list trust framework is not configured", {
+      issuer: typeof payload.iss === "string" ? payload.iss : null,
+      statusState: reference.statusState,
+      present: reference.present,
+      trustEnforced: options.trustPolicyOptions?.hasTrustRegistry === true,
+    });
+  }
+  // TODO(CS-02 status framework): fetch, verify, cache, and evaluate status-list token
+  // once trusted status-list issuers, allowed JWT algorithms, cache lifetime, fetch timeout,
+  // maximum response size, and revoked/suspended bit interpretation are configured.
   return {
     ...reference,
     issuer: typeof payload.iss === "string" ? payload.iss : null,
+    trustPolicy: {
+      hasTrustRegistry: options.trustPolicyOptions?.hasTrustRegistry === true,
+      strictStatus: options.strictMissingStatus === true,
+    },
   };
 }

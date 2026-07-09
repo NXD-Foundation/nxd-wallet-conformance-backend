@@ -776,9 +776,15 @@ export async function validateCs02SdJwtPresentation({
   }
 
   const issuerPayload = issuerAuthenticity.issuerPayload;
-  const issuerTrust = await validateCs02IssuerTrust(issuerPayload?.iss, resolveCs02TrustPolicyOptions());
+  const trustPolicyOptions = options.trustPolicyOptions || resolveCs02TrustPolicyOptions(options.env);
+  const issuerTrust = await validateCs02IssuerTrust(issuerPayload?.iss, trustPolicyOptions);
+  let credentialStatus;
   try {
-    await validateCs02CredentialStatusList(sdJwt);
+    credentialStatus = await validateCs02CredentialStatusList(sdJwt, {
+      env: options.env,
+      trustPolicyOptions,
+      log: options.log,
+    });
   } catch (error) {
     if (error instanceof Cs02StatusListError) {
       throw new Cs02VerifierResponseError(error.message, error.errorCode);
@@ -790,6 +796,7 @@ export async function validateCs02SdJwtPresentation({
     ...verified,
     issuerAuthenticity,
     issuerTrust,
+    credentialStatus,
   };
 }
 
@@ -821,6 +828,9 @@ export async function validateCs02SdJwtEntriesInVpToken(
           issuerVerificationJwk: context.issuerVerificationJwk,
           issuerJwks: context.issuerJwks,
           rejectUnsolicitedDisclosures: context.rejectUnsolicitedDisclosures,
+          trustPolicyOptions: context.trustPolicyOptions,
+          env: context.env,
+          log: context.log,
         },
       });
     }
