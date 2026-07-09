@@ -282,22 +282,23 @@ function resolveTargetCredentialQueryIds(dcqlQuery, matchesByQueryId) {
   const requiredSets = credentialSets.filter((set) => set?.required !== false);
 
   if (requiredSets.length === 0) {
-    for (const credQuery of dcqlQuery.credentials) {
-      if (matchedIds.has(credQuery.id)) {
-        return [credQuery.id];
-      }
-    }
-    return null;
+    const requestedIds = dcqlQuery.credentials.map((credQuery) => credQuery?.id).filter(Boolean);
+    return requestedIds.every((id) => matchedIds.has(id)) ? requestedIds : null;
   }
 
+  const selectedIds = new Set();
   for (const set of requiredSets) {
+    let selectedOption = null;
     for (const option of set.options) {
       if (option.every((id) => matchedIds.has(id))) {
-        return option;
+        selectedOption = option;
+        break;
       }
     }
+    if (!selectedOption) return null;
+    for (const id of selectedOption) selectedIds.add(id);
   }
-  return null;
+  return Array.from(selectedIds);
 }
 
 /**

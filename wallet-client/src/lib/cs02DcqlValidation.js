@@ -226,6 +226,9 @@ function validateDcqlCredentialQuery(credQuery, index, options, log = () => {}) 
   }
 
   validateDcqlMeta(credQuery, options, log);
+  if (credQuery.trusted_authorities != null) {
+    validateCs02TrustedAuthorities(credQuery, log);
+  }
   validateDcqlClaims(credQuery, log);
   validateHolderBindingPolicy(credQuery, log);
 }

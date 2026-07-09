@@ -426,12 +426,12 @@ function x5cLeafPem(header) {
   return `-----BEGIN CERTIFICATE-----\n${der.match(/.{1,64}/g).join("\n")}\n-----END CERTIFICATE-----\n`;
 }
 
-async function verifyJarWithX5cLeaf(requestJwt, header, context) {
+async function verifyJarWithX5cLeaf(requestJwt, header, clientId, context) {
   const pem = x5cLeafPem(header);
   assertEs256P256Certificate(pem, context);
   const key = await importX509(pem, "ES256");
   const verified = await jwtVerify(requestJwt, key, { clockTolerance: 0 });
-  await validateX509SanDnsTrustAnchor(null, header, pem);
+  await validateX509SanDnsTrustAnchor(clientId, header, pem);
   return verified;
 }
 
@@ -492,7 +492,7 @@ async function verifyJarWithVerifierAttestation(requestJwt, header, clientId, op
     );
   }
   await validateVerifierAttestationTrust(header, clientId);
-  return verifyJarWithX5cLeaf(requestJwt, header, "verifier_attestation x5c");
+  return verifyJarWithX5cLeaf(requestJwt, header, clientId, "verifier_attestation x5c");
 }
 
 export async function verifyCs02JarSignature(requestJwt, header, payload, options, log = () => {}) {
@@ -503,7 +503,7 @@ export async function verifyCs02JarSignature(requestJwt, header, payload, option
   try {
     switch (scheme) {
       case "x509_san_dns":
-        return verifyJarWithX5cLeaf(requestJwt, header, "x509_san_dns x5c");
+        return verifyJarWithX5cLeaf(requestJwt, header, clientId, "x509_san_dns x5c");
       case "did:web":
         return verifyJarWithDidWeb(requestJwt, header, clientId, options);
       case "did:jwk":

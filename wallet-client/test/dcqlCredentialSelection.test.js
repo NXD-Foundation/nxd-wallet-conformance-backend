@@ -499,6 +499,40 @@ describe("dcqlCredentialSelection", () => {
       ]);
     });
 
+    it("returns all requested credential queries when no credential_sets are present", async () => {
+      const mdocB64 = buildMdocB64ForTests(pidDoctype);
+      const sd = await buildDcSdJwtForTests("eu.test.demo");
+      const store = {
+        pid: { credential: { credential: mdocB64 } },
+        demo: { credential: { credential: sd } },
+      };
+      const dcqlQuery = {
+        credentials: [
+          {
+            id: "mdoc-id",
+            format: "mso_mdoc",
+            meta: { doctype_value: pidDoctype },
+          },
+          {
+            id: "sd-id",
+            format: "dc+sd-jwt",
+            meta: { vct_values: ["eu.test.demo"] },
+          },
+        ],
+      };
+      const selections = await selectWalletCredentialsForDcql({
+        dcqlQuery,
+        listWalletCredentialTypes: async () => Object.keys(store),
+        getWalletCredentialByType: async (t) => store[t] || null,
+        extractCredentialString: (env) => env?.credential || null,
+      });
+      expect(selections).to.have.length(2);
+      expect(selections.map((entry) => entry.matchedQuery.id).sort()).to.deep.equal([
+        "mdoc-id",
+        "sd-id",
+      ]);
+    });
+
     it("satisfies required credential_sets options with multiple credential queries", async () => {
       const mdocB64 = buildMdocB64ForTests(pidDoctype);
       const sd = await buildDcSdJwtForTests("eu.test.demo");
@@ -532,6 +566,38 @@ describe("dcqlCredentialSelection", () => {
         "mdoc-id",
         "sd-id",
       ]);
+    });
+
+    it("requires every required credential_set to be satisfiable", async () => {
+      const sd = await buildDcSdJwtForTests("eu.test.demo");
+      const store = {
+        demo: { credential: { credential: sd } },
+      };
+      const dcqlQuery = {
+        credential_sets: [
+          { required: true, options: [["sd-id"]] },
+          { required: true, options: [["missing-mdoc"]] },
+        ],
+        credentials: [
+          {
+            id: "sd-id",
+            format: "dc+sd-jwt",
+            meta: { vct_values: ["eu.test.demo"] },
+          },
+          {
+            id: "missing-mdoc",
+            format: "mso_mdoc",
+            meta: { doctype_value: pidDoctype },
+          },
+        ],
+      };
+      const selections = await selectWalletCredentialsForDcql({
+        dcqlQuery,
+        listWalletCredentialTypes: async () => Object.keys(store),
+        getWalletCredentialByType: async (t) => store[t] || null,
+        extractCredentialString: (env) => env?.credential || null,
+      });
+      expect(selections).to.deep.equal([]);
     });
   });
 });

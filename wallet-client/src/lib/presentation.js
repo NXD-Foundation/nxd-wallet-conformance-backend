@@ -634,7 +634,15 @@ async function buildPresentableVpTokenForSelection({
     });
   }
 
-  return vpToken;
+  return {
+    vpToken,
+    responseSigner: {
+      privateJwk,
+      publicJwk,
+      didJwk,
+      presentationAlg,
+    },
+  };
 }
 
 async function buildCs02StrictPresentation({
@@ -674,8 +682,9 @@ async function buildCs02StrictPresentation({
   }
 
   const grouped = new Map();
+  let responseSigner = null;
   for (const selection of dcqlSelections) {
-    const presentation = await buildPresentableVpTokenForSelection({
+    const presentationResult = await buildPresentableVpTokenForSelection({
       selection,
       payload,
       clientId,
@@ -687,6 +696,9 @@ async function buildCs02StrictPresentation({
       cs02Options,
       slog,
     });
+    if (!responseSigner) {
+      responseSigner = presentationResult.responseSigner;
+    }
     const credQueryId = selection.matchedQuery.id;
     if (!grouped.has(credQueryId)) {
       grouped.set(credQueryId, {
@@ -694,7 +706,7 @@ async function buildCs02StrictPresentation({
         presentations: [],
       });
     }
-    grouped.get(credQueryId).presentations.push(presentation);
+    grouped.get(credQueryId).presentations.push(presentationResult.vpToken);
   }
 
   return {
@@ -706,6 +718,7 @@ async function buildCs02StrictPresentation({
       })),
     ),
     presentation_submission: undefined,
+    responseSigner,
   };
 }
 
@@ -973,6 +986,7 @@ export async function performPresentation(
     }
 
     let cs02PresentationResult = null;
+    let responseSigner = null;
     if (cs02Options.strict) {
       cs02PresentationResult = await buildCs02StrictPresentation({
         payload,
@@ -994,6 +1008,7 @@ export async function performPresentation(
     if (cs02PresentationResult) {
       vpTokenValue = cs02PresentationResult.vpTokenValue;
       presentation_submission = cs02PresentationResult.presentation_submission;
+      responseSigner = cs02PresentationResult.responseSigner;
     } else {
     // Determine which wallet credential to use: DCQL first, then PEX / heuristics
     const hasDcqlCredentials =
@@ -1138,6 +1153,12 @@ export async function performPresentation(
       alg: presentationAlg,
       sdJwt: isSdJwt ? vpToken : undefined,
     });
+    responseSigner = {
+      privateJwk,
+      publicJwk,
+      didJwk,
+      presentationAlg,
+    };
     console.log("[present] Built kbJwt len:", kbJwt.length);
     try {
       slog("[present] kbJwt created", { length: kbJwt.length });
@@ -1380,6 +1401,9 @@ export async function performPresentation(
       // Wallet signs nothing here to avoid verifier signature mismatch; use JWE per spec branch in verifier
       let responseJwtOrJwe = null;
       try {
+        if (!responseSigner?.didJwk) {
+          throw new Error("Missing wallet response signing identity for direct_post.jwt");
+        }
         const clientMetadata =
           payload.client_metadata || payload.clientMetadata || {};
         const jwks =
@@ -1410,7 +1434,7 @@ export async function performPresentation(
           ...(nonce ? { nonce } : {}),
           iat: now,
           exp: now + 300,
-          iss: didJwk,
+          iss: responseSigner.didJwk,
           // OID4VP direct_post.jwt aligns with JARM: aud SHOULD be the verifier's client_id
           aud: clientId || responseUri,
         };
@@ -1468,9 +1492,16 @@ export async function performPresentation(
           console.log("[present] Created JWE:", responseJwtOrJwe);
         } else {
           // Fallback: send signed JWT directly if no enc key is provided
-          const signingKey = await importJWK(privateJwk, presentationAlg);
+          if (!responseSigner.privateJwk || !responseSigner.presentationAlg) {
+            throw new Error("Missing wallet response signing key for direct_post.jwt");
+          }
+          const signingKey = await importJWK(responseSigner.privateJwk, responseSigner.presentationAlg);
           responseJwtOrJwe = await new SignJWT(jwtPayload)
-            .setProtectedHeader({ alg: presentationAlg, typ: "JWT", kid: didJwk })
+            .setProtectedHeader({
+              alg: responseSigner.presentationAlg,
+              typ: "JWT",
+              kid: responseSigner.didJwk,
+            })
             .setIssuer(jwtPayload.iss)
             .setAudience(jwtPayload.aud)
             .setIssuedAt(jwtPayload.iat)
