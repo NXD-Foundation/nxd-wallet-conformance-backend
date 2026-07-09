@@ -1,3 +1,5 @@
+import { validateDcqlClaimPath } from "./cs02DcqlValidation.js";
+
 function decodeSdJwtDisclosure(disclosure) {
   try {
     const decoded = JSON.parse(
@@ -39,9 +41,13 @@ function requestedSdJwtClaimNames(dcqlCredentialQuery) {
 
   return Array.from(
     new Set(
-      dcqlCredentialQuery.claims
-        .map((claim) => (Array.isArray(claim?.path) ? claim.path[0] : null))
-        .filter((name) => typeof name === "string" && name.length > 0),
+      dcqlCredentialQuery.claims.map((claim, index) => {
+        validateDcqlClaimPath(
+          claim?.path,
+          `credentials[${dcqlCredentialQuery.id}].claims[${index}]`,
+        );
+        return Array.isArray(claim?.path) ? claim.path[0] : null;
+      }).filter((name) => typeof name === "string" && name.length > 0),
     ),
   );
 }

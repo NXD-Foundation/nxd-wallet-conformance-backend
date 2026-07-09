@@ -216,20 +216,6 @@ function validateCredentialSets(dcqlQuery, slog) {
   });
 }
 
-function credentialIdSatisfiesRequiredCredentialSets(dcqlQuery, credentialId) {
-  const credentialSets = Array.isArray(dcqlQuery?.credential_sets)
-    ? dcqlQuery.credential_sets
-    : [];
-  const requiredSets = credentialSets.filter((set) => set?.required !== false);
-  if (requiredSets.length === 0) return true;
-
-  return requiredSets.every((set) =>
-    set.options.some(
-      (option) => option.length === 1 && option[0] === credentialId,
-    ),
-  );
-}
-
 function inferDoctypeFromStoredCredential(type, stored) {
   const metadataDocType = stored?.metadata?.doctype;
   if (typeof metadataDocType === "string" && metadataDocType.length > 0) {
@@ -249,6 +235,141 @@ function inferDoctypeFromStoredCredential(type, stored) {
   return null;
 }
 
+async function findWalletMatchesForDcqlQuery({
+  credQuery,
+  types,
+  getWalletCredentialByType,
+  extractCredentialString,
+  slog,
+}) {
+  const matches = [];
+  for (const t of types) {
+    const stored = await getWalletCredentialByType(t);
+    const token = extractCredentialString(stored?.credential);
+    if (!token) {
+      safeSlog(slog, "[dcql] wallet credential skipped", {
+        credentialId: credQuery.id,
+        type: t,
+        reason: "no presentable token",
+        foundStored: !!stored,
+      });
+      continue;
+    }
+    if (
+      storedCredentialMatchesDcqlQuery(credQuery, token, slog, {
+        fallbackDocType: inferDoctypeFromStoredCredential(t, stored),
+      })
+    ) {
+      matches.push({
+        selectedType: t,
+        matchedQuery: credQuery,
+        stored,
+        token,
+      });
+      if (credQuery.multiple !== true) {
+        break;
+      }
+    }
+  }
+  return matches;
+}
+
+function resolveTargetCredentialQueryIds(dcqlQuery, matchesByQueryId) {
+  const matchedIds = new Set(matchesByQueryId.keys());
+  const credentialSets = Array.isArray(dcqlQuery?.credential_sets)
+    ? dcqlQuery.credential_sets
+    : [];
+  const requiredSets = credentialSets.filter((set) => set?.required !== false);
+
+  if (requiredSets.length === 0) {
+    for (const credQuery of dcqlQuery.credentials) {
+      if (matchedIds.has(credQuery.id)) {
+        return [credQuery.id];
+      }
+    }
+    return null;
+  }
+
+  for (const set of requiredSets) {
+    for (const option of set.options) {
+      if (option.every((id) => matchedIds.has(id))) {
+        return option;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Select one or more wallet credentials for a DCQL query, honoring multiple=true
+ * and required credential_sets options.
+ *
+ * @returns {Promise<Array<{ selectedType: string, matchedQuery: object, stored: object, token: string }>>}
+ */
+export async function selectWalletCredentialsForDcql({
+  dcqlQuery,
+  listWalletCredentialTypes,
+  getWalletCredentialByType,
+  extractCredentialString,
+  slog,
+}) {
+  if (!dcqlQuery || !Array.isArray(dcqlQuery.credentials) || dcqlQuery.credentials.length === 0) {
+    safeSlog(slog, "[dcql] selection skipped", { reason: "dcql_query.credentials missing or empty" });
+    return [];
+  }
+
+  validateCredentialSets(dcqlQuery, slog);
+  const types = await listWalletCredentialTypes();
+  safeSlog(slog, "[dcql] multi-selection started", {
+    credentialQueryCount: dcqlQuery.credentials.length,
+    walletTypeCount: types.length,
+  });
+
+  const matchesByQueryId = new Map();
+  for (const credQuery of dcqlQuery.credentials) {
+    if (!credQuery?.format) continue;
+    const matches = await findWalletMatchesForDcqlQuery({
+      credQuery,
+      types,
+      getWalletCredentialByType,
+      extractCredentialString,
+      slog,
+    });
+    if (matches.length > 0) {
+      matchesByQueryId.set(credQuery.id, matches);
+    }
+  }
+
+  const targetQueryIds = resolveTargetCredentialQueryIds(dcqlQuery, matchesByQueryId);
+  if (!targetQueryIds || targetQueryIds.length === 0) {
+    safeSlog(slog, "[dcql] multi-selection failed", {
+      matchedQueryIds: Array.from(matchesByQueryId.keys()),
+    });
+    return [];
+  }
+
+  const selections = [];
+  for (const queryId of targetQueryIds) {
+    const credQuery = dcqlQuery.credentials.find((entry) => entry?.id === queryId);
+    const matches = matchesByQueryId.get(queryId) || [];
+    if (matches.length === 0) {
+      safeSlog(slog, "[dcql] required credential query unsatisfied", { queryId });
+      return [];
+    }
+    if (credQuery?.multiple === true) {
+      selections.push(...matches);
+    } else {
+      selections.push(matches[0]);
+    }
+  }
+
+  safeSlog(slog, "[dcql] multi-selection matched", {
+    selectionCount: selections.length,
+    credentialQueryIds: targetQueryIds,
+  });
+  return selections;
+}
+
 /**
  * @param {object} params
  * @param {object|null} [params.dcqlQuery]
@@ -265,77 +386,16 @@ export async function selectWalletCredentialTypeForDcql({
   extractCredentialString,
   slog,
 }) {
-  if (!dcqlQuery || !Array.isArray(dcqlQuery.credentials)) {
-    safeSlog(slog, "[dcql] selection skipped", {
-      reason: "dcql_query.credentials missing",
-    });
+  const selections = await selectWalletCredentialsForDcql({
+    dcqlQuery,
+    listWalletCredentialTypes,
+    getWalletCredentialByType,
+    extractCredentialString,
+    slog,
+  });
+  if (selections.length === 0) {
     return null;
   }
-  if (dcqlQuery.credentials.length === 0) {
-    safeSlog(slog, "[dcql] selection skipped", {
-      reason: "dcql_query.credentials empty",
-    });
-    return null;
-  }
-
-  validateCredentialSets(dcqlQuery, slog);
-  safeSlog(slog, "[dcql] selection started", {
-    credentialQueryCount: dcqlQuery.credentials.length,
-    credentialSetCount: Array.isArray(dcqlQuery.credential_sets)
-      ? dcqlQuery.credential_sets.length
-      : 0,
-  });
-
-  const types = await listWalletCredentialTypes();
-  safeSlog(slog, "[dcql] wallet credential candidates", {
-    count: types.length,
-    types,
-  });
-  for (const credQuery of dcqlQuery.credentials) {
-    if (!credQuery || !credQuery.format) {
-      safeSlog(slog, "[dcql] credential query skipped", {
-        credentialId: credQuery?.id,
-        reason: "missing format",
-      });
-      continue;
-    }
-    if (!credentialIdSatisfiesRequiredCredentialSets(dcqlQuery, credQuery.id)) {
-      safeSlog(slog, "[dcql] credential query skipped", {
-        credentialId: credQuery.id,
-        reason: "does not satisfy required credential_sets in single-credential mode",
-      });
-      continue;
-    }
-    for (const t of types) {
-      const stored = await getWalletCredentialByType(t);
-      const token = extractCredentialString(stored?.credential);
-      if (!token) {
-        safeSlog(slog, "[dcql] wallet credential skipped", {
-          credentialId: credQuery.id,
-          type: t,
-          reason: "no presentable token",
-          foundStored: !!stored,
-        });
-        continue;
-      }
-      if (
-        storedCredentialMatchesDcqlQuery(credQuery, token, slog, {
-          fallbackDocType: inferDoctypeFromStoredCredential(t, stored),
-        })
-      ) {
-        safeSlog(slog, "[dcql] selection matched", {
-          selectedType: t,
-          credentialId: credQuery.id,
-          format: credQuery.format,
-        });
-        return { selectedType: t, matchedQuery: credQuery };
-      }
-    }
-  }
-  safeSlog(slog, "[dcql] selection failed", {
-    credentialQueryIds: dcqlQuery.credentials
-      .map((c) => c?.id)
-      .filter(Boolean),
-  });
-  return null;
+  const first = selections[0];
+  return { selectedType: first.selectedType, matchedQuery: first.matchedQuery };
 }

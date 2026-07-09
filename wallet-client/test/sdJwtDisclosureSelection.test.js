@@ -3,6 +3,7 @@ import {
   filterSdJwtByDcqlClaims,
   sdJwtWithoutKbJwt,
 } from "../src/lib/sdJwtDisclosureSelection.js";
+import { Cs02ValidationError } from "../src/lib/cs02RequestValidation.js";
 
 function b64Json(value) {
   return Buffer.from(JSON.stringify(value)).toString("base64url");
@@ -60,5 +61,17 @@ describe("sdJwtDisclosureSelection", () => {
     });
 
     expect(sdJwtWithoutKbJwt(filtered).disclosures).to.deep.equal([]);
+  });
+
+  it("throws when a requested DCQL claim path is invalid", () => {
+    const sdJwt = `${unsignedJwt({ vct: "urn:test", family_name: "Neslo" })}~`;
+
+    expect(() =>
+      filterSdJwtByDcqlClaims(sdJwt, {
+        id: "cmwallet",
+        format: "dc+sd-jwt",
+        claims: [{ path: [] }],
+      }),
+    ).to.throw(Cs02ValidationError);
   });
 });

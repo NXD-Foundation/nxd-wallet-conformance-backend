@@ -26,6 +26,7 @@ import {
 } from "./cs03.js";
 import {
   selectWalletCredentialTypeForDcql,
+  selectWalletCredentialsForDcql,
   presentationFormatFromDcqlQuery,
 } from "./dcqlCredentialSelection.js";
 import {
@@ -44,6 +45,11 @@ import {
   fetchCs02AuthorizationRequestJwt,
   validateAndVerifyCs02AuthorizationRequest,
 } from "./cs02RequestValidation.js";
+import {
+  validateCs02PresentationQuery,
+  buildCs02VpTokenObject,
+  resolveCs02KbJwtAudience,
+} from "./cs02DcqlValidation.js";
 
 function makeSessionLogger(sessionId) {
   return function sessionLog(...args) {
@@ -504,6 +510,205 @@ function extractCredentialString(credentialEnvelope) {
   return null;
 }
 
+async function buildPresentableVpTokenForSelection({
+  selection,
+  payload,
+  clientId,
+  responseUri,
+  verifierBase,
+  nonce,
+  keyPath,
+  presentationDefinition,
+  cs02Options,
+  slog,
+}) {
+  const { selectedType, matchedQuery, stored } = selection;
+  let vpToken = selection.token || extractCredentialString(stored?.credential);
+  if (!stored?.credential || !vpToken) {
+    throw new Cs02ValidationError(
+      "Unable to extract presentable credential token from wallet cache",
+      "access_denied",
+    );
+  }
+
+  const isMdoc = isMdocCredential(vpToken);
+  const isSdJwt = !isMdoc && typeof vpToken === "string" && vpToken.includes("~");
+  if (isSdJwt && matchedQuery) {
+    const before = vpToken;
+    vpToken = filterSdJwtByDcqlClaims(vpToken, matchedQuery);
+    try {
+      slog("[present] SD-JWT filtered by DCQL", {
+        beforeDisclosures: sdJwtWithoutKbJwt(before).disclosures.length,
+        afterDisclosures: sdJwtWithoutKbJwt(vpToken).disclosures.length,
+        dcqlId: matchedQuery.id,
+      });
+    } catch {}
+  }
+
+  const {
+    privateJwk,
+    publicJwk,
+    didJwk,
+    alg: presentationAlg,
+    source: presentationKeySource,
+  } = await resolvePresentationKeyBinding({ stored, keyPath });
+  try {
+    slog("[present] presentation key selected", {
+      source: presentationKeySource,
+      alg: presentationAlg,
+      credentialQueryId: matchedQuery?.id,
+    });
+  } catch {}
+
+  const kbAudience = cs02Options?.strict
+    ? resolveCs02KbJwtAudience(payload, clientId)
+    : clientId || responseUri || verifierBase;
+  if (!kbAudience) {
+    throw new Cs02ValidationError(
+      "Unable to determine audience for key-binding JWT",
+      "invalid_client",
+    );
+  }
+
+  const kbJwt = await createProofJwt({
+    privateJwk,
+    publicJwk,
+    audience: kbAudience,
+    nonce,
+    issuer: didJwk,
+    typ: isSdJwt ? "kb+jwt" : "openid4vp-proof+jwt",
+    alg: presentationAlg,
+    sdJwt: isSdJwt ? vpToken : undefined,
+  });
+
+  if (cs02Options?.strict && isSdJwt) {
+    const kbPayload = decodeJwt(kbJwt).payload;
+    const kbHeader = decodeJwt(kbJwt).header;
+    if (kbHeader.typ !== "kb+jwt") {
+      throw new Cs02ValidationError("KB-JWT must use typ kb+jwt", "invalid_request");
+    }
+    if (kbPayload.nonce !== nonce) {
+      throw new Cs02ValidationError("KB-JWT nonce does not match authorization request", "invalid_request");
+    }
+    if (kbPayload.aud !== kbAudience) {
+      throw new Cs02ValidationError("KB-JWT audience must be the verifier client_id", "invalid_client");
+    }
+    if (!kbPayload.sd_hash) {
+      throw new Cs02ValidationError("KB-JWT must include sd_hash for SD-JWT-VC", "invalid_request");
+    }
+    if (!kbPayload.iat) {
+      throw new Cs02ValidationError("KB-JWT must include iat", "invalid_request");
+    }
+  }
+
+  if (isMdoc) {
+    let docType = selectedType || "org.iso.18013.5.1.mDL";
+    if (matchedQuery?.meta?.doctype_value) {
+      docType = matchedQuery.meta.doctype_value;
+    } else if (presentationDefinition?.input_descriptors?.[0]?.id) {
+      const descriptorId = presentationDefinition.input_descriptors[0].id;
+      if (descriptorId.includes(".") || descriptorId.includes(":")) {
+        docType = descriptorId;
+      }
+    }
+    vpToken = await buildMdocPresentation(vpToken, {
+      docType,
+      clientId,
+      responseUri,
+      verifierGeneratedNonce: nonce,
+      devicePrivateJwk: stored?.keyBinding?.privateJwk || privateJwk,
+      presentationDefinition,
+      dcqlCredentialQuery: matchedQuery,
+    });
+  } else if (typeof vpToken === "string" && vpToken.includes("~")) {
+    vpToken = attachKbJwtToSdJwt(vpToken, kbJwt);
+  } else {
+    vpToken = await buildJwtVpToken({
+      credentialJwt: vpToken,
+      privateJwk,
+      publicJwk,
+      issuer: didJwk,
+      audience: kbAudience,
+      nonce,
+      alg: presentationAlg,
+    });
+  }
+
+  return vpToken;
+}
+
+async function buildCs02StrictPresentation({
+  payload,
+  clientId,
+  responseUri,
+  verifierBase,
+  nonce,
+  keyPath,
+  credentialType,
+  presentationDefinition,
+  cs02Options,
+  slog,
+}) {
+  validateCs02PresentationQuery(payload, cs02Options, slog);
+  const dcqlSelections = await selectWalletCredentialsForDcql({
+    dcqlQuery: payload.dcql_query,
+    listWalletCredentialTypes,
+    getWalletCredentialByType,
+    extractCredentialString,
+    slog,
+  });
+  if (dcqlSelections.length === 0) {
+    throw new Cs02ValidationError(
+      "No credential satisfies the verifier DCQL query",
+      "access_denied",
+    );
+  }
+  if (
+    credentialType &&
+    dcqlSelections.some((selection) => selection.selectedType !== credentialType)
+  ) {
+    throw new Cs02ValidationError(
+      `Request credential type "${credentialType}" does not match the credential type selected for DCQL`,
+      "access_denied",
+    );
+  }
+
+  const grouped = new Map();
+  for (const selection of dcqlSelections) {
+    const presentation = await buildPresentableVpTokenForSelection({
+      selection,
+      payload,
+      clientId,
+      responseUri,
+      verifierBase,
+      nonce,
+      keyPath,
+      presentationDefinition,
+      cs02Options,
+      slog,
+    });
+    const credQueryId = selection.matchedQuery.id;
+    if (!grouped.has(credQueryId)) {
+      grouped.set(credQueryId, {
+        multiple: selection.matchedQuery.multiple === true,
+        presentations: [],
+      });
+    }
+    grouped.get(credQueryId).presentations.push(presentation);
+  }
+
+  return {
+    vpTokenValue: buildCs02VpTokenObject(
+      Array.from(grouped.entries()).map(([credQueryId, value]) => ({
+        credQueryId,
+        presentations: value.presentations,
+        multiple: value.multiple,
+      })),
+    ),
+    presentation_submission: undefined,
+  };
+}
+
 export async function performPresentation(
   { deepLink, verifierBase, credentialType, keyPath },
   logSessionId,
@@ -767,6 +972,29 @@ export async function performPresentation(
       };
     }
 
+    let cs02PresentationResult = null;
+    if (cs02Options.strict) {
+      cs02PresentationResult = await buildCs02StrictPresentation({
+        payload,
+        clientId,
+        responseUri,
+        verifierBase,
+        nonce,
+        keyPath,
+        credentialType,
+        presentationDefinition,
+        cs02Options,
+        slog,
+      });
+    }
+
+    let vpTokenValue;
+    let presentation_submission;
+
+    if (cs02PresentationResult) {
+      vpTokenValue = cs02PresentationResult.vpTokenValue;
+      presentation_submission = cs02PresentationResult.presentation_submission;
+    } else {
     // Determine which wallet credential to use: DCQL first, then PEX / heuristics
     const hasDcqlCredentials =
       payload.dcql_query &&
@@ -1043,7 +1271,7 @@ export async function performPresentation(
       slog("[present] credential format", { format: credentialFormat });
     } catch {}
 
-    const presentation_submission = buildPresentationSubmission(
+    presentation_submission = buildPresentationSubmission(
       presentationDefinition,
       credentialFormat,
     );
@@ -1064,7 +1292,6 @@ export async function performPresentation(
     // Per spec: "The object MUST contain one member for each Credential Query ... The member value
     // MUST be a string or an array of strings". We use array form for consistency, e.g.:
     // { "vp_token": { "example_credential_id": ["eyJhb...YMetA"] }, ... }
-    let vpTokenValue;
     if (
       dcqlQuery &&
       Array.isArray(dcqlQuery.credentials) &&
@@ -1114,6 +1341,8 @@ export async function performPresentation(
         slog("[present] vp_token string format");
       } catch {}
     }
+
+    } // end legacy compatibility presentation path
 
     // Send the credential token (SD-JWT, mdoc DeviceResponse, or JWT VC)
     // Per OpenID4VP spec:
