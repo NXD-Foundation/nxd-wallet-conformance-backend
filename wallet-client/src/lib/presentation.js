@@ -747,10 +747,11 @@ export async function performPresentation(
     let requestJwt;
     let header;
     let payload;
+    let effectiveClientMetadata = null;
     if (cs02Options.strict) {
       const fetched = await fetchCs02AuthorizationRequestJwt(requestUri, method, cs02Options, slog);
       requestJwt = fetched.requestJwt;
-      ({ header, payload } = await validateAndVerifyCs02AuthorizationRequest(requestJwt, {
+      ({ header, payload, effectiveClientMetadata } = await validateAndVerifyCs02AuthorizationRequest(requestJwt, {
         deepLinkClientId: clientId,
         deepLinkUrl,
         options: cs02Options,
@@ -866,6 +867,9 @@ export async function performPresentation(
     if (!responseUri) throw new Error("Missing response_uri in request");
     if (!nonce) throw new Error("Missing nonce in request");
 
+    const resolvedClientMetadata =
+      effectiveClientMetadata || payload.client_metadata || payload.clientMetadata || {};
+
     const cs03Request = extractCs03Request(payload);
     if (cs03Request) {
       if ((responseMode || "direct_post") !== "direct_post") {
@@ -908,7 +912,7 @@ export async function performPresentation(
       if (responseURI) {
         await sendCs03OobResponse(responseURI, qesResponse, {
           clientId,
-          clientMetadata: payload.client_metadata || payload.clientMetadata || null,
+          clientMetadata: resolvedClientMetadata || null,
         });
         try {
           slog("[present] CS-03 OOB qesResponse sent", {
@@ -1405,8 +1409,7 @@ export async function performPresentation(
         if (!responseSigner?.didJwk) {
           throw new Error("Missing wallet response signing identity for direct_post.jwt");
         }
-        const clientMetadata =
-          payload.client_metadata || payload.clientMetadata || {};
+        const clientMetadata = resolvedClientMetadata;
         const jwks =
           clientMetadata.jwks ||
           (clientMetadata.jwks_uri
@@ -1644,8 +1647,7 @@ export async function performPresentation(
               res.status +
               ") – retrying with payload-object JWE fallback",
           );
-          const clientMetadata =
-            payload.client_metadata || payload.clientMetadata || {};
+          const clientMetadata = resolvedClientMetadata;
           const jwks =
             clientMetadata.jwks ||
             (clientMetadata.jwks_uri

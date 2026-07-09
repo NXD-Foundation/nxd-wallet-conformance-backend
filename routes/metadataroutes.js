@@ -2,6 +2,7 @@ import express from "express";
 import fs from "fs";
 import { pemToJWK } from "../utils/cryptoUtils.js";
 import { PROXY_PATH } from "../utils/routeUtils.js";
+import { buildStrictCs02ClientMetadata } from "../utils/cs02TrustPolicy.js";
 const metadataRouter = express.Router();
 
 const serverURL = process.env.SERVER_URL || "http://localhost:3000";
@@ -15,6 +16,10 @@ const issuerConfig = JSON.parse(
 const oauthConfig = JSON.parse(
   fs.readFileSync("./data/oauth-config.json", "utf-8")
 );
+
+function loadVerifierClientMetadata() {
+  return JSON.parse(fs.readFileSync("./data/verifier-config.json", "utf-8"));
+}
 
 // Load defaultSigningKid from issuer-config.json, similar to credGenerationUtils.js
 let issuerConfigValues = {};
@@ -102,6 +107,22 @@ metadataRouter.get(["/", "/jwks"], (req, res) => {
       { ...jwks, kid: `${defaultSigningKid}-agreement`, use: "keyAgreement" },
     ],
   });
+});
+
+metadataRouter.get(["/client-metadata", "/client-metadata/cs02"], (req, res) => {
+  const broadMetadata = loadVerifierClientMetadata();
+  const strictCs02 =
+    req.path.endsWith("/cs02") ||
+    String(req.query.profile || "").toLowerCase() === "cs02" ||
+    String(req.query.profile || "").toLowerCase() === "we-build-cs02";
+  const responseMode =
+    typeof req.query.response_mode === "string" && req.query.response_mode
+      ? req.query.response_mode
+      : "direct_post";
+  const metadata = strictCs02
+    ? buildStrictCs02ClientMetadata(broadMetadata, responseMode)
+    : broadMetadata;
+  res.type("application/json").send(metadata);
 });
 
 

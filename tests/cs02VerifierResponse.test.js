@@ -1,11 +1,14 @@
 import { expect } from "chai";
 import * as jose from "jose";
+import { createHash } from "crypto";
 import {
   Cs02VerifierResponseError,
   validateCs02DcqlVpTokenResponse,
   validateCs02JweResponseHeader,
   validateCs02KeyBindingJwtClaims,
   validateCs02ResponseSubmission,
+  validateCs02SdJwtIssuerAuthenticity,
+  validateCs02SdJwtPresentation,
   verifyCs02OuterResponseJwt,
 } from "../utils/cs02VerifierResponse.js";
 
@@ -24,6 +27,57 @@ async function signResponseJwt(payload, privateJwk, header = {}) {
   return new jose.SignJWT(payload)
     .setProtectedHeader({ alg: "ES256", typ: "JWT", jwk: header.jwk, ...header })
     .sign(signingKey);
+}
+
+function b64Json(value) {
+  return Buffer.from(JSON.stringify(value)).toString("base64url");
+}
+
+function disclosure(name, value, salt = "salt") {
+  return Buffer.from(JSON.stringify([salt, name, value])).toString("base64url");
+}
+
+function disclosureDigest(encodedDisclosure) {
+  return createHash("sha256").update(encodedDisclosure, "ascii").digest("base64url");
+}
+
+async function buildSdJwtPresentation({
+  issuerPrivateJwk,
+  holderPrivateJwk,
+  holderPublicJwk,
+  issuerPayload = {},
+  issuerHeader = {},
+  disclosures = [disclosure("family_name", "Neslo")],
+  kbPayload = {},
+} = {}) {
+  const issuerKey = await jose.importJWK(issuerPrivateJwk, issuerHeader.alg || "ES256");
+  const now = Math.floor(Date.now() / 1000);
+  const sdDigests = disclosures.map(disclosureDigest);
+  const issuerJwt = await new jose.SignJWT({
+    iss: "https://issuer.example",
+    iat: now,
+    exp: now + 300,
+    vct: "test",
+    cnf: { jwk: holderPublicJwk },
+    _sd_alg: "sha-256",
+    _sd: sdDigests,
+    ...issuerPayload,
+  })
+    .setProtectedHeader({ alg: "ES256", typ: "dc+sd-jwt", kid: "issuer-key", ...issuerHeader })
+    .sign(issuerKey);
+
+  const holderKey = await jose.importJWK(holderPrivateJwk, "ES256");
+  const kbJwt = await new jose.SignJWT({
+    nonce: "nonce-1",
+    aud: "x509_san_dns:verifier.example",
+    iat: now,
+    sd_hash: "test-sd-hash",
+    ...kbPayload,
+  })
+    .setProtectedHeader({ alg: "ES256", typ: "kb+jwt" })
+    .sign(holderKey);
+
+  return `${issuerJwt}~${disclosures.join("~")}~${kbJwt}`;
 }
 
 describe("CS-02 verifier response validation (Phase 4)", () => {
@@ -277,5 +331,219 @@ describe("CS-02 verifier response validation (Phase 4)", () => {
         options: { strict: true },
       }),
     ).to.throw(Cs02VerifierResponseError, /missing aud/);
+  });
+
+  describe("SD-JWT-VC issuer authenticity (Phase D)", () => {
+    async function keyMaterial() {
+      const issuer = await jose.generateKeyPair("ES256", { extractable: true });
+      const holder = await jose.generateKeyPair("ES256", { extractable: true });
+      return {
+        issuerPrivateJwk: await jose.exportJWK(issuer.privateKey),
+        issuerPublicJwk: await jose.exportJWK(issuer.publicKey),
+        holderPrivateJwk: await jose.exportJWK(holder.privateKey),
+        holderPublicJwk: await jose.exportJWK(holder.publicKey),
+      };
+    }
+
+    it("accepts a valid issuer signature and matching cnf.jwk when local issuer key material is available", async () => {
+      const keys = await keyMaterial();
+      const sdJwt = await buildSdJwtPresentation(keys);
+
+      const result = await validateCs02SdJwtPresentation({
+        sdJwt,
+        sessionNonce: "nonce-1",
+        clientId: "x509_san_dns:verifier.example",
+        credQuery: {
+          id: "cmwallet",
+          format: "dc+sd-jwt",
+          meta: { vct_values: ["test"] },
+          claims: [{ path: ["family_name"] }],
+        },
+        options: {
+          strict: true,
+          issuerVerificationJwk: keys.issuerPublicJwk,
+          rejectUnsolicitedDisclosures: true,
+        },
+      });
+
+      expect(result.ok).to.equal(true);
+      expect(result.issuerAuthenticity.issuerSignature).to.include({
+        verified: true,
+        enforced: true,
+        placeholder: false,
+      });
+      expect(result.issuerTrust).to.include({ placeholder: true });
+      expect(result.issuerAuthenticity.claims.family_name).to.equal("Neslo");
+    });
+
+    it("rejects SD-JWT with invalid issuer signature when a local issuer key is available", async () => {
+      const keys = await keyMaterial();
+      const otherIssuer = await jose.generateKeyPair("ES256", { extractable: true });
+      const otherIssuerPublicJwk = await jose.exportJWK(otherIssuer.publicKey);
+      const sdJwt = await buildSdJwtPresentation(keys);
+
+      try {
+        await validateCs02SdJwtIssuerAuthenticity({
+          sdJwt,
+          credQuery: { meta: { vct_values: ["test"] }, claims: [{ path: ["family_name"] }] },
+          options: { strict: true, issuerVerificationJwk: otherIssuerPublicJwk },
+        });
+        expect.fail("expected issuer signature rejection");
+      } catch (error) {
+        expect(error).to.be.instanceOf(Cs02VerifierResponseError);
+        expect(error.message).to.match(/issuer signature/);
+      }
+    });
+
+    it("checks issuer signature before disclosure reconstruction when issuer key is available", async () => {
+      const keys = await keyMaterial();
+      const otherIssuer = await jose.generateKeyPair("ES256", { extractable: true });
+      const otherIssuerPublicJwk = await jose.exportJWK(otherIssuer.publicKey);
+      const sdJwt = await buildSdJwtPresentation({
+        ...keys,
+        issuerPayload: { _sd: ["not-the-real-disclosure-digest"] },
+      });
+
+      try {
+        await validateCs02SdJwtIssuerAuthenticity({
+          sdJwt,
+          options: { strict: true, issuerVerificationJwk: otherIssuerPublicJwk },
+        });
+        expect.fail("expected issuer signature rejection");
+      } catch (error) {
+        expect(error).to.be.instanceOf(Cs02VerifierResponseError);
+        expect(error.message).to.match(/issuer signature/);
+      }
+    });
+
+    it("rejects SD-JWT with unsupported issuer alg", async () => {
+      const keys = await keyMaterial();
+      const sdJwt = await buildSdJwtPresentation(keys);
+      const [issuerJwt, ...tail] = sdJwt.split("~");
+      const [, payload, signature] = issuerJwt.split(".");
+      const tampered = `${b64Json({ alg: "none", typ: "dc+sd-jwt" })}.${payload}.${signature}~${tail.join("~")}`;
+
+      try {
+        await validateCs02SdJwtIssuerAuthenticity({
+          sdJwt: tampered,
+          options: { strict: true, issuerVerificationJwk: keys.issuerPublicJwk },
+        });
+        expect.fail("expected unsupported alg rejection");
+      } catch (error) {
+        expect(error).to.be.instanceOf(Cs02VerifierResponseError);
+        expect(error.message).to.match(/supported alg/);
+      }
+    });
+
+    it("rejects SD-JWT missing cnf.jwk when holder binding is required", async () => {
+      const keys = await keyMaterial();
+      const sdJwt = await buildSdJwtPresentation({
+        ...keys,
+        issuerPayload: { cnf: undefined },
+      });
+
+      try {
+        await validateCs02SdJwtIssuerAuthenticity({
+          sdJwt,
+          options: { strict: true, issuerVerificationJwk: keys.issuerPublicJwk },
+        });
+        expect.fail("expected missing cnf.jwk rejection");
+      } catch (error) {
+        expect(error).to.be.instanceOf(Cs02VerifierResponseError);
+        expect(error.message).to.match(/cnf\.jwk/);
+      }
+    });
+
+    it("returns an explicit issuer-signature placeholder when no issuer key source exists", async () => {
+      const keys = await keyMaterial();
+      const sdJwt = await buildSdJwtPresentation(keys);
+
+      const result = await validateCs02SdJwtIssuerAuthenticity({
+        sdJwt,
+        credQuery: { meta: { vct_values: ["test"] }, claims: [{ path: ["family_name"] }] },
+        options: { strict: true },
+      });
+
+      expect(result.issuerSignature).to.include({
+        verified: false,
+        enforced: false,
+        placeholder: true,
+      });
+    });
+
+    it("rejects presented disclosures that do not reconstruct against the issuer payload", async () => {
+      const keys = await keyMaterial();
+      const sdJwt = await buildSdJwtPresentation({
+        ...keys,
+        issuerPayload: { _sd: ["not-the-real-disclosure-digest"] },
+      });
+
+      try {
+        await validateCs02SdJwtIssuerAuthenticity({
+          sdJwt,
+          options: { strict: true, issuerVerificationJwk: keys.issuerPublicJwk },
+        });
+        expect.fail("expected disclosure digest rejection");
+      } catch (error) {
+        expect(error).to.be.instanceOf(Cs02VerifierResponseError);
+        expect(error.message).to.match(/disclosure digest/);
+      }
+    });
+
+    it("rejects missing requested claims after disclosure reconstruction", async () => {
+      const keys = await keyMaterial();
+      const sdJwt = await buildSdJwtPresentation(keys);
+
+      try {
+        await validateCs02SdJwtIssuerAuthenticity({
+          sdJwt,
+          credQuery: { claims: [{ path: ["given_name"] }] },
+          options: { strict: true, issuerVerificationJwk: keys.issuerPublicJwk },
+        });
+        expect.fail("expected missing requested claim rejection");
+      } catch (error) {
+        expect(error).to.be.instanceOf(Cs02VerifierResponseError);
+        expect(error.message).to.match(/missing requested claim path/);
+      }
+    });
+
+    it("rejects unsolicited disclosures in strict mode", async () => {
+      const keys = await keyMaterial();
+      const sdJwt = await buildSdJwtPresentation({
+        ...keys,
+        disclosures: [disclosure("family_name", "Neslo"), disclosure("given_name", "Alice")],
+      });
+
+      try {
+        await validateCs02SdJwtIssuerAuthenticity({
+          sdJwt,
+          credQuery: { claims: [{ path: ["family_name"] }] },
+          options: { strict: true, issuerVerificationJwk: keys.issuerPublicJwk },
+        });
+        expect.fail("expected unsolicited disclosure rejection");
+      } catch (error) {
+        expect(error).to.be.instanceOf(Cs02VerifierResponseError);
+        expect(error.message).to.match(/unsolicited disclosed claim/);
+      }
+    });
+
+    it("rejects wrong vct for the requested DCQL credential", async () => {
+      const keys = await keyMaterial();
+      const sdJwt = await buildSdJwtPresentation(keys);
+
+      try {
+        await validateCs02SdJwtIssuerAuthenticity({
+          sdJwt,
+          credQuery: { meta: { vct_values: ["different-vct"] }, claims: [{ path: ["family_name"] }] },
+          options: { strict: true, issuerVerificationJwk: keys.issuerPublicJwk },
+        });
+        expect.fail("expected vct rejection");
+      } catch (error) {
+        expect(error).to.be.instanceOf(Cs02VerifierResponseError);
+        expect(error.message).to.match(/vct/);
+      }
+    });
+
+    it.skip("rejects untrusted SD-JWT issuers once configured issuer trust exists", () => {});
   });
 });

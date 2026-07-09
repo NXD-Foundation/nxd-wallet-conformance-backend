@@ -1,5 +1,6 @@
 import { expect } from "chai";
 import {
+  buildStrictCs02ClientMetadata,
   Cs02TrustPolicyError,
   filterClientMetadataForCs02Enforcement,
   getCs02EnforcedMetadataProfile,
@@ -7,6 +8,9 @@ import {
   validateCs02RequestUriQueryPrecedence,
   validateDidJwkTrustRules,
   validateDidWebKidResolution,
+  mergeCs02ClientMetadata,
+  resolveCs02EffectiveClientMetadata,
+  validateCs02ClientMetadataUri,
   validateX509SanDnsTrustAnchor,
 } from "../utils/cs02TrustPolicy.js";
 
@@ -62,6 +66,41 @@ describe("CS-02 trust and metadata policy (Phase 5)", () => {
     expect(filtered.vp_formats_supported["dc+sd-jwt"]["kb-jwt_alg_values"]).to.deep.equal(["ES256"]);
     expect(filtered.encrypted_response_alg_values_supported).to.deep.equal(["ECDH-ES+A256KW"]);
     expect(filtered.encrypted_response_enc_values_supported).to.deep.equal(["A256GCM"]);
+  });
+
+  it("builds strict CS-02 metadata from broad verifier capabilities", () => {
+    const broad = {
+      vp_formats_supported: {
+        "jwt_vc_json": { alg_values: ["ES256"] },
+        "https://cloudsignatureconsortium.org/2025/x509": {},
+        "dc+sd-jwt": {
+          "sd-jwt_alg_values": ["ES256", "ES384", "RS256"],
+          "kb-jwt_alg_values": ["ES256", "ES384"],
+        },
+        "mso_mdoc": { issuerauth_alg_values: [-7, -35] },
+      },
+      encrypted_response_alg_values_supported: ["ECDH-ES+A256KW"],
+      encrypted_response_enc_values_supported: ["A256GCM"],
+    };
+    const strict = buildStrictCs02ClientMetadata(
+      broad,
+      "direct_post",
+    );
+
+    expect(strict.vp_formats_supported).to.have.keys(["dc+sd-jwt", "mso_mdoc"]);
+    expect(strict.vp_formats_supported["dc+sd-jwt"]["sd-jwt_alg_values"]).to.deep.equal([
+      "ES256",
+      "ES384",
+    ]);
+    expect(strict.vp_formats_supported["dc+sd-jwt"]["kb-jwt_alg_values"]).to.deep.equal([
+      "ES256",
+    ]);
+    expect(strict).to.not.have.property("encrypted_response_alg_values_supported");
+    expect(strict).to.not.have.property("encrypted_response_enc_values_supported");
+    expect(broad.vp_formats_supported["dc+sd-jwt"]["kb-jwt_alg_values"]).to.deep.equal([
+      "ES256",
+      "ES384",
+    ]);
   });
 
   it("rejects deep-link query parameters that contradict signed JAR values", () => {
@@ -176,5 +215,211 @@ describe("CS-02 DID trust policy (Phase A)", () => {
     expect(() =>
       validateDidJwkTrustRules({ kty: "EC", crv: "P-256", alg: "ES384", x: "a", y: "b" }),
     ).to.throw(Cs02TrustPolicyError, /ES256/);
+  });
+});
+
+describe("CS-02 client_metadata_uri policy (Phase B)", () => {
+  const metadataUri = "https://verifier.example/client-metadata";
+  const validMetadata = {
+    vp_formats_supported: {
+      "dc+sd-jwt": {
+        "sd-jwt_alg_values": ["ES256"],
+        "kb-jwt_alg_values": ["ES256"],
+      },
+    },
+    jwks: { keys: [{ kty: "EC", crv: "P-256", x: "abc", y: "def", use: "enc" }] },
+  };
+
+  function mockMetadataFetch(metadata, { contentType = "application/json", status = 200 } = {}) {
+    return async () => ({
+      ok: status >= 200 && status < 300,
+      status,
+      headers: {
+        get: (name) => {
+          const key = String(name || "").toLowerCase();
+          if (key === "content-type") return contentType;
+          return null;
+        },
+      },
+      text: async () => JSON.stringify(metadata),
+    });
+  }
+
+  function mockRedirectThenMetadataFetch(metadata) {
+    let callCount = 0;
+    return async () => {
+      callCount += 1;
+      if (callCount === 1) {
+        return {
+          ok: false,
+          status: 302,
+          headers: {
+            get: (name) => (String(name || "").toLowerCase() === "location"
+              ? "https://verifier.example/redirected-client-metadata"
+              : null),
+          },
+          text: async () => "",
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        headers: {
+          get: (name) => (String(name || "").toLowerCase() === "content-type"
+            ? "application/json"
+            : null),
+        },
+        text: async () => JSON.stringify(metadata),
+      };
+    };
+  }
+
+  it("prefers inline client_metadata over remote metadata for overlapping fields", () => {
+    const merged = mergeCs02ClientMetadata(
+      { jwks: { keys: [{ kid: "inline" }] }, client_name: "Inline Verifier" },
+      { jwks: { keys: [{ kid: "remote" }] }, client_name: "Remote Verifier" },
+    );
+    expect(merged.jwks.keys[0].kid).to.equal("inline");
+    expect(merged.client_name).to.equal("Inline Verifier");
+  });
+
+  it("fills verifier key metadata from remote when inline metadata omits it", async () => {
+    const resolved = await resolveCs02EffectiveClientMetadata(
+      {
+        response_mode: "direct_post",
+        client_metadata_uri: metadataUri,
+      },
+      { fetchImpl: mockMetadataFetch(validMetadata), strict: true },
+    );
+    expect(resolved.sources.remote).to.equal(true);
+    expect(resolved.effectiveMetadata.jwks.keys).to.have.length(1);
+  });
+
+  it("passes redirect limits through effective client metadata resolution", async () => {
+    try {
+      await resolveCs02EffectiveClientMetadata(
+        {
+          response_mode: "direct_post",
+          client_metadata_uri: metadataUri,
+        },
+        {
+          fetchImpl: mockRedirectThenMetadataFetch(validMetadata),
+          strict: true,
+          maxRedirects: 0,
+        },
+      );
+      expect.fail("expected redirect limit rejection");
+    } catch (error) {
+      expect(error).to.be.instanceOf(Cs02TrustPolicyError);
+      expect(error.message).to.match(/redirect limit/);
+    }
+  });
+
+  it("rejects non-HTTPS client_metadata_uri in strict mode", async () => {
+    try {
+      await validateCs02ClientMetadataUri("http://verifier.example/client-metadata", {
+        fetchImpl: mockMetadataFetch(validMetadata),
+        responseMode: "direct_post",
+        strict: true,
+      });
+      expect.fail("expected non-HTTPS rejection");
+    } catch (error) {
+      expect(error).to.be.instanceOf(Cs02TrustPolicyError);
+      expect(error.message).to.match(/HTTPS/);
+    }
+  });
+
+  it("rejects relative client_metadata_uri", async () => {
+    try {
+      await validateCs02ClientMetadataUri("/client-metadata", {
+        fetchImpl: mockMetadataFetch(validMetadata),
+        responseMode: "direct_post",
+        strict: true,
+      });
+      expect.fail("expected relative URI rejection");
+    } catch (error) {
+      expect(error).to.be.instanceOf(Cs02TrustPolicyError);
+      expect(error.message).to.match(/absolute URI/);
+    }
+  });
+
+  it("rejects remote metadata with unsupported vp formats", async () => {
+    try {
+      await validateCs02ClientMetadataUri(metadataUri, {
+        fetchImpl: mockMetadataFetch({
+          vp_formats_supported: { "jwt_vc_json": { alg_values: ["ES256"] } },
+        }),
+        responseMode: "direct_post",
+        strict: true,
+      });
+      expect.fail("expected unsupported vp format rejection");
+    } catch (error) {
+      expect(error).to.be.instanceOf(Cs02TrustPolicyError);
+      expect(error.message).to.match(/unsupported vp format/);
+    }
+  });
+
+  it("rejects remote metadata advertising unsupported KB-JWT algs", async () => {
+    try {
+      await validateCs02ClientMetadataUri(metadataUri, {
+        fetchImpl: mockMetadataFetch({
+          vp_formats_supported: {
+            "dc+sd-jwt": {
+              "sd-jwt_alg_values": ["ES256"],
+              "kb-jwt_alg_values": ["ES384"],
+            },
+          },
+        }),
+        responseMode: "direct_post",
+        strict: true,
+      });
+      expect.fail("expected unsupported KB-JWT alg rejection");
+    } catch (error) {
+      expect(error).to.be.instanceOf(Cs02TrustPolicyError);
+      expect(error.message).to.match(/unsupported KB-JWT alg/);
+    }
+  });
+
+  it("rejects remote metadata advertising encrypted response settings for direct_post", async () => {
+    try {
+      await validateCs02ClientMetadataUri(metadataUri, {
+        fetchImpl: mockMetadataFetch({
+          authorization_encrypted_response_alg: "ECDH-ES+A256KW",
+        }),
+        responseMode: "direct_post",
+        strict: true,
+      });
+      expect.fail("expected direct_post encrypted metadata rejection");
+    } catch (error) {
+      expect(error).to.be.instanceOf(Cs02TrustPolicyError);
+      expect(error.message).to.match(/encrypted response settings/);
+    }
+  });
+
+  it("rejects remote metadata advertising encrypted response alg/enc arrays for direct_post", async () => {
+    try {
+      await validateCs02ClientMetadataUri(metadataUri, {
+        fetchImpl: mockMetadataFetch({
+          encrypted_response_alg_values_supported: ["ECDH-ES+A256KW"],
+          encrypted_response_enc_values_supported: ["A256GCM"],
+        }),
+        responseMode: "direct_post",
+        strict: true,
+      });
+      expect.fail("expected direct_post encrypted metadata arrays rejection");
+    } catch (error) {
+      expect(error).to.be.instanceOf(Cs02TrustPolicyError);
+      expect(error.message).to.match(/encrypted response settings/);
+    }
+  });
+
+  it("accepts valid HTTPS remote metadata with supported JWKs", async () => {
+    const result = await validateCs02ClientMetadataUri(metadataUri, {
+      fetchImpl: mockMetadataFetch(validMetadata),
+      responseMode: "direct_post",
+      strict: true,
+    });
+    expect(result.ok).to.equal(true);
+    expect(result.metadata.jwks.keys).to.have.length(1);
   });
 });

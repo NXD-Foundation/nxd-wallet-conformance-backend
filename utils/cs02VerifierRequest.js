@@ -5,7 +5,7 @@
 import * as jose from "jose";
 import { validateCs02DcqlQuery } from "../wallet-client/src/lib/cs02DcqlValidation.js";
 import {
-  filterClientMetadataForCs02Enforcement,
+  buildStrictCs02ClientMetadata,
   validateX509SanDnsTrustAnchor as validateX509SanDnsTrustForRequestGeneration,
   validateVerifierAttestationTrust as validateVerifierAttestationForRequestGeneration,
 } from "./cs02TrustPolicy.js";
@@ -309,7 +309,7 @@ export function validateCs02SignedJar(requestJwt, options = { strict: true }) {
 }
 
 export function filterClientMetadataForCs02(clientMetadata, responseMode) {
-  return filterClientMetadataForCs02Enforcement(clientMetadata, responseMode, { strict: true });
+  return buildStrictCs02ClientMetadata(clientMetadata, responseMode);
 }
 
 export {

@@ -1,4 +1,5 @@
 import { expect } from "chai";
+import fs from "fs";
 import * as jose from "jose";
 import { buildVpRequestJWT } from "../utils/cryptoUtils.js";
 import { DEFAULT_DCQL_QUERY } from "../utils/routeUtils.js";
@@ -139,7 +140,25 @@ describe("CS-02 verifier request generation (Phase 3)", () => {
     );
 
     expect(filtered.vp_formats_supported).to.have.keys(["dc+sd-jwt", "vc+sd-jwt", "mso_mdoc"]);
+    expect(filtered.vp_formats_supported["dc+sd-jwt"]["kb-jwt_alg_values"]).to.deep.equal(["ES256"]);
+    expect(filtered).to.not.have.property("encrypted_response_alg_values_supported");
     expect(filtered).to.not.have.property("encrypted_response_enc_values_supported");
+  });
+
+  it("keeps broad verifier-config capabilities out of strict CS-02 metadata", () => {
+    const broadConfig = JSON.parse(fs.readFileSync("./data/verifier-config.json", "utf8"));
+    expect(broadConfig.vp_formats_supported).to.have.property(
+      "https://cloudsignatureconsortium.org/2025/x509",
+    );
+
+    const strict = filterClientMetadataForCs02(broadConfig, "direct_post");
+    expect(strict.vp_formats_supported).to.not.have.property("jwt_vc_json");
+    expect(strict.vp_formats_supported).to.not.have.property(
+      "https://cloudsignatureconsortium.org/2025/x509",
+    );
+    expect(strict.vp_formats_supported["dc+sd-jwt"]["kb-jwt_alg_values"]).to.deep.equal(["ES256"]);
+    expect(strict).to.not.have.property("encrypted_response_alg_values_supported");
+    expect(strict).to.not.have.property("encrypted_response_enc_values_supported");
   });
 
   it("does not reintroduce unsupported metadata formats for direct_post", async () => {
@@ -157,6 +176,7 @@ describe("CS-02 verifier request generation (Phase 3)", () => {
     const payload = jose.decodeJwt(requestJwt);
 
     expect(payload.client_metadata.vp_formats_supported).to.have.keys(["dc+sd-jwt", "mso_mdoc"]);
+    expect(payload.client_metadata).to.not.have.property("encrypted_response_alg_values_supported");
     expect(payload.client_metadata).to.not.have.property("encrypted_response_enc_values_supported");
   });
 

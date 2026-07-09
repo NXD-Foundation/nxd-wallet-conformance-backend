@@ -23,6 +23,7 @@ import {
   validateCs02RequestUriQueryPrecedence,
   validateDidJwkTrustRules,
   validateDidWebKidResolution,
+  resolveCs02EffectiveClientMetadata,
   Cs02TrustPolicyError,
 } from "../../../utils/cs02TrustPolicy.js";
 
@@ -561,9 +562,47 @@ export async function validateAndVerifyCs02AuthorizationRequest(
   }
 
   const verified = await verifyCs02JarSignature(requestJwt, header, payload, options, log);
+
+  let effectiveClientMetadata = null;
+  if (
+    options.strict &&
+    (payload.client_metadata != null || payload.client_metadata_uri != null)
+  ) {
+    try {
+      const resolved = await resolveCs02EffectiveClientMetadata(payload, {
+        fetchImpl: options.fetchImpl,
+        strict: true,
+        log,
+      });
+      effectiveClientMetadata = resolved.effectiveMetadata;
+    } catch (error) {
+      if (error instanceof Cs02TrustPolicyError) {
+        logValidationFailure(log, "client_metadata_uri", { message: error.message });
+        throw new Cs02ValidationError(error.message, error.errorCode);
+      }
+      throw error;
+    }
+  } else if (payload.client_metadata != null || payload.client_metadata_uri != null) {
+    try {
+      const resolved = await resolveCs02EffectiveClientMetadata(payload, {
+        fetchImpl: options.fetchImpl,
+        strict: false,
+        log,
+      });
+      effectiveClientMetadata = resolved.effectiveMetadata;
+    } catch (error) {
+      try {
+        log?.("[CS02] client metadata resolution skipped in compatibility mode", {
+          message: error?.message || String(error),
+        });
+      } catch {}
+    }
+  }
+
   return {
     header: verified.protectedHeader || header,
     payload: verified.payload || payload,
+    effectiveClientMetadata,
   };
 }
 

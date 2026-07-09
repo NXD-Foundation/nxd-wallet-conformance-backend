@@ -467,4 +467,183 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
       }
     });
   });
+
+  describe("client_metadata_uri policy (Phase B)", () => {
+    const metadataUri = "https://verifier.example/client-metadata";
+
+    function validRemoteMetadata(overrides = {}) {
+      return {
+        vp_formats_supported: {
+          "dc+sd-jwt": {
+            "sd-jwt_alg_values": ["ES256"],
+            "kb-jwt_alg_values": ["ES256"],
+          },
+        },
+        jwks: { keys: [{ kty: "EC", crv: "P-256", x: "abc", y: "def", use: "enc", kid: "remote" }] },
+        ...overrides,
+      };
+    }
+
+    function mockMetadataFetch(metadata, { contentType = "application/json", status = 200 } = {}) {
+      return async () => ({
+        ok: status >= 200 && status < 300,
+        status,
+        headers: {
+          get: (name) => (String(name || "").toLowerCase() === "content-type" ? contentType : null),
+        },
+        text: async () => JSON.stringify(metadata),
+      });
+    }
+
+    before(function () {
+      if (!fs.existsSync(ecKeyPath)) {
+        this.skip();
+      }
+    });
+
+    it("rejects http:// client_metadata_uri in strict mode", async () => {
+      const requestJwt = await signJar(
+        baseJarPayload({
+          client_metadata_uri: "http://verifier.example/client-metadata",
+        }),
+      );
+      try {
+        await validateAndVerifyCs02AuthorizationRequest(requestJwt, { options: strictOptions() });
+        expect.fail("expected http client_metadata_uri rejection");
+      } catch (error) {
+        expect(error).to.be.instanceOf(Cs02ValidationError);
+        expect(error.message).to.match(/HTTPS/);
+      }
+    });
+
+    it("rejects relative client_metadata_uri in strict mode", async () => {
+      const requestJwt = await signJar(
+        baseJarPayload({ client_metadata_uri: "/client-metadata" }),
+      );
+      try {
+        await validateAndVerifyCs02AuthorizationRequest(requestJwt, { options: strictOptions() });
+        expect.fail("expected relative client_metadata_uri rejection");
+      } catch (error) {
+        expect(error).to.be.instanceOf(Cs02ValidationError);
+        expect(error.message).to.match(/absolute URI/);
+      }
+    });
+
+    it("rejects remote metadata with unsupported strict CS-02 formats", async () => {
+      const requestJwt = await signJar(
+        baseJarPayload({ client_metadata_uri: metadataUri }),
+      );
+      try {
+        await validateAndVerifyCs02AuthorizationRequest(requestJwt, {
+          options: strictOptions({
+            fetchImpl: mockMetadataFetch({
+              vp_formats_supported: { "jwt_vc_json": { alg_values: ["ES256"] } },
+            }),
+          }),
+        });
+        expect.fail("expected unsupported remote vp format rejection");
+      } catch (error) {
+        expect(error).to.be.instanceOf(Cs02ValidationError);
+        expect(error.message).to.match(/unsupported vp format/);
+      }
+    });
+
+    it("rejects remote metadata with unsupported KB-JWT algs", async () => {
+      const requestJwt = await signJar(
+        baseJarPayload({ client_metadata_uri: metadataUri }),
+      );
+      try {
+        await validateAndVerifyCs02AuthorizationRequest(requestJwt, {
+          options: strictOptions({
+            fetchImpl: mockMetadataFetch({
+              vp_formats_supported: {
+                "dc+sd-jwt": {
+                  "sd-jwt_alg_values": ["ES256"],
+                  "kb-jwt_alg_values": ["ES384"],
+                },
+              },
+            }),
+          }),
+        });
+        expect.fail("expected unsupported remote KB-JWT alg rejection");
+      } catch (error) {
+        expect(error).to.be.instanceOf(Cs02ValidationError);
+        expect(error.message).to.match(/unsupported KB-JWT alg/);
+      }
+    });
+
+    it("rejects remote metadata advertising direct_post encryption settings", async () => {
+      const requestJwt = await signJar(
+        baseJarPayload({
+          response_mode: "direct_post",
+          client_metadata_uri: metadataUri,
+        }),
+      );
+      try {
+        await validateAndVerifyCs02AuthorizationRequest(requestJwt, {
+          options: strictOptions({
+            fetchImpl: mockMetadataFetch({
+              authorization_encrypted_response_alg: "ECDH-ES+A256KW",
+            }),
+          }),
+        });
+        expect.fail("expected direct_post encrypted metadata rejection");
+      } catch (error) {
+        expect(error).to.be.instanceOf(Cs02ValidationError);
+        expect(error.message).to.match(/encrypted response settings/);
+      }
+    });
+
+    it("rejects remote metadata advertising direct_post encrypted response alg/enc arrays", async () => {
+      const requestJwt = await signJar(
+        baseJarPayload({
+          response_mode: "direct_post",
+          client_metadata_uri: metadataUri,
+        }),
+      );
+      try {
+        await validateAndVerifyCs02AuthorizationRequest(requestJwt, {
+          options: strictOptions({
+            fetchImpl: mockMetadataFetch({
+              encrypted_response_alg_values_supported: ["ECDH-ES+A256KW"],
+              encrypted_response_enc_values_supported: ["A256GCM"],
+            }),
+          }),
+        });
+        expect.fail("expected direct_post encrypted metadata arrays rejection");
+      } catch (error) {
+        expect(error).to.be.instanceOf(Cs02ValidationError);
+        expect(error.message).to.match(/encrypted response settings/);
+      }
+    });
+
+    it("accepts valid HTTPS remote metadata with supported JWKs", async () => {
+      const requestJwt = await signJar(
+        baseJarPayload({ client_metadata_uri: metadataUri }),
+      );
+      const verified = await validateAndVerifyCs02AuthorizationRequest(requestJwt, {
+        options: strictOptions({
+          fetchImpl: mockMetadataFetch(validRemoteMetadata()),
+        }),
+      });
+      expect(verified.effectiveClientMetadata.jwks.keys[0].kid).to.equal("remote");
+    });
+
+    it("prefers inline client_metadata over client_metadata_uri metadata", async () => {
+      const requestJwt = await signJar(
+        baseJarPayload({
+          client_metadata_uri: metadataUri,
+          client_metadata: {
+            jwks: { keys: [{ kid: "inline", kty: "EC", crv: "P-256", x: "abc", y: "def" }] },
+          },
+        }),
+      );
+      const verified = await validateAndVerifyCs02AuthorizationRequest(requestJwt, {
+        options: strictOptions({
+          fetchImpl: mockMetadataFetch(validRemoteMetadata()),
+        }),
+      });
+      expect(verified.effectiveClientMetadata.jwks.keys[0].kid).to.equal("inline");
+    });
+  });
 });

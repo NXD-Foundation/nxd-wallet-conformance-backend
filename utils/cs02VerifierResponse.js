@@ -8,6 +8,7 @@ import {
   importJWK,
   jwtVerify,
 } from "jose";
+import { createHash } from "crypto";
 import {
   extractKeyBindingJwtFromSdJwt,
   validateSdJwtKeyBindingMatchesCredential,
@@ -57,6 +58,7 @@ function isPlainObject(value) {
 }
 
 const SD_JWT_FORMATS = new Set(["dc+sd-jwt", "vc+sd-jwt"]);
+const CS02_ISSUER_SD_JWT_ALGS = new Set(["ES256", "ES384"]);
 
 export function normalizeDcqlVpToken(vpToken) {
   if (vpToken == null) return vpToken;
@@ -481,16 +483,259 @@ export function validateCs02KeyBindingJwtClaims({
   }
 }
 
+function parseSdJwtPresentation(sdJwt) {
+  if (typeof sdJwt !== "string" || sdJwt.length === 0) {
+    throw new Cs02VerifierResponseError("SD-JWT-VC presentation must be a non-empty string", "invalid_vp_token");
+  }
+  const [issuerJwt, ...tail] = sdJwt.split("~");
+  if (!issuerJwt || issuerJwt.split(".").length !== 3) {
+    throw new Cs02VerifierResponseError("SD-JWT-VC issuer-signed JWT must be compact JWS", "invalid_credential");
+  }
+
+  const nonEmptyTail = tail.filter((part) => part.length > 0);
+  const last = nonEmptyTail[nonEmptyTail.length - 1];
+  const hasKbJwt = last && last.split(".").length === 3;
+  return {
+    issuerJwt,
+    disclosures: hasKbJwt ? nonEmptyTail.slice(0, -1) : nonEmptyTail,
+    kbJwt: hasKbJwt ? last : null,
+  };
+}
+
+function decodeDisclosure(disclosure) {
+  let decoded;
+  try {
+    decoded = JSON.parse(Buffer.from(disclosure, "base64url").toString("utf8"));
+  } catch {
+    throw new Cs02VerifierResponseError("SD-JWT disclosure is not valid base64url JSON", "invalid_credential");
+  }
+  if (!Array.isArray(decoded) || decoded.length < 3 || typeof decoded[1] !== "string") {
+    throw new Cs02VerifierResponseError("SD-JWT disclosure must contain salt, claim name, and value", "invalid_credential");
+  }
+  return {
+    salt: decoded[0],
+    claimName: decoded[1],
+    value: decoded[2],
+  };
+}
+
+function digestDisclosure(disclosure, sdAlg = "sha-256") {
+  const normalized = String(sdAlg || "sha-256").toLowerCase();
+  if (normalized !== "sha-256") {
+    throw new Cs02VerifierResponseError(
+      `Unsupported SD-JWT disclosure digest algorithm "${sdAlg}"`,
+      "invalid_credential",
+    );
+  }
+  return createHash("sha256").update(disclosure, "ascii").digest("base64url");
+}
+
+function reconstructTopLevelSdJwtClaims(issuerPayload, disclosures) {
+  const reconstructed = { ...(issuerPayload || {}) };
+  const expectedDigests = new Set(Array.isArray(issuerPayload?._sd) ? issuerPayload._sd : []);
+  const disclosedClaimNames = [];
+
+  for (const disclosure of disclosures) {
+    const digest = digestDisclosure(disclosure, issuerPayload?._sd_alg);
+    if (!expectedDigests.has(digest)) {
+      throw new Cs02VerifierResponseError(
+        "SD-JWT disclosure digest does not match issuer-signed payload",
+        "invalid_credential",
+      );
+    }
+    const { claimName, value } = decodeDisclosure(disclosure);
+    reconstructed[claimName] = value;
+    disclosedClaimNames.push(claimName);
+  }
+
+  delete reconstructed._sd;
+  delete reconstructed._sd_alg;
+  return { claims: reconstructed, disclosedClaimNames };
+}
+
+function requestedTopLevelClaimNames(credQuery) {
+  const names = new Set();
+  for (const claim of credQuery?.claims || []) {
+    const path = claim?.path;
+    if (!Array.isArray(path) || path.length === 0) continue;
+    if (path.every((segment) => typeof segment === "string" && segment.length > 0)) {
+      names.add(path[0]);
+    }
+  }
+  return names;
+}
+
+function getPathValue(object, path) {
+  if (!Array.isArray(path) || path.length === 0) return undefined;
+  let current = object;
+  for (const segment of path) {
+    if (typeof segment !== "string" || segment.length === 0) return undefined;
+    if (!current || typeof current !== "object") return undefined;
+    current = current[segment];
+  }
+  return current;
+}
+
+function validateIssuerCredentialClaims({
+  issuerPayload,
+  reconstructedClaims,
+  disclosedClaimNames,
+  credQuery,
+  holderBindingRequired = true,
+  rejectUnsolicitedDisclosures = true,
+  clockTolerance = 300,
+}) {
+  if (typeof issuerPayload?.iss !== "string" || issuerPayload.iss.length === 0) {
+    throw new Cs02VerifierResponseError("SD-JWT-VC issuer payload is missing iss", "invalid_credential");
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  if (issuerPayload.iat != null) {
+    if (typeof issuerPayload.iat !== "number" || issuerPayload.iat > now + clockTolerance) {
+      throw new Cs02VerifierResponseError("SD-JWT-VC issuer iat is outside accepted clock skew", "invalid_credential");
+    }
+  }
+  if (issuerPayload.exp != null) {
+    if (typeof issuerPayload.exp !== "number" || issuerPayload.exp <= now - clockTolerance) {
+      throw new Cs02VerifierResponseError("SD-JWT-VC issuer exp is expired", "invalid_credential");
+    }
+  }
+
+  if (holderBindingRequired && !issuerPayload.cnf?.jwk) {
+    throw new Cs02VerifierResponseError("SD-JWT-VC issuer payload is missing cnf.jwk", "invalid_credential");
+  }
+
+  const vctValues = Array.isArray(credQuery?.meta?.vct_values) ? credQuery.meta.vct_values : [];
+  if (vctValues.length > 0 && !vctValues.includes(reconstructedClaims?.vct)) {
+    throw new Cs02VerifierResponseError("SD-JWT-VC vct does not satisfy DCQL request", "invalid_credential");
+  }
+
+  const requestedClaimNames = requestedTopLevelClaimNames(credQuery);
+  for (const claim of credQuery?.claims || []) {
+    if (Array.isArray(claim?.path) && getPathValue(reconstructedClaims, claim.path) === undefined) {
+      throw new Cs02VerifierResponseError(
+        `SD-JWT-VC is missing requested claim path "${claim.path.join(".")}"`,
+        "invalid_credential",
+      );
+    }
+  }
+
+  if (rejectUnsolicitedDisclosures && requestedClaimNames.size > 0) {
+    for (const claimName of disclosedClaimNames) {
+      if (!requestedClaimNames.has(claimName)) {
+        throw new Cs02VerifierResponseError(
+          `SD-JWT-VC includes unsolicited disclosed claim "${claimName}"`,
+          "invalid_credential",
+        );
+      }
+    }
+  }
+}
+
+async function resolveIssuerVerificationKey({ header, payload, options }) {
+  if (options?.issuerVerificationKey) return options.issuerVerificationKey;
+  if (options?.issuerVerificationJwk) return importJWK(options.issuerVerificationJwk, header.alg);
+  if (typeof options?.resolveIssuerVerificationKey === "function") {
+    const key = await options.resolveIssuerVerificationKey({ header, payload });
+    if (!key) return null;
+    if (key.type === "public" || key.type === "private" || key.constructor?.name?.includes("Key")) return key;
+    return importJWK(key, header.alg);
+  }
+  if (Array.isArray(options?.issuerJwks?.keys)) {
+    const jwk = options.issuerJwks.keys.find((candidate) => {
+      if (header.kid && candidate.kid && candidate.kid !== header.kid) return false;
+      if (candidate.use && candidate.use !== "sig") return false;
+      if (candidate.alg && candidate.alg !== header.alg) return false;
+      return true;
+    });
+    if (jwk) return importJWK(jwk, header.alg);
+  }
+  return null;
+}
+
+export async function validateCs02SdJwtIssuerAuthenticity({
+  sdJwt,
+  credQuery,
+  options = { strict: true },
+} = {}) {
+  if (!options.strict) return { ok: true, skipped: true };
+
+  const { issuerJwt, disclosures } = parseSdJwtPresentation(sdJwt);
+  const header = decodeProtectedHeader(issuerJwt);
+  if (!header.alg || String(header.alg).toLowerCase() === "none") {
+    throw new Cs02VerifierResponseError("SD-JWT-VC issuer JWT must use a supported alg", "invalid_credential");
+  }
+  if (!CS02_ISSUER_SD_JWT_ALGS.has(header.alg)) {
+    throw new Cs02VerifierResponseError(
+      `Unsupported SD-JWT-VC issuer alg "${header.alg}"`,
+      "invalid_credential",
+    );
+  }
+
+  const issuerPayload = decodeJwt(issuerJwt);
+  const verificationKey = await resolveIssuerVerificationKey({ header, payload: issuerPayload, options });
+  let issuerSignature = {
+    verified: false,
+    enforced: false,
+    placeholder: true,
+    reason: "no issuer verification key source configured",
+  };
+  if (verificationKey) {
+    try {
+      await jwtVerify(issuerJwt, verificationKey, { clockTolerance: options.clockTolerance ?? 300 });
+    } catch {
+      throw new Cs02VerifierResponseError(
+        "SD-JWT-VC issuer signature verification failed",
+        "invalid_credential",
+      );
+    }
+    issuerSignature = {
+      verified: true,
+      enforced: true,
+      placeholder: false,
+      alg: header.alg,
+      kid: header.kid ?? null,
+    };
+  }
+
+  const { claims, disclosedClaimNames } = reconstructTopLevelSdJwtClaims(issuerPayload, disclosures);
+  validateIssuerCredentialClaims({
+    issuerPayload,
+    reconstructedClaims: claims,
+    disclosedClaimNames,
+    credQuery,
+    holderBindingRequired: options.holderBindingRequired !== false,
+    rejectUnsolicitedDisclosures: options.rejectUnsolicitedDisclosures !== false,
+    clockTolerance: options.clockTolerance ?? 300,
+  });
+
+  return {
+    ok: true,
+    header,
+    issuerPayload,
+    claims,
+    disclosedClaimNames,
+    issuerSignature,
+  };
+}
+
 export async function validateCs02SdJwtPresentation({
   sdJwt,
   sessionNonce,
   clientId,
   computeSdHash,
+  credQuery,
   options = { strict: true },
 }) {
   if (!options.strict || typeof sdJwt !== "string" || sdJwt.length === 0) {
     return { ok: true };
   }
+
+  const issuerAuthenticity = await validateCs02SdJwtIssuerAuthenticity({
+    sdJwt,
+    credQuery,
+    options,
+  });
 
   const kbJwt = extractKeyBindingJwtFromSdJwt(sdJwt);
   if (!kbJwt) {
@@ -502,7 +747,15 @@ export async function validateCs02SdJwtPresentation({
 
   const kbHeader = decodeProtectedHeader(kbJwt);
   const kbPayload = decodeJwt(kbJwt);
-  const verified = await validateSdJwtKeyBindingMatchesCredential({ sdJwt });
+  let verified;
+  try {
+    verified = await validateSdJwtKeyBindingMatchesCredential({ sdJwt });
+  } catch (error) {
+    throw new Cs02VerifierResponseError(
+      error?.message || "SD-JWT key binding validation failed",
+      "invalid_key_binding_jwt",
+    );
+  }
 
   validateCs02KeyBindingJwtClaims({
     kbHeader,
@@ -522,8 +775,8 @@ export async function validateCs02SdJwtPresentation({
     }
   }
 
-  const issuerPayload = decodeJwt(sdJwt.split("~")[0]);
-  await validateCs02IssuerTrust(issuerPayload?.iss, resolveCs02TrustPolicyOptions());
+  const issuerPayload = issuerAuthenticity.issuerPayload;
+  const issuerTrust = await validateCs02IssuerTrust(issuerPayload?.iss, resolveCs02TrustPolicyOptions());
   try {
     await validateCs02CredentialStatusList(sdJwt);
   } catch (error) {
@@ -533,7 +786,11 @@ export async function validateCs02SdJwtPresentation({
     throw error;
   }
 
-  return verified;
+  return {
+    ...verified,
+    issuerAuthenticity,
+    issuerTrust,
+  };
 }
 
 export async function validateCs02SdJwtEntriesInVpToken(
@@ -556,7 +813,15 @@ export async function validateCs02SdJwtEntriesInVpToken(
         sessionNonce: context.sessionNonce,
         clientId: context.clientId,
         computeSdHash: context.computeSdHash,
-        options,
+        credQuery,
+        options: {
+          ...options,
+          resolveIssuerVerificationKey: context.resolveIssuerVerificationKey,
+          issuerVerificationKey: context.issuerVerificationKey,
+          issuerVerificationJwk: context.issuerVerificationJwk,
+          issuerJwks: context.issuerJwks,
+          rejectUnsolicitedDisclosures: context.rejectUnsolicitedDisclosures,
+        },
       });
     }
   }
