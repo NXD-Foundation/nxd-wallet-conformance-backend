@@ -11,11 +11,11 @@ The remaining CS-02-critical issues are:
 - exact `did:web` `kid` binding in the wallet JAR verification path
 - strict `client_metadata_uri` validation and remote metadata policy
 - verifier metadata consistency for strict CS-02 mode
-- SD-JWT-VC issuer signature and configured issuer trust validation
+- SD-JWT-VC issuer signature validation where local/test key material exists; configured issuer trust remains out of scope
 - future status-list enforcement once trust framework inputs exist
 - production `x509_san_dns` and `verifier_attestation` trust checks once trust anchors/trusted issuers exist
 - disclosure/request-constraint hardening beyond the current DCQL subset
-- explicit holder consent gating or documented integration boundary
+- holder consent documented as intentionally out of scope because `wallet-client` is a headless test wallet
 - tests that lock the above behavior into strict CS-02 mode
 
 ## Phase A: DID Trust Policy Wiring
@@ -107,7 +107,9 @@ Goal: ensure verifier metadata and request-time metadata advertise only what str
 Required verifier metadata changes:
 
 - Audit every place that loads or publishes `data/verifier-config.json`.
-- Decide whether `data/verifier-config.json` should be strict CS-02 by default or whether strict metadata should be produced through a filtered view.
+- Keep `data/verifier-config.json` as the broad verifier capability/config source unless a separate strict fixture is introduced.
+- Produce strict CS-02 metadata through a filtered view for CS-02 request objects and CS-02 metadata publication.
+- Do not mutate or narrow compatibility/CS-03 source configuration solely to satisfy strict CS-02 metadata rules.
 - In strict CS-02 mode, advertise only:
   - `dc+sd-jwt`
   - `vc+sd-jwt`
@@ -117,8 +119,8 @@ Required verifier metadata changes:
   - response modes that the verifier validates
   - JWE algorithms and enc values that are actually accepted by `validateCs02JweResponseHeader`
 - Remove `jwt_vc_json` from strict CS-02 metadata.
-- Remove `https://cloudsignatureconsortium.org/2025/x509` from strict CS-02 metadata unless it is part of a distinct compatibility or CS-03 route.
-- Remove `ES384` from `kb-jwt_alg_values` in strict CS-02 metadata unless verifier-side KB-JWT validation is expanded to accept and verify ES384.
+- Remove `https://cloudsignatureconsortium.org/2025/x509` from strict CS-02 metadata, but keep it allowed in distinct CS-03 or compatibility metadata/routes.
+- Remove `ES384` from `kb-jwt_alg_values` in strict CS-02 metadata. Keep ES384 out unless a concrete CS-03 or future profile requirement needs it and verifier-side KB-JWT validation is expanded accordingly.
 - For `direct_post`, remove all encrypted-response metadata:
   - `encrypted_response_alg_values_supported`
   - `encrypted_response_enc_values_supported`
@@ -131,7 +133,8 @@ Required verifier metadata changes:
 Required publication policy:
 
 - If public verifier metadata endpoints exist or are added, expose a strict CS-02 filtered metadata document for CS-02 routes.
-- Keep compatibility metadata separate and clearly named.
+- Keep CS-03 metadata separate and clearly named, including `https://cloudsignatureconsortium.org/2025/x509` where that route/profile needs it.
+- Keep other compatibility metadata separate and clearly named.
 - Do not let a compatibility route silently feed unsupported metadata into strict CS-02 JAR generation.
 - Document the difference between strict CS-02 metadata and legacy/compatibility metadata.
 
@@ -142,7 +145,7 @@ Required tests:
 - Unit test strict metadata filtering keeps `mso_mdoc`.
 - Unit test KB-JWT alg filtering keeps only ES256.
 - Add a route or builder test proving generated strict CS-02 request objects do not contain unsupported metadata.
-- Add a metadata fixture test that fails if `data/verifier-config.json` is used directly in strict CS-02 without filtering.
+- Add a metadata fixture test that fails if broad `data/verifier-config.json` capabilities are used directly in strict CS-02 without filtering.
 
 Acceptance criteria:
 
@@ -150,9 +153,9 @@ Acceptance criteria:
 - Compatibility metadata cannot leak unsupported formats/algorithms into strict CS-02 request objects.
 - Metadata tests fail if unsupported strict-mode formats or algs are reintroduced.
 
-## Phase D: SD-JWT-VC Issuer Authenticity And Trust
+## Phase D: SD-JWT-VC Issuer Authenticity
 
-Goal: move from holder-binding-only validation to real SD-JWT-VC issuer authenticity validation.
+Goal: move from holder-binding-only validation toward SD-JWT-VC issuer authenticity checks, while keeping configured issuer trust intentionally out of scope until a trust framework exists.
 
 Required verifier changes:
 
@@ -160,12 +163,8 @@ Required verifier changes:
 - Decode the issuer-signed JWT segment of the SD-JWT.
 - Require a protected header with a supported issuer signing algorithm.
 - Reject `alg=none` and unsupported issuer signing algorithms.
-- Resolve issuer verification keys from configured trusted issuer metadata.
-- Support at least one configured trust source:
-  - explicit issuer allowlist with JWKS/JWKS URI
-  - local trusted issuer configuration file
-  - existing issuer metadata if already validated through a trusted path
-- Verify the issuer-signed JWT signature before accepting any disclosed claims.
+- Verify the issuer-signed JWT signature before accepting any disclosed claims when an issuer verification key is available through existing local/test metadata.
+- If no trusted issuer key source exists, keep the current placeholder behavior explicit and do not pretend issuer trust was enforced.
 - Require expected issuer claims:
   - `iss`
   - `iat` when present to be sane
@@ -175,31 +174,31 @@ Required verifier changes:
 - Validate that presented disclosures reconstruct against the issuer-signed SD-JWT payload.
 - Verify that requested DCQL claim paths are present after disclosure reconstruction.
 - Reject unsolicited disclosed claims in strict CS-02 mode unless explicitly allowed by the request.
-- Run issuer trust validation before status-list trust decisions.
+- Invoke the existing issuer-trust placeholder before status-list decisions, but keep configured trusted issuer enforcement intentionally out of scope for now.
 
-Required trust-policy changes:
+Issuer trust-framework scope decision:
 
-- Extend `validateCs02IssuerTrust` to read configured trusted issuers.
-- Keep default behavior as placeholder only if no trusted issuer config exists, but return a visible marker that issuer trust was not enforced.
-- Add an environment/config flag for strict issuer trust once configuration exists.
-- Define a stable error code for untrusted issuer, for example `invalid_credential`.
-- Keep logs concise: issuer identifier, key id, configured trust source, and reason for failure.
+- Do not implement configured trusted issuer loading in this phase.
+- Do not add a strict issuer-trust environment flag until the trust framework exists.
+- Keep `validateCs02IssuerTrust` as a placeholder method returning a visible marker that issuer trust was not enforced.
+- Keep future trusted issuer behavior documented as TODO, including issuer allowlists, JWKS/JWKS URI trust sources, trust-registry integration, and stable `invalid_credential` errors for untrusted issuers.
+- Keep logs concise: issuer identifier, key id if available, and whether issuer trust was placeholder-only.
 
 Required tests:
 
 - Reject SD-JWT with invalid issuer signature.
 - Reject SD-JWT with unsupported issuer alg.
 - Reject SD-JWT missing `cnf.jwk` when holder binding is required.
-- Reject SD-JWT from untrusted issuer when trust config is present.
-- Accept SD-JWT from trusted issuer with valid signature and matching `cnf.jwk`.
+- Add skipped/TODO tests for rejecting untrusted issuers once trust config exists.
+- Accept SD-JWT with valid issuer signature and matching `cnf.jwk` when local/test issuer key material is available.
 - Reject presented disclosures that do not reconstruct.
 - Reject missing requested claims.
 - Reject unsolicited disclosures in strict mode if policy is enabled.
 
 Acceptance criteria:
 
-- Verifier does not mark a CS-02 SD-JWT presentation successful based only on KB-JWT holder binding.
-- Issuer signature and configured issuer trust are verified when trust configuration exists.
+- Verifier does not mark a CS-02 SD-JWT presentation successful based only on KB-JWT holder binding when issuer key material is available for signature verification.
+- Configured issuer trust remains intentionally out of scope until a trust framework exists.
 - Placeholder/no-trust-framework behavior is explicit and test-covered.
 
 ## Phase E: Status-List Enforcement Readiness
@@ -347,42 +346,34 @@ Acceptance criteria:
 - The wallet only discloses what the strict DCQL request allows.
 - The verifier validates that the received presentation satisfies the original request constraints, not just the holder-binding proof.
 
-## Phase H: Holder Consent Gate
+## Phase H: Headless Wallet Consent Scope
 
-Goal: ensure CS-02 flows cannot silently present credentials without a holder consent decision.
+Goal: document that holder consent is intentionally out of scope for this repo because `wallet-client` is a headless test wallet used for issuer/verifier testing, not an end-user wallet UI.
 
-Required design decision:
+Scope decision:
 
-- Decide whether `wallet-client/src/lib/presentation.js` is a low-level automation library or an end-user wallet flow.
-- If it is a low-level library, document that callers must provide a consent gate before invoking presentation generation.
-- If it is an end-user wallet flow, add an explicit consent step before presentation generation.
+- Treat `wallet-client/src/lib/presentation.js` as a low-level/headless automation library.
+- Do not add an interactive consent callback or approval UI to this repo.
+- Do not block test presentations solely because no human consent decision exists.
+- Document that any production end-user wallet wrapping this code must add its own consent gate before invoking presentation generation.
 
-Required implementation if consent is enforced in this repo:
+Required documentation changes:
 
-- Add a consent callback or approval object to the presentation flow.
-- Present the verifier identity, requested credential query ids, requested claim paths, response mode, and transaction data summary to the consent layer.
-- Require a positive consent decision before credential selection or before presentation generation.
-- Return a protocol error such as `access_denied` when the holder declines.
-- Do not store raw credentials in consent logs.
-- Record only consent decision metadata:
-  - session id
-  - verifier client id
-  - requested credential ids
-  - requested claim paths
-  - decision timestamp
-  - accepted/declined
+- Add a short note to the relevant wallet/client documentation that this is a headless testing wallet.
+- State that holder consent is out of scope for this repo.
+- State that production wallet integrations must present verifier identity, requested credential query ids, requested claim paths, response mode, and transaction data summary before calling the presentation flow.
+- State that production wallet integrations must return a protocol error such as `access_denied` when the holder declines.
+- State that production consent logs must not include raw credentials or private key material.
 
 Required tests:
 
-- Presentation generation is blocked when no consent callback/decision is provided in strict end-user mode.
-- Declined consent returns `access_denied`.
-- Accepted consent allows the happy path to continue.
-- Consent logs do not include raw credentials or private key material.
+- No runtime consent gate tests are required in this repo while it remains a headless test wallet.
+- Add or update a documentation/README assertion test only if the project already has documentation linting.
 
 Acceptance criteria:
 
-- CS-02 strict presentation cannot silently auto-present in the end-user wallet path.
-- If consent is external to this repo, the boundary is documented and tested through an explicit adapter contract.
+- The remaining-issues coverage and plan clearly mark holder consent as out of scope for the headless test wallet.
+- No implementation work is required unless this repo becomes an end-user wallet.
 
 ## Phase I: Tests, Fixtures, And Regression Gates
 
@@ -402,7 +393,7 @@ Add or update tests in these areas:
 - `wallet-client/test/presentationKeyBinding.test.js`
   - no unsolicited disclosures
   - missing requested disclosures
-  - consent behavior if implemented in wallet flow
+  - no consent runtime tests required while wallet-client remains a headless test wallet
 - `tests/cs02TrustPolicy.test.js`
   - direct_post deletes encrypted alg and enc metadata
   - `did:web` HTTPS and exact `kid` matching
@@ -443,11 +434,11 @@ The remaining alignment work is complete when:
 - Strict wallet validation rejects invalid `client_metadata_uri` and validates fetched metadata before use.
 - Strict verifier metadata advertises only the formats, algorithms, response modes, and encryption options enforced at runtime.
 - `direct_post` metadata does not advertise encrypted response settings.
-- SD-JWT-VC issuer signatures are verified and issuer trust is enforced when trust configuration exists.
+- SD-JWT-VC issuer signatures are verified when local/test key material exists; configured issuer trust remains explicitly out of scope until a trust framework exists.
 - Status-list validation remains explicitly placeholder-only without trust config and becomes enforceable without changing callers when trust config is added.
 - x509 and verifier-attestation placeholder methods remain callable now and become enforcing when anchors/trusted issuers are configured.
 - The wallet and verifier enforce request/disclosure constraints beyond holder-binding proof.
-- Holder consent is either enforced in the wallet flow or documented as an explicit caller responsibility with a tested adapter boundary.
+- Holder consent is documented as intentionally out of scope for this headless test wallet; production wrappers must implement consent externally.
 - Focused CS-02 tests cover all high-priority remaining gaps.
 
 ## Assumptions And Defaults
