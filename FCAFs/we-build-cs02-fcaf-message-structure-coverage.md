@@ -2,50 +2,57 @@
 
 This report cross-references the FCAFS MessageStructure analysis in `/home/ni/code/fcafs/message-structure-analysis` with the WE BUILD CS-02 constrained presentation profile in `docs/core/cs-02-credential-presentation (1).md`.
 
-The source FCAFS report is broad: it evaluates verifier and wallet behavior against 236 EC FCAF MessageStructure specs. CS-02 is narrower. It makes OpenID4VP, signed JAR, DCQL, `openid4vp://present`, SD-JWT-VC selective disclosure, ES256/P-256, nonce/audience binding, and Presentation Response validation the relevant target. ISO mdoc, CWT, JSON serialization, OpenID Federation, and some broader FCAF client identifier variants are useful interoperability capabilities, but they are not the core WE BUILD CS-02 target.
+The source FCAFS report is broad: it evaluates verifier and wallet behavior against 236 EC FCAF MessageStructure specs. CS-02 is narrower. It makes OpenID4VP, signed JAR, DCQL, `openid4vp://present`, SD-JWT-VC selective disclosure, ES256/P-256, nonce/audience binding, and Presentation Response validation the relevant target. ISO mdoc remains supported in this repo for practical compatibility. CWT, JSON serialization, OpenID Federation, and broader client identifier variants remain useful interoperability work, but they are not the first WE BUILD CS-02 alignment target.
 
 ## WE BUILD CS-02 Target Profile
 
-CS-02 requires:
-
-| Area | CS-02 requirement | Local reference |
+| Area | CS-02 requirement | Current implementation status |
 |---|---|---|
-| Request protection | All authorization requests must be signed JARs. | `docs/core/cs-02-credential-presentation (1).md:99`, `:128`, `:136`, `:269` |
-| Credential query | DCQL must be used. | `docs/core/cs-02-credential-presentation (1).md:102` |
-| Invocation | Wallet invocation uses `openid4vp://present?request_uri=<URL>`. | `docs/core/cs-02-credential-presentation (1).md:140` |
-| Wallet validation | Wallet validates request signature, nonce freshness, audience, expiry, credential types, disclosure constraints, and integrity. | `docs/core/cs-02-credential-presentation (1).md:150` |
-| Credential format | SD-JWT-VC selective disclosure is mandatory. | `docs/core/cs-02-credential-presentation (1).md:177`, `:251` |
-| Holder binding | KB-JWT is mandatory for SD-JWT VCs and must bind proof to nonce and audience. | `docs/core/cs-02-credential-presentation (1).md:105`, `:179`, `:254` |
-| Verifier response validation | Verifier validates presentation proof signature, credential authenticity, WUA validity, disclosure integrity, holder binding, nonce/audience binding, and request constraints. | `docs/core/cs-02-credential-presentation (1).md:271` |
-| Verifier metadata | Verifier metadata must be published. | `docs/core/cs-02-credential-presentation (1).md:282`, `:284` |
+| Request protection | All authorization requests must be signed JARs. | Mostly covered by `wallet-client/src/lib/cs02RequestValidation.js` and `utils/cs02VerifierRequest.js`. |
+| Credential query | DCQL must be used. | Covered for strict CS-02 paths by `wallet-client/src/lib/cs02DcqlValidation.js`; verifier generation also validates DCQL. |
+| Invocation | Wallet invocation uses `openid4vp://present?request_uri=<URL>`. | Covered; legacy invocation can be gated by compatibility flags. |
+| Wallet validation | Wallet validates request signature, nonce freshness, audience, expiry, credential types, disclosure constraints, and integrity. | Much improved; remaining gaps are `did:web` kid enforcement, `client_metadata_uri` policy wiring, and some disclosure/request-integrity edge cases. |
+| Credential format | SD-JWT-VC selective disclosure is mandatory. | Covered/partial for `dc+sd-jwt` and `vc+sd-jwt`; `mso_mdoc` remains allowed; other formats are compatibility-mode only. |
+| Holder binding | KB-JWT is mandatory for SD-JWT VCs and must bind proof to nonce and audience. | Covered for generated wallet responses and verifier checks. |
+| Verifier response validation | Verifier validates presentation proof signature, credential authenticity, WUA validity, disclosure integrity, holder binding, nonce/audience binding, and request constraints. | Much improved; verifier now validates response mode, DCQL shape, outer response JWT, KB-JWT claims, `sd_hash`, and invokes status/trust placeholders. Issuer trust and full disclosure/authenticity validation remain incomplete. |
+| Verifier metadata | Verifier metadata must be published and match runtime enforcement. | Partial; inline request metadata is filtered/validated, but static metadata still advertises broader formats/algorithms. |
 
 ## Updated End-to-End Flow Coverage
 
-```
+```text
 Verifier -> Wallet (OpenID4VP / CS-02)
-  Verifier creates signed JAR with DCQL, nonce, state, exp, client_id, response_uri
+  Verifier creates ES256 signed JAR with DCQL, nonce, state, exp, client_id, response_uri
   -> Wallet is invoked through openid4vp://present?request_uri=...
   -> Wallet fetches request object by GET or POST
-  -> Wallet verifies signed request object and selects credential using DCQL
-  -> Wallet filters SD-JWT disclosures and creates KB-JWT
-  -> Wallet posts vp_token to Presentation Response Endpoint
-  -> Verifier checks state, nonce, audience, sd_hash, cnf-bound KB-JWT, and requested claims
+  -> Wallet validates JAR header/payload/signature and DCQL before selection
+  -> Wallet selects one or more matching credentials, filters SD-JWT disclosures, and creates KB-JWT
+  -> Wallet posts vp_token or response JWT/JWE to Presentation Response Endpoint
+  -> Verifier validates response mode, state, DCQL response shape, KB-JWT nonce/aud/sd_hash/cnf binding
+  -> Verifier invokes issuer-trust and status-list placeholders before success
 ```
 
-The current repo has improved over the older merged FCAFS report in several CS-02-critical areas:
+## Current Implementation Improvements
 
 | Capability | Status | Evidence |
 |---|---|---|
-| `openid4vp://present` invocation | Covered | Wallet parser accepts `present` authority and rejects other non-empty authorities in `wallet-client/src/lib/presentation.js:104`. |
-| Signed request requirement | Mostly covered | Wallet rejects `alg=none` and verifies JARs using x5c, metadata JWKS/JWKS URI, or DID material in `wallet-client/src/lib/presentation.js:244`. Verifier signs x509 and DID request objects in `utils/cryptoUtils.js:486` and `:572`. |
-| DCQL-only request generation | Covered in builder | Builder rejects `presentation_definition` and emits `dcql_query` in `utils/cryptoUtils.js:418`. |
-| Request URI GET/POST | Covered | Wallet fetches request object with GET or POST in `wallet-client/src/lib/presentation.js:126`. |
-| Transaction data binding to DCQL ids | Covered/partial | Verifier validates encoded `credential_ids` when parseable in `utils/cryptoUtils.js:430`; wallet treats invalid transaction data as fatal in `wallet-client/src/lib/presentation.js:560`. |
-| SD-JWT selective disclosure | Covered/partial | Wallet filters disclosures by DCQL claim paths in `wallet-client/src/lib/presentation.js:828` and `wallet-client/src/lib/sdJwtDisclosureSelection.js`. This is functional but not full DCQL structural validation. |
-| KB-JWT generation | Covered | Wallet resolves holder key material and creates KB-JWT with nonce, audience, and `sd_hash` in `wallet-client/src/lib/presentation.js:840`. |
-| DCQL response object | Covered for selected credential | Wallet returns `vp_token` as object keyed by DCQL credential id in `wallet-client/src/lib/presentation.js:1019`. |
-| Verifier nonce/audience/key-binding checks | Covered/partial | Verifier checks nonce, audience, `sd_hash`, and `cnf.jwk` signature binding in `routes/verify/verifierRoutes.js` and `utils/sdJwtKeyBinding.js`. |
-| Verifier response JWT signature validation | Missing/partial | Existing docs still note that `direct_post.jwt` unencrypted responses are decoded before full outer response JWT signature verification. |
+| `openid4vp://present` invocation | Covered | `parseOpenId4VpDeepLink` is used before request fetch in `wallet-client/src/lib/presentation.js`; strict options come from `resolveCs02ValidationOptions`. |
+| Signed request requirement | Mostly covered | `validateCs02JarHeader`, `validateCs02JarPayload`, and `verifyCs02JarSignature` enforce signed JAR behavior in `wallet-client/src/lib/cs02RequestValidation.js`. |
+| JAR `typ` and `alg` | Covered for strict CS-02 | `CS02_JAR_TYP` and `CS02_ALLOWED_ALGS` enforce `oauth-authz-req+jwt` and `ES256`. |
+| Request URI GET/POST | Covered | `fetchCs02AuthorizationRequestJwt` supports allowed request URI methods and strict content-type policy. |
+| HTTPS `request_uri` | Covered with dev override | Strict mode requires HTTPS unless `CS02_ALLOW_HTTP` is enabled. |
+| DCQL-only request validation | Covered | `validateCs02PresentationQuery` rejects `presentation_definition`, scope-only queries, combined `scope` + `dcql_query`, and missing `dcql_query` in strict mode. |
+| DCQL structural validation | Mostly covered | `validateCs02DcqlQuery` checks non-empty credentials, ids, duplicate ids, formats, `meta`, claim paths, `claim_sets`, `credential_sets`, `multiple`, and holder-binding policy. |
+| `trusted_authorities` | Placeholder/advisory | `validateCs02TrustedAuthoritiesPolicy` logs and ignores constraints until a trust registry is configured, matching the current project policy. |
+| Multiple credential responses | Covered | `selectWalletCredentialsForDcql` honors `multiple=true`, and `buildCs02VpTokenObject` emits arrays for multi-credential entries. |
+| SD-JWT selective disclosure | Covered/partial | Wallet filters disclosures by requested DCQL claim paths; full disclosure integrity is still stronger on holder-binding than on all requested/unsolicited claim edge cases. |
+| KB-JWT generation | Covered | Wallet generates KB-JWT with nonce, audience, `iat`, and `sd_hash`; verifier validates those claims. |
+| Verifier response mode validation | Covered | `validateCs02ResponseSubmission` rejects bare `vp_token` for `direct_post.jwt`, wrong-mode submissions, missing response, and missing state. |
+| DCQL response object validation | Covered | `validateCs02DcqlVpTokenResponse` rejects non-object tokens, unknown ids, missing required ids, wrong credential-set satisfaction, bad arrays, and multiple values unless `multiple=true`. |
+| `direct_post.jwt` outer JWT validation | Mostly covered | `verifyCs02OuterResponseJwt` validates signature when a verification key is resolvable and checks `iss`, `aud`, `iat`, `exp`, and `state`. |
+| JWE response header validation | Covered/partial | `validateCs02JweResponseHeader` checks `alg`, `enc`, and `kid` against metadata; allowed defaults still include broader compatibility algorithms. |
+| Status-list validation | Placeholder covered | `validateCs02CredentialStatusList` decodes SD-JWT issuer payload and validates `status.status_list.idx` plus HTTPS absolute `uri`; missing status is allowed unless strict status validation is enabled. |
+| Trust policy | Placeholder covered | `utils/cs02TrustPolicy.js` centralizes x509, verifier-attestation, DID, metadata, issuer-trust, and status policy placeholders. |
+| Metadata filtering | Partial | `filterClientMetadataForCs02Enforcement` filters inline metadata for CS-02 request generation; static `data/verifier-config.json` still advertises broader entries. |
 
 ## Coverage Table: FCAF Specs Filtered By CS-02
 
@@ -54,152 +61,152 @@ Legend:
 | Mark | Meaning |
 |---|---|
 | Yes | Covered for the WE BUILD CS-02 profile |
-| Partial | Some CS-02 behavior exists, but validation is incomplete or route-dependent |
-| Missing | Required by CS-02 but not fully implemented |
+| Partial | Some CS-02 behavior exists, but validation is incomplete, placeholder-only, or route-dependent |
+| Missing | Required by CS-02 but not implemented |
 | Out of scope | FCAF coverage target is broader than current CS-02 |
 
 ### ProtocolMessages: Authorization Request / JAR (PM 002-011)
 
 | FCAF spec area | CS-02 relevance | Coverage | Notes |
 |---|---:|---|---|
-| Plain unsigned request (PM 002) | Not required; CS-02 forbids unsigned requests | Out of scope | CS-02 requires signed request objects. Wallet rejects `alg=none`. |
-| `typ=oauth-authz-req+jwt` handling (PM 004, 006-007) | Required in practice | Partial | Verifier sets `typ`. Wallet verifies signatures, but no strict `typ` allowlist was found in the wallet verifier path. |
-| Request object by reference (PM 005) | Required for CS-02 invocation | Yes | `openid4vp://present?request_uri=...` is supported. |
-| `client_id` present and request/JAR consistency (PM 008-010) | Required | Partial | Wallet checks deep-link `client_id` mismatch if present, but the path does not clearly reject a request JWT missing `client_id`. |
-| `request_uri_method=post` (PM 011) | Useful and supported | Yes | Wallet fetches via POST with form content type. |
+| Plain unsigned request (PM 002) | CS-02 forbids unsigned requests | Yes | Strict wallet validation rejects unsigned/malformed JARs and `alg=none`. |
+| `typ=oauth-authz-req+jwt` handling (PM 004, 006-007) | Required in practice | Yes | `validateCs02JarHeader` requires the CS-02 JAR typ. |
+| Request object by reference (PM 005) | Required | Yes | `openid4vp://present?request_uri=...` and GET/POST retrieval are supported. |
+| `client_id` present and request/JAR consistency (PM 008-010) | Required | Yes | Payload requires `client_id`; deep-link `client_id`, when present, must match the signed JAR. |
+| `request_uri_method=post` (PM 011) | Useful and supported | Yes | Wallet sends form-encoded POST and rejects unsupported methods in strict mode. |
 
 ### ProtocolMessages: DCQL Top-Level (PM 012-021)
 
 | FCAF spec area | CS-02 relevance | Coverage | Notes |
 |---|---:|---|---|
-| DCQL used instead of PEX/scope | Required | Yes | Request builder rejects `presentation_definition` and uses `dcql_query`. |
-| One or more matching credentials | Required | Partial | Wallet selects a single matching credential. Multiple credential response is not complete. |
-| No credential satisfies query | Required | Yes | Wallet fails when no stored credential matches format/meta constraints. |
-| Malformed DCQL rejected | Required | Partial | Missing/empty `credentials` is rejected by selection failure; deeper structure validation is incomplete. |
-| Unknown params ignored | Required by broader OpenID4VP | Partial | Not a strict schema parser; unknown params are effectively ignored in many paths. |
-| `transaction_data` support | Optional/profile-specific | Partial | Implemented where present, but malformed base64 transaction data is not always rejected by the verifier builder. |
-| Mutual exclusivity of `dcql_query` and `scope` | Required by FCAF | Missing | No clear wallet rejection for both being present. CS-02 uses DCQL, so this matters mostly for negative tests. |
+| DCQL used instead of PEX/scope | Required | Yes | Strict mode rejects `presentation_definition`, scope-only requests, and combined `dcql_query` + `scope`. |
+| One or more matching credentials | Required | Yes/partial | Wallet can select one or multiple matching credentials; optional credential-set semantics are implemented for current cases. |
+| No credential satisfies query | Required | Yes | Wallet fails with access-denied style behavior instead of falling back to unrelated credentials. |
+| Malformed DCQL rejected | Required | Mostly yes | Structural validation covers ids, formats, claims, `claim_sets`, `credential_sets`, `multiple`, and holder-binding policy. |
+| Unknown params ignored | Required by broader OpenID4VP | Partial | The CS-02 subset validates required structure but does not implement a full unknown-parameter negative matrix. |
+| `transaction_data` support | Optional/profile-specific | Partial | Existing checks cover encoded `credential_ids` in generation and wallet fatal errors for malformed transaction data; full FCAF matrix remains incomplete. |
+| Mutual exclusivity of `dcql_query` and `scope` | Required by FCAF | Yes | `validateCs02PresentationQuery` rejects both being present. |
 
 ### ProtocolMessages: Request URI / Retrieval / Request Object (PM 022-051)
 
 | FCAF spec area | CS-02 relevance | Coverage | Notes |
 |---|---:|---|---|
-| GET/POST `request_uri` | Required | Yes | Wallet supports both. |
-| HTTPS-only `request_uri` | Required for production security | Missing/partial | Wallet fetch path does not visibly enforce HTTPS before `fetch`. |
-| Request URI response content type | FCAF negative tests | Missing | Wallet reads body text and does not enforce `application/oauth-authz-req+jwt`. |
-| UTF-8/form POST | Required for POST method | Yes | Wallet sends `application/x-www-form-urlencoded`. |
-| Nonce and expiry in request object | Required | Partial | Verifier includes `nonce`, `iat`, `exp`; wallet requires `nonce` but relies on JWT library clock checks and does not separately model nonce freshness. |
-| Audience matches wallet | Required by CS-02 WU validation | Missing/unclear | Request JWT `aud` is hard-coded to `https://self-issued.me/v2` in builder; wallet does not visibly validate that audience matches a wallet identifier. |
-| `client_id` query/JWT mismatch | Required | Yes when deep link contains client_id | Wallet rejects mismatch between deep-link `client_id` and request JWT `client_id`. |
+| GET/POST `request_uri` | Required | Yes | Wallet supports both allowed methods. |
+| HTTPS-only `request_uri` | Required for production security | Yes | Strict mode requires HTTPS unless local dev override is configured. |
+| Request URI response content type | FCAF negative tests | Yes/partial | Strict fetch checks for `application/oauth-authz-req+jwt`; compatibility behavior may still differ outside CS-02 mode. |
+| UTF-8/form POST | Required for POST method | Yes | Wallet sends form content for POST retrieval. |
+| Nonce and expiry in request object | Required | Yes | Payload validation requires `nonce`, `iat`, `exp`, and request lifetime limits. |
+| Audience matches wallet policy | Required by CS-02 WU validation | Yes/partial | Default wallet audience policy accepts `https://self-issued.me/v2` until a wallet-specific audience is configured. |
+| `client_id` query/JWT mismatch | Required | Yes | Deep-link and signed JAR `client_id` contradictions are rejected. |
+| Query vs signed JAR precedence | Required | Partial | `validateCs02RequestUriQueryPrecedence` catches contradictions for mapped fields; not every possible query parameter is modeled. |
 
 ### ProtocolMessages: DCQL credentials / credential_sets / claims (PM 052-123)
 
 | FCAF spec area | CS-02 relevance | Coverage | Notes |
 |---|---:|---|---|
-| `credentials` array exists and is non-empty | Required | Partial | Wallet requires an array to select; structural errors become selection failures rather than precise protocol validation. |
-| Credential query `id` validation | Required for DCQL response shape | Partial | Wallet uses `id` when present; it does not fully enforce type, charset, uniqueness, or missing-id rejection. |
-| `format` validation | Required | Partial | Wallet supports `dc+sd-jwt`, `vc+sd-jwt`, `mso_mdoc`, `jwt_vc_json`; unsupported formats fail matching. No full OID4VP Appendix B validation. |
-| `multiple` | FCAF broader behavior | Partial | Response builder treats `multiple=true` and false the same for the selected credential. |
-| `meta` matching | Required for credential selection | Partial | Supports SD-JWT `vct_values` and mdoc `doctype_value`; no full format-specific `meta` schema validation. |
-| `trusted_authorities` | Relevant to high assurance | Missing | No evidence of wallet-side trusted authority constraint validation. |
-| `require_cryptographic_holder_binding` | Relevant to CS-02 | Partial | Holder binding is generated for SD-JWT presentations, but request-side flag validation is not complete. |
-| Claim paths and claim_sets | Required for disclosure constraints | Partial | Wallet filters SD-JWT disclosures by first path segment; full DCQL path grammar, `claim_sets`, duplicate claim ids, value matching, and negative validation remain incomplete. |
-| `credential_sets` | Relevant when used | Partial | Wallet validates non-empty options and unknown ids, but only supports single selected credential behavior. |
+| `credentials` array exists and is non-empty | Required | Yes | Strict validator rejects missing or empty credentials. |
+| Credential query `id` validation | Required | Yes | Non-empty id, allowed charset, and duplicate-id checks are enforced. |
+| `format` validation | Required | Yes | Strict mode allows `dc+sd-jwt`, `vc+sd-jwt`, and project-scoped `mso_mdoc`; other formats are compatibility-mode only. |
+| `multiple` | Required when requested | Yes | Wallet can return arrays for `multiple=true`; verifier validates array shape and rejects extra multiples otherwise. |
+| `meta` matching | Required for credential selection | Mostly yes | SD-JWT `vct_values` and mdoc `doctype_value` are validated. More format-specific meta constraints may still be future work. |
+| `trusted_authorities` | Relevant to high assurance | Partial / placeholder | Accepted as advisory and logged until a trust registry is configured. |
+| `require_cryptographic_holder_binding` | Relevant to CS-02 | Yes | Strict mode rejects `false` for SD-JWT-VC because KB-JWT is mandatory. |
+| Claim paths and claim_sets | Required for disclosure constraints | Partial | The validator enforces non-empty string path segments, duplicate claim ids, and `claim_sets` references. Full DCQL path grammar and value matching are not complete. |
+| `credential_sets` | Relevant when used | Mostly yes | Non-empty options and unknown id references are rejected; verifier validates satisfied required sets. |
 
 ### ProtocolMessages: Authorization Response (PM 124-159)
 
 | FCAF spec area | CS-02 relevance | Coverage | Notes |
 |---|---:|---|---|
-| direct_post response | Required | Yes | Wallet posts form-encoded response; verifier checks state and nonce. |
-| direct_post.jwt / encrypted response | Useful, profile-adjacent | Partial | Wallet can create JWE/JWT response; verifier decrypts JWE branch. Full outer response JWT signature verification is still not clearly enforced for unencrypted direct_post.jwt. |
-| `vp_token` DCQL object shape | Required with DCQL | Partial | Wallet emits correct object shape for selected credential. Verifier validates object shape but missing expected credential ids may be warning-level in current docs. |
+| direct_post response | Required | Yes | Verifier requires `vp_token` and `state` for direct_post. |
+| direct_post.jwt / encrypted response | Useful, profile-adjacent | Mostly yes | Verifier requires `response`, validates JWE header, decrypts JWE, and verifies signed response JWT claims/signature when key material is resolvable. |
+| `vp_token` DCQL object shape | Required with DCQL | Yes | Verifier rejects non-object, unknown ids, missing required ids, and invalid value cardinality. |
 | `transaction_data` reference in credential presentation | Optional/profile-specific | Partial | Some validation exists, but full FCAF error matrix is not covered. |
-| Wallet error response handling | Required robustness | Partial | Verifier surfaces wallet-reported errors for direct_post. Coverage of all FCAF error flows is incomplete. |
-| Unsupported response modes / scopes / formats | Required negative tests | Partial | Request builder rejects unsupported response modes; wallet negative handling is not complete. |
+| Wallet error response handling | Required robustness | Yes/partial | Verifier stores failed session state and returns wallet-reported protocol errors for covered response paths. |
+| Unsupported response modes / scopes / formats | Required negative tests | Mostly yes | Request generation and wallet validation reject unsupported CS-02 modes/formats; `dc_api` and `dc_api.jwt` remain supported for expected future CS-02 expansion. |
 
 ### Metadata: Status Claims (M 081-103) and CredentialFormats status (CF 029-031, 049)
 
 | FCAF spec area | CS-02 relevance | Coverage | Notes |
 |---|---:|---|---|
-| JOSE `status` / `status_list` validation | Important for credential authenticity/revocation | Missing | The FCAFS report identified this as uncovered. CS-02 verifier validation includes credential authenticity; status checking should be treated as a CS-02 gap even if not spelled out in detail. |
-| COSE status claims | Out of core CS-02 because mdoc is deferred | Out of scope / Missing for mdoc | CS-02 note says ISO18013-5/7 support comes in subsequent versions. |
+| JOSE `status` / `status_list` validation | Important for credential authenticity/revocation | Partial / placeholder | `utils/cs02StatusList.js` validates malformed references (`idx`, HTTPS absolute `uri`) and is invoked by verifier SD-JWT checks. Fetch, signature validation, bitstring decoding, and revoked/suspended decisions are TODOs until trust framework exists. |
+| Missing status behavior | Local policy | Yes / placeholder | Missing status is allowed by default and rejected only when `CS02_STRICT_STATUS_VALIDATION` is enabled. |
+| COSE status claims | Out of core CS-02 SD-JWT target | Out of scope / partial for mdoc | mdoc remains supported, but COSE status-list validation is not part of the current CS-02 SD-JWT alignment work. |
 
 ### Metadata: client_metadata and Client Identifier Schemes (M 104-141)
 
 | FCAF spec area | CS-02 relevance | Coverage | Notes |
 |---|---:|---|---|
-| Verifier metadata publication | Required | Partial | Local metadata/config exists, but this report did not prove full `.well-known` publication and schema coverage. |
-| `client_metadata` parsing and precedence | Required for interoperability | Partial | Wallet accepts inline metadata and metadata URI/JWKS for verification. Full precedence and negative validation are incomplete. |
-| `x509_san_dns` | Required/recommended in CS-02 | Partial | Verifier can build x509_san_dns requests, but wallet verifies x5c leaf signature without visible SAN/trust-chain validation. |
-| `verifier_attestation` | Recommended/allowed in CS-02 | Partial | Verifier can generate a development VA-JWT, but comments indicate the self-signed variant is not production-compliant; wallet-side attestation validation is not evident. |
-| `did:web` / `did:jwk` | Recommended by CS-02 | Yes/partial | Verifier and wallet support DID-based request signing and verification. Trust policy for DID resolution remains limited. |
+| Verifier metadata publication | Required | Partial | Request-time metadata is filtered, but static `data/verifier-config.json` still advertises broader formats/algorithms than strict CS-02 enforcement. |
+| `client_metadata` parsing and precedence | Required | Partial | Inline metadata schema and format/alg checks exist. `client_metadata_uri` HTTPS placeholder exists but is not yet wired into strict wallet request validation. |
+| `x509_san_dns` | Required/recommended in CS-02 | Partial / intentional placeholder | Wallet verifies with x5c leaf key. Chain trust and SAN DNS match are intentionally skipped until trust anchors are configured, with placeholder methods left in place. |
+| `verifier_attestation` | Recommended/allowed in CS-02 | Partial / intentional placeholder | JOSE header `jwt` is required in the wallet path, but issuer trust, `sub`, expiry, and signing-key binding are placeholders until trusted issuers are configured. |
+| `did:web` / `did:jwk` | Recommended by CS-02 | Partial | `did:jwk` enforces P-256/ES256 key material. `did:web` resolves over HTTPS, but the current signature path can still fall back to any verification method instead of requiring exact `kid` match. |
 | `openid_federation`, `x509_hash`, `origin:` | Broader FCAF | Out of scope / partial | Not core CS-02; useful for broader FCAF but lower WE BUILD priority. |
-| Wallet metadata encryption | Useful | Partial | Verifier can encrypt request objects to wallet metadata JWKS; wallet direct support depends on flow and metadata. |
+| Wallet metadata encryption | Useful | Partial | Request/response encryption exists, but metadata consistency and direct_post/direct_post.jwt distinctions need cleanup. |
 
 ### CredentialFormats (CF 029-049)
 
 | FCAF spec area | CS-02 relevance | Coverage | Notes |
 |---|---:|---|---|
-| SD-JWT-VC compact with KB-JWT | Required | Yes/partial | Wallet appends KB-JWT; verifier checks nonce, audience, `sd_hash`, and `cnf.jwk` signature binding. Credential issuer signature/status validation still needs hardening. |
-| SD-JWT-VC compact without KB-JWT | Negative case for CS-02 | Partial | CS-02 requires KB-JWT; verifier rejects missing nonce/key-binding in key-bound paths, but full negative test matrix should be added. |
-| JWT VC / JWT VP | Not primary CS-02 | Partial | Supported for compatibility. |
-| ISO mdoc | Deferred by CS-02 note | Out of scope for CS-02 v1.1 | Repo has mdoc support, but CS-02 says ISO18013-5/7 come later. |
+| SD-JWT-VC compact with KB-JWT | Required | Mostly yes | Wallet appends KB-JWT; verifier checks `typ`, nonce, audience, `iat`, `sd_hash`, and `cnf.jwk` signature binding. Issuer signature/trust remains placeholder-level. |
+| SD-JWT-VC compact without KB-JWT | Negative case for CS-02 | Yes | Verifier strict SD-JWT presentation validation rejects missing KB-JWT. |
+| JWT VC / JWT VP | Not primary CS-02 | Compatibility only | These are not allowed in strict CS-02 DCQL format validation. |
+| ISO mdoc | Practical project scope | Partial | `mso_mdoc` remains allowed and supported; broader mdoc/COSE/FCAF coverage is not complete. |
 | CWT, JSON serialization, multiple mdocs | Broader FCAF | Out of scope | These remain FCAF gaps but are not WE BUILD CS-02 blockers. |
 
-## CS-02-Critical Gaps
+## Remaining CS-02-Critical Gaps
 
 | Priority | Gap | Why it matters for WE BUILD CS-02 |
 |---|---|---|
-| Critical | Full request object validation is incomplete on wallet side. | CS-02 requires signature, nonce freshness, audience match, expiry, credential constraints, and request integrity. Current wallet verifies signatures and requires nonce, but `typ`, HTTPS/content-type, audience-to-wallet, strict `client_id`, and full DCQL schema checks are incomplete. |
-| Critical | Verifier response validation is still partial. | CS-02 requires validation of presentation proof signature, credential authenticity, disclosure integrity, holder binding, nonce/audience binding, and request constraints. Holder binding is much improved, but outer response JWT signature verification and credential authenticity/status validation remain incomplete. |
-| Critical | Status/revocation validation is missing. | The FCAFS report shows JOSE/COSE status specs uncovered. For CS-02 SD-JWT-VC, JOSE status/status_list validation should be implemented as part of credential authenticity. |
-| Major | Client identifier trust policy is incomplete. | CS-02 names `x509_san_dns`, `verifier_attestation`, and DIDs. The implementation signs/verifies with x5c and DID material, but production-grade SAN matching, certificate chain anchoring, verifier attestation issuer trust, and metadata precedence are not complete. |
-| Major | DCQL structural validation is incomplete. | CS-02 mandates DCQL. The wallet matches practical `format` and `meta` constraints but does not fully validate IDs, duplicate IDs, claim path grammar, claim_sets, `trusted_authorities`, `multiple`, or invalid formats. |
-| Major | Consent is not evidenced as a protocol gate. | CS-02 requires transparent holder consent and forbids auto-consent. The wallet presentation function can execute a presentation flow directly; this report did not find a clear mandatory consent step in the core library path. |
-| Major | ES256/P-256 is not uniformly enforced. | CS-02 requires strict P-256 with ES256. The code supports ES256 paths, but x509 and verifier_attestation branches still have RS256 fallbacks/defaults. |
+| High | `did:web` `kid` matching is not enforced in the active wallet signature verification path. | The shared helper requires a matching `kid`, but the active DID verification path can fall back to all verification methods. CS-02 DID trust rules should bind the JAR signature to the selected `kid`. |
+| High | Full credential authenticity remains incomplete. | The verifier checks KB-JWT/cnf binding and invokes issuer-trust placeholders, but SD-JWT issuer signature validation and configured issuer trust are not fully enforced yet. |
+| High | Metadata consistency is incomplete. | Static verifier metadata still advertises broader formats/algorithms, and direct_post metadata filtering leaves some encryption algorithm metadata visible. CS-02 metadata should match runtime enforcement. |
+| Major | `client_metadata_uri` policy is not wired into strict wallet validation. | The HTTPS placeholder exists, but strict wallet validation currently only validates inline `client_metadata`. |
+| Major | Status/revocation is placeholder-only. | Malformed status-list references are rejected, but status-list token fetch, signature validation, bitstring decoding, and revoked/suspended decisions wait on the trust framework. |
+| Major | Production trust policy is intentionally deferred. | x509 chain/SAN validation and verifier-attestation trusted issuer validation are intentionally skipped until trust anchors/trusted issuers exist. |
+| Major | Full disclosure/request-constraint validation still needs hardening. | DCQL structure and KB-JWT are much stronger, but full DCQL path grammar, value matching, unsolicited disclosure detection, and all FCAF negative cases are not complete. |
+| Major | Consent is not evidenced as a protocol gate. | CS-02 requires transparent holder consent and forbids auto-consent. The core presentation library can execute directly; a mandatory UI/API consent gate should be documented or enforced. |
 
 ## FCAF Gaps That Are Lower Priority For WE BUILD CS-02
-
-These remain FCAF MessageStructure gaps, but they should not be treated as first-order CS-02 blockers:
 
 | FCAF area | Reason |
 |---|---|
 | Plain unsigned authorization request support | CS-02 requires signed requests and wallets must reject unsigned requests. |
-| ISO mdoc, multiple DeviceResponses, COSE status | CS-02 v1.1 explicitly defers ISO18013-5/7 support to subsequent versions. |
+| COSE status and multiple mdoc DeviceResponses | mdoc is supported for project compatibility, but CS-02 alignment is focused on SD-JWT-VC. |
 | CWT referenced tokens | Not part of the CS-02 SD-JWT-VC target. |
 | JSON serialization credentials | Not part of the CS-02 compact SD-JWT-VC target. |
-| OpenID Federation | Useful for broader HAIP/FCAF, but CS-02 highlights x509/verifier_attestation and recommends DIDs. |
-| `redirect_uri` unsigned/client-id scheme behavior | CS-02 emphasizes signed JAR and high-assurance schemes. Redirect URI scheme may be useful for compatibility but should not drive WE BUILD conformance. |
+| OpenID Federation | Useful for broader HAIP/FCAF, but current work uses x509/verifier_attestation placeholders and DID schemes. |
+| `redirect_uri` unsigned/client-id scheme behavior | CS-02 emphasizes signed JAR and high-assurance schemes. Redirect URI scheme may remain compatibility behavior but should not drive WE BUILD conformance. |
 
 ## Profile-Adjusted Coverage Summary
 
-This is not a recount of all 236 FCAF cases. It is the practical CS-02 subset view:
-
 | Layer | WE BUILD relevance | Coverage |
 |---|---|---|
-| Signed JAR request creation | Required | Partial: signed request objects exist; ES256 is not uniform. |
-| Wallet JAR validation | Required | Partial: signature verification exists; strict `typ`, HTTPS, content type, audience, and trust policy are incomplete. |
+| Signed JAR request creation | Required | Mostly covered: ES256/P-256 request generation exists for CS-02 paths; trust-anchor-backed x509 policy is placeholder. |
+| Wallet JAR validation | Required | Mostly covered: strict `typ`, `alg`, required fields, lifetime, audience policy, HTTPS request URI, signature verification, and query precedence exist; `did:web` `kid` and `client_metadata_uri` wiring remain gaps. |
 | `openid4vp://present` request URI invocation | Required | Covered. |
-| DCQL query and response shape | Required | Partial: practical selection/response exists; full DCQL schema validation missing. |
-| SD-JWT-VC selective disclosure | Required | Partial/covered for simple claim paths. |
-| KB-JWT holder binding | Required | Covered for generated wallet responses; verifier-side checks are now materially improved. |
-| Verifier nonce/audience/request-constraint checks | Required | Partial: nonce/audience and claim constraints exist; expected DCQL id enforcement and outer response proof validation remain incomplete. |
-| Credential authenticity and status | Required by verifier validation intent | Missing/partial: key binding is checked, but issuer signature/trust and status_list validation need hardening. |
-| Verifier metadata | Required | Partial: config exists; publication/schema proof incomplete. |
-| Holder consent | Required | Missing/unclear in core automated presentation path. |
+| DCQL query and response shape | Required | Mostly covered: structure, ids, formats, claim paths, claim_sets, credential_sets, multiple, and response object shape are validated. |
+| SD-JWT-VC selective disclosure | Required | Partial/covered for common claim paths; full disclosure integrity and value matching remain follow-up work. |
+| KB-JWT holder binding | Required | Covered for generated wallet responses and verifier checks. |
+| Verifier nonce/audience/request-constraint checks | Required | Mostly covered for response mode, state, nonce, audience, DCQL response shape, and KB-JWT; issuer trust and disclosure authenticity remain partial. |
+| Credential authenticity and status | Required by verifier validation intent | Partial: KB-JWT/cnf binding and status reference placeholders exist; issuer signature/trust and revocation decisions remain TODO until trust framework exists. |
+| Verifier metadata | Required | Partial: inline metadata filtering/validation exists; static/public metadata needs alignment. |
+| Holder consent | Required | Missing/unclear in the core automated presentation path. |
 
 ## Recommended Remediation Order
 
-1. Add a CS-02 wallet request validator that explicitly checks JAR `typ`, `alg=ES256`, `client_id`, `nonce`, `exp`, `aud`, HTTPS `request_uri`, response content type, and `dcql_query` presence.
-2. Add full DCQL schema validation for the CS-02 subset: credential query `id`, uniqueness, format allowlist, `meta.vct_values`, claims path grammar, claim ids, `claim_sets`, and `trusted_authorities` policy.
-3. Enforce ES256/P-256 consistently in verifier request generation. Remove or isolate RS256-only branches from CS-02 flows.
-4. Harden verifier response validation: verify outer direct_post.jwt signatures when unencrypted, require expected DCQL credential ids as fatal, and add tests for missing/wrong KB-JWT nonce, audience, `sd_hash`, and `cnf.jwk`.
-5. Implement JOSE `status` / `status_list` validation for SD-JWT-VC credentials and define the local policy for missing status.
-6. Define production trust policy for `x509_san_dns`, `verifier_attestation`, and DIDs: SAN matching, trust anchors, verifier attestation issuer validation, metadata precedence, and certificate chain handling.
-7. Make holder consent an explicit mandatory step in the wallet UI/API path, or document that the library is lower-level and must be wrapped by a consent gate.
+1. Fix active `did:web` verification to require a `kid` and call the shared `validateDidWebKidResolution` policy before verifying the JAR signature.
+2. Wire `validateCs02ClientMetadataUri` into strict wallet JAR validation and ensure remote metadata, if supported, is fetched only over HTTPS and validated with the same metadata policy.
+3. Align verifier metadata with runtime enforcement: remove unsupported strict-mode formats/algorithms from static/public metadata, and delete all encrypted-response metadata from `direct_post` request metadata.
+4. Complete SD-JWT-VC issuer authenticity validation: verify issuer signature with configured issuer keys/trust and document how issuer trust is configured.
+5. Keep status-list validation as placeholder until trust framework exists, then add fetch/cache/timeout/max-size policy, token signature validation, bitstring decoding, and revoked/suspended decisions.
+6. When trust anchors/trusted attestation issuers exist, implement x509 chain/SAN DNS enforcement and verifier-attestation issuer/sub/expiry/signing-key binding validation in the placeholder methods.
+7. Harden remaining disclosure/request-constraint checks: full DCQL path grammar, value matching, unsolicited disclosure rejection, and more negative tests.
+8. Make holder consent an explicit mandatory step in the wallet UI/API path, or document that the core library must be wrapped by a consent gate.
 
 ## Bottom Line
 
-Against the original broad FCAFS report, this repo still does not cover the full 236-spec MessageStructure surface. Against the narrower WE BUILD CS-02 profile, the implementation is much closer: the core happy path for signed OpenID4VP, `openid4vp://present`, DCQL, SD-JWT-VC disclosure, KB-JWT, and nonce/audience binding is present.
+Against the original broad FCAFS report, this repo still does not cover the full 236-spec MessageStructure surface. Against the narrower WE BUILD CS-02 profile, the implementation is now substantially closer than the original report indicated: strict wallet request validation, DCQL validation, multi-credential response generation, verifier response validation, KB-JWT checks, status-list placeholders, and shared trust/metadata policy are in place.
 
-The remaining CS-02 blockers are not broad format support. They are stricter validation and trust: full wallet-side request validation, full DCQL schema validation, uniform ES256/P-256 enforcement, production-grade client identifier trust, credential status validation, explicit consent gating, and complete verifier-side response proof validation.
+The remaining CS-02 blockers are now narrower and mostly about trust and policy completion: exact `did:web` `kid` binding, `client_metadata_uri` enforcement, metadata consistency, configured issuer/signature trust, future status-list enforcement, production x509/verifier-attestation trust, explicit consent gating, and a fuller disclosure/negative-test matrix.
