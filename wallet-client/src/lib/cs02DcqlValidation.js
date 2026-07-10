@@ -67,6 +67,25 @@ function validateSdJwtClaimPathSupport(path, context, log = () => {}) {
   }
 }
 
+function validateUnsupportedClaimConstraints(claim, context, log = () => {}) {
+  if (claim?.values != null) {
+    const validValues =
+      Array.isArray(claim.values) &&
+      claim.values.length > 0 &&
+      claim.values.every((value) => typeof value === "string" && value.length > 0);
+    if (!validValues) {
+      logDcqlFailure(log, "claim_values_invalid", {
+        context,
+        valueType: Array.isArray(claim?.values) ? "array" : typeof claim?.values,
+      });
+      throw new Cs02ValidationError(
+        `DCQL claim values must be a non-empty array of non-empty strings (${context})`,
+        "invalid_request",
+      );
+    }
+  }
+}
+
 function validateDcqlClaims(credQuery, log = () => {}) {
   if (credQuery.claims == null) return;
   if (!Array.isArray(credQuery.claims)) {
@@ -81,6 +100,7 @@ function validateDcqlClaims(credQuery, log = () => {}) {
     const claim = credQuery.claims[index];
     const context = `credentials[${credQuery.id}].claims[${index}]`;
     validateDcqlClaimPath(claim?.path, context, log);
+    validateUnsupportedClaimConstraints(claim, context, log);
     if (SD_JWT_FORMATS.has(String(credQuery.format || ""))) {
       validateSdJwtClaimPathSupport(claim?.path, context, log);
     }

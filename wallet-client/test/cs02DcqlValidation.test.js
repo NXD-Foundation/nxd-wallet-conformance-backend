@@ -134,6 +134,62 @@ describe("CS-02 DCQL validation (Phase 2)", () => {
     ).to.not.throw();
   });
 
+  it("accepts syntactically valid DCQL claim values constraints", () => {
+    expect(() =>
+      validateCs02DcqlQuery(
+        {
+          credentials: [
+            {
+              id: "pid",
+              format: "dc+sd-jwt",
+              claims: [{ path: ["family_name"], values: ["Doe"] }],
+            },
+          ],
+        },
+        strictOptions,
+      ),
+    ).to.not.throw();
+  });
+
+  it("rejects malformed DCQL claim values constraints", () => {
+    expect(() =>
+      validateCs02DcqlQuery(
+        {
+          credentials: [
+            {
+              id: "pid",
+              format: "dc+sd-jwt",
+              claims: [{ path: ["family_name"], values: [] }],
+            },
+          ],
+        },
+        strictOptions,
+      ),
+    ).to.throw(Cs02ValidationError, /must be a non-empty array/);
+  });
+
+  it("logs trusted_authorities as advisory when no trust registry is configured", () => {
+    const logs = [];
+    validateCs02DcqlQuery(
+      {
+        credentials: [
+          {
+            id: "pid",
+            format: "dc+sd-jwt",
+            trusted_authorities: [{ type: "openid_federation", entity_id: "https://ta.example" }],
+          },
+        ],
+      },
+      strictOptions,
+      (...args) => logs.push(args),
+    );
+
+    expect(logs.some(([message, data]) =>
+      message === "[CS02] trusted_authorities ignored (no trust registry configured)" &&
+      data?.credentialId === "pid"
+    )).to.equal(true);
+  });
+
   it("requires claim ids when claim_sets is present", () => {
     expect(() =>
       validateCs02DcqlQuery(

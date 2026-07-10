@@ -339,7 +339,21 @@ Acceptance criteria:
 
 Goal: close the remaining validation gap between structurally valid DCQL and fully verified disclosed credential content.
 
-Status: partially complete. Verifier-side strict SD-JWT validation already reconstructs disclosures, checks requested claims, rejects unsolicited disclosures in strict mode, and validates requested `vct` values. The remaining work is mainly wallet-side claim-set/credential-set minimization and any still-missing negative coverage.
+Status: partially complete. Verifier-side strict SD-JWT validation already reconstructs disclosures, checks requested claims, rejects unsolicited disclosures in strict mode, and validates requested `vct` values. The currently enforced subset now includes:
+
+- top-level SD-JWT exact string `values`
+- nested `mso_mdoc` claim-path presence checks
+- `mso_mdoc` `claim_sets` satisfaction
+- exact string `values` matching for `mso_mdoc` claims
+
+Broader value/path semantics remain pending until they are implemented consistently across wallet and verifier paths.
+
+Implementation policy for this phase:
+
+- When a DCQL constraint subset is implemented in this repo, enforce it in both wallet selection/presentation logic and verifier-side response validation where applicable.
+- When a DCQL constraint is not yet implemented, keep it as pending work in the plan rather than adding broad request rejection solely because the implementation is incomplete.
+- Do not silently weaken a request by claiming support for a constraint that is ignored at runtime.
+- Prefer incremental enforcement of well-scoped subsets, for example top-level SD-JWT claim path and exact-value matching, before attempting broader format-generic support.
 
 Required wallet changes:
 
@@ -348,6 +362,9 @@ Required wallet changes:
 - Ensure every requested SD-JWT disclosure exists in the stored credential.
 - Fail when a requested disclosure cannot be found.
 - Do not include unsolicited disclosures in strict CS-02 mode.
+- Enforce supported DCQL claim value constraints from stored wallet credentials when selecting/presenting SD-JWT credentials.
+- For the currently supported subset, enforce exact string matching for top-level SD-JWT claim `values`.
+- For the currently supported mdoc subset, enforce nested claim-path presence, `claim_sets` satisfaction, and exact string `values` matching.
 - When `claim_sets` is present, disclose only the claims belonging to the satisfied claim set option.
 - For `credential_sets`, only present credentials belonging to the satisfied option.
 - Preserve existing multi-credential behavior for `multiple=true`.
@@ -357,6 +374,9 @@ Required verifier changes:
 - Reconstruct disclosed SD-JWT claims before accepting the presentation.
 - Verify every requested DCQL claim path is present in the reconstructed claims.
 - Reject unsolicited disclosed claims when strict policy is enabled.
+- Enforce supported DCQL claim value constraints against reconstructed credential claims.
+- For the currently supported subset, enforce exact string matching for top-level SD-JWT claim `values`.
+- For the currently supported mdoc subset, enforce nested claim-path presence, `claim_sets` satisfaction, and exact string `values` matching.
 - Validate `vct` in reconstructed/issuer-signed credential against `meta.vct_values`.
 - Validate `mso_mdoc` doctype against `meta.doctype_value` for mdoc responses.
 - Ensure a response satisfying one `credential_sets` option does not include unrelated credential query ids.
@@ -366,6 +386,7 @@ Required tests:
 
 - Reject missing requested disclosure.
 - Reject unsolicited disclosure.
+- Reject wrong claim value for supported DCQL `values` constraints.
 - Accept only the selected `claim_sets` option.
 - Reject wrong `vct`.
 - Reject wrong mdoc doctype when `mso_mdoc` is requested.

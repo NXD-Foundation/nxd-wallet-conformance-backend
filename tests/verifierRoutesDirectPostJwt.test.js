@@ -16,6 +16,14 @@ const mockExtractClaimsFromRequest = sinon.stub();
 const mockGetVPSession = sinon.stub();
 const mockStoreVPSession = sinon.stub();
 
+async function markSessionFailed(sessionId, vpSession, error, errorDescription) {
+  vpSession.status = 'failed';
+  vpSession.error = error;
+  vpSession.error_description = errorDescription;
+  delete vpSession.claims;
+  await mockStoreVPSession(sessionId, vpSession);
+}
+
 // Mock route that simulates the direct_post.jwt handling
 app.post('/direct_post/:id', async (req, res) => {
   try {
@@ -29,11 +37,23 @@ app.post('/direct_post/:id', async (req, res) => {
     if (vpSession.response_mode === 'direct_post.jwt') {
       // Wallet-reported error handling for jwt flow
       if (req.body.error) {
+        await markSessionFailed(
+          sessionId,
+          vpSession,
+          req.body.error,
+          req.body.error_description || `Wallet reported ${req.body.error}`,
+        );
         return res.status(400).json({ error: req.body.error, error_description: req.body.error_description });
       }
       const jwtResponse = req.body.response;
       
       if (!jwtResponse) {
+        await markSessionFailed(
+          sessionId,
+          vpSession,
+          'invalid_request',
+          "No 'response' parameter in direct_post.jwt response",
+        );
         return res.status(400).json({ error: "No 'response' parameter in direct_post.jwt response" });
       }
       
@@ -52,12 +72,24 @@ app.post('/direct_post/:id', async (req, res) => {
             vpToken = decodedJWT.vp_token;
             
             if (!vpToken) {
+              await markSessionFailed(
+                sessionId,
+                vpSession,
+                'invalid_request',
+                'No VP token in decrypted JWT response',
+              );
               return res.status(400).json({ error: "No VP token in decrypted JWT response" });
             }
           } else if (decrypted && decrypted.vp_token) {
             console.log("Processing payload object from JWE (wallet-specific behavior)");
             vpToken = decrypted.vp_token;
           } else {
+            await markSessionFailed(
+              sessionId,
+              vpSession,
+              'invalid_request',
+              'Failed to decrypt JWE response or no vp_token found',
+            );
             return res.status(400).json({ error: "Failed to decrypt JWE response or no vp_token found" });
           }
           
@@ -68,9 +100,21 @@ app.post('/direct_post/:id', async (req, res) => {
           if (result.keybindJwt && result.keybindJwt.payload) {
             const kb = result.keybindJwt.payload;
             if (!kb.nonce || kb.nonce !== vpSession.nonce) {
+              await markSessionFailed(
+                sessionId,
+                vpSession,
+                'invalid_nonce',
+                'submitted nonce does not match',
+              );
               return res.status(400).json({ error: 'submitted nonce does not match' });
             }
             if (vpSession.client_id && kb.aud && kb.aud !== vpSession.client_id) {
+              await markSessionFailed(
+                sessionId,
+                vpSession,
+                'invalid_audience',
+                'aud claim does not match verifier client_id',
+              );
               return res.status(400).json({ error: 'aud claim does not match verifier client_id' });
             }
           }
@@ -85,6 +129,12 @@ app.post('/direct_post/:id', async (req, res) => {
           
           const vpToken = decodedJWT.vp_token;
           if (!vpToken) {
+            await markSessionFailed(
+              sessionId,
+              vpSession,
+              'invalid_request',
+              'No VP token in JWT response',
+            );
             return res.status(400).json({ error: "No VP token in JWT response" });
           }
           
@@ -92,9 +142,21 @@ app.post('/direct_post/:id', async (req, res) => {
           if (result.keybindJwt && result.keybindJwt.payload) {
             const kb = result.keybindJwt.payload;
             if (!kb.nonce || kb.nonce !== vpSession.nonce) {
+              await markSessionFailed(
+                sessionId,
+                vpSession,
+                'invalid_nonce',
+                'submitted nonce does not match',
+              );
               return res.status(400).json({ error: 'submitted nonce does not match' });
             }
             if (vpSession.client_id && kb.aud && kb.aud !== vpSession.client_id) {
+              await markSessionFailed(
+                sessionId,
+                vpSession,
+                'invalid_audience',
+                'aud claim does not match verifier client_id',
+              );
               return res.status(400).json({ error: 'aud claim does not match verifier client_id' });
             }
           }
@@ -105,19 +167,43 @@ app.post('/direct_post/:id', async (req, res) => {
         }
       } catch (error) {
         console.error("Error processing JWT response:", error);
+        await markSessionFailed(
+          sessionId,
+          vpSession,
+          'invalid_request',
+          'Invalid JWT response',
+        );
         return res.status(400).json({ error: "Invalid JWT response" });
       }
     } else if (vpSession.response_mode === 'direct_post') {
       // Wallet-reported error handling for form-post flow
       if (req.body.error) {
+        await markSessionFailed(
+          sessionId,
+          vpSession,
+          req.body.error,
+          req.body.error_description || `Wallet reported ${req.body.error}`,
+        );
         return res.status(400).json({ error: req.body.error, error_description: req.body.error_description });
       }
       try {
         const state = req.body.state;
         if (!state) {
+          await markSessionFailed(
+            sessionId,
+            vpSession,
+            'invalid_request',
+            'state parameter missing',
+          );
           return res.status(400).json({ error: 'state parameter missing' });
         }
         if (state !== vpSession.state) {
+          await markSessionFailed(
+            sessionId,
+            vpSession,
+            'invalid_state',
+            'state mismatch',
+          );
           return res.status(400).json({ error: 'state mismatch' });
         }
         const result = await mockExtractClaimsFromRequest(req);
@@ -125,9 +211,21 @@ app.post('/direct_post/:id', async (req, res) => {
         if (result.keybindJwt && result.keybindJwt.payload) {
           const kb = result.keybindJwt.payload;
           if (!kb.nonce || kb.nonce !== vpSession.nonce) {
+            await markSessionFailed(
+              sessionId,
+              vpSession,
+              'invalid_nonce',
+              'submitted nonce does not match',
+            );
             return res.status(400).json({ error: 'submitted nonce does not match' });
           }
           if (vpSession.client_id && kb.aud && kb.aud !== vpSession.client_id) {
+            await markSessionFailed(
+              sessionId,
+              vpSession,
+              'invalid_audience',
+              'aud claim does not match verifier client_id',
+            );
             return res.status(400).json({ error: 'aud claim does not match verifier client_id' });
           }
         }
@@ -136,6 +234,12 @@ app.post('/direct_post/:id', async (req, res) => {
         await mockStoreVPSession(sessionId, vpSession);
         return res.status(200).json({ status: 'ok' });
       } catch (e) {
+        await markSessionFailed(
+          sessionId,
+          vpSession,
+          'invalid_request',
+          e.message,
+        );
         return res.status(400).json({ error: e.message });
       }
     } else {
@@ -273,6 +377,11 @@ describe('Verifier Routes - Direct Post JWT Fixes', () => {
 
       expect(response.body).to.have.property('error');
       expect(response.body.error).to.include("No 'response' parameter");
+      expect(mockStoreVPSession.calledOnce).to.equal(true);
+      const [, storedSession] = mockStoreVPSession.getCall(0).args;
+      expect(storedSession.status).to.equal('failed');
+      expect(storedSession.error_description).to.include("No 'response' parameter");
+      expect(storedSession).to.not.have.property('claims');
     });
 
     it('should handle missing session', async () => {
@@ -307,6 +416,10 @@ describe('Verifier Routes - Direct Post JWT Fixes', () => {
 
       expect(response.body).to.have.property('error');
       expect(response.body.error).to.include('Invalid JWT response');
+      expect(mockStoreVPSession.calledOnce).to.equal(true);
+      const [, storedSession] = mockStoreVPSession.getCall(0).args;
+      expect(storedSession.status).to.equal('failed');
+      expect(storedSession).to.not.have.property('claims');
     });
 
     it('should handle missing vp_token in decrypted response', async () => {
@@ -473,6 +586,11 @@ describe('Verifier Routes - Direct Post JWT Fixes', () => {
 
       expect(response.body).to.have.property('error');
       expect(response.body.error).to.match(/aud/);
+      expect(mockStoreVPSession.calledOnce).to.equal(true);
+      const [, storedSession] = mockStoreVPSession.getCall(0).args;
+      expect(storedSession.status).to.equal('failed');
+      expect(storedSession.error).to.equal('invalid_audience');
+      expect(storedSession).to.not.have.property('claims');
     });
 
     it('should surface wallet error for jwt flow', async () => {
@@ -491,6 +609,11 @@ describe('Verifier Routes - Direct Post JWT Fixes', () => {
 
       expect(response.body.error).to.equal('invalid_request');
       expect(response.body.error_description).to.include('unsupported');
+      expect(mockStoreVPSession.calledOnce).to.equal(true);
+      const [, storedSession] = mockStoreVPSession.getCall(0).args;
+      expect(storedSession.status).to.equal('failed');
+      expect(storedSession.error).to.equal('invalid_request');
+      expect(storedSession).to.not.have.property('claims');
     });
   });
 
@@ -534,6 +657,11 @@ describe('Verifier Routes - Direct Post JWT Fixes', () => {
 
       expect(response.body).to.have.property('error');
       expect(response.body.error).to.match(/state/i);
+      expect(mockStoreVPSession.calledOnce).to.equal(true);
+      const [, storedSession] = mockStoreVPSession.getCall(0).args;
+      expect(storedSession.status).to.equal('failed');
+      expect(storedSession.error_description).to.match(/state parameter missing/);
+      expect(storedSession).to.not.have.property('claims');
     });
 
     it('should reject when state mismatches', async () => {
@@ -574,6 +702,11 @@ describe('Verifier Routes - Direct Post JWT Fixes', () => {
 
       expect(response.body.error).to.equal('invalid_request');
       expect(response.body.error_description).to.include('unsupported');
+      expect(mockStoreVPSession.calledOnce).to.equal(true);
+      const [, storedSession] = mockStoreVPSession.getCall(0).args;
+      expect(storedSession.status).to.equal('failed');
+      expect(storedSession.error).to.equal('invalid_request');
+      expect(storedSession).to.not.have.property('claims');
     });
 
     it('should surface unsupported transaction data type error', async () => {

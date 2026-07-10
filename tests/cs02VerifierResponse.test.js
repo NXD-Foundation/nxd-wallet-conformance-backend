@@ -82,14 +82,20 @@ async function buildSdJwtPresentation({
   return `${issuerJwt}~${disclosures.join("~")}~${kbJwt}`;
 }
 
-function buildMdocB64ForTests(docType) {
+function buildMdocB64ForTests(docType, namespace = null, claims = {}) {
+  const nameSpaceItems = Object.entries(claims).map(([elementIdentifier, elementValue]) =>
+    encode({ elementIdentifier, elementValue }),
+  );
   return Buffer.from(
     encode({
       version: "1.0",
       documents: [
         {
           docType,
-          issuerSigned: { nameSpaces: {}, issuerAuth: new Uint8Array([1]) },
+          issuerSigned: {
+            nameSpaces: namespace ? { [namespace]: nameSpaceItems } : {},
+            issuerAuth: new Uint8Array([1]),
+          },
           deviceSigned: { nameSpaces: {}, deviceAuth: {} },
         },
       ],
@@ -644,6 +650,37 @@ describe("CS-02 verifier response validation (Phase 4)", () => {
       }
     });
 
+    it("accepts supported DCQL claim values constraints when the disclosed SD-JWT claim matches", async () => {
+      const keys = await keyMaterial();
+      const sdJwt = await buildSdJwtPresentation(keys);
+
+      const result = await validateCs02SdJwtIssuerAuthenticity({
+        sdJwt,
+        credQuery: { claims: [{ path: ["family_name"], values: ["Neslo"] }] },
+        options: { strict: true, issuerVerificationJwk: keys.issuerPublicJwk },
+      });
+
+      expect(result.ok).to.equal(true);
+      expect(result.claims.family_name).to.equal("Neslo");
+    });
+
+    it("rejects wrong SD-JWT claim values in strict mode", async () => {
+      const keys = await keyMaterial();
+      const sdJwt = await buildSdJwtPresentation(keys);
+
+      try {
+        await validateCs02SdJwtIssuerAuthenticity({
+          sdJwt,
+          credQuery: { claims: [{ path: ["family_name"], values: ["Doe"] }] },
+          options: { strict: true, issuerVerificationJwk: keys.issuerPublicJwk },
+        });
+        expect.fail("expected value mismatch rejection");
+      } catch (error) {
+        expect(error).to.be.instanceOf(Cs02VerifierResponseError);
+        expect(error.message).to.match(/does not satisfy requested DCQL values constraint/);
+      }
+    });
+
     it("rejects wrong vct for the requested DCQL credential", async () => {
       const keys = await keyMaterial();
       const sdJwt = await buildSdJwtPresentation(keys);
@@ -688,6 +725,80 @@ describe("CS-02 verifier response validation (Phase 4)", () => {
           },
         }),
       ).to.throw(Cs02VerifierResponseError, /doctype/);
+    });
+
+    it("accepts mso_mdoc when a requested nested claim path is present", () => {
+      const result = validateCs02MdocPresentation({
+        presentation: buildMdocB64ForTests(
+          "test",
+          "urn:eu.europa.ec.eudi:pid:1",
+          { family_name: "Neslo" },
+        ),
+        credQuery: {
+          id: "mdoc-id",
+          format: "mso_mdoc",
+          meta: { doctype_value: "test" },
+          claims: [{ path: ["urn:eu.europa.ec.eudi:pid:1", "family_name"] }],
+        },
+      });
+      expect(result.ok).to.equal(true);
+    });
+
+    it("rejects missing mso_mdoc claim paths requested by DCQL", () => {
+      expect(() =>
+        validateCs02MdocPresentation({
+          presentation: buildMdocB64ForTests(
+            "test",
+            "urn:eu.europa.ec.eudi:pid:1",
+            { given_name: "Alice" },
+          ),
+          credQuery: {
+            id: "mdoc-id",
+            format: "mso_mdoc",
+            meta: { doctype_value: "test" },
+            claims: [{ path: ["urn:eu.europa.ec.eudi:pid:1", "family_name"] }],
+          },
+        }),
+      ).to.throw(Cs02VerifierResponseError, /missing requested claim path/);
+    });
+
+    it("rejects wrong mso_mdoc claim values when requested by DCQL", () => {
+      expect(() =>
+        validateCs02MdocPresentation({
+          presentation: buildMdocB64ForTests(
+            "test",
+            "urn:eu.europa.ec.eudi:pid:1",
+            { family_name: "Neslo" },
+          ),
+          credQuery: {
+            id: "mdoc-id",
+            format: "mso_mdoc",
+            meta: { doctype_value: "test" },
+            claims: [{ path: ["urn:eu.europa.ec.eudi:pid:1", "family_name"], values: ["Doe"] }],
+          },
+        }),
+      ).to.throw(Cs02VerifierResponseError, /values constraint/);
+    });
+
+    it("accepts mso_mdoc when one DCQL claim_sets option is satisfied", () => {
+      const result = validateCs02MdocPresentation({
+        presentation: buildMdocB64ForTests(
+          "test",
+          "urn:eu.europa.ec.eudi:pid:1",
+          { birth_date: "1990-01-01" },
+        ),
+        credQuery: {
+          id: "mdoc-id",
+          format: "mso_mdoc",
+          meta: { doctype_value: "test" },
+          claims: [
+            { id: "family_name_claim", path: ["urn:eu.europa.ec.eudi:pid:1", "family_name"] },
+            { id: "birth_date_claim", path: ["urn:eu.europa.ec.eudi:pid:1", "birth_date"] },
+          ],
+          claim_sets: [["family_name_claim"], ["birth_date_claim"]],
+        },
+      });
+      expect(result.ok).to.equal(true);
     });
   });
 });

@@ -123,4 +123,28 @@ describe("sdJwtDisclosureSelection", () => {
       }),
     ).to.throw(Cs02ValidationError, /top-level claim paths/);
   });
+
+  it("keeps a requested SD-JWT claim when its value satisfies the DCQL values constraint", () => {
+    const sdJwt = `${unsignedJwt({ vct: "urn:test", family_name: "Neslo" })}~`;
+
+    const filtered = filterSdJwtByDcqlClaims(sdJwt, {
+      id: "cmwallet",
+      format: "dc+sd-jwt",
+      claims: [{ path: ["family_name"], values: ["Neslo", "Doe"] }],
+    });
+
+    expect(filtered).to.equal(sdJwt);
+  });
+
+  it("throws when an SD-JWT claim does not satisfy the DCQL values constraint", () => {
+    const sdJwt = `${unsignedJwt({ vct: "urn:test", family_name: "Neslo" })}~`;
+
+    expect(() =>
+      filterSdJwtByDcqlClaims(sdJwt, {
+        id: "cmwallet",
+        format: "dc+sd-jwt",
+        claims: [{ path: ["family_name"], values: ["Doe"] }],
+      }),
+    ).to.throw(Cs02ValidationError, /does not satisfy requested DCQL values constraint/);
+  });
 });

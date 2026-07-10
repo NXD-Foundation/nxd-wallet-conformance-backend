@@ -18,6 +18,20 @@ function buildMdocB64ForTests(docType) {
   return base64url.encode(cbor, "utf8");
 }
 
+function buildMdocWithClaimsForTests(docType, namespace, claims = {}) {
+  const nameSpaceItems = Object.entries(claims).map(([elementIdentifier, elementValue]) =>
+    encode({ elementIdentifier, elementValue }),
+  );
+  const cbor = encode({
+    docType,
+    issuerSigned: {
+      nameSpaces: { [namespace]: nameSpaceItems },
+      issuerAuth: new Uint8Array([1]),
+    },
+  });
+  return base64url.encode(cbor, "utf8");
+}
+
 function buildIssuerSignedOnlyMdocForTests(docType = null) {
   const issuerAuth = docType
     ? [new Uint8Array(), {}, encode({ docType }), new Uint8Array()]
@@ -160,6 +174,66 @@ describe("dcqlCredentialSelection", () => {
         }),
       ).to.equal(false);
     });
+    it("matches mso_mdoc when a requested nested claim path is present", () => {
+      const mdoc = buildMdocWithClaimsForTests(
+        pidDoctype,
+        "urn:eu.europa.ec.eudi:pid:1",
+        { family_name: "Neslo" },
+      );
+      const q = {
+        id: "cred1",
+        format: "mso_mdoc",
+        meta: { doctype_value: pidDoctype },
+        claims: [{ path: ["urn:eu.europa.ec.eudi:pid:1", "family_name"] }],
+      };
+      expect(storedCredentialMatchesDcqlQuery(q, mdoc)).to.equal(true);
+    });
+    it("rejects mso_mdoc when a requested nested claim path is missing", () => {
+      const mdoc = buildMdocWithClaimsForTests(
+        pidDoctype,
+        "urn:eu.europa.ec.eudi:pid:1",
+        { given_name: "Alice" },
+      );
+      const q = {
+        id: "cred1",
+        format: "mso_mdoc",
+        meta: { doctype_value: pidDoctype },
+        claims: [{ path: ["urn:eu.europa.ec.eudi:pid:1", "family_name"] }],
+      };
+      expect(storedCredentialMatchesDcqlQuery(q, mdoc)).to.equal(false);
+    });
+    it("matches mso_mdoc when a requested claim satisfies a DCQL values constraint", () => {
+      const mdoc = buildMdocWithClaimsForTests(
+        pidDoctype,
+        "urn:eu.europa.ec.eudi:pid:1",
+        { family_name: "Neslo" },
+      );
+      const q = {
+        id: "cred1",
+        format: "mso_mdoc",
+        meta: { doctype_value: pidDoctype },
+        claims: [{ path: ["urn:eu.europa.ec.eudi:pid:1", "family_name"], values: ["Neslo"] }],
+      };
+      expect(storedCredentialMatchesDcqlQuery(q, mdoc)).to.equal(true);
+    });
+    it("rejects mso_mdoc when no DCQL claim_sets option is satisfied", () => {
+      const mdoc = buildMdocWithClaimsForTests(
+        pidDoctype,
+        "urn:eu.europa.ec.eudi:pid:1",
+        { family_name: "Neslo" },
+      );
+      const q = {
+        id: "cred1",
+        format: "mso_mdoc",
+        meta: { doctype_value: pidDoctype },
+        claims: [
+          { id: "family_name_claim", path: ["urn:eu.europa.ec.eudi:pid:1", "family_name"] },
+          { id: "given_name_claim", path: ["urn:eu.europa.ec.eudi:pid:1", "given_name"] },
+        ],
+        claim_sets: [["given_name_claim"]],
+      };
+      expect(storedCredentialMatchesDcqlQuery(q, mdoc)).to.equal(false);
+    });
     it("matches dc+sd-jwt to SD-JWT and optional vct_values", async () => {
       const vct = "eu.webuildconsortium.helloworld.v1";
       const sd = await buildDcSdJwtForTests(vct);
@@ -177,12 +251,34 @@ describe("dcqlCredentialSelection", () => {
       };
       expect(storedCredentialMatchesDcqlQuery(q, sd)).to.equal(false);
     });
+    it("matches dc+sd-jwt when a top-level claim satisfies a DCQL values constraint", async () => {
+      const sd = await buildDcSdJwtForTests("a.b.c");
+      const q = {
+        id: "cred1",
+        format: "dc+sd-jwt",
+        claims: [{ path: ["family_name"], values: ["Neslo"] }],
+      };
+      expect(storedCredentialMatchesDcqlQuery(q, sd)).to.equal(true);
+    });
+    it("rejects dc+sd-jwt when a top-level claim does not satisfy a DCQL values constraint", async () => {
+      const sd = await buildDcSdJwtForTests("a.b.c");
+      const q = {
+        id: "cred1",
+        format: "dc+sd-jwt",
+        claims: [{ path: ["family_name"], values: ["Doe"] }],
+      };
+      expect(storedCredentialMatchesDcqlQuery(q, sd)).to.equal(false);
+    });
   });
 
   describe("selectWalletCredentialTypeForDcql", () => {
     it("picks the mdoc-typed configuration when DCQL requests mso_mdoc even if SD-JWT is first in the list", async () => {
       const sdJwt = await buildDcSdJwtForTests("eu.dummy");
-      const mdocB64 = buildMdocB64ForTests(pidDoctype);
+      const mdocB64 = buildMdocWithClaimsForTests(
+        pidDoctype,
+        "org.iso.18013.5.1",
+        { family_name: "Neslo" },
+      );
       const store = {
         "sd-first": { credential: { credential: sdJwt } },
         [pidDoctype]: { credential: { credential: mdocB64 } },
@@ -219,7 +315,11 @@ describe("dcqlCredentialSelection", () => {
     });
 
     it("accepts a required credential_set option that references the matched credential query id", async () => {
-      const mdocB64 = buildMdocB64ForTests(pidDoctype);
+      const mdocB64 = buildMdocWithClaimsForTests(
+        pidDoctype,
+        "org.iso.18013.5.1",
+        { family_name: "Neslo" },
+      );
       const store = {
         [pidDoctype]: { credential: { credential: mdocB64 } },
       };

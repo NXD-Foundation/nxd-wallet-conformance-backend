@@ -111,7 +111,7 @@ Legend:
 | `meta` matching | Required for credential selection | Mostly yes | SD-JWT `vct_values` and mdoc `doctype_value` are validated. More format-specific meta constraints may still be future work. |
 | `trusted_authorities` | Relevant to high assurance | Partial / placeholder | Accepted as advisory and logged until a trust registry is configured. |
 | `require_cryptographic_holder_binding` | Relevant to CS-02 | Yes | Strict mode rejects `false` for SD-JWT-VC because KB-JWT is mandatory. |
-| Claim paths and claim_sets | Required for disclosure constraints | Partial | The validator enforces non-empty string path segments, duplicate claim ids, and `claim_sets` references. Full DCQL path grammar and value matching are not complete. |
+| Claim paths and claim_sets | Required for disclosure constraints | Partial | The validator enforces non-empty string path segments, duplicate claim ids, and `claim_sets` references. Enforced runtime support now covers top-level SD-JWT claim paths and nested mdoc claim paths, plus exact string `values` matching for those supported subsets. Broader DCQL path grammar remains incomplete. |
 | `credential_sets` | Relevant when used | Mostly yes | Non-empty options and unknown id references are rejected; verifier validates satisfied required sets. |
 
 ### ProtocolMessages: Authorization Response (PM 124-159)
@@ -185,7 +185,7 @@ Legend:
 | Wallet JAR validation | Required | Mostly covered: strict `typ`, `alg`, required fields, lifetime, audience policy, HTTPS request URI, signature verification, query precedence, exact `did:web` `kid` binding, and strict `client_metadata_uri` policy are in place. |
 | `openid4vp://present` request URI invocation | Required | Covered. |
 | DCQL query and response shape | Required | Mostly covered: structure, ids, formats, claim paths, claim_sets, credential_sets, multiple, and response object shape are validated. |
-| SD-JWT-VC selective disclosure | Required | Partial/covered for common claim paths; full disclosure integrity and value matching remain follow-up work. |
+| SD-JWT-VC selective disclosure | Required | Partial/covered for the supported subsets; top-level SD-JWT exact string `values` and nested mdoc claim-path / `claim_sets` / exact string `values` constraints are now enforced, while broader path semantics remain follow-up work. |
 | KB-JWT holder binding | Required | Covered for generated wallet responses and verifier checks. |
 | Verifier nonce/audience/request-constraint checks | Required | Mostly covered for response mode, state, nonce, audience, DCQL response shape, and KB-JWT; issuer trust and disclosure authenticity remain partial. |
 | Credential authenticity and status | Required by verifier validation intent | Partial: KB-JWT/cnf binding and status reference placeholders exist; issuer signature/trust and revocation decisions remain TODO until trust framework exists. |

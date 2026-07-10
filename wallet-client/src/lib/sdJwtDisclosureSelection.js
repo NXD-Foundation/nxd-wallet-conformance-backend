@@ -22,6 +22,19 @@ function readJwtPayload(jwt) {
   }
 }
 
+function reconstructedTopLevelSdJwtClaims(issuerJwt, disclosures) {
+  const claims = { ...(readJwtPayload(issuerJwt) || {}) };
+  delete claims._sd;
+  delete claims._sd_alg;
+  for (const disclosure of disclosures) {
+    const decoded = decodeSdJwtDisclosure(disclosure);
+    if (typeof decoded?.[1] === "string" && decoded[1].length > 0) {
+      claims[decoded[1]] = decoded[2];
+    }
+  }
+  return claims;
+}
+
 export function sdJwtWithoutKbJwt(sdJwt) {
   let token = String(sdJwt || "");
   while (token.endsWith("~")) token = token.slice(0, -1);
@@ -136,6 +149,25 @@ export function filterSdJwtByDcqlClaims(sdJwt, dcqlCredentialQuery) {
     throw new Error(
       `Stored SD-JWT is missing requested DCQL disclosure(s): ${missing.join(", ")}`,
     );
+  }
+
+  const reconstructedClaims = reconstructedTopLevelSdJwtClaims(
+    issuerJwt,
+    filteredDisclosures,
+  );
+  for (const claim of dcqlCredentialQuery?.claims || []) {
+    if (!Array.isArray(claim?.values) || claim.values.length === 0) continue;
+    const claimName = Array.isArray(claim.path) ? claim.path[0] : null;
+    const actualValue = claimName ? reconstructedClaims[claimName] : undefined;
+    if (
+      typeof actualValue !== "string" ||
+      !claim.values.includes(actualValue)
+    ) {
+      throw new Cs02ValidationError(
+        `Stored SD-JWT claim "${claimName || "unknown"}" does not satisfy requested DCQL values constraint`,
+        "access_denied",
+      );
+    }
   }
 
   return `${issuerJwt}${filteredDisclosures.length > 0 ? `~${filteredDisclosures.join("~")}` : ""}~`;

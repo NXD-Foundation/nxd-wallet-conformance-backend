@@ -20,6 +20,11 @@ import {
   resolveCs02TrustPolicyOptions,
 } from "./cs02TrustPolicy.js";
 import { extractMdocDocType } from "../wallet-client/src/lib/mdocDocType.js";
+import {
+  claimSatisfiesMdocConstraints,
+  extractMdocClaimsByNamespace,
+  selectSatisfiedMdocClaimSet,
+} from "./mdocClaims.js";
 
 export { resolveVerifierCs02Options, isVerifierCs02StrictMode } from "./cs02VerifierRequest.js";
 
@@ -632,6 +637,18 @@ function validateIssuerCredentialClaims({
         "invalid_credential",
       );
     }
+    if (Array.isArray(claim?.values) && claim.values.length > 0) {
+      const actualValue = getPathValue(reconstructedClaims, claim.path);
+      if (
+        typeof actualValue !== "string" ||
+        !claim.values.includes(actualValue)
+      ) {
+        throw new Cs02VerifierResponseError(
+          `SD-JWT-VC claim "${claim.path.join(".")}" does not satisfy requested DCQL values constraint`,
+          "invalid_credential",
+        );
+      }
+    }
   }
 
   if (rejectUnsolicitedDisclosures && requestedClaimNames.size > 0) {
@@ -889,6 +906,54 @@ export function validateCs02MdocPresentation({ presentation, credQuery } = {}) {
       `mso_mdoc doctype does not satisfy DCQL request for credential "${credQuery?.id || "unknown"}"`,
       "invalid_credential",
     );
+  }
+
+  const claimConstraints = Array.isArray(credQuery?.claims) ? credQuery.claims : [];
+  if (claimConstraints.length > 0) {
+    let claimsByNamespace;
+    try {
+      claimsByNamespace = extractMdocClaimsByNamespace(presentation, {
+        fallbackDocType: actualDocType,
+      }).claimsByNamespace;
+    } catch {
+      throw new Cs02VerifierResponseError(
+        `Unable to decode mso_mdoc claims for DCQL credential "${credQuery?.id || "unknown"}"`,
+        "invalid_credential",
+      );
+    }
+
+    const satisfiedClaimSet = selectSatisfiedMdocClaimSet(credQuery, claimsByNamespace);
+    const claimsById = new Map(
+      claimConstraints
+        .filter((claim) => typeof claim?.id === "string" && claim.id.length > 0)
+        .map((claim) => [claim.id, claim]),
+    );
+    const claimsToCheck = satisfiedClaimSet
+      ? Array.from(satisfiedClaimSet).map((id) => claimsById.get(id)).filter(Boolean)
+      : claimConstraints;
+
+    if (Array.isArray(credQuery?.claim_sets) && credQuery.claim_sets.length > 0 && !satisfiedClaimSet) {
+      throw new Cs02VerifierResponseError(
+        `mso_mdoc presentation does not satisfy any DCQL claim_sets option for credential "${credQuery?.id || "unknown"}"`,
+        "invalid_credential",
+      );
+    }
+
+    for (const claim of claimsToCheck) {
+      if (!claimSatisfiesMdocConstraints(claim, claimsByNamespace)) {
+        const path = Array.isArray(claim?.path) ? claim.path.join(".") : "unknown";
+        if (Array.isArray(claim?.values) && claim.values.length > 0) {
+          throw new Cs02VerifierResponseError(
+            `mso_mdoc claim "${path}" does not satisfy requested DCQL values constraint`,
+            "invalid_credential",
+          );
+        }
+        throw new Cs02VerifierResponseError(
+          `mso_mdoc is missing requested claim path "${path}"`,
+          "invalid_credential",
+        );
+      }
+    }
   }
 
   return { ok: true, doctype: actualDocType };

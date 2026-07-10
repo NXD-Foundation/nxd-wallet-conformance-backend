@@ -3,6 +3,10 @@ import base64url from 'base64url';
 import crypto from "node:crypto";
 import { DeviceResponse } from "@animo-id/mdoc";
 import { mdocContext } from "./mdocContext.js";
+import {
+  extractMdocClaimsByNamespace,
+  selectSatisfiedMdocClaimSet,
+} from "../../utils/mdocClaims.js";
 
 /**
  * Custom mDL verification using cbor-x decoder
@@ -272,13 +276,26 @@ function dcqlPathToMdocJsonPath(path) {
   return `$['${namespace.replaceAll("'", "\\'")}']['${elementIdentifier.replaceAll("'", "\\'")}']`;
 }
 
-function presentationDefinitionFromDcqlMdocQuery(dcqlCredentialQuery, docType) {
+function presentationDefinitionFromDcqlMdocQuery(dcqlCredentialQuery, docType, claimsByNamespace = null) {
   if (!dcqlCredentialQuery || dcqlCredentialQuery.format !== "mso_mdoc") {
     return null;
   }
 
-  const fields = Array.isArray(dcqlCredentialQuery.claims)
-    ? dcqlCredentialQuery.claims
+  const claimsById = new Map(
+    (dcqlCredentialQuery.claims || [])
+      .filter((claim) => typeof claim?.id === "string" && claim.id.length > 0)
+      .map((claim) => [claim.id, claim]),
+  );
+  const satisfiedClaimSet =
+    claimsByNamespace ? selectSatisfiedMdocClaimSet(dcqlCredentialQuery, claimsByNamespace) : null;
+  const selectedClaims = Array.isArray(dcqlCredentialQuery.claims)
+    ? (satisfiedClaimSet
+        ? Array.from(satisfiedClaimSet).map((id) => claimsById.get(id)).filter(Boolean)
+        : dcqlCredentialQuery.claims)
+    : [];
+
+  const fields = selectedClaims
+    ? selectedClaims
         .map((claim) => dcqlPathToMdocJsonPath(claim?.path))
         .filter(Boolean)
         .map((path) => ({
@@ -447,9 +464,20 @@ export async function buildMdocPresentation(storedCredential, options = {}) {
     verifierGeneratedNonce,
   });
 
+  const decodedClaims =
+    dcqlCredentialQuery
+      ? extractMdocClaimsByNamespace(
+          {
+            docType,
+            issuerSigned,
+          },
+          { fallbackDocType: docType },
+        ).claimsByNamespace
+      : null;
+
   const effectivePresentationDefinition =
     presentationDefinition ||
-    presentationDefinitionFromDcqlMdocQuery(dcqlCredentialQuery, docType);
+    presentationDefinitionFromDcqlMdocQuery(dcqlCredentialQuery, docType, decodedClaims);
 
   if (effectivePresentationDefinition) {
     builder = builder.usingPresentationDefinition(effectivePresentationDefinition);
