@@ -1,6 +1,7 @@
 import { expect } from "chai";
 import { encode } from "cbor-x";
 import base64url from "base64url";
+import { createHash } from "crypto";
 import { SignJWT, generateKeyPair, exportJWK } from "jose";
 import {
   storedCredentialMatchesDcqlQuery,
@@ -45,13 +46,25 @@ function buildIssuerSignedOnlyMdocForTests(docType = null) {
   );
 }
 
-async function buildDcSdJwtForTests(vct) {
+async function buildDcSdJwtForTests(vct, disclosures = [disclosure("family_name", "Neslo")]) {
   const { privateKey, publicKey } = await generateKeyPair("ES256");
   const pub = await exportJWK(publicKey);
-  const first = await new SignJWT({ vct })
+  const first = await new SignJWT({
+    vct,
+    _sd_alg: "sha-256",
+    _sd: disclosures.map(disclosureDigest),
+  })
     .setProtectedHeader({ typ: "dc+sd-jwt", alg: "ES256", jwk: pub })
     .sign(privateKey);
-  return `${first}~WyJ4IiwiZmFtaWx5X25hbWUiLCJOZXNsbyJd`;
+  return `${first}~${disclosures.join("~")}~`;
+}
+
+function disclosure(name, value) {
+  return base64url.encode(JSON.stringify(["salt", name, value]), "utf8");
+}
+
+function disclosureDigest(encodedDisclosure) {
+  return createHash("sha256").update(encodedDisclosure, "ascii").digest("base64url");
 }
 
 describe("dcqlCredentialSelection", () => {
@@ -240,6 +253,26 @@ describe("dcqlCredentialSelection", () => {
       const q = {
         format: "dc+sd-jwt",
         meta: { vct_values: [vct, "other"] },
+      };
+      expect(storedCredentialMatchesDcqlQuery(q, sd)).to.equal(true);
+    });
+    it("matches dc+sd-jwt when a nested disclosed object path is present", async () => {
+      const addressDisclosure = disclosure("address", { locality: "Athens", country: "GR" });
+      const sd = await buildDcSdJwtForTests("eu.test.demo", [addressDisclosure]);
+      const q = {
+        id: "cred1",
+        format: "dc+sd-jwt",
+        claims: [{ path: ["address", "locality"] }],
+      };
+      expect(storedCredentialMatchesDcqlQuery(q, sd)).to.equal(true);
+    });
+    it("matches dc+sd-jwt when a dotted disclosure key satisfies a nested path", async () => {
+      const schemeDisclosure = disclosure("identifier.schemeID", "European Student Identifier");
+      const sd = await buildDcSdJwtForTests("eu.test.demo", [schemeDisclosure]);
+      const q = {
+        id: "cred1",
+        format: "dc+sd-jwt",
+        claims: [{ path: ["identifier", "schemeID"], values: ["European Student Identifier"] }],
       };
       expect(storedCredentialMatchesDcqlQuery(q, sd)).to.equal(true);
     });

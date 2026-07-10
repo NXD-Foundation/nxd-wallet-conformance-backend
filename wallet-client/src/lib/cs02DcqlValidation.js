@@ -54,14 +54,14 @@ export function validateDcqlClaimPath(path, context, log = () => {}) {
 
 function validateSdJwtClaimPathSupport(path, context, log = () => {}) {
   if (!Array.isArray(path) || path.length === 0) return;
-  if (path.length !== 1) {
+  if (path.some((segment) => typeof segment !== "string" || segment.length === 0)) {
     logDcqlFailure(log, "claim_path_not_supported_for_sd_jwt", {
       context,
       path,
       pathLength: path.length,
     });
     throw new Cs02ValidationError(
-      `DCQL claim path must reference a top-level claim for SD-JWT-VC (${context})`,
+      `DCQL claim path contains unsupported SD-JWT segments (${context})`,
       "invalid_request",
     );
   }

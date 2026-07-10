@@ -341,12 +341,15 @@ Goal: close the remaining validation gap between structurally valid DCQL and ful
 
 Status: partially complete. Verifier-side strict SD-JWT validation already reconstructs disclosures, checks requested claims, rejects unsolicited disclosures in strict mode, and validates requested `vct` values. The currently enforced subset now includes:
 
-- top-level SD-JWT exact string `values`
+- SD-JWT claim-path presence for string-segment paths, including nested object paths
+- SD-JWT dotted disclosure-key matching when a disclosed key maps to a nested DCQL path
+- SD-JWT `claim_sets` satisfaction for the supported path subset
+- exact string `values` matching for supported SD-JWT claim paths
 - nested `mso_mdoc` claim-path presence checks
 - `mso_mdoc` `claim_sets` satisfaction
 - exact string `values` matching for `mso_mdoc` claims
 
-Broader value/path semantics remain pending until they are implemented consistently across wallet and verifier paths.
+Broader value/path semantics remain pending until they are implemented consistently across wallet and verifier paths. The remaining broader-semantic work is now specifically about cases beyond the current string-segment path subset, for example more complex DCQL path grammar or future SD-JWT path forms outside the current object/dotted-key model.
 
 Implementation policy for this phase:
 
@@ -363,7 +366,7 @@ Required wallet changes:
 - Fail when a requested disclosure cannot be found.
 - Do not include unsolicited disclosures in strict CS-02 mode.
 - Enforce supported DCQL claim value constraints from stored wallet credentials when selecting/presenting SD-JWT credentials.
-- For the currently supported subset, enforce exact string matching for top-level SD-JWT claim `values`.
+- For the currently supported SD-JWT subset, enforce claim-path presence, `claim_sets`, and exact string `values` matching for string-segment paths, including nested object paths and dotted disclosure keys that satisfy those paths.
 - For the currently supported mdoc subset, enforce nested claim-path presence, `claim_sets` satisfaction, and exact string `values` matching.
 - When `claim_sets` is present, disclose only the claims belonging to the satisfied claim set option.
 - For `credential_sets`, only present credentials belonging to the satisfied option.
@@ -375,7 +378,7 @@ Required verifier changes:
 - Verify every requested DCQL claim path is present in the reconstructed claims.
 - Reject unsolicited disclosed claims when strict policy is enabled.
 - Enforce supported DCQL claim value constraints against reconstructed credential claims.
-- For the currently supported subset, enforce exact string matching for top-level SD-JWT claim `values`.
+- For the currently supported SD-JWT subset, enforce claim-path presence, `claim_sets`, and exact string `values` matching for string-segment paths, including nested object paths and dotted disclosure keys that satisfy those paths.
 - For the currently supported mdoc subset, enforce nested claim-path presence, `claim_sets` satisfaction, and exact string `values` matching.
 - Validate `vct` in reconstructed/issuer-signed credential against `meta.vct_values`.
 - Validate `mso_mdoc` doctype against `meta.doctype_value` for mdoc responses.
@@ -387,6 +390,8 @@ Required tests:
 - Reject missing requested disclosure.
 - Reject unsolicited disclosure.
 - Reject wrong claim value for supported DCQL `values` constraints.
+- Accept nested SD-JWT claim paths when they are satisfied by disclosed object claims.
+- Accept nested SD-JWT claim paths when they are satisfied by dotted disclosure keys.
 - Accept only the selected `claim_sets` option.
 - Reject wrong `vct`.
 - Reject wrong mdoc doctype when `mso_mdoc` is requested.
@@ -502,4 +507,3 @@ The remaining alignment work is complete when:
 - Missing SD-JWT-VC status remains allowed by default until status-list issuer trust exists.
 - x509 chain/SAN and verifier-attestation trusted issuer enforcement remain intentionally skipped until trust anchors/trusted issuers are configured.
 - Compatibility behavior must be explicit and must not silently weaken strict CS-02 routes.
-

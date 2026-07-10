@@ -99,7 +99,7 @@ describe("CS-02 DCQL validation (Phase 2)", () => {
     expect(() => validateDcqlClaimPath([-1], "test")).to.throw(Cs02ValidationError);
   });
 
-  it("rejects nested SD-JWT claim paths until explicit support exists", () => {
+  it("accepts nested SD-JWT claim paths with string segments", () => {
     expect(() =>
       validateCs02DcqlQuery(
         {
@@ -113,7 +113,7 @@ describe("CS-02 DCQL validation (Phase 2)", () => {
         },
         strictOptions,
       ),
-    ).to.throw(Cs02ValidationError, /top-level claim/);
+    ).to.not.throw();
   });
 
   it("allows nested mdoc claim paths", () => {

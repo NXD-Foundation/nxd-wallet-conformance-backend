@@ -111,7 +111,7 @@ Legend:
 | `meta` matching | Required for credential selection | Mostly yes | SD-JWT `vct_values` and mdoc `doctype_value` are validated. More format-specific meta constraints may still be future work. |
 | `trusted_authorities` | Relevant to high assurance | Partial / placeholder | Accepted as advisory and logged until a trust registry is configured. |
 | `require_cryptographic_holder_binding` | Relevant to CS-02 | Yes | Strict mode rejects `false` for SD-JWT-VC because KB-JWT is mandatory. |
-| Claim paths and claim_sets | Required for disclosure constraints | Partial | The validator enforces non-empty string path segments, duplicate claim ids, and `claim_sets` references. Enforced runtime support now covers top-level SD-JWT claim paths and nested mdoc claim paths, plus exact string `values` matching for those supported subsets. Broader DCQL path grammar remains incomplete. |
+| Claim paths and claim_sets | Required for disclosure constraints | Partial | The validator enforces non-empty string path segments, duplicate claim ids, and `claim_sets` references. Enforced runtime support now covers SD-JWT claim-path presence for current string-segment paths, including nested object paths and dotted disclosure-key matches, plus SD-JWT `claim_sets` and exact string `values` for that subset. Nested mdoc claim paths, `claim_sets`, and exact string `values` are also enforced. Broader DCQL path grammar remains incomplete. |
 | `credential_sets` | Relevant when used | Mostly yes | Non-empty options and unknown id references are rejected; verifier validates satisfied required sets. |
 
 ### ProtocolMessages: Authorization Response (PM 124-159)
@@ -163,7 +163,7 @@ Legend:
 | High | Metadata consistency is incomplete. | Strict request-time metadata filtering is in place, but public/static metadata publication still needs continued auditing so compatibility metadata cannot leak into strict CS-02 surfaces. |
 | Major | Status/revocation is placeholder-only. | Malformed status-list references are rejected, but status-list token fetch, signature validation, bitstring decoding, and revoked/suspended decisions wait on the trust framework. |
 | Major | Production trust policy is intentionally deferred. | x509 chain/SAN validation and verifier-attestation trusted issuer validation are intentionally skipped until trust anchors/trusted issuers exist. |
-| Major | Full disclosure/request-constraint validation still needs hardening. | DCQL structure, requested-claim checks, and unsolicited disclosure rejection are stronger now, but wallet-side minimization, full DCQL path grammar, value matching, and more FCAF negative cases are not complete. |
+| Major | Full disclosure/request-constraint validation still needs hardening. | DCQL structure, requested-claim checks, nested supported-path enforcement, and unsolicited disclosure rejection are stronger now, but wallet-side minimization, broader DCQL path grammar beyond the supported subset, broader value semantics, and more FCAF negative cases are not complete. |
 | Major | Consent is out of scope in runtime and must stay documented as such. | `wallet-client` is a headless test wallet. Production wrappers still need their own UI/API consent gate and safe consent logging. |
 
 ## FCAF Gaps That Are Lower Priority For WE BUILD CS-02
@@ -185,7 +185,7 @@ Legend:
 | Wallet JAR validation | Required | Mostly covered: strict `typ`, `alg`, required fields, lifetime, audience policy, HTTPS request URI, signature verification, query precedence, exact `did:web` `kid` binding, and strict `client_metadata_uri` policy are in place. |
 | `openid4vp://present` request URI invocation | Required | Covered. |
 | DCQL query and response shape | Required | Mostly covered: structure, ids, formats, claim paths, claim_sets, credential_sets, multiple, and response object shape are validated. |
-| SD-JWT-VC selective disclosure | Required | Partial/covered for the supported subsets; top-level SD-JWT exact string `values` and nested mdoc claim-path / `claim_sets` / exact string `values` constraints are now enforced, while broader path semantics remain follow-up work. |
+| SD-JWT-VC selective disclosure | Required | Partial/covered for the supported subsets; current SD-JWT string-segment claim-path presence, dotted disclosure-key matching, `claim_sets`, and exact string `values` constraints are now enforced, and nested mdoc claim-path / `claim_sets` / exact string `values` constraints are also enforced. Broader path/value semantics remain follow-up work. |
 | KB-JWT holder binding | Required | Covered for generated wallet responses and verifier checks. |
 | Verifier nonce/audience/request-constraint checks | Required | Mostly covered for response mode, state, nonce, audience, DCQL response shape, and KB-JWT; issuer trust and disclosure authenticity remain partial. |
 | Credential authenticity and status | Required by verifier validation intent | Partial: KB-JWT/cnf binding and status reference placeholders exist; issuer signature/trust and revocation decisions remain TODO until trust framework exists. |
@@ -198,7 +198,7 @@ Legend:
 2. Extend SD-JWT-VC issuer authenticity from local/test key verification to configured issuer trust once the trust framework exists.
 3. Keep status-list validation as placeholder until trust framework exists, then add fetch/cache/timeout/max-size policy, token signature validation, bitstring decoding, and revoked/suspended decisions.
 4. When trust anchors/trusted attestation issuers exist, implement x509 chain/SAN DNS enforcement and verifier-attestation issuer/sub/expiry/signing-key binding validation in the placeholder methods.
-5. Harden remaining disclosure/request-constraint checks: wallet-side minimization, full DCQL path grammar, value matching, credential-set strictness, and more negative tests.
+5. Harden remaining disclosure/request-constraint checks: wallet-side minimization, broader DCQL path grammar beyond the supported subset, broader value semantics, credential-set strictness, and more negative tests.
 6. Keep holder consent documented as external to this headless test wallet and require production wrappers to implement the consent gate.
 
 ## Bottom Line

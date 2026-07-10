@@ -25,6 +25,11 @@ import {
   extractMdocClaimsByNamespace,
   selectSatisfiedMdocClaimSet,
 } from "./mdocClaims.js";
+import {
+  getSdJwtPathValue,
+  parseSdJwtClaims,
+  selectSatisfiedSdJwtClaimSet,
+} from "./sdJwtClaims.js";
 
 export { resolveVerifierCs02Options, isVerifierCs02StrictMode } from "./cs02VerifierRequest.js";
 
@@ -574,9 +579,9 @@ function requestedTopLevelClaimNames(credQuery) {
 
 function assertSupportedSdJwtClaimPaths(credQuery) {
   for (const claim of credQuery?.claims || []) {
-    if (Array.isArray(claim?.path) && claim.path.length !== 1) {
+    if (!Array.isArray(claim?.path) || claim.path.length === 0) {
       throw new Cs02VerifierResponseError(
-        `Unsupported SD-JWT DCQL claim path "${claim.path.join(".")}": only top-level claim paths are currently supported`,
+        `Unsupported SD-JWT DCQL claim path "${Array.isArray(claim?.path) ? claim.path.join(".") : "unknown"}"`,
         "invalid_request",
       );
     }
@@ -597,7 +602,7 @@ function getPathValue(object, path) {
 function validateIssuerCredentialClaims({
   issuerPayload,
   reconstructedClaims,
-  disclosedClaimNames,
+  disclosureKeymap,
   credQuery,
   holderBindingRequired = true,
   rejectUnsolicitedDisclosures = true,
@@ -629,20 +634,31 @@ function validateIssuerCredentialClaims({
   }
 
   assertSupportedSdJwtClaimPaths(credQuery);
-  const requestedClaimNames = requestedTopLevelClaimNames(credQuery);
-  for (const claim of credQuery?.claims || []) {
-    if (Array.isArray(claim?.path) && getPathValue(reconstructedClaims, claim.path) === undefined) {
+  const satisfiedClaimSet = selectSatisfiedSdJwtClaimSet(credQuery, reconstructedClaims);
+  const claimsById = new Map(
+    (credQuery?.claims || [])
+      .filter((claim) => typeof claim?.id === "string" && claim.id.length > 0)
+      .map((claim) => [claim.id, claim]),
+  );
+  const claimsToCheck = satisfiedClaimSet
+    ? Array.from(satisfiedClaimSet).map((id) => claimsById.get(id)).filter(Boolean)
+    : (credQuery?.claims || []);
+  if (Array.isArray(credQuery?.claim_sets) && credQuery.claim_sets.length > 0 && !satisfiedClaimSet) {
+    throw new Cs02VerifierResponseError(
+      "SD-JWT-VC does not satisfy any DCQL claim_sets option",
+      "invalid_credential",
+    );
+  }
+  for (const claim of claimsToCheck) {
+    if (Array.isArray(claim?.path) && getSdJwtPathValue(reconstructedClaims, claim.path) === undefined) {
       throw new Cs02VerifierResponseError(
         `SD-JWT-VC is missing requested claim path "${claim.path.join(".")}"`,
         "invalid_credential",
       );
     }
     if (Array.isArray(claim?.values) && claim.values.length > 0) {
-      const actualValue = getPathValue(reconstructedClaims, claim.path);
-      if (
-        typeof actualValue !== "string" ||
-        !claim.values.includes(actualValue)
-      ) {
+      const actualValue = getSdJwtPathValue(reconstructedClaims, claim.path);
+      if (typeof actualValue !== "string" || !claim.values.includes(actualValue)) {
         throw new Cs02VerifierResponseError(
           `SD-JWT-VC claim "${claim.path.join(".")}" does not satisfy requested DCQL values constraint`,
           "invalid_credential",
@@ -651,11 +667,19 @@ function validateIssuerCredentialClaims({
     }
   }
 
-  if (rejectUnsolicitedDisclosures && requestedClaimNames.size > 0) {
-    for (const claimName of disclosedClaimNames) {
-      if (!requestedClaimNames.has(claimName)) {
+  if (rejectUnsolicitedDisclosures && Object.keys(disclosureKeymap || {}).length > 0) {
+    const allowedPaths = new Set(
+      claimsToCheck
+        .filter((claim) => Array.isArray(claim?.path) && claim.path.length > 0)
+        .map((claim) => claim.path.join(".")),
+    );
+    for (const disclosedPath of Object.keys(disclosureKeymap || {})) {
+      const allowed = Array.from(allowedPaths).some(
+        (path) => disclosedPath === path || disclosedPath.startsWith(`${path}.`) || path.startsWith(`${disclosedPath}.`),
+      );
+      if (!allowed) {
         throw new Cs02VerifierResponseError(
-          `SD-JWT-VC includes unsolicited disclosed claim "${claimName}"`,
+          `SD-JWT-VC includes unsolicited disclosed claim "${disclosedPath}"`,
           "invalid_credential",
         );
       }
@@ -729,11 +753,28 @@ export async function validateCs02SdJwtIssuerAuthenticity({
     };
   }
 
-  const { claims, disclosedClaimNames } = reconstructTopLevelSdJwtClaims(issuerPayload, disclosures);
+  let parsedClaims;
+  try {
+    parsedClaims = parseSdJwtClaims(sdJwt);
+  } catch {
+    throw new Cs02VerifierResponseError(
+      "SD-JWT disclosure digest does not match issuer-signed payload",
+      "invalid_credential",
+    );
+  }
+  for (const disclosure of disclosures) {
+    const digest = digestDisclosure(disclosure, issuerPayload?._sd_alg);
+    if (!Object.values(parsedClaims.disclosureKeymap || {}).includes(digest)) {
+      throw new Cs02VerifierResponseError(
+        "SD-JWT disclosure digest does not match issuer-signed payload",
+        "invalid_credential",
+      );
+    }
+  }
   validateIssuerCredentialClaims({
     issuerPayload,
-    reconstructedClaims: claims,
-    disclosedClaimNames,
+    reconstructedClaims: parsedClaims.claims,
+    disclosureKeymap: parsedClaims.disclosureKeymap,
     credQuery,
     holderBindingRequired: options.holderBindingRequired !== false,
     rejectUnsolicitedDisclosures: options.rejectUnsolicitedDisclosures !== false,
@@ -744,8 +785,8 @@ export async function validateCs02SdJwtIssuerAuthenticity({
     ok: true,
     header,
     issuerPayload,
-    claims,
-    disclosedClaimNames,
+    claims: parsedClaims.claims,
+    disclosedClaimNames: Object.keys(parsedClaims.disclosureKeymap || {}),
     issuerSignature,
   };
 }

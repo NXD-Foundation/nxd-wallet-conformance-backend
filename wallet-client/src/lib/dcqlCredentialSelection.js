@@ -10,6 +10,7 @@ import {
   extractMdocClaimsByNamespace,
   selectSatisfiedMdocClaimSet,
 } from "../../../utils/mdocClaims.js";
+import { parseSdJwtClaims, selectSatisfiedSdJwtClaimSet, claimSatisfiesSdJwtConstraints } from "../../../utils/sdJwtClaims.js";
 import { extractMdocDocType } from "./mdocDocType.js";
 
 function safeSlog(slog, event, data) {
@@ -66,49 +67,6 @@ function readSdJwtVct(sdJwt, slog) {
       error: e?.message || String(e),
     });
     return undefined;
-  }
-}
-
-function decodeSdJwtDisclosure(disclosure, slog) {
-  try {
-    const decoded = JSON.parse(Buffer.from(disclosure, "base64url").toString("utf8"));
-    return Array.isArray(decoded) ? decoded : null;
-  } catch (e) {
-    safeSlog(slog, "[dcql] sd-jwt disclosure decode failed", {
-      error: e?.message || String(e),
-    });
-    return null;
-  }
-}
-
-function readSdJwtTopLevelClaims(sdJwt, slog) {
-  try {
-    const parts = String(sdJwt).split("~").filter((part, index) => index === 0 || part.length > 0);
-    const issuerJwt = parts[0];
-    const issuerParts = String(issuerJwt).split(".");
-    if (issuerParts.length < 2) {
-      safeSlog(slog, "[dcql] sd-jwt claims decode failed", {
-        reason: "missing issuer payload segment",
-      });
-      return null;
-    }
-    const claims = JSON.parse(Buffer.from(issuerParts[1], "base64url").toString("utf8"));
-    delete claims._sd;
-    delete claims._sd_alg;
-
-    for (const part of parts.slice(1)) {
-      if (part.includes(".")) continue;
-      const decoded = decodeSdJwtDisclosure(part, slog);
-      if (typeof decoded?.[1] === "string" && decoded[1].length > 0) {
-        claims[decoded[1]] = decoded[2];
-      }
-    }
-    return claims;
-  } catch (e) {
-    safeSlog(slog, "[dcql] sd-jwt claims decode failed", {
-      error: e?.message || String(e),
-    });
-    return null;
   }
 }
 
@@ -229,36 +187,49 @@ export function storedCredentialMatchesDcqlQuery(
       if (!matched) return false;
     }
     const claimConstraints = Array.isArray(credQuery.claims) ? credQuery.claims : [];
-    const needsValueMatching = claimConstraints.some(
-      (claim) => Array.isArray(claim?.values) && claim.values.length > 0,
-    );
-    if (needsValueMatching) {
-      const claims = readSdJwtTopLevelClaims(token, slog);
-      if (!claims) return false;
-      for (const claim of claimConstraints) {
-        if (!Array.isArray(claim?.values) || claim.values.length === 0) continue;
-        const claimName =
-          Array.isArray(claim?.path) && claim.path.length === 1 ? claim.path[0] : null;
-        const actualValue = claimName ? claims[claimName] : undefined;
-        const matched =
-          typeof actualValue === "string" && claim.values.includes(actualValue);
-        safeSlog(slog, "[dcql] sd-jwt claim values comparison", {
+    const needsClaimMatching = claimConstraints.length > 0;
+    if (needsClaimMatching) {
+      let parsed;
+      try {
+        parsed = parseSdJwtClaims(token);
+      } catch (e) {
+        safeSlog(slog, "[dcql] sd-jwt claims decode failed", {
+          error: e?.message || String(e),
+        });
+        return false;
+      }
+      const satisfiedClaimSet = selectSatisfiedSdJwtClaimSet(credQuery, parsed.claims);
+      const claimsById = new Map(
+        claimConstraints
+          .filter((claim) => typeof claim?.id === "string" && claim.id.length > 0)
+          .map((claim) => [claim.id, claim]),
+      );
+      const claimsToCheck = satisfiedClaimSet
+        ? Array.from(satisfiedClaimSet).map((id) => claimsById.get(id)).filter(Boolean)
+        : claimConstraints;
+      if (Array.isArray(credQuery.claim_sets) && credQuery.claim_sets.length > 0 && !satisfiedClaimSet) {
+        safeSlog(slog, "[dcql] sd-jwt claim_sets unsatisfied", {
           credentialId: credQuery.id,
           format,
-          claimName,
-          expected: claim.values,
-          actual: actualValue,
+        });
+        return false;
+      }
+      for (const claim of claimsToCheck) {
+        const matched = claimSatisfiesSdJwtConstraints(claim, parsed.claims);
+        safeSlog(slog, "[dcql] sd-jwt claim comparison", {
+          credentialId: credQuery.id,
+          format,
+          path: claim?.path,
+          expected: claim?.values || null,
           matched,
         });
-        if (!matched) {
-          return false;
-        }
+        if (!matched) return false;
       }
     }
     safeSlog(slog, "[dcql] sd-jwt match accepted", {
       credentialId: credQuery.id,
       format,
-      reason: needsValueMatching ? "vct_values and claim values satisfied" : "no vct_values or claim values constraint",
+      reason: needsClaimMatching ? "vct_values and claim constraints satisfied" : "no vct_values or claim constraints",
     });
     return true;
   }

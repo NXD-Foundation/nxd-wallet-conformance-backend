@@ -633,21 +633,39 @@ describe("CS-02 verifier response validation (Phase 4)", () => {
       }
     });
 
-    it("rejects nested SD-JWT claim paths until explicit support exists", async () => {
+    it("accepts nested SD-JWT claim paths when a disclosed object satisfies them", async () => {
       const keys = await keyMaterial();
-      const sdJwt = await buildSdJwtPresentation(keys);
+      const addressDisclosure = disclosure("address", { locality: "Athens", country: "GR" });
+      const sdJwt = await buildSdJwtPresentation({
+        ...keys,
+        disclosures: [addressDisclosure],
+      });
 
-      try {
-        await validateCs02SdJwtIssuerAuthenticity({
-          sdJwt,
-          credQuery: { claims: [{ path: ["address", "locality"] }] },
-          options: { strict: true, issuerVerificationJwk: keys.issuerPublicJwk },
-        });
-        expect.fail("expected nested claim path rejection");
-      } catch (error) {
-        expect(error).to.be.instanceOf(Cs02VerifierResponseError);
-        expect(error.message).to.match(/top-level claim paths are currently supported/);
-      }
+      const result = await validateCs02SdJwtIssuerAuthenticity({
+        sdJwt,
+        credQuery: { claims: [{ path: ["address", "locality"] }] },
+        options: { strict: true, issuerVerificationJwk: keys.issuerPublicJwk },
+      });
+
+      expect(result.ok).to.equal(true);
+      expect(result.claims.address.locality).to.equal("Athens");
+    });
+
+    it("accepts nested SD-JWT paths backed by dotted disclosure keys", async () => {
+      const keys = await keyMaterial();
+      const schemeDisclosure = disclosure("identifier.schemeID", "European Student Identifier");
+      const sdJwt = await buildSdJwtPresentation({
+        ...keys,
+        disclosures: [schemeDisclosure],
+      });
+
+      const result = await validateCs02SdJwtIssuerAuthenticity({
+        sdJwt,
+        credQuery: { claims: [{ path: ["identifier", "schemeID"], values: ["European Student Identifier"] }] },
+        options: { strict: true, issuerVerificationJwk: keys.issuerPublicJwk },
+      });
+
+      expect(result.ok).to.equal(true);
     });
 
     it("accepts supported DCQL claim values constraints when the disclosed SD-JWT claim matches", async () => {

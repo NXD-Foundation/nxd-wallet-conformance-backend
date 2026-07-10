@@ -1,4 +1,5 @@
 import { expect } from "chai";
+import { createHash } from "crypto";
 import {
   filterSdJwtByDcqlClaims,
   sdJwtWithoutKbJwt,
@@ -17,12 +18,20 @@ function disclosure(name, value) {
   return b64Json(["salt", name, value]);
 }
 
+function disclosureDigest(encodedDisclosure) {
+  return createHash("sha256").update(encodedDisclosure, "ascii").digest("base64url");
+}
+
 describe("sdJwtDisclosureSelection", () => {
   it("filters SD-JWT disclosures to the requested DCQL claim paths", () => {
     const familyName = disclosure("family_name", "Neslo");
     const givenName = disclosure("given_name", "Alice");
     const kbJwt = unsignedJwt({ typ: "kb+jwt" });
-    const sdJwt = `${unsignedJwt({ vct: "urn:test", _sd: ["digest"] })}~${familyName}~${givenName}~${kbJwt}`;
+    const sdJwt = `${unsignedJwt({
+      vct: "urn:test",
+      _sd_alg: "sha-256",
+      _sd: [disclosureDigest(familyName), disclosureDigest(givenName)],
+    })}~${familyName}~${givenName}~${kbJwt}`;
 
     const filtered = filterSdJwtByDcqlClaims(sdJwt, {
       id: "cmwallet",
@@ -37,10 +46,12 @@ describe("sdJwtDisclosureSelection", () => {
   });
 
   it("throws when a requested DCQL claim is neither clear nor disclosed", () => {
-    const sdJwt = `${unsignedJwt({ vct: "urn:test", _sd: ["digest"] })}~${disclosure(
-      "given_name",
-      "Alice",
-    )}~`;
+    const givenName = disclosure("given_name", "Alice");
+    const sdJwt = `${unsignedJwt({
+      vct: "urn:test",
+      _sd_alg: "sha-256",
+      _sd: [disclosureDigest(givenName)],
+    })}~${givenName}~`;
 
     expect(() =>
       filterSdJwtByDcqlClaims(sdJwt, {
@@ -67,7 +78,11 @@ describe("sdJwtDisclosureSelection", () => {
     const familyName = disclosure("family_name", "Neslo");
     const birthDate = disclosure("birth_date", "1990-01-01");
     const kbJwt = unsignedJwt({ typ: "kb+jwt" });
-    const sdJwt = `${unsignedJwt({ vct: "urn:test", _sd: ["digest"] })}~${familyName}~${birthDate}~${kbJwt}`;
+    const sdJwt = `${unsignedJwt({
+      vct: "urn:test",
+      _sd_alg: "sha-256",
+      _sd: [disclosureDigest(familyName), disclosureDigest(birthDate)],
+    })}~${familyName}~${birthDate}~${kbJwt}`;
 
     const filtered = filterSdJwtByDcqlClaims(sdJwt, {
       id: "cmwallet",
@@ -85,7 +100,11 @@ describe("sdJwtDisclosureSelection", () => {
 
   it("throws when stored disclosures satisfy no DCQL claim_sets option", () => {
     const familyName = disclosure("family_name", "Neslo");
-    const sdJwt = `${unsignedJwt({ vct: "urn:test", _sd: ["digest"] })}~${familyName}~`;
+    const sdJwt = `${unsignedJwt({
+      vct: "urn:test",
+      _sd_alg: "sha-256",
+      _sd: [disclosureDigest(familyName)],
+    })}~${familyName}~`;
 
     expect(() =>
       filterSdJwtByDcqlClaims(sdJwt, {
@@ -112,16 +131,39 @@ describe("sdJwtDisclosureSelection", () => {
     ).to.throw(Cs02ValidationError);
   });
 
-  it("throws when an SD-JWT request uses a nested claim path", () => {
-    const sdJwt = `${unsignedJwt({ vct: "urn:test", family_name: "Neslo" })}~`;
+  it("supports nested SD-JWT claim paths when a disclosed object satisfies them", () => {
+    const address = disclosure("address", { locality: "Athens", country: "GR" });
+    const sdJwt = `${unsignedJwt({
+      vct: "urn:test",
+      _sd_alg: "sha-256",
+      _sd: [disclosureDigest(address)],
+    })}~${address}~`;
 
-    expect(() =>
-      filterSdJwtByDcqlClaims(sdJwt, {
-        id: "cmwallet",
-        format: "dc+sd-jwt",
-        claims: [{ path: ["address", "locality"] }],
-      }),
-    ).to.throw(Cs02ValidationError, /top-level claim paths/);
+    const filtered = filterSdJwtByDcqlClaims(sdJwt, {
+      id: "cmwallet",
+      format: "dc+sd-jwt",
+      claims: [{ path: ["address", "locality"] }],
+    });
+
+    expect(sdJwtWithoutKbJwt(filtered).disclosures).to.deep.equal([address]);
+  });
+
+  it("supports dotted SD-JWT disclosure keys for nested DCQL paths", () => {
+    const scheme = disclosure("identifier.schemeID", "European Student Identifier");
+    const value = disclosure("identifier.value", "urn:test:123");
+    const sdJwt = `${unsignedJwt({
+      vct: "urn:test",
+      _sd_alg: "sha-256",
+      _sd: [disclosureDigest(scheme), disclosureDigest(value)],
+    })}~${scheme}~${value}~`;
+
+    const filtered = filterSdJwtByDcqlClaims(sdJwt, {
+      id: "cmwallet",
+      format: "dc+sd-jwt",
+      claims: [{ path: ["identifier", "schemeID"] }],
+    });
+
+    expect(sdJwtWithoutKbJwt(filtered).disclosures).to.deep.equal([scheme]);
   });
 
   it("keeps a requested SD-JWT claim when its value satisfies the DCQL values constraint", () => {
