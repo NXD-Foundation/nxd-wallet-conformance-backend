@@ -121,7 +121,7 @@ describe("wallet-client credentialProofBinding (Phase 8)", () => {
     });
 
     expect(poll.body.transaction_id).to.equal("tx-123");
-    expect(poll.headers.authorization).to.match(/^Bearer /);
+    expect(poll.headers.authorization).to.match(/^DPoP /);
     expect(poll.headers.DPoP).to.be.a("string");
     expect(poll.senderContextRetained).to.equal(true);
     expect(poll.walletUnitSubjectKeyRetained).to.equal(true);

@@ -124,8 +124,8 @@ export function assertCs01CredentialRequestContract({
   if (!proofJwt || typeof proofJwt !== "string") {
     throw new Cs01ConformanceError("CS-01 credential request must include a JWT proof");
   }
-  if (!headers?.authorization?.startsWith("Bearer ")) {
-    throw new Cs01ConformanceError("CS-01 credential request must include Authorization Bearer header");
+  if (!headers?.authorization?.startsWith("DPoP ")) {
+    throw new Cs01ConformanceError("CS-01 credential request must include Authorization DPoP header");
   }
   if (!headers?.DPoP) {
     throw new Cs01ConformanceError("CS-01 credential request must include DPoP header");
@@ -142,8 +142,8 @@ export function assertCs01DeferredRequestContract({ profile, pollRequest }) {
   if (!pollRequest?.body?.transaction_id) {
     throw new Cs01ConformanceError("CS-01 deferred credential request must include transaction_id");
   }
-  if (!pollRequest?.headers?.authorization?.startsWith("Bearer ")) {
-    throw new Cs01ConformanceError("CS-01 deferred credential request must include Authorization Bearer header");
+  if (!pollRequest?.headers?.authorization?.startsWith("DPoP ")) {
+    throw new Cs01ConformanceError("CS-01 deferred credential request must include Authorization DPoP header");
   }
   if (!pollRequest?.headers?.DPoP) {
     throw new Cs01ConformanceError("CS-01 deferred credential request must retain DPoP sender constraining");

@@ -311,7 +311,7 @@ describe("WE BUILD CS-01 conformance suite (Phase 10)", () => {
         profile: CS01,
         credentialRequest: proofBundle.credentialRequest,
         headers: {
-          authorization: `Bearer ${cs01DpopTokenResponse.access_token}`,
+          authorization: `DPoP ${cs01DpopTokenResponse.access_token}`,
           DPoP: credentialDpop,
         },
         proofBinding,

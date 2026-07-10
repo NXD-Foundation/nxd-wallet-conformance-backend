@@ -9,6 +9,7 @@ import {
   shouldUseDpopForResourceRequest,
   createTokenRequestDpopBinding,
   assertAccessTokenCnfMatchesWia,
+  buildResourceRequestHeaders,
 } from "../src/lib/dpopBinding.js";
 import { ensureOrCreateEcKeyPair } from "../src/lib/crypto.js";
 import { WALLET_PROFILES } from "../src/lib/profile.js";
@@ -79,6 +80,22 @@ describe("wallet-client dpopBinding (Phase 6)", () => {
         "opaque",
       ),
     ).to.equal(false);
+  });
+
+  it("builds DPoP authorization headers for DPoP-bound resource requests", () => {
+    const headers = buildResourceRequestHeaders(
+      "opaque-token",
+      "dpop-proof-jwt",
+      { token_type: "DPoP" },
+    );
+    expect(headers.authorization).to.equal("DPoP opaque-token");
+    expect(headers.DPoP).to.equal("dpop-proof-jwt");
+  });
+
+  it("builds Bearer authorization headers for non-DPoP-bound resource requests", () => {
+    const headers = buildResourceRequestHeaders("opaque-token", null, { token_type: "Bearer" });
+    expect(headers.authorization).to.equal("Bearer opaque-token");
+    expect(headers).to.not.have.property("DPoP");
   });
 
   it("can create token DPoP from the WIA cnf keypair", async () => {

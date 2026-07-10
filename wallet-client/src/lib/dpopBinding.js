@@ -1,6 +1,10 @@
 import { calculateJwkThumbprint, decodeJwt } from "jose";
 import { createDPoP, ensureOrCreateEcKeyPair } from "./crypto.js";
-import { isDpopBoundAccessToken, computeAthForDpop } from "../../utils/tokenUtils.js";
+import {
+  isDpopBoundAccessToken,
+  computeAthForDpop,
+  formatResourceAuthorizationHeader,
+} from "../../utils/tokenUtils.js";
 import { isWebuildCs01Profile } from "./profile.js";
 
 export class DpopRequiredError extends Error {
@@ -181,9 +185,14 @@ export async function createResourceRequestDpopProof({
   }
 }
 
-export function buildBearerResourceHeaders(accessToken, dpopJwt) {
+export function buildResourceRequestHeaders(accessToken, dpopJwt, tokenBody = null) {
   return {
-    authorization: `Bearer ${accessToken}`,
+    authorization: formatResourceAuthorizationHeader(accessToken, tokenBody),
     ...(dpopJwt ? { DPoP: dpopJwt } : {}),
   };
+}
+
+/** @deprecated Use buildResourceRequestHeaders */
+export function buildBearerResourceHeaders(accessToken, dpopJwt, tokenBody = null) {
+  return buildResourceRequestHeaders(accessToken, dpopJwt, tokenBody);
 }

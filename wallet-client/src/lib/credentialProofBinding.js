@@ -20,7 +20,7 @@ import { createWalletUnitCredentialKeyAttestation } from "./walletUnitAttestatio
 import { isWebuildCs01Profile } from "./profile.js";
 import {
   createResourceRequestDpopProof,
-  buildBearerResourceHeaders,
+  buildResourceRequestHeaders,
   assertDpopBoundTokenReceived,
   isSenderConstrainingMandatory,
 } from "./dpopBinding.js";
@@ -247,7 +247,7 @@ export async function buildDeferredCredentialPollRequest({
 
   return {
     body: { transaction_id: transactionId },
-    headers: buildBearerResourceHeaders(accessToken, dpopJwt),
+    headers: buildResourceRequestHeaders(accessToken, dpopJwt, tokenBody),
     senderContextRetained: true,
     walletUnitSubjectKeyRetained: !!subjectKey?.privateJwk,
   };

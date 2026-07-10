@@ -1,6 +1,6 @@
 import { expect } from "chai";
 import crypto from "crypto";
-import { computeAthForDpop, isDpopBoundAccessToken } from "../utils/tokenUtils.js";
+import { computeAthForDpop, isDpopBoundAccessToken, formatResourceAuthorizationHeader } from "../utils/tokenUtils.js";
 
 function referenceAth(accessToken) {
   return crypto
@@ -27,6 +27,25 @@ describe("tokenUtils DPoP helpers", () => {
 
     it("MUST be stable for empty string edge case", () => {
       expect(computeAthForDpop("")).to.equal(referenceAth(""));
+    });
+  });
+
+  describe("formatResourceAuthorizationHeader", () => {
+    it("MUST use DPoP scheme when token_type is DPoP", () => {
+      expect(formatResourceAuthorizationHeader("opaque-token", { token_type: "DPoP" })).to.equal(
+        "DPoP opaque-token",
+      );
+    });
+
+    it("MUST use DPoP scheme when JWT access token contains cnf.jkt", () => {
+      const jwt = minimalJwt({ cnf: { jkt: "abc" } });
+      expect(formatResourceAuthorizationHeader(jwt, { token_type: "Bearer" })).to.equal(`DPoP ${jwt}`);
+    });
+
+    it("MUST use Bearer scheme for non-DPoP-bound tokens", () => {
+      expect(formatResourceAuthorizationHeader("opaque-token", { token_type: "Bearer" })).to.equal(
+        "Bearer opaque-token",
+      );
     });
   });
 

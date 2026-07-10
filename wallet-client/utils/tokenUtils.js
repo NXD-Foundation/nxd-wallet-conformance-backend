@@ -165,6 +165,17 @@ export function computeAthForDpop(accessToken) {
  * Whether the token response / access token is DPoP sender-constrained (RFC 9449).
  * Uses token_type when present; for JWT access tokens, also detects cnf.jkt.
  */
+/**
+ * Authorization header value for protected resource requests (RFC 9449 §7.1).
+ * DPoP-bound tokens use the DPoP scheme; otherwise Bearer (RFC 6750).
+ */
+export function formatResourceAuthorizationHeader(accessToken, tokenBody = null) {
+  if (isDpopBoundAccessToken(tokenBody, accessToken)) {
+    return `DPoP ${accessToken}`;
+  }
+  return `Bearer ${accessToken}`;
+}
+
 export function isDpopBoundAccessToken(tokenBody, accessToken) {
   const tt = tokenBody?.token_type;
   if (typeof tt === "string" && tt.toLowerCase() === "dpop") {

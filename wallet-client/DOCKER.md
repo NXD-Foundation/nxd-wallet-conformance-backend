@@ -55,7 +55,7 @@ Use this profile for ITB+ and remote interop against CS-01 issuers (including Sp
 - **Both grant types** are supported by default: `authorization_code` and `pre-authorized_code`
 - **Auth-code path:** PAR mandatory, PKCE S256, WUA headers, DPoP-bound tokens, scope from offer/metadata
 - **Pre-auth path:** WUA headers (no body `client_assertion`), DPoP mandatory, credential selection via `credential_configuration_ids`
-- **Deferred issuance:** polls `/credential_deferred` with Bearer + DPoP; honors issuer `interval` from 202 responses
+- **Deferred issuance:** polls `/credential_deferred` with `Authorization: DPoP` + `DPoP` proof header; honors issuer `interval` from 202 responses
 - **Opt-out:** `CS01_DISABLE_PRE_AUTHORIZED=true` disables pre-auth only (legacy strict CS-01 testers)
 
 Example `docker-compose.yml` override:

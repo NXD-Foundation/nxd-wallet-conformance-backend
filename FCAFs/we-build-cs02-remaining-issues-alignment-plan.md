@@ -129,7 +129,7 @@ Normative source decision for this repo:
 Project reasoning note:
 
 - See [docs/openid4vp-cs02-verifier-metadata-model.md](/home/ni/code/js/rfc-issuer-v1/docs/openid4vp-cs02-verifier-metadata-model.md)
-  for the downloaded VP v1.0 and RFC 7591 references plus the profile-separation interpretation we should use while implementing this phase.
+for the downloaded VP v1.0 and RFC 7591 references plus the profile-separation interpretation we should use while implementing this phase.
 
 Required verifier metadata changes:
 
@@ -502,3 +502,4 @@ The remaining alignment work is complete when:
 - Missing SD-JWT-VC status remains allowed by default until status-list issuer trust exists.
 - x509 chain/SAN and verifier-attestation trusted issuer enforcement remain intentionally skipped until trust anchors/trusted issuers are configured.
 - Compatibility behavior must be explicit and must not silently weaken strict CS-02 routes.
+

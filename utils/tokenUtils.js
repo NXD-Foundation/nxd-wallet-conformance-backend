@@ -36,6 +36,72 @@ export function buildAccessToken(issuerURL, privateKey, cnf = null) {
   return token;
 }
 
+/**
+ * Whether a JWT access token is DPoP sender-constrained (contains cnf.jkt).
+ */
+export function isDpopBoundAccessTokenJwt(accessToken) {
+  try {
+    const decoded = jwt.decode(accessToken, { complete: true });
+    return Boolean(decoded?.payload?.cnf?.jkt);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Parse Authorization header for protected resource requests (RFC 9449 §7.1 / RFC 6750).
+ */
+export function parseResourceAuthorizationHeader(authHeader) {
+  if (typeof authHeader !== "string" || !authHeader.trim()) {
+    return {
+      ok: false,
+      status: 401,
+      error: "invalid_token",
+      error_description: "Missing Authorization header",
+    };
+  }
+
+  const bearerMatch = authHeader.match(/^Bearer\s+(\S.+)$/i);
+  if (bearerMatch) {
+    return { ok: true, scheme: "Bearer", accessToken: bearerMatch[1].trim() };
+  }
+
+  const dpopMatch = authHeader.match(/^DPoP\s+(\S.+)$/i);
+  if (dpopMatch) {
+    return { ok: true, scheme: "DPoP", accessToken: dpopMatch[1].trim() };
+  }
+
+  return {
+    ok: false,
+    status: 401,
+    error: "invalid_token",
+    error_description:
+      "Missing or invalid Authorization header. Expected: DPoP <access_token> or Bearer <access_token>",
+  };
+}
+
+/**
+ * Parse Authorization and reject DPoP-bound tokens sent as Bearer (RFC 9449 §7.2).
+ */
+export function parseAndValidateResourceAuthorizationHeader(authHeader) {
+  const parsed = parseResourceAuthorizationHeader(authHeader);
+  if (!parsed.ok) {
+    return parsed;
+  }
+
+  if (parsed.scheme === "Bearer" && isDpopBoundAccessTokenJwt(parsed.accessToken)) {
+    return {
+      ok: false,
+      status: 401,
+      error: "invalid_token",
+      error_description:
+        "DPoP-bound access token must be sent using the DPoP authorization scheme (RFC 9449)",
+    };
+  }
+
+  return parsed;
+}
+
 export function generateRefreshToken(length = 64) {
   return crypto.randomBytes(length).toString("hex");
 }

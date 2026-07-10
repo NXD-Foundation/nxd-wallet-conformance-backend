@@ -32,7 +32,7 @@ import {
 import {
   createTokenRequestDpopBinding,
   createResourceRequestDpopProof,
-  buildBearerResourceHeaders,
+  buildResourceRequestHeaders,
   assertDpopBoundTokenReceived,
   assertAccessTokenCnfMatchesWia,
 } from "./lib/dpopBinding.js";
@@ -938,7 +938,7 @@ async function httpPostJson(url, body, logSessionId, extraHeaders = null) {
       url, 
       headers: {
         ...headers,
-        authorization: headers.authorization ? "Bearer <redacted>" : undefined,
+        authorization: headers.authorization ? "<redacted>" : undefined,
         DPoP: headers.DPoP ? "<redacted>" : undefined,
       },
       body: body || {}
@@ -1479,14 +1479,14 @@ async function runPreAuthorizedIssuance({ profile = activeWalletProfile, walletC
   const credRequestId = `cred_req_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
   const credHeaders = {
     "content-type": "application/json",
-    ...buildBearerResourceHeaders(accessToken, credentialDpopJwt),
+    ...buildResourceRequestHeaders(accessToken, credentialDpopJwt, tokenBody),
   };
   try { 
     slog("[CREDENTIAL] [REQUEST] Credential request", { 
       requestId: credRequestId,
       endpoint: credentialEndpoint,
       method: "POST",
-      headers: { "content-type": "application/json", authorization: "Bearer <redacted>", DPoP: credentialDpopJwt ? "<redacted>" : undefined },
+      headers: { "content-type": "application/json", authorization: "DPoP <redacted>", DPoP: credentialDpopJwt ? "<redacted>" : undefined },
       body: { ...credReq, proofs: { jwt: ["<redacted>"] } }
     }); 
   } catch {}
@@ -2036,7 +2036,7 @@ async function runAuthorizationCodeIssuance({ profile = activeWalletProfile, wal
   const credReqBody = JSON.stringify(credReq);
   const credHeadersCode = {
     "content-type": "application/json",
-    ...buildBearerResourceHeaders(accessToken, credentialDpopJwtCode),
+    ...buildResourceRequestHeaders(accessToken, credentialDpopJwtCode, tokenBody),
   };
   try { slog("[codeflow] sending credential request", { endpoint: credentialEndpoint, hasDPoP: !!credentialDpopJwtCode, body: { ...credReq, proofs: { jwt: ["<redacted>"] } } }); } catch {}
   const credRes = await fetch(credentialEndpoint, {

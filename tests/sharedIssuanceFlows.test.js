@@ -37,6 +37,16 @@ describe('Shared Issuance Flows', () => {
     });
   };
 
+  const resourceAuthorizationHeader = (accessToken) => {
+    try {
+      const decoded = jwt.decode(accessToken, { complete: true });
+      if (decoded?.payload?.cnf?.jkt) {
+        return `DPoP ${accessToken}`;
+      }
+    } catch {}
+    return `Bearer ${accessToken}`;
+  };
+
   before(async () => {
     // Create a global sandbox for module-level stubs
     globalSandbox = sinon.createSandbox();
@@ -1208,7 +1218,7 @@ describe('Shared Issuance Flows', () => {
 
       const response = await request(app)
         .post('/credential')
-        .set('Authorization', `Bearer ${accessToken}`)
+        .set('Authorization', resourceAuthorizationHeader(accessToken))
         .send({
           credential_configuration_id: 'test-cred-config',
           proof: {
@@ -1246,7 +1256,7 @@ describe('Shared Issuance Flows', () => {
 
       const response = await request(app)
         .post('/credential')
-        .set('Authorization', `Bearer ${accessToken}`)
+        .set('Authorization', resourceAuthorizationHeader(accessToken))
         .send({
           credential_configuration_id: 'test-cred-config',
           proof: {
@@ -1284,7 +1294,7 @@ describe('Shared Issuance Flows', () => {
 
       const response = await request(app)
         .post('/credential')
-        .set('Authorization', `Bearer ${accessToken}`)
+        .set('Authorization', resourceAuthorizationHeader(accessToken))
         .send({
           credential_configuration_id: 'test-cred-config',
           proof: { jwt: testProofJwt }
@@ -1358,7 +1368,7 @@ describe('Shared Issuance Flows', () => {
 
       const response = await request(app)
         .post('/credential')
-        .set('Authorization', `Bearer ${accessToken}`)
+        .set('Authorization', resourceAuthorizationHeader(accessToken))
         .send({
           credential_configuration_id: 'test-cred-config',
           proofs: {
@@ -1402,7 +1412,7 @@ describe('Shared Issuance Flows', () => {
 
       const first = await request(app)
         .post('/credential')
-        .set('Authorization', `Bearer ${accessToken}`)
+        .set('Authorization', resourceAuthorizationHeader(accessToken))
         .send(body);
 
       if (first.status !== 200) {
@@ -1411,7 +1421,7 @@ describe('Shared Issuance Flows', () => {
 
       const second = await request(app)
         .post('/credential')
-        .set('Authorization', `Bearer ${accessToken}`)
+        .set('Authorization', resourceAuthorizationHeader(accessToken))
         .send(body)
         .expect(400);
 
@@ -1461,7 +1471,7 @@ describe('Shared Issuance Flows', () => {
 
       const response = await request(app)
         .post('/credential')
-        .set('Authorization', `Bearer ${accessToken}`)
+        .set('Authorization', resourceAuthorizationHeader(accessToken))
         .send({
           credential_configuration_id: 'test-cred-config',
           proof: {
@@ -1485,7 +1495,7 @@ describe('Shared Issuance Flows', () => {
 
         const res = await request(app)
           .post('/credential')
-          .set('Authorization', `Bearer ${accessToken}`)
+          .set('Authorization', resourceAuthorizationHeader(accessToken))
           .send({
             credential_configuration_id: 'test-cred-config',
             proof: { jwt: 'dummy' }
@@ -1508,7 +1518,7 @@ describe('Shared Issuance Flows', () => {
         for (const invalid of cases) {
           const res = await request(app)
             .post('/credential')
-            .set('Authorization', `Bearer ${accessToken}`)
+            .set('Authorization', resourceAuthorizationHeader(accessToken))
             .send({
               credential_configuration_id: 'test-cred-config',
               proofs: invalid
@@ -1529,7 +1539,7 @@ describe('Shared Issuance Flows', () => {
 
         const res = await request(app)
           .post('/credential')
-          .set('Authorization', `Bearer ${accessToken}`)
+          .set('Authorization', resourceAuthorizationHeader(accessToken))
           .send({
             credential_configuration_id: 'test-cred-config',
             proofs: { jwt: ['dummy'], mso_mdoc: ['dummy2'] }
@@ -1549,7 +1559,7 @@ describe('Shared Issuance Flows', () => {
 
         const res = await request(app)
           .post('/credential')
-          .set('Authorization', `Bearer ${accessToken}`)
+          .set('Authorization', resourceAuthorizationHeader(accessToken))
           .send({
             credential_configuration_id: 'test-cred-config',
             proofs: { jwt: [] }
@@ -1574,7 +1584,7 @@ describe('Shared Issuance Flows', () => {
 
         const res = await request(app)
           .post('/credential')
-          .set('Authorization', `Bearer ${accessToken}`)
+          .set('Authorization', resourceAuthorizationHeader(accessToken))
           .send({
             credential_configuration_id: 'test-cred-config',
             proofs: { jwt: [signed] }
@@ -1599,7 +1609,7 @@ describe('Shared Issuance Flows', () => {
         const badAud = signProofJwt({ nonce: nonce, aud: 'https://other.example.com', iss: 'wallet' });
         const res = await request(app)
           .post('/credential')
-          .set('Authorization', `Bearer ${accessToken}`)
+          .set('Authorization', resourceAuthorizationHeader(accessToken))
           .send({
             credential_configuration_id: 'test-cred-config',
             proof: { jwt: badAud }
@@ -1621,7 +1631,7 @@ describe('Shared Issuance Flows', () => {
         const stale = signProofJwt({ nonce: 'stale-nonce', aud: process.env.SERVER_URL, iss: 'wallet' });
         const res = await request(app)
           .post('/credential')
-          .set('Authorization', `Bearer ${accessToken}`)
+          .set('Authorization', resourceAuthorizationHeader(accessToken))
           .send({
             credential_configuration_id: 'test-cred-config',
             proofs: { jwt: stale }
@@ -1644,7 +1654,7 @@ describe('Shared Issuance Flows', () => {
         const missingNonceJwt = signProofJwt({ aud: process.env.SERVER_URL, iss: 'wallet' });
         const res = await request(app)
           .post('/credential')
-          .set('Authorization', `Bearer ${accessToken}`)
+          .set('Authorization', resourceAuthorizationHeader(accessToken))
           .send({
             credential_configuration_id: 'test-cred-config',
             proofs: { jwt: missingNonceJwt }
@@ -1669,7 +1679,7 @@ describe('Shared Issuance Flows', () => {
         const expiredNonceJwt = jwt.sign({ nonce: 'expired-nonce', aud: process.env.SERVER_URL, iss: 'wallet' }, 'test', { algorithm: 'HS256' });
         const res = await request(app)
           .post('/credential')
-          .set('Authorization', `Bearer ${accessToken}`)
+          .set('Authorization', resourceAuthorizationHeader(accessToken))
           .send({
             credential_configuration_id: 'test-cred-config',
             proofs: { jwt: expiredNonceJwt }
@@ -1695,7 +1705,7 @@ describe('Shared Issuance Flows', () => {
         const jwtForMdoc = jwt.sign({ nonce: 'test-nonce-123', aud: 'http://localhost:3000/credential', iss: 'wallet' }, 'test', { algorithm: 'HS256' });
         const res = await request(app)
           .post('/credential')
-          .set('Authorization', `Bearer ${accessToken}`)
+          .set('Authorization', resourceAuthorizationHeader(accessToken))
           .send({
             credential_configuration_id: 'urn:eu.europa.ec.eudi:pid:1:mso_mdoc',
             proof: { jwt: jwtForMdoc }
@@ -1717,7 +1727,7 @@ describe('Shared Issuance Flows', () => {
         const coseKey = { kty: 'OKP', crv: 'Ed25519', x: 'AQ' };
         const res = await request(app)
           .post('/credential')
-          .set('Authorization', `Bearer ${accessToken}`)
+          .set('Authorization', resourceAuthorizationHeader(accessToken))
           .send({
             credential_configuration_id: 'urn:eu.europa.ec.eudi:pid:1:mso_mdoc',
             proofs: { cose_key: [coseKey] }
@@ -1740,7 +1750,7 @@ describe('Shared Issuance Flows', () => {
 
         const res = await request(app)
           .post('/credential')
-          .set('Authorization', `Bearer ${accessToken}`)
+          .set('Authorization', resourceAuthorizationHeader(accessToken))
           .send({
             credential_configuration_id: 'test-cred-config',
           proofs: { jwt: [jwtWithNonce] }
@@ -1764,7 +1774,7 @@ describe('Shared Issuance Flows', () => {
 
         const res = await request(app)
           .post('/credential')
-          .set('Authorization', `Bearer ${accessToken}`)
+          .set('Authorization', resourceAuthorizationHeader(accessToken))
           .send({
             credential_configuration_id: 'test-cred-config',
           proofs: { jwt: [jwtWithNonce] }
@@ -1787,7 +1797,7 @@ describe('Shared Issuance Flows', () => {
 
         const res = await request(app)
           .post('/credential')
-          .set('Authorization', `Bearer ${accessToken}`)
+          .set('Authorization', resourceAuthorizationHeader(accessToken))
           .send({
             credential_configuration_id: 'urn:eu.europa.ec.eudi:pid:1:mso_mdoc',
           proofs: { jwt: [jwtWithNonce] }
@@ -1819,7 +1829,7 @@ describe('Shared Issuance Flows', () => {
         // Missing jwk
         let res = await request(app)
           .post('/credential')
-          .set('Authorization', `Bearer ${accessToken}`)
+          .set('Authorization', resourceAuthorizationHeader(accessToken))
           .send({
             credential_configuration_id: 'test-cred-config',
             proofs: { jwt: [jwtWithNonce] },
@@ -1831,7 +1841,7 @@ describe('Shared Issuance Flows', () => {
         // Missing enc
         res = await request(app)
           .post('/credential')
-          .set('Authorization', `Bearer ${accessToken}`)
+          .set('Authorization', resourceAuthorizationHeader(accessToken))
           .send({
             credential_configuration_id: 'test-cred-config',
             proofs: { jwt: [jwtWithNonce] },
@@ -1843,7 +1853,7 @@ describe('Shared Issuance Flows', () => {
         // Unsupported alg (conformance: VCIIssuerFailOnUnsupportedEncryptionAlgorithm)
         res = await request(app)
           .post('/credential')
-          .set('Authorization', `Bearer ${accessToken}`)
+          .set('Authorization', resourceAuthorizationHeader(accessToken))
           .send({
             credential_configuration_id: 'test-cred-config',
             proofs: { jwt: [jwtWithNonce] },
@@ -1862,7 +1872,7 @@ describe('Shared Issuance Flows', () => {
 
         res = await request(app)
           .post('/credential')
-          .set('Authorization', `Bearer ${accessToken}`)
+          .set('Authorization', resourceAuthorizationHeader(accessToken))
           .send({
             credential_configuration_id: 'test-cred-config',
             proofs: { jwt: [jwtWithNonce] },
@@ -1903,7 +1913,7 @@ describe('Shared Issuance Flows', () => {
 
         const res = await request(app)
           .post('/credential')
-          .set('Authorization', `Bearer ${accessToken}`)
+          .set('Authorization', resourceAuthorizationHeader(accessToken))
           .set('Content-Type', 'application/jwt')
           .send(jweReq);
 
@@ -1924,7 +1934,7 @@ describe('Shared Issuance Flows', () => {
 
         const first = await request(app)
           .post('/credential')
-          .set('Authorization', `Bearer ${accessToken}`)
+          .set('Authorization', resourceAuthorizationHeader(accessToken))
           .send({
             credential_configuration_id: 'test-cred-config',
             proof: { jwt: jwtWithNonce }
@@ -2002,7 +2012,7 @@ describe('Shared Issuance Flows', () => {
 
       const credentialResponse = await request(app)
         .post('/credential')
-        .set('Authorization', `Bearer ${accessToken}`)
+        .set('Authorization', resourceAuthorizationHeader(accessToken))
         .send({
           credential_configuration_id: 'test-cred-config',
           proof: { jwt: proofJwt },
@@ -2049,7 +2059,7 @@ describe('Shared Issuance Flows', () => {
 
         const pending = await request(app)
           .post('/credential_deferred')
-          .set('Authorization', `Bearer ${accessToken}`)
+          .set('Authorization', resourceAuthorizationHeader(accessToken))
           .send({ transaction_id: transactionId })
           .expect(202);
 
@@ -2058,7 +2068,7 @@ describe('Shared Issuance Flows', () => {
 
         const ready = await request(app)
           .post('/credential_deferred')
-          .set('Authorization', `Bearer ${accessToken}`)
+          .set('Authorization', resourceAuthorizationHeader(accessToken))
           .send({ transaction_id: transactionId });
 
         if (ready.status === 200) {
@@ -2113,7 +2123,7 @@ describe('Shared Issuance Flows', () => {
 
         const pending = await request(app)
           .post('/credential_deferred')
-          .set('Authorization', `Bearer ${accessToken}`)
+          .set('Authorization', resourceAuthorizationHeader(accessToken))
           .send({ transaction_id: transactionId })
           .expect(202);
 
@@ -2122,7 +2132,7 @@ describe('Shared Issuance Flows', () => {
 
         const ready = await request(app)
           .post('/credential_deferred')
-          .set('Authorization', `Bearer ${accessToken}`)
+          .set('Authorization', resourceAuthorizationHeader(accessToken))
           .send({ transaction_id: transactionId });
 
         if (ready.status === 200) {
@@ -2193,7 +2203,7 @@ describe('Shared Issuance Flows', () => {
 
       const response = await request(app)
         .post('/credential_deferred')
-        .set('Authorization', `Bearer ${accessToken}`)
+        .set('Authorization', resourceAuthorizationHeader(accessToken))
         .send({ transaction_id: transactionId })
         .expect(400);
 
@@ -2230,7 +2240,7 @@ describe('Shared Issuance Flows', () => {
 
       const response = await request(app)
         .post('/credential_deferred')
-        .set('Authorization', `Bearer ${accessToken}`)
+        .set('Authorization', resourceAuthorizationHeader(accessToken))
         .send({ transaction_id: transactionId });
 
       if (response.status === 200) {

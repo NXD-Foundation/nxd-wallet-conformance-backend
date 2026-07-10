@@ -143,7 +143,7 @@ async function buildCs01PreAuthCredentialRequest({
     profile: CS01,
     credentialRequest: proofBundle.credentialRequest,
     headers: {
-      authorization: `Bearer ${tokenBody.access_token}`,
+      authorization: `DPoP ${tokenBody.access_token}`,
       DPoP: credentialDpop,
     },
     proofBinding,
