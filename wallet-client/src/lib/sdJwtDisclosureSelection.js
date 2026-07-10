@@ -1,4 +1,5 @@
 import { validateDcqlClaimPath } from "./cs02DcqlValidation.js";
+import { Cs02ValidationError } from "./cs02RequestValidation.js";
 
 function decodeSdJwtDisclosure(disclosure) {
   try {
@@ -46,6 +47,12 @@ function requestedSdJwtClaimNames(dcqlCredentialQuery) {
           claim?.path,
           `credentials[${dcqlCredentialQuery.id}].claims[${index}]`,
         );
+        if (claim.path.length !== 1) {
+          throw new Cs02ValidationError(
+            `Unsupported SD-JWT DCQL claim path "${claim.path.join(".")}": only top-level claim paths are currently supported`,
+            "invalid_request",
+          );
+        }
         return Array.isArray(claim?.path) ? claim.path[0] : null;
       }).filter((name) => typeof name === "string" && name.length > 0),
     ),

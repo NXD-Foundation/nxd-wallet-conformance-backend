@@ -11,10 +11,10 @@ The source FCAFS report is broad: it evaluates verifier and wallet behavior agai
 | Request protection | All authorization requests must be signed JARs. | Mostly covered by `wallet-client/src/lib/cs02RequestValidation.js` and `utils/cs02VerifierRequest.js`. |
 | Credential query | DCQL must be used. | Covered for strict CS-02 paths by `wallet-client/src/lib/cs02DcqlValidation.js`; verifier generation also validates DCQL. |
 | Invocation | Wallet invocation uses `openid4vp://present?request_uri=<URL>`. | Covered; legacy invocation can be gated by compatibility flags. |
-| Wallet validation | Wallet validates request signature, nonce freshness, audience, expiry, credential types, disclosure constraints, and integrity. | Much improved; remaining gaps are `did:web` kid enforcement, `client_metadata_uri` policy wiring, and some disclosure/request-integrity edge cases. |
+| Wallet validation | Wallet validates request signature, nonce freshness, audience, expiry, credential types, disclosure constraints, and integrity. | Much improved; `did:web` exact `kid` enforcement and strict `client_metadata_uri` wiring are covered. Remaining gaps are narrower disclosure/request-integrity edge cases and future remote-metadata fetch hardening. |
 | Credential format | SD-JWT-VC selective disclosure is mandatory. | Covered/partial for `dc+sd-jwt` and `vc+sd-jwt`; `mso_mdoc` remains allowed; other formats are compatibility-mode only. |
 | Holder binding | KB-JWT is mandatory for SD-JWT VCs and must bind proof to nonce and audience. | Covered for generated wallet responses and verifier checks. |
-| Verifier response validation | Verifier validates presentation proof signature, credential authenticity, WUA validity, disclosure integrity, holder binding, nonce/audience binding, and request constraints. | Much improved; verifier now validates response mode, DCQL shape, outer response JWT, KB-JWT claims, `sd_hash`, and invokes status/trust placeholders. Issuer trust and full disclosure/authenticity validation remain incomplete. |
+| Verifier response validation | Verifier validates presentation proof signature, credential authenticity, WUA validity, disclosure integrity, holder binding, nonce/audience binding, and request constraints. | Much improved; verifier now validates response mode, DCQL shape, outer response JWT, KB-JWT claims, `sd_hash`, issuer signatures when local/test key material exists, requested claims after disclosure reconstruction, and status/trust placeholders. Configured issuer trust and future trust-framework enforcement remain incomplete. |
 | Verifier metadata | Verifier metadata must be published and match runtime enforcement. | Partial; inline request metadata is filtered/validated, but static metadata still advertises broader formats/algorithms. |
 
 ## Updated End-to-End Flow Coverage
@@ -138,10 +138,10 @@ Legend:
 | FCAF spec area | CS-02 relevance | Coverage | Notes |
 |---|---:|---|---|
 | Verifier metadata publication | Required | Partial | Request-time metadata is filtered, but static `data/verifier-config.json` still advertises broader formats/algorithms than strict CS-02 enforcement. |
-| `client_metadata` parsing and precedence | Required | Partial | Inline metadata schema and format/alg checks exist. `client_metadata_uri` HTTPS placeholder exists but is not yet wired into strict wallet request validation. |
+| `client_metadata` parsing and precedence | Required | Yes / partial | Inline and remote metadata are validated in strict mode, HTTPS `client_metadata_uri` is enforced, and inline metadata takes precedence. Remaining follow-up is fetch timeout/max-size hardening. |
 | `x509_san_dns` | Required/recommended in CS-02 | Partial / intentional placeholder | Wallet verifies with x5c leaf key. Chain trust and SAN DNS match are intentionally skipped until trust anchors are configured, with placeholder methods left in place. |
 | `verifier_attestation` | Recommended/allowed in CS-02 | Partial / intentional placeholder | JOSE header `jwt` is required in the wallet path, but issuer trust, `sub`, expiry, and signing-key binding are placeholders until trusted issuers are configured. |
-| `did:web` / `did:jwk` | Recommended by CS-02 | Partial | `did:jwk` enforces P-256/ES256 key material. `did:web` resolves over HTTPS, but the current signature path can still fall back to any verification method instead of requiring exact `kid` match. |
+| `did:web` / `did:jwk` | Recommended by CS-02 | Yes | `did:jwk` enforces P-256/ES256 key material through the shared trust policy. `did:web` resolves over HTTPS, requires an exact `kid`, and rejects fallback to unrelated verification methods. |
 | `openid_federation`, `x509_hash`, `origin:` | Broader FCAF | Out of scope / partial | Not core CS-02; useful for broader FCAF but lower WE BUILD priority. |
 | Wallet metadata encryption | Useful | Partial | Request/response encryption exists, but metadata consistency and direct_post/direct_post.jwt distinctions need cleanup. |
 
@@ -149,7 +149,7 @@ Legend:
 
 | FCAF spec area | CS-02 relevance | Coverage | Notes |
 |---|---:|---|---|
-| SD-JWT-VC compact with KB-JWT | Required | Mostly yes | Wallet appends KB-JWT; verifier checks `typ`, nonce, audience, `iat`, `sd_hash`, and `cnf.jwk` signature binding. Issuer signature/trust remains placeholder-level. |
+| SD-JWT-VC compact with KB-JWT | Required | Mostly yes | Wallet appends KB-JWT; verifier checks `typ`, nonce, audience, `iat`, `sd_hash`, `cnf.jwk` signature binding, issuer signature when local/test key material exists, requested claims, and unsolicited disclosure rejection in strict mode. Configured issuer trust remains placeholder-level. |
 | SD-JWT-VC compact without KB-JWT | Negative case for CS-02 | Yes | Verifier strict SD-JWT presentation validation rejects missing KB-JWT. |
 | JWT VC / JWT VP | Not primary CS-02 | Compatibility only | These are not allowed in strict CS-02 DCQL format validation. |
 | ISO mdoc | Practical project scope | Partial | `mso_mdoc` remains allowed and supported; broader mdoc/COSE/FCAF coverage is not complete. |
@@ -159,14 +159,12 @@ Legend:
 
 | Priority | Gap | Why it matters for WE BUILD CS-02 |
 |---|---|---|
-| High | `did:web` `kid` matching is not enforced in the active wallet signature verification path. | The shared helper requires a matching `kid`, but the active DID verification path can fall back to all verification methods. CS-02 DID trust rules should bind the JAR signature to the selected `kid`. |
-| High | Full credential authenticity remains incomplete. | The verifier checks KB-JWT/cnf binding and invokes issuer-trust placeholders, but SD-JWT issuer signature validation and configured issuer trust are not fully enforced yet. |
-| High | Metadata consistency is incomplete. | Static verifier metadata still advertises broader formats/algorithms, and direct_post metadata filtering leaves some encryption algorithm metadata visible. CS-02 metadata should match runtime enforcement. |
-| Major | `client_metadata_uri` policy is not wired into strict wallet validation. | The HTTPS placeholder exists, but strict wallet validation currently only validates inline `client_metadata`. |
+| High | Full credential authenticity remains incomplete. | The verifier now validates issuer signatures when local/test key material exists, but configured issuer trust and trust-framework-backed authenticity are still intentionally placeholder-only. |
+| High | Metadata consistency is incomplete. | Strict request-time metadata filtering is in place, but public/static metadata publication still needs continued auditing so compatibility metadata cannot leak into strict CS-02 surfaces. |
 | Major | Status/revocation is placeholder-only. | Malformed status-list references are rejected, but status-list token fetch, signature validation, bitstring decoding, and revoked/suspended decisions wait on the trust framework. |
 | Major | Production trust policy is intentionally deferred. | x509 chain/SAN validation and verifier-attestation trusted issuer validation are intentionally skipped until trust anchors/trusted issuers exist. |
-| Major | Full disclosure/request-constraint validation still needs hardening. | DCQL structure and KB-JWT are much stronger, but full DCQL path grammar, value matching, unsolicited disclosure detection, and all FCAF negative cases are not complete. |
-| Major | Consent is not evidenced as a protocol gate. | CS-02 requires transparent holder consent and forbids auto-consent. The core presentation library can execute directly; a mandatory UI/API consent gate should be documented or enforced. |
+| Major | Full disclosure/request-constraint validation still needs hardening. | DCQL structure, requested-claim checks, and unsolicited disclosure rejection are stronger now, but wallet-side minimization, full DCQL path grammar, value matching, and more FCAF negative cases are not complete. |
+| Major | Consent is out of scope in runtime and must stay documented as such. | `wallet-client` is a headless test wallet. Production wrappers still need their own UI/API consent gate and safe consent logging. |
 
 ## FCAF Gaps That Are Lower Priority For WE BUILD CS-02
 
@@ -184,7 +182,7 @@ Legend:
 | Layer | WE BUILD relevance | Coverage |
 |---|---|---|
 | Signed JAR request creation | Required | Mostly covered: ES256/P-256 request generation exists for CS-02 paths; trust-anchor-backed x509 policy is placeholder. |
-| Wallet JAR validation | Required | Mostly covered: strict `typ`, `alg`, required fields, lifetime, audience policy, HTTPS request URI, signature verification, and query precedence exist; `did:web` `kid` and `client_metadata_uri` wiring remain gaps. |
+| Wallet JAR validation | Required | Mostly covered: strict `typ`, `alg`, required fields, lifetime, audience policy, HTTPS request URI, signature verification, query precedence, exact `did:web` `kid` binding, and strict `client_metadata_uri` policy are in place. |
 | `openid4vp://present` request URI invocation | Required | Covered. |
 | DCQL query and response shape | Required | Mostly covered: structure, ids, formats, claim paths, claim_sets, credential_sets, multiple, and response object shape are validated. |
 | SD-JWT-VC selective disclosure | Required | Partial/covered for common claim paths; full disclosure integrity and value matching remain follow-up work. |
@@ -192,21 +190,19 @@ Legend:
 | Verifier nonce/audience/request-constraint checks | Required | Mostly covered for response mode, state, nonce, audience, DCQL response shape, and KB-JWT; issuer trust and disclosure authenticity remain partial. |
 | Credential authenticity and status | Required by verifier validation intent | Partial: KB-JWT/cnf binding and status reference placeholders exist; issuer signature/trust and revocation decisions remain TODO until trust framework exists. |
 | Verifier metadata | Required | Partial: inline metadata filtering/validation exists; static/public metadata needs alignment. |
-| Holder consent | Required | Missing/unclear in the core automated presentation path. |
+| Holder consent | Required | Out of scope in this repo | `wallet-client` is a headless test wallet; production wrappers must implement consent before calling the presentation flow. |
 
 ## Recommended Remediation Order
 
-1. Fix active `did:web` verification to require a `kid` and call the shared `validateDidWebKidResolution` policy before verifying the JAR signature.
-2. Wire `validateCs02ClientMetadataUri` into strict wallet JAR validation and ensure remote metadata, if supported, is fetched only over HTTPS and validated with the same metadata policy.
-3. Align verifier metadata with runtime enforcement: remove unsupported strict-mode formats/algorithms from static/public metadata, and delete all encrypted-response metadata from `direct_post` request metadata.
-4. Complete SD-JWT-VC issuer authenticity validation: verify issuer signature with configured issuer keys/trust and document how issuer trust is configured.
-5. Keep status-list validation as placeholder until trust framework exists, then add fetch/cache/timeout/max-size policy, token signature validation, bitstring decoding, and revoked/suspended decisions.
-6. When trust anchors/trusted attestation issuers exist, implement x509 chain/SAN DNS enforcement and verifier-attestation issuer/sub/expiry/signing-key binding validation in the placeholder methods.
-7. Harden remaining disclosure/request-constraint checks: full DCQL path grammar, value matching, unsolicited disclosure rejection, and more negative tests.
-8. Make holder consent an explicit mandatory step in the wallet UI/API path, or document that the core library must be wrapped by a consent gate.
+1. Finish the remaining strict metadata publication audit so compatibility/static metadata cannot leak unsupported formats or algorithms into strict CS-02 routes.
+2. Extend SD-JWT-VC issuer authenticity from local/test key verification to configured issuer trust once the trust framework exists.
+3. Keep status-list validation as placeholder until trust framework exists, then add fetch/cache/timeout/max-size policy, token signature validation, bitstring decoding, and revoked/suspended decisions.
+4. When trust anchors/trusted attestation issuers exist, implement x509 chain/SAN DNS enforcement and verifier-attestation issuer/sub/expiry/signing-key binding validation in the placeholder methods.
+5. Harden remaining disclosure/request-constraint checks: wallet-side minimization, full DCQL path grammar, value matching, credential-set strictness, and more negative tests.
+6. Keep holder consent documented as external to this headless test wallet and require production wrappers to implement the consent gate.
 
 ## Bottom Line
 
 Against the original broad FCAFS report, this repo still does not cover the full 236-spec MessageStructure surface. Against the narrower WE BUILD CS-02 profile, the implementation is now substantially closer than the original report indicated: strict wallet request validation, DCQL validation, multi-credential response generation, verifier response validation, KB-JWT checks, status-list placeholders, and shared trust/metadata policy are in place.
 
-The remaining CS-02 blockers are now narrower and mostly about trust and policy completion: exact `did:web` `kid` binding, `client_metadata_uri` enforcement, metadata consistency, configured issuer/signature trust, future status-list enforcement, production x509/verifier-attestation trust, explicit consent gating, and a fuller disclosure/negative-test matrix.
+The remaining CS-02 blockers are now narrower and mostly about trust and policy completion: strict/public metadata consistency, configured issuer trust, future status-list enforcement, production x509/verifier-attestation trust, wallet-side disclosure/request minimization, explicit external consent gating, and a fuller negative-test matrix.

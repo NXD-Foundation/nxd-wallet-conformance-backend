@@ -627,6 +627,23 @@ describe("CS-02 verifier response validation (Phase 4)", () => {
       }
     });
 
+    it("rejects nested SD-JWT claim paths until explicit support exists", async () => {
+      const keys = await keyMaterial();
+      const sdJwt = await buildSdJwtPresentation(keys);
+
+      try {
+        await validateCs02SdJwtIssuerAuthenticity({
+          sdJwt,
+          credQuery: { claims: [{ path: ["address", "locality"] }] },
+          options: { strict: true, issuerVerificationJwk: keys.issuerPublicJwk },
+        });
+        expect.fail("expected nested claim path rejection");
+      } catch (error) {
+        expect(error).to.be.instanceOf(Cs02VerifierResponseError);
+        expect(error.message).to.match(/top-level claim paths are currently supported/);
+      }
+    });
+
     it("rejects wrong vct for the requested DCQL credential", async () => {
       const keys = await keyMaterial();
       const sdJwt = await buildSdJwtPresentation(keys);

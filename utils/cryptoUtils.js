@@ -387,7 +387,13 @@ export async function buildVpRequestJWT(
     clientMetadataForPayload = filterClientMetadataForCs02(client_metadata, response_mode);
   }
   if (response_mode === "direct_post" && clientMetadataForPayload && typeof clientMetadataForPayload === "object") {
-    const { encrypted_response_enc_values_supported, ...rest } = clientMetadataForPayload;
+    const {
+      encrypted_response_alg_values_supported,
+      encrypted_response_enc_values_supported,
+      authorization_encrypted_response_alg,
+      authorization_encrypted_response_enc,
+      ...rest
+    } = clientMetadataForPayload;
     clientMetadataForPayload = rest;
   }
 

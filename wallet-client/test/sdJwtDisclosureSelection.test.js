@@ -111,4 +111,16 @@ describe("sdJwtDisclosureSelection", () => {
       }),
     ).to.throw(Cs02ValidationError);
   });
+
+  it("throws when an SD-JWT request uses a nested claim path", () => {
+    const sdJwt = `${unsignedJwt({ vct: "urn:test", family_name: "Neslo" })}~`;
+
+    expect(() =>
+      filterSdJwtByDcqlClaims(sdJwt, {
+        id: "cmwallet",
+        format: "dc+sd-jwt",
+        claims: [{ path: ["address", "locality"] }],
+      }),
+    ).to.throw(Cs02ValidationError, /top-level claim paths/);
+  });
 });

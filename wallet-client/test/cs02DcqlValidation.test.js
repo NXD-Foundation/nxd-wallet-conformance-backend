@@ -99,6 +99,41 @@ describe("CS-02 DCQL validation (Phase 2)", () => {
     expect(() => validateDcqlClaimPath([-1], "test")).to.throw(Cs02ValidationError);
   });
 
+  it("rejects nested SD-JWT claim paths until explicit support exists", () => {
+    expect(() =>
+      validateCs02DcqlQuery(
+        {
+          credentials: [
+            {
+              id: "pid",
+              format: "dc+sd-jwt",
+              claims: [{ path: ["address", "locality"] }],
+            },
+          ],
+        },
+        strictOptions,
+      ),
+    ).to.throw(Cs02ValidationError, /top-level claim/);
+  });
+
+  it("allows nested mdoc claim paths", () => {
+    expect(() =>
+      validateCs02DcqlQuery(
+        {
+          credentials: [
+            {
+              id: "pid",
+              format: "mso_mdoc",
+              meta: { doctype_value: "org.iso.18013.5.1.mDL" },
+              claims: [{ path: ["org.iso.18013.5.1", "family_name"] }],
+            },
+          ],
+        },
+        strictOptions,
+      ),
+    ).to.not.throw();
+  });
+
   it("requires claim ids when claim_sets is present", () => {
     expect(() =>
       validateCs02DcqlQuery(

@@ -23,6 +23,31 @@ function loadVerifierClientMetadata() {
   return JSON.parse(fs.readFileSync("./data/verifier-config.json", "utf-8"));
 }
 
+function normalizeVerifierMetadataProfile(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "cs02" || normalized === "we-build-cs02") return "cs02";
+  if (normalized === "cs03" || normalized === "we-build-cs03") return "cs03";
+  if (normalized === "compat" || normalized === "compatibility") return "compat";
+  return "";
+}
+
+function resolvePublishedVerifierMetadata({ pathName, profile, responseMode }) {
+  const broadMetadata = loadVerifierClientMetadata();
+  const normalizedProfile = normalizeVerifierMetadataProfile(profile);
+
+  if (pathName.endsWith("/cs02") || normalizedProfile === "cs02") {
+    return buildStrictCs02ClientMetadata(broadMetadata, responseMode);
+  }
+
+  // CS-03 and compatibility currently share the broad deployment capability set.
+  // Keep them explicit so same-deployment profile separation is visible in routing.
+  if (pathName.endsWith("/cs03") || normalizedProfile === "cs03") {
+    return broadMetadata;
+  }
+
+  return broadMetadata;
+}
+
 // Load defaultSigningKid from issuer-config.json, similar to credGenerationUtils.js
 let issuerConfigValues = {};
 try {
@@ -113,19 +138,16 @@ metadataRouter.get(["/", "/jwks"], (req, res) => {
   });
 });
 
-metadataRouter.get(["/client-metadata", "/client-metadata/cs02"], (req, res) => {
-  const broadMetadata = loadVerifierClientMetadata();
-  const strictCs02 =
-    req.path.endsWith("/cs02") ||
-    String(req.query.profile || "").toLowerCase() === "cs02" ||
-    String(req.query.profile || "").toLowerCase() === "we-build-cs02";
+metadataRouter.get(["/client-metadata", "/client-metadata/cs02", "/client-metadata/cs03"], (req, res) => {
   const responseMode =
     typeof req.query.response_mode === "string" && req.query.response_mode
       ? req.query.response_mode
       : "direct_post";
-  const metadata = strictCs02
-    ? buildStrictCs02ClientMetadata(broadMetadata, responseMode)
-    : broadMetadata;
+  const metadata = resolvePublishedVerifierMetadata({
+    pathName: req.path,
+    profile: req.query.profile,
+    responseMode,
+  });
   res.type("application/json").send(metadata);
 });
 

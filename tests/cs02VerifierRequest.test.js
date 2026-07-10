@@ -194,6 +194,8 @@ describe("CS-02 verifier request generation (Phase 3)", () => {
     expect(payload.client_metadata.vp_formats_supported).to.have.keys(["dc+sd-jwt", "mso_mdoc"]);
     expect(payload.client_metadata).to.not.have.property("encrypted_response_alg_values_supported");
     expect(payload.client_metadata).to.not.have.property("encrypted_response_enc_values_supported");
+    expect(payload.client_metadata).to.not.have.property("authorization_encrypted_response_alg");
+    expect(payload.client_metadata).to.not.have.property("authorization_encrypted_response_enc");
   });
 
   it("rejects non-string transaction_data credential_ids", () => {

@@ -50,6 +50,21 @@ incoming verifier requests (for example from older demo verifiers in this repo).
 It **emits** CS-02-compliant `openid4vp://present?…` URLs and registers
 `openid4vp://present` as its OAuth redirect URI.
 
+## Consent scope
+
+`wallet-client` is a headless test wallet used for issuer/verifier integration
+and protocol testing. It does not implement an end-user consent UI or a runtime
+approval callback before presentation generation.
+
+Production wallet integrations that wrap this library must add their own
+consent gate before calling the presentation flow. At minimum, that wrapper
+must show the verifier identity, requested credential query ids, requested
+claim paths, response mode, and any transaction data summary, and it must
+return a protocol error such as `access_denied` if the holder declines.
+
+Consent/audit logs in those production wrappers must avoid raw credential
+contents and private key material.
+
 ## Examples
 
 Wallet invocation (by reference):

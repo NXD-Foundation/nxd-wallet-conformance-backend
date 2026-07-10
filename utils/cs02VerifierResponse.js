@@ -567,6 +567,17 @@ function requestedTopLevelClaimNames(credQuery) {
   return names;
 }
 
+function assertSupportedSdJwtClaimPaths(credQuery) {
+  for (const claim of credQuery?.claims || []) {
+    if (Array.isArray(claim?.path) && claim.path.length !== 1) {
+      throw new Cs02VerifierResponseError(
+        `Unsupported SD-JWT DCQL claim path "${claim.path.join(".")}": only top-level claim paths are currently supported`,
+        "invalid_request",
+      );
+    }
+  }
+}
+
 function getPathValue(object, path) {
   if (!Array.isArray(path) || path.length === 0) return undefined;
   let current = object;
@@ -612,6 +623,7 @@ function validateIssuerCredentialClaims({
     throw new Cs02VerifierResponseError("SD-JWT-VC vct does not satisfy DCQL request", "invalid_credential");
   }
 
+  assertSupportedSdJwtClaimPaths(credQuery);
   const requestedClaimNames = requestedTopLevelClaimNames(credQuery);
   for (const claim of credQuery?.claims || []) {
     if (Array.isArray(claim?.path) && getPathValue(reconstructedClaims, claim.path) === undefined) {

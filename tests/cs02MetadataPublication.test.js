@@ -44,4 +44,13 @@ describe("CS-02 verifier metadata publication (Phase C)", () => {
     );
     expect(res.body).to.have.property("encrypted_response_enc_values_supported");
   });
+
+  it("publishes an explicit CS-03 metadata view without narrowing deployment capabilities", async () => {
+    const res = await request(appWithMetadataRoutes()).get("/client-metadata/cs03").expect(200);
+    expect(res.body.vp_formats_supported).to.have.property("dc+sd-jwt");
+    expect(res.body.vp_formats_supported).to.have.property(
+      "https://cloudsignatureconsortium.org/2025/x509",
+    );
+    expect(res.body.vp_formats_supported["dc+sd-jwt"]["kb-jwt_alg_values"]).to.include("ES384");
+  });
 });

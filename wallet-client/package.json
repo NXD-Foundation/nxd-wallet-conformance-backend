@@ -7,6 +7,7 @@
   "scripts": {
     "start": "node src/server.js",
     "test": "mocha \"test/**/*.js\"",
+    "test:cs02": "mocha test/cs02RequestValidation.test.js test/cs02DcqlValidation.test.js test/sdJwtDisclosureSelection.test.js test/dcqlCredentialSelection.test.js --exit",
     "test:cs01": "mocha test/cs01Conformance.test.js test/issuanceCs01PreAuth.test.js test/profile.test.js test/scopeResolution.test.js test/walletClientId.test.js test/dpopBinding.test.js test/walletUnitAttestation.test.js test/credentialProofBinding.test.js test/deferredIssuance.test.js"
   },
   "dependencies": {

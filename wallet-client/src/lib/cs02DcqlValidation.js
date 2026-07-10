@@ -52,6 +52,21 @@ export function validateDcqlClaimPath(path, context, log = () => {}) {
   }
 }
 
+function validateSdJwtClaimPathSupport(path, context, log = () => {}) {
+  if (!Array.isArray(path) || path.length === 0) return;
+  if (path.length !== 1) {
+    logDcqlFailure(log, "claim_path_not_supported_for_sd_jwt", {
+      context,
+      path,
+      pathLength: path.length,
+    });
+    throw new Cs02ValidationError(
+      `DCQL claim path must reference a top-level claim for SD-JWT-VC (${context})`,
+      "invalid_request",
+    );
+  }
+}
+
 function validateDcqlClaims(credQuery, log = () => {}) {
   if (credQuery.claims == null) return;
   if (!Array.isArray(credQuery.claims)) {
@@ -66,6 +81,9 @@ function validateDcqlClaims(credQuery, log = () => {}) {
     const claim = credQuery.claims[index];
     const context = `credentials[${credQuery.id}].claims[${index}]`;
     validateDcqlClaimPath(claim?.path, context, log);
+    if (SD_JWT_FORMATS.has(String(credQuery.format || ""))) {
+      validateSdJwtClaimPathSupport(claim?.path, context, log);
+    }
 
     if (hasClaimSets) {
       if (typeof claim?.id !== "string" || claim.id.length === 0) {

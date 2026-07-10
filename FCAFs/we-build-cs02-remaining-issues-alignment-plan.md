@@ -6,16 +6,23 @@ This plan starts from the updated status in `FCAFs/we-build-cs02-fcaf-message-st
 
 The remaining work is narrower. It is mostly about making the active runtime paths use the new policy helpers consistently, aligning metadata with actual enforcement, and completing the trust/authenticity surfaces that were intentionally left as placeholders until configuration exists.
 
+## Progress Snapshot
+
+Implemented since the original plan draft:
+
+- Phase A is complete: wallet `did:web` and `did:jwk` verification now route through the shared trust-policy helpers, require exact `kid` resolution for `did:web`, and reject fallback-to-any-verification-method behavior.
+- Phase B is complete except for future fetch hardening: strict wallet validation now enforces HTTPS `client_metadata_uri`, validates fetched metadata with the same strict policy as inline metadata, and preserves inline-metadata precedence.
+- Phase C is complete for strict request-time metadata filtering and local publication separation: strict CS-02 request metadata removes unsupported formats, KB-JWT algorithms, and `direct_post` encryption advertisement, while public metadata routes now keep an explicit broad/CS-03 view separate from the strict CS-02 projection.
+- Phase D is complete for local/test issuer authenticity: verifier-side strict SD-JWT validation now verifies issuer signatures when key material is available, reconstructs disclosures, checks requested claims, and keeps configured issuer trust explicitly placeholder-only.
+- Phase E is complete as a placeholder readiness phase: verifier SD-JWT validation invokes status-list checks, exposes explicit placeholder status state, and covers default-vs-strict missing-status behavior with tests.
+- Phase F is complete as a placeholder readiness phase: x509 SAN DNS and verifier-attestation trust helpers remain callable from wallet and verifier paths, return `enforced: false` without trust config, and are covered by placeholder tests.
+- Phase H is documented: `wallet-client` is now explicitly described as a headless test wallet, with production consent requirements pushed to wrappers around this library.
+
 The remaining CS-02-critical issues are:
 
-- exact `did:web` `kid` binding in the wallet JAR verification path
-- strict `client_metadata_uri` validation and remote metadata policy
-- verifier metadata consistency for strict CS-02 mode
-- SD-JWT-VC issuer signature validation where local/test key material exists; configured issuer trust remains out of scope
 - future status-list enforcement once trust framework inputs exist
 - production `x509_san_dns` and `verifier_attestation` trust checks once trust anchors/trusted issuers exist
 - disclosure/request-constraint hardening beyond the current DCQL subset
-- holder consent documented as intentionally out of scope because `wallet-client` is a headless test wallet
 - tests that lock the above behavior into strict CS-02 mode
 
 ## Phase A: DID Trust Policy Wiring
@@ -104,6 +111,26 @@ Acceptance criteria:
 
 Goal: ensure verifier metadata and request-time metadata advertise only what strict CS-02 runtime enforcement actually supports.
 
+Normative source decision for this repo:
+
+- Base reasoning on OpenID4VP 1.0 Section 5.1, Section 5.9, Section 8.3, and Section 11, plus RFC 7591 Section 2 client metadata semantics.
+- Treat Verifier metadata as primarily request-carried client metadata for signed OpenID4VP request-object flows in this repo:
+  - inline `client_metadata`
+  - `client_metadata_uri` when used
+  - Client Identifier Prefix-specific trust inputs
+- Do not assume VP v1.0 requires one issuer-style global Verifier metadata discovery endpoint.
+- If public Verifier metadata routes are kept, treat them as implementation-specific publication surfaces and keep them profile-specific or filtered.
+- Same deployment support for CS-02 and CS-03 is an explicit requirement:
+  - keep one broad deployment capability source
+  - derive a strict CS-02 metadata projection
+  - derive a distinct CS-03 or compatibility projection
+  - never force one public metadata document to represent both profiles with one unfiltered payload
+
+Project reasoning note:
+
+- See [docs/openid4vp-cs02-verifier-metadata-model.md](/home/ni/code/js/rfc-issuer-v1/docs/openid4vp-cs02-verifier-metadata-model.md)
+  for the downloaded VP v1.0 and RFC 7591 references plus the profile-separation interpretation we should use while implementing this phase.
+
 Required verifier metadata changes:
 
 - Audit every place that loads or publishes `data/verifier-config.json`.
@@ -133,6 +160,7 @@ Required verifier metadata changes:
 Required publication policy:
 
 - If public verifier metadata endpoints exist or are added, expose a strict CS-02 filtered metadata document for CS-02 routes.
+- If public verifier metadata endpoints exist or are added, they may expose a broad or CS-03-compatible view for same-deployment use, but that broad view must remain separate from strict CS-02 publication.
 - Keep CS-03 metadata separate and clearly named, including `https://cloudsignatureconsortium.org/2025/x509` where that route/profile needs it.
 - Keep other compatibility metadata separate and clearly named.
 - Do not let a compatibility route silently feed unsupported metadata into strict CS-02 JAR generation.
@@ -150,6 +178,7 @@ Required tests:
 Acceptance criteria:
 
 - Strict CS-02 request metadata matches runtime enforcement.
+- Same-deployment CS-02 and CS-03 support uses distinct metadata projections rather than one unfiltered shared payload.
 - Compatibility metadata cannot leak unsupported formats/algorithms into strict CS-02 request objects.
 - Metadata tests fail if unsupported strict-mode formats or algs are reintroduced.
 
@@ -309,6 +338,8 @@ Acceptance criteria:
 ## Phase G: Disclosure And Request-Constraint Hardening
 
 Goal: close the remaining validation gap between structurally valid DCQL and fully verified disclosed credential content.
+
+Status: partially complete. Verifier-side strict SD-JWT validation already reconstructs disclosures, checks requested claims, rejects unsolicited disclosures in strict mode, and validates requested `vct` values. The remaining work is mainly wallet-side claim-set/credential-set minimization and any still-missing negative coverage.
 
 Required wallet changes:
 
