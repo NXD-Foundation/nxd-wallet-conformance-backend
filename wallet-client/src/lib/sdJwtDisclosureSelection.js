@@ -5,7 +5,7 @@ import {
   parseSdJwtClaims,
   sdJwtDisclosureHashesForPath,
   selectSatisfiedSdJwtClaimSet,
-} from "../../../utils/sdJwtClaims.js";
+} from "../../utils/sdJwtClaims.js";
 
 export function sdJwtWithoutKbJwt(sdJwt) {
   let token = String(sdJwt || "");

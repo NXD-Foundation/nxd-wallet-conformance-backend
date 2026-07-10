@@ -25,12 +25,12 @@ import {
   validateDidWebKidResolution,
   resolveCs02EffectiveClientMetadata,
   Cs02TrustPolicyError,
-} from "../../../utils/cs02TrustPolicy.js";
+} from "../../utils/cs02TrustPolicy.js";
 
 export {
   validateX509SanDnsTrustAnchor,
   validateVerifierAttestationTrust,
-} from "../../../utils/cs02TrustPolicy.js";
+} from "../../utils/cs02TrustPolicy.js";
 
 export const CS02_JAR_TYP = "oauth-authz-req+jwt";
 export const CS02_ALLOWED_ALGS = new Set(["ES256"]);

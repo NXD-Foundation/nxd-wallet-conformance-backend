@@ -4,7 +4,7 @@
  */
 
 import { Cs02ValidationError } from "./cs02RequestValidation.js";
-import { validateCs02TrustedAuthoritiesPolicy } from "../../../utils/cs02TrustPolicy.js";
+import { validateCs02TrustedAuthoritiesPolicy } from "../../utils/cs02TrustPolicy.js";
 
 export const CS02_ALLOWED_DCQL_FORMATS = new Set(["dc+sd-jwt", "vc+sd-jwt", "mso_mdoc"]);
 export const CS02_COMPATIBILITY_DCQL_FORMATS = new Set(["jwt_vc_json", "jwt_vc_json-ld"]);

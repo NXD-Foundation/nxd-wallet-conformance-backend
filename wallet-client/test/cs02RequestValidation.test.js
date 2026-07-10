@@ -21,7 +21,7 @@ import {
 } from "../src/lib/cs02RequestValidation.js";
 import { OPENID4VP_PRESENT_URI } from "../src/lib/openid4vpUri.js";
 import { WALLET_PROFILES } from "../src/lib/profile.js";
-import { setCs02TrustPlaceholderRecorder } from "../../utils/cs02TrustPolicy.js";
+import { setCs02TrustPlaceholderRecorder } from "../utils/cs02TrustPolicy.js";
 
 const ecKeyPath = path.join(process.cwd(), "x509EC", "ec_private_pkcs8.key");
 const ecCertPath = path.join(process.cwd(), "x509EC", "client_certificate.crt");

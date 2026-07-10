@@ -6,7 +6,7 @@ import { mdocContext } from "./mdocContext.js";
 import {
   extractMdocClaimsByNamespace,
   selectSatisfiedMdocClaimSet,
-} from "../../utils/mdocClaims.js";
+} from "./mdocClaims.js";
 
 /**
  * Custom mDL verification using cbor-x decoder

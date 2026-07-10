@@ -9,8 +9,8 @@ import {
   claimSatisfiesMdocConstraints,
   extractMdocClaimsByNamespace,
   selectSatisfiedMdocClaimSet,
-} from "../../../utils/mdocClaims.js";
-import { parseSdJwtClaims, selectSatisfiedSdJwtClaimSet, claimSatisfiesSdJwtConstraints } from "../../../utils/sdJwtClaims.js";
+} from "../../utils/mdocClaims.js";
+import { parseSdJwtClaims, selectSatisfiedSdJwtClaimSet, claimSatisfiesSdJwtConstraints } from "../../utils/sdJwtClaims.js";
 import { extractMdocDocType } from "./mdocDocType.js";
 
 function safeSlog(slog, event, data) {
