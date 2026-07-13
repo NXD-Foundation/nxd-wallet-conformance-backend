@@ -24,8 +24,7 @@ export const CS02_DEFAULT_RESPONSE_MODE = "direct_post";
 export const CS02_ALLOWED_CLIENT_ID_SCHEMES = new Set([
   "x509_san_dns",
   "verifier_attestation",
-  "did:web",
-  "did:jwk",
+  "decentralized_identifier",
 ]);
 export const CS02_SUPPORTED_TRANSACTION_DATA_TYPES = new Set([
   "qes_authorization",
@@ -70,10 +69,11 @@ export function parseVerifierClientIdScheme(clientId) {
   if (clientId.startsWith("verifier_attestation:")) {
     return { scheme: "verifier_attestation", value: clientId };
   }
-  if (clientId.startsWith("did:web:")) return { scheme: "did:web", value: clientId };
-  if (clientId.startsWith("did:jwk:")) return { scheme: "did:jwk", value: clientId };
   if (clientId.startsWith("decentralized_identifier:")) {
     return { scheme: "decentralized_identifier", value: clientId };
+  }
+  if (clientId.startsWith("did:web:") || clientId.startsWith("did:jwk:")) {
+    return { scheme: "legacy_did", value: clientId };
   }
   if (clientId.startsWith("redirect_uri:")) return { scheme: "redirect_uri", value: clientId };
   if (clientId.startsWith("x509_hash:")) return { scheme: "x509_hash", value: clientId };
@@ -88,6 +88,16 @@ export function resolveEffectiveClientId(clientId) {
     return clientId.substring("redirect_uri:".length);
   }
   return clientId;
+}
+
+export function resolveVerifierDidMethod(clientId) {
+  const effectiveClientId = resolveEffectiveClientId(clientId);
+  if (typeof effectiveClientId !== "string" || !effectiveClientId.startsWith("did:")) {
+    return "unknown";
+  }
+  if (effectiveClientId.startsWith("did:web:")) return "did:web";
+  if (effectiveClientId.startsWith("did:jwk:")) return "did:jwk";
+  return "unsupported";
 }
 
 export function validateCs02ResponseMode(responseMode, options = { strict: true }) {
@@ -183,6 +193,23 @@ export function validateCs02JarGenerationInput({
   transaction_data = null,
   options = { strict: true },
 }) {
+  const { scheme } = parseVerifierClientIdScheme(client_id);
+  const didMethod = resolveVerifierDidMethod(client_id);
+
+  if (scheme === "legacy_did") {
+    throw new Cs02VerifierRequestError(
+      'CS-02 DID client_id values must use the "decentralized_identifier:" prefix',
+      "invalid_client",
+    );
+  }
+
+  if (scheme === "decentralized_identifier" && !["did:web", "did:jwk"].includes(didMethod)) {
+    throw new Cs02VerifierRequestError(
+      `Unsupported CS-02 DID method "${didMethod}" inside decentralized_identifier client_id`,
+      "invalid_client",
+    );
+  }
+
   if (!options.strict) return;
 
   if (presentation_definition) {
@@ -203,14 +230,13 @@ export function validateCs02JarGenerationInput({
     throw new Cs02VerifierRequestError('CS-02 response_type must be "vp_token"', "invalid_request");
   }
 
-  const { scheme } = parseVerifierClientIdScheme(client_id);
   if (scheme === "redirect_uri") {
     throw new Cs02VerifierRequestError(
       "redirect_uri client identifier scheme is not supported in CS-02 mode",
       "invalid_client",
     );
   }
-  if (scheme === "x509_hash" || scheme === "decentralized_identifier" || scheme === "unknown") {
+  if (scheme === "x509_hash" || scheme === "unknown") {
     throw new Cs02VerifierRequestError(
       `Unsupported CS-02 client identifier scheme "${scheme}"`,
       "invalid_client",

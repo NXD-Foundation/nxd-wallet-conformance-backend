@@ -38,8 +38,7 @@ export const CS02_FORBIDDEN_ALGS = new Set(["none", "RS256", "ES256K", "EdDSA"])
 export const CS02_ALLOWED_CLIENT_ID_SCHEMES = new Set([
   "x509_san_dns",
   "verifier_attestation",
-  "did:web",
-  "did:jwk",
+  "decentralized_identifier",
 ]);
 export const CS02_DEFAULT_AUDIENCES = ["https://self-issued.me/v2"];
 export const CS02_REQUEST_URI_CONTENT_TYPE = "application/oauth-authz-req+jwt";
@@ -115,13 +114,31 @@ export function parseCs02ClientIdScheme(clientId) {
   if (clientId.startsWith("verifier_attestation:")) {
     return { scheme: "verifier_attestation", value: clientId };
   }
-  if (clientId.startsWith("did:web:")) {
-    return { scheme: "did:web", value: clientId };
+  if (clientId.startsWith("decentralized_identifier:")) {
+    return { scheme: "decentralized_identifier", value: clientId };
   }
-  if (clientId.startsWith("did:jwk:")) {
-    return { scheme: "did:jwk", value: clientId };
+  if (clientId.startsWith("did:web:") || clientId.startsWith("did:jwk:")) {
+    return { scheme: "legacy_did", value: clientId };
   }
   return { scheme: "unknown", value: clientId };
+}
+
+export function resolveCs02EffectiveClientId(clientId) {
+  if (typeof clientId !== "string") return clientId;
+  if (clientId.startsWith("decentralized_identifier:")) {
+    return clientId.substring("decentralized_identifier:".length);
+  }
+  return clientId;
+}
+
+export function resolveCs02DidMethod(clientId) {
+  const effectiveClientId = resolveCs02EffectiveClientId(clientId);
+  if (typeof effectiveClientId !== "string" || !effectiveClientId.startsWith("did:")) {
+    return "unknown";
+  }
+  if (effectiveClientId.startsWith("did:web:")) return "did:web";
+  if (effectiveClientId.startsWith("did:jwk:")) return "did:jwk";
+  return "unsupported";
 }
 
 export function isP256Jwk(jwk) {
@@ -383,8 +400,23 @@ export function validateCs02ClientId(clientId, log = () => {}) {
   const { scheme } = parseCs02ClientIdScheme(clientId);
   if (!CS02_ALLOWED_CLIENT_ID_SCHEMES.has(scheme)) {
     logValidationFailure(log, "client_id_scheme", { scheme, clientId });
+    if (scheme === "legacy_did") {
+      throw new Cs02ValidationError(
+        'CS-02 DID client_id values must use the "decentralized_identifier:" prefix',
+        "invalid_client",
+      );
+    }
     throw new Cs02ValidationError(
       `Unsupported CS-02 client identifier scheme "${scheme}"`,
+      "invalid_client",
+    );
+  }
+
+  const didMethod = resolveCs02DidMethod(clientId);
+  if (scheme === "decentralized_identifier" && !["did:web", "did:jwk"].includes(didMethod)) {
+    logValidationFailure(log, "client_id_did_method", { didMethod, clientId });
+    throw new Cs02ValidationError(
+      `Unsupported CS-02 DID method "${didMethod}" inside decentralized_identifier client_id`,
       "invalid_client",
     );
   }
@@ -451,7 +483,7 @@ async function verifyJarWithX5cLeaf(requestJwt, header, clientId, context) {
 
 async function verifyJarWithDidWeb(requestJwt, header, clientId, options) {
   const kid = header?.kid;
-  const did = String(clientId).split("#")[0];
+  const did = resolveCs02EffectiveClientId(String(clientId)).split("#")[0];
 
   try {
     const { document, resolutionUrl } = await resolveDidWebDocument(did, options);
@@ -467,10 +499,11 @@ async function verifyJarWithDidWeb(requestJwt, header, clientId, options) {
 }
 
 async function verifyJarWithDidJwk(requestJwt, header, clientId, options) {
+  const effectiveClientId = resolveCs02EffectiveClientId(clientId);
   let jwk;
   try {
     jwk = JSON.parse(
-      Buffer.from(String(clientId).substring("did:jwk:".length), "base64url").toString("utf8"),
+      Buffer.from(String(effectiveClientId).substring("did:jwk:".length), "base64url").toString("utf8"),
     );
   } catch {
     throw new Cs02ValidationError("did:jwk client_id is malformed", "invalid_client");
@@ -499,15 +532,23 @@ export async function verifyCs02JarSignature(requestJwt, header, payload, option
   const clientId = payload?.client_id;
   validateCs02ClientId(clientId, log);
   const { scheme } = parseCs02ClientIdScheme(clientId);
+  const didMethod = resolveCs02DidMethod(clientId);
 
   try {
     switch (scheme) {
       case "x509_san_dns":
         return await verifyJarWithX5cLeaf(requestJwt, header, clientId, "x509_san_dns x5c");
-      case "did:web":
-        return await verifyJarWithDidWeb(requestJwt, header, clientId, options);
-      case "did:jwk":
-        return await verifyJarWithDidJwk(requestJwt, header, clientId, options);
+      case "decentralized_identifier":
+        if (didMethod === "did:web") {
+          return await verifyJarWithDidWeb(requestJwt, header, clientId, options);
+        }
+        if (didMethod === "did:jwk") {
+          return await verifyJarWithDidJwk(requestJwt, header, clientId, options);
+        }
+        throw new Cs02ValidationError(
+          `Unsupported CS-02 DID method "${didMethod}" inside decentralized_identifier client_id`,
+          "invalid_client",
+        );
       case "verifier_attestation":
         return await verifyJarWithVerifierAttestation(requestJwt, header, clientId, options);
       default:

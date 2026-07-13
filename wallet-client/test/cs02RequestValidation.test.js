@@ -244,8 +244,21 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
       expect(parseCs02ClientIdScheme("verifier_attestation:verifier-1").scheme).to.equal(
         "verifier_attestation",
       );
-      expect(parseCs02ClientIdScheme("did:web:example.org").scheme).to.equal("did:web");
-      expect(parseCs02ClientIdScheme("did:jwk:eyJrdHkiOiJFQyJ9").scheme).to.equal("did:jwk");
+      expect(parseCs02ClientIdScheme("decentralized_identifier:did:web:example.org").scheme).to.equal(
+        "decentralized_identifier",
+      );
+      expect(parseCs02ClientIdScheme("decentralized_identifier:did:jwk:eyJrdHkiOiJFQyJ9").scheme).to.equal(
+        "decentralized_identifier",
+      );
+    });
+
+    it("rejects bare DID client_id values without decentralized_identifier prefix", () => {
+      expect(() => validateCs02ClientId("did:web:example.org")).to.throw(
+        'CS-02 DID client_id values must use the "decentralized_identifier:" prefix',
+      );
+      expect(() => validateCs02ClientId("did:jwk:eyJrdHkiOiJFQyJ9")).to.throw(
+        'CS-02 DID client_id values must use the "decentralized_identifier:" prefix',
+      );
     });
 
     it("rejects deep-link client_id mismatch", () => {
@@ -285,7 +298,7 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
       const privateKey = await importPKCS8(fs.readFileSync(ecKeyPath, "utf8"), "ES256");
       const publicJwk = await exportJWK(privateKey);
       delete publicJwk.d;
-      const clientId = `did:jwk:${Buffer.from(JSON.stringify(publicJwk)).toString("base64url")}`;
+      const clientId = `decentralized_identifier:did:jwk:${Buffer.from(JSON.stringify(publicJwk)).toString("base64url")}`;
       const requestJwt = await new SignJWT(baseJarPayload({ client_id: clientId }))
         .setProtectedHeader({ alg: "ES256", typ: CS02_JAR_TYP })
         .sign(privateKey);
@@ -354,9 +367,10 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
   });
 
   describe("did:web and did:jwk trust policy (Phase A)", () => {
-    const didWebClientId = "did:web:example.org";
-    const didWebKid = `${didWebClientId}#keys-1`;
-    const alternateKid = `${didWebClientId}#keys-2`;
+    const didWebDid = "did:web:example.org";
+    const didWebClientId = `decentralized_identifier:${didWebDid}`;
+    const didWebKid = `${didWebDid}#keys-1`;
+    const alternateKid = `${didWebDid}#keys-2`;
 
     let privateKey;
     let publicJwk;
@@ -383,7 +397,7 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
 
     function didWebDocument() {
       return {
-        id: didWebClientId,
+        id: didWebDid,
         verificationMethod: [
           { id: didWebKid, type: "JsonWebKey2020", publicKeyJwk: publicJwk },
           { id: alternateKid, type: "JsonWebKey2020", publicKeyJwk: alternateJwk },
@@ -467,7 +481,7 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
     it("does not fall back to unrelated did:web verification methods", async () => {
       const requestJwt = await signDidWebJar();
       const onlyAlternateKeyDoc = {
-        id: didWebClientId,
+        id: didWebDid,
         verificationMethod: [
           { id: alternateKid, type: "JsonWebKey2020", publicKeyJwk: alternateJwk },
         ],
@@ -485,7 +499,7 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
 
     it("rejects did:jwk client_id with non-P-256 key material", async () => {
       const rsaJwk = { kty: "RSA", n: "abc", e: "AQAB" };
-      const clientId = `did:jwk:${Buffer.from(JSON.stringify(rsaJwk)).toString("base64url")}`;
+      const clientId = `decentralized_identifier:did:jwk:${Buffer.from(JSON.stringify(rsaJwk)).toString("base64url")}`;
       const requestJwt = await new SignJWT(baseJarPayload({ client_id: clientId }))
         .setProtectedHeader({ alg: "ES256", typ: CS02_JAR_TYP })
         .sign(privateKey);
@@ -497,6 +511,23 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
         expect(error).to.be.instanceOf(Cs02ValidationError);
         expect(error.errorCode).to.equal("invalid_client");
         expect(error.message).to.match(/EC\/P-256/);
+      }
+    });
+
+    it("rejects bare did:web client_id even when the DID document is otherwise valid", async () => {
+      const requestJwt = await new SignJWT(baseJarPayload({ client_id: didWebDid }))
+        .setProtectedHeader({ alg: "ES256", typ: CS02_JAR_TYP, kid: didWebKid })
+        .sign(privateKey);
+
+      try {
+        await validateAndVerifyCs02AuthorizationRequest(requestJwt, {
+          options: strictOptions({ fetchImpl: mockDidWebFetch(didWebDocument()) }),
+        });
+        expect.fail("expected bare did:web client_id rejection");
+      } catch (error) {
+        expect(error).to.be.instanceOf(Cs02ValidationError);
+        expect(error.errorCode).to.equal("invalid_client");
+        expect(error.message).to.include("decentralized_identifier");
       }
     });
   });

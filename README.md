@@ -548,7 +548,7 @@ Per RFC 9101, the verifier supports JWT-secured authorization requests:
 
 ### Client Identification Schemes
 
-The verifier supports multiple `client_id_scheme` values per OpenID4VP v1.0:
+The verifier supports multiple OpenID4VP client identifier schemes and prefixes:
 
 - **`redirect_uri`**: Client identified by redirect URI (no client authentication required)
   - Used for simple flows without cryptographic client authentication
@@ -560,12 +560,10 @@ The verifier supports multiple `client_id_scheme` values per OpenID4VP v1.0:
   - Validates certificate SAN URI against `client_id`
 - **`x509_hash`**: Client identified by X.509 certificate hash (SHA-256)
   - Validates certificate hash against `client_id`
-- **`did:web`**: Client identified by DID Web (`did:web:` method)
-  - Resolves DID document from `.well-known/did.json` or path-based resolution
-  - Validates verification methods in DID document
-- **`did:jwk`**: Client identified by DID JWK (`did:jwk:` method)
-  - Extracts JWK directly from DID identifier
-  - Validates public key from DID
+- **`decentralized_identifier`**: DID-based client identification
+  - Uses `client_id` values such as `decentralized_identifier:did:web:...` or `decentralized_identifier:did:jwk:...`
+  - `did:web` resolves the DID document from `.well-known/did.json` or path-based resolution
+  - `did:jwk` extracts the JWK directly from the DID identifier
 - **`verifier_attestation`**: Client identified by Verifier Attestation JWT (VA-JWT) per OpenID4VP v1.0
   - Validates VA-JWT signature, claims, and expiration
   - Extracts `cnf.jwk` for proof-of-possession validation
@@ -994,5 +992,4 @@ See also [docs/cs01-pre-authorized-flow-relaxation-plan.md](docs/cs01-pre-author
 - **RFC 7636**: [Proof Key for Code Exchange (PKCE)](https://www.rfc-editor.org/rfc/rfc7636.html)
 - **EUDI Wallet ARF**: [Architecture and Reference Framework](https://github.com/eu-digital-identity-wallet/eudi-doc-architecture-and-reference-framework/releases)
 - **ISO/IEC 18013-5:2021**: [Mobile driving licence (mDL)](https://www.iso.org/standard/69084.html)
-
 

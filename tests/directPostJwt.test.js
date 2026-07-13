@@ -39,7 +39,7 @@ describe('Direct Post JWT Fixes', () => {
 
   describe('buildVpRequestJWT - Enhanced Metadata', () => {
     it('should include encryption metadata for direct_post.jwt', async () => {
-      const client_id = 'did:jwk:test';
+      const client_id = 'decentralized_identifier:did:jwk:test';
       const redirect_uri = 'https://example.com/callback';
       const presentation_definition = null;
       const dcql_query = { test: 'query' };
@@ -89,7 +89,7 @@ describe('Direct Post JWT Fixes', () => {
     });
 
     it('should not include encryption metadata for direct_post', async () => {
-      const client_id = 'did:jwk:test';
+      const client_id = 'decentralized_identifier:did:jwk:test';
       const redirect_uri = 'https://example.com/callback';
       const presentation_definition = null;
       const dcql_query = { test: 'query' };
@@ -124,7 +124,7 @@ describe('Direct Post JWT Fixes', () => {
     });
 
     it('should set correct audience for direct_post.jwt', async () => {
-      const client_id = 'did:jwk:test';
+      const client_id = 'decentralized_identifier:did:jwk:test';
       const redirect_uri = 'https://example.com/callback';
       const presentation_definition = null;
       const dcql_query = { test: 'query' };
@@ -155,7 +155,7 @@ describe('Direct Post JWT Fixes', () => {
     });
 
     it('should set correct audience for dc_api.jwt', async () => {
-      const client_id = 'did:jwk:test';
+      const client_id = 'decentralized_identifier:did:jwk:test';
       const redirect_uri = 'https://example.com/callback';
       const presentation_definition = null;
       const dcql_query = { test: 'query' };
@@ -260,7 +260,7 @@ describe('Direct Post JWT Fixes', () => {
       const validModes = ['direct_post', 'direct_post.jwt', 'dc_api.jwt', 'dc_api'];
       
       for (const mode of validModes) {
-        const client_id = 'did:jwk:test';
+        const client_id = 'decentralized_identifier:did:jwk:test';
         const redirect_uri = 'https://example.com/callback';
         const presentation_definition = null;
         const dcql_query = { test: 'query' };
@@ -290,7 +290,7 @@ describe('Direct Post JWT Fixes', () => {
     });
 
     it('should reject invalid response modes', async () => {
-      const client_id = 'did:jwk:test';
+      const client_id = 'decentralized_identifier:did:jwk:test';
       const redirect_uri = 'https://example.com/callback';
       const presentation_definition = null;
       const dcql_query = { test: 'query' };
@@ -323,7 +323,7 @@ describe('Direct Post JWT Fixes', () => {
 
   describe('Response URI exclusivity for direct_post', () => {
     it('should include response_uri and omit redirect_uri for direct_post', async () => {
-      const client_id = 'did:jwk:test';
+      const client_id = 'decentralized_identifier:did:jwk:test';
       const redirect_uri = 'https://example.com/callback';
       const presentation_definition = null;
       const dcql_query = { test: 'query' };
@@ -353,7 +353,7 @@ describe('Direct Post JWT Fixes', () => {
     });
 
     it('should include response_uri and omit redirect_uri for direct_post.jwt', async () => {
-      const client_id = 'did:jwk:test';
+      const client_id = 'decentralized_identifier:did:jwk:test';
       const redirect_uri = 'https://example.com/callback';
       const presentation_definition = null;
       const dcql_query = { test: 'query' };

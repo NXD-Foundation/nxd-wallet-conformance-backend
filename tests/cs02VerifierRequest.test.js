@@ -31,7 +31,7 @@ async function buildStandardCs02Jar(overrides = {}) {
       null,
       null,
       overrides.client_metadata || { client_name: "Test Verifier" },
-      null,
+      overrides.kid || null,
       "https://example.com",
       "vp_token",
       "nonce-phase3",
@@ -107,6 +107,25 @@ describe("CS-02 verifier request generation (Phase 3)", () => {
     } catch (error) {
       expect(error).to.be.instanceOf(Cs02VerifierRequestError);
     }
+  });
+
+  it("rejects bare DID client_id values without decentralized_identifier prefix", async () => {
+    try {
+      await buildStandardCs02Jar({ client_id: "did:web:example.org" });
+      expect.fail("expected bare DID client_id rejection");
+    } catch (error) {
+      expect(error).to.be.instanceOf(Cs02VerifierRequestError);
+      expect(error.message).to.include("decentralized_identifier");
+    }
+  });
+
+  it("accepts decentralized_identifier client_id values with did:web payloads", async () => {
+    const requestJwt = await buildStandardCs02Jar({
+      client_id: "decentralized_identifier:did:web:example.org",
+      kid: "did:web:example.org#keys-1",
+    });
+    const payload = jose.decodeJwt(requestJwt);
+    expect(payload.client_id).to.equal("decentralized_identifier:did:web:example.org");
   });
 
   it("rejects malformed transaction_data decoding in strict mode", () => {
