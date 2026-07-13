@@ -62,6 +62,37 @@ Sources: [CS-01](./core/cs-01-credential-issuance%20%281%29.md),
 [attestation options](./haip-etsi-wallet-attestation-options.md), and
 [pre-authorized-flow plan](./cs01-pre-authorized-flow-relaxation-plan.md).
 
+### Credential Issuer Metadata Discovery
+
+- OpenID4VCI 1.0 Section 12.2.2 defines Credential Issuer metadata discovery.
+  For an issuer identifier with a path, insert
+  `/.well-known/openid-credential-issuer` between the origin and that path.
+  For example, `https://issuer.example/tenant` resolves to
+  `https://issuer.example/.well-known/openid-credential-issuer/tenant`.
+- A Wallet is recommended to send an `Accept` header identifying the metadata
+  media types it supports. Every conforming issuer MUST support unsigned
+  `application/json`; signed `application/jwt` metadata is optional.
+- The wallet client must request `application/json` until it implements
+  signed-metadata verification. Do not decode or use a JWT metadata payload
+  without signature verification and an established trust policy for its
+  signer. Supporting signed metadata is a separate security feature, not a
+  parsing fallback.
+- OpenID4VCI does not require an OAuth Authorization Server metadata
+  `scopes_supported` array to contain `openid` for credential issuance. Treat
+  credential issuer `credential_configurations_supported[*].scope` values as
+  the primary source for scope-based issuance.
+- If an issuer configuration has no `scope`, the wallet may only rely on
+  `authorization_details` for that credential when the Authorization Server
+  metadata advertises `authorization_details_types_supported` including
+  `openid_credential`.
+- HAIP 1.0 draft 03 Section 4.5 adds the requirement to publish a credential
+  type-to-`scope` mapping; it does not change the OpenID4VCI discovery URL or
+  metadata content negotiation rules.
+
+Sources: [OpenID4VCI 1.0](./rfc/openid-4-verifiable-credential-issuance-1_0.html)
+Sections 12.2.2-12.2.3 and [HAIP 1.0 draft 03](./rfc/openid4vc-high-assurance-interoperability-profile-1_0-ID1.html)
+Section 4.5.
+
 ### OpenID4VP Verification
 
 - The current standard verifier path uses DCQL for OpenID4VP 1.0; legacy
@@ -131,7 +162,7 @@ Source: [JAR x5c chain plan](./jar-x5c-certificate-chain-plan.md).
 | [CS-03 remote signing](./core/cs-03-remote-signing-with-wallet-units%20%283%29.md) | Wallet- and QTSP-centric remote signing | Normative profile |
 | [CS-04 WUA lifecycle](./core/cs-04-wua-lifecycle.md) | WUA lifecycle, binding, revocation, and key attestation | Normative profile |
 | [TS-12 SCA with wallet](./ts12-electronic-payments-SCA-implementation-with-wallet%20%281%29.md) | Wallet-based strong customer authentication and transaction data | External specification |
-| [`docs/rfc/`](./rfc/) | Local copies of RFC 7591, RFC 9449, and OpenID4VP material | Reference copies |
+| [`docs/rfc/`](./rfc/) | Local copies of OpenID4VCI 1.0, HAIP 1.0 draft 03, RFC 7591, RFC 9449, and OpenID4VP material | Reference copies |
 
 ### Current Design, Behaviour, And Interoperability
 

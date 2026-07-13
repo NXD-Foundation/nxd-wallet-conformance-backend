@@ -16,6 +16,14 @@ export class CredentialSelectionError extends Error {
   }
 }
 
+export class AuthorizationDetailsSupportError extends Error {
+  constructor(message, errorCode = "invalid_authorization_server") {
+    super(message);
+    this.name = "AuthorizationDetailsSupportError";
+    this.errorCode = errorCode;
+  }
+}
+
 /** Read credential_configuration_ids from a Credential Offer (VCI v1.0 + legacy credentials). */
 export function extractOfferedConfigurationIds(offerConfig) {
   if (!offerConfig || typeof offerConfig !== "object") {
@@ -126,6 +134,45 @@ export function resolveCredentialScope({
     source,
     offerScope,
     metadataScope,
+  };
+}
+
+export function assertAuthorizationDetailsSupportForCredentialRequest({
+  configurationId,
+  issuerMeta,
+  offerConfig = null,
+  authorizationServerMeta = null,
+}) {
+  if (!configurationId) {
+    throw new AuthorizationDetailsSupportError(
+      "credential configuration id is required to determine authorization_details support",
+    );
+  }
+
+  const offerScope = extractOfferGrantScope(offerConfig);
+  const metadataScope = extractMetadataScope(issuerMeta, configurationId);
+  if (offerScope || metadataScope) {
+    return {
+      required: false,
+      reason: "issuer_scope_available",
+      offerScope,
+      metadataScope,
+    };
+  }
+
+  const supportedTypes = authorizationServerMeta?.authorization_details_types_supported;
+  if (!Array.isArray(supportedTypes) || !supportedTypes.includes("openid_credential")) {
+    throw new AuthorizationDetailsSupportError(
+      `authorization_details support required for credential configuration '${configurationId}': issuer metadata does not define a scope, so AS metadata must advertise authorization_details_types_supported including 'openid_credential'`,
+    );
+  }
+
+  return {
+    required: true,
+    reason: "issuer_scope_missing",
+    offerScope: null,
+    metadataScope: null,
+    authorizationDetailsType: "openid_credential",
   };
 }
 

@@ -7,7 +7,6 @@ import {
 import {
   getWalletCredentialByType,
   listWalletCredentialTypes,
-  appendWalletLog,
 } from "./cache.js";
 import {
   buildMdocPresentation,
@@ -50,69 +49,7 @@ import {
   buildCs02VpTokenObject,
   resolveCs02KbJwtAudience,
 } from "./cs02DcqlValidation.js";
-
-function makeSessionLogger(sessionId) {
-  return function sessionLog(...args) {
-    try {
-      console.log(...args);
-    } catch {}
-    if (!sessionId) return;
-    try {
-      // Separate string messages from structured data
-      const messages = [];
-      let data = null;
-
-      // If last arg is a plain object (not null, not array, not Date, etc.), treat it as structured data
-      if (args.length > 0) {
-        const lastArg = args[args.length - 1];
-        if (
-          lastArg &&
-          typeof lastArg === "object" &&
-          !Array.isArray(lastArg) &&
-          !(lastArg instanceof Date) &&
-          !(lastArg instanceof Error) &&
-          Object.prototype.toString.call(lastArg) === "[object Object]"
-        ) {
-          // Last argument is structured data
-          data = lastArg;
-          // Process remaining args as messages
-          for (let i = 0; i < args.length - 1; i++) {
-            const arg = args[i];
-            if (typeof arg === "string") {
-              messages.push(arg);
-            } else {
-              try {
-                messages.push(JSON.stringify(arg));
-              } catch {
-                messages.push(String(arg));
-              }
-            }
-          }
-        } else {
-          // No structured data, convert all args to messages
-          for (const arg of args) {
-            if (typeof arg === "string") {
-              messages.push(arg);
-            } else {
-              try {
-                messages.push(JSON.stringify(arg));
-              } catch {
-                messages.push(String(arg));
-              }
-            }
-          }
-        }
-      }
-
-      const message = messages.join(" ");
-      const logEntry = { level: "info", message };
-      if (data) {
-        logEntry.data = data;
-      }
-      appendWalletLog(sessionId, logEntry).catch(() => {});
-    } catch {}
-  };
-}
+import { makeSessionLogger } from "./logger.js";
 
 function parseOpenId4VpDeepLink(deepLink, { cs02Options, log } = {}) {
   console.log("[present] Parsing deep link:", deepLink);

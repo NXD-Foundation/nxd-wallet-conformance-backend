@@ -1,5 +1,7 @@
 import { expect } from "chai";
 import {
+  AuthorizationDetailsSupportError,
+  assertAuthorizationDetailsSupportForCredentialRequest,
   ScopeResolutionError,
   CredentialSelectionError,
   extractOfferGrantScope,
@@ -114,6 +116,52 @@ describe("wallet-client scopeResolution (Phase 5)", () => {
 
     expect(resolved.scope).to.equal("UnscopedCredential");
     expect(resolved.source).to.equal("compatibility:configurationId-fallback");
+  });
+
+  it("does not require AS authorization_details support when issuer scope exists", () => {
+    const resolved = assertAuthorizationDetailsSupportForCredentialRequest({
+      configurationId: "PID",
+      issuerMeta,
+      offerConfig: { grants: { authorization_code: {} } },
+      authorizationServerMeta: {},
+    });
+
+    expect(resolved).to.deep.include({
+      required: false,
+      reason: "issuer_scope_available",
+      metadataScope: "PID",
+    });
+  });
+
+  it("requires AS authorization_details support when issuer scope is missing", () => {
+    expect(() =>
+      assertAuthorizationDetailsSupportForCredentialRequest({
+        configurationId: "UnscopedCredential",
+        issuerMeta,
+        offerConfig: { grants: { authorization_code: {} } },
+        authorizationServerMeta: {},
+      }),
+    ).to.throw(
+      AuthorizationDetailsSupportError,
+      /authorization_details_types_supported including 'openid_credential'/,
+    );
+  });
+
+  it("accepts auth-details fallback when AS metadata advertises openid_credential", () => {
+    const resolved = assertAuthorizationDetailsSupportForCredentialRequest({
+      configurationId: "UnscopedCredential",
+      issuerMeta,
+      offerConfig: { grants: { authorization_code: {} } },
+      authorizationServerMeta: {
+        authorization_details_types_supported: ["openid_credential"],
+      },
+    });
+
+    expect(resolved).to.deep.include({
+      required: true,
+      reason: "issuer_scope_missing",
+      authorizationDetailsType: "openid_credential",
+    });
   });
 });
 

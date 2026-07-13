@@ -2,7 +2,7 @@ import express from "express";
 import fetch from "node-fetch";
 import { createPkcePair } from "./lib/crypto.js";
 import { performPresentation, resolveDeepLinkFromEndpoint } from "./lib/presentation.js";
-import { storeWalletCredentialByType, walletRedisClient, appendWalletLog, getWalletLogs } from "./lib/cache.js";
+import { storeWalletCredentialByType, walletRedisClient, getWalletLogs, getGlobalLogs } from "./lib/cache.js";
 import { jwtVerify, decodeJwt, decodeProtectedHeader, createLocalJWKSet, importJWK, importX509 } from "jose";
 import { decodeSdJwt, getClaims } from "@sd-jwt/decode";
 import { digest } from "@sd-jwt/crypto-nodejs";
@@ -25,6 +25,7 @@ import {
   resolveWalletClientId,
 } from "./lib/walletClientId.js";
 import {
+  assertAuthorizationDetailsSupportForCredentialRequest,
   resolveCredentialScope,
   resolvePreAuthorizedCredentialSelection,
   extractOfferedConfigurationIds,
@@ -62,6 +63,14 @@ import {
   OPENID4VP_PRESENT_URI,
   isOpenId4VpDeepLink,
 } from "./lib/openid4vpUri.js";
+import {
+  installProcessLogHandlers,
+  logError,
+  logInfo,
+  logWarn,
+  makeSessionLogger,
+  runWithLogContext,
+} from "./lib/logger.js";
 
 const activeWalletProfile = resolveWalletProfile();
 const activeWalletClientId = resolveWalletClientId();
@@ -70,76 +79,9 @@ const activeCs01GrantPolicy = describeCs01GrantPolicy(activeWalletProfile);
 const app = express();
 app.use(express.json({ limit: "2mb" }));
 
+installProcessLogHandlers();
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-// Operation context tracking for better log organization (per session)
-const sessionOperationCounters = new Map();
-
-function makeSessionLogger(sessionId) {
-  if (!sessionId) {
-    return function sessionLog(...args) {
-      try { console.log(...args); } catch {}
-    };
-  }
-  
-  // Initialize per-session counter if needed
-  if (!sessionOperationCounters.has(sessionId)) {
-    sessionOperationCounters.set(sessionId, 0);
-  }
-  
-  return function sessionLog(...args) {
-    try { console.log(...args); } catch {}
-    try {
-      // Separate string messages from structured data
-      const messages = [];
-      let data = null;
-      
-      // If last arg is a plain object (not null, not array, not Date, etc.), treat it as structured data
-      if (args.length > 0) {
-        const lastArg = args[args.length - 1];
-        if (lastArg && typeof lastArg === 'object' && !Array.isArray(lastArg) && 
-            !(lastArg instanceof Date) && !(lastArg instanceof Error) && 
-            Object.prototype.toString.call(lastArg) === '[object Object]') {
-          // Last argument is structured data
-          data = lastArg;
-          // Process remaining args as messages
-          for (let i = 0; i < args.length - 1; i++) {
-            const arg = args[i];
-            if (typeof arg === 'string') {
-              messages.push(arg);
-            } else {
-              try { messages.push(JSON.stringify(arg)); } catch { messages.push(String(arg)); }
-            }
-          }
-        } else {
-          // No structured data, convert all args to messages
-          for (const arg of args) {
-            if (typeof arg === 'string') {
-              messages.push(arg);
-            } else {
-              try { messages.push(JSON.stringify(arg)); } catch { messages.push(String(arg)); }
-            }
-          }
-        }
-      }
-      
-      const message = messages.join(' ');
-      const counter = sessionOperationCounters.get(sessionId);
-      sessionOperationCounters.set(sessionId, counter + 1);
-      
-      const logEntry = { 
-        level: 'info', 
-        message,
-        step: counter
-      };
-      
-      if (data) {
-        logEntry.data = data;
-      }
-      appendWalletLog(sessionId, logEntry).catch(() => {});
-    } catch {}
-  };
-}
 
 function logFlowError(slog, label, error, extra = {}) {
   try {
@@ -171,179 +113,112 @@ async function runGuardedAsync(slog, label, fn, extra = {}) {
   }
 }
 
-// Helper function to log errors to both console and Redis (if sessionId available)
-async function logError(sessionId, ...args) {
-  // Always log to console
-  console.error(...args);
-  
-  // If sessionId is available, also log to Redis
-  if (sessionId) {
-    try {
-      const messages = args.map(arg => {
-        if (typeof arg === 'string') return arg;
-        try { return JSON.stringify(arg); } catch { return String(arg); }
-      });
-      const message = messages.join(' ');
-      await appendWalletLog(sessionId, {
-        level: 'error',
-        message
-      });
-    } catch (err) {
-      // Silently fail if Redis logging fails
-    }
-  }
-}
-
-// Helper function to log info messages to both console and Redis (if sessionId available)
-async function logInfo(sessionId, ...args) {
-  // Always log to console
-  console.log(...args);
-  
-  // If sessionId is available, also log to Redis
-  if (sessionId) {
-    try {
-      const messages = args.map(arg => {
-        if (typeof arg === 'string') return arg;
-        try { return JSON.stringify(arg); } catch { return String(arg); }
-      });
-      const message = messages.join(' ');
-      await appendWalletLog(sessionId, {
-        level: 'info',
-        message
-      });
-    } catch (err) {
-      // Silently fail if Redis logging fails
-    }
-  }
-}
-
-// Helper function to log warnings to both console and Redis (if sessionId available)
-async function logWarn(sessionId, ...args) {
-  // Always log to console
-  console.warn(...args);
-  
-  // If sessionId is available, also log to Redis
-  if (sessionId) {
-    try {
-      const messages = args.map(arg => {
-        if (typeof arg === 'string') return arg;
-        try { return JSON.stringify(arg); } catch { return String(arg); }
-      });
-      const message = messages.join(' ');
-      await appendWalletLog(sessionId, {
-        level: 'warn',
-        message
-      });
-    } catch (err) {
-      // Silently fail if Redis logging fails
-    }
-  }
-}
-
 // POST /issue
 // body: { issuer: string (default http://localhost:3000), offer?: string, fetchOfferPath?: string, credential?: string }
 app.post("/issue", async (req, res) => {
-  try {
-    const issuerBase = (req.body.issuer || "http://localhost:3000").replace(/\/$/, "");
-    const deepLink = req.body.offer || (await getOfferDeepLink(issuerBase, req.body.fetchOfferPath, req.body.credential));
-    await logInfo(req.body.sessionId, "[/issue] deepLink:", deepLink || "<none>");
-    if (!deepLink) {
-      return res.status(400).json({ error: "invalid_request", error_description: "Missing offer or fetchOfferPath" });
-    }
+  return runWithLogContext(req.body.sessionId, async () => {
+    try {
+      const issuerBase = (req.body.issuer || "http://localhost:3000").replace(/\/$/, "");
+      const deepLink = req.body.offer || (await getOfferDeepLink(issuerBase, req.body.fetchOfferPath, req.body.credential));
+      await logInfo(req.body.sessionId, "[/issue] deepLink:", deepLink || "<none>");
+      if (!deepLink) {
+        return res.status(400).json({ error: "invalid_request", error_description: "Missing offer or fetchOfferPath" });
+      }
 
-    const offerConfig = await resolveOfferConfig(deepLink);
-    const offeredConfigurationIds = getOfferedConfigurationIds(offerConfig);
-    try {
-      await logInfo(req.body.sessionId, "[/issue] offer.credential_issuer=", offerConfig?.credential_issuer);
-      await logInfo(req.body.sessionId, "[/issue] offer.config_ids=", offeredConfigurationIds);
-      await logInfo(req.body.sessionId, "[/issue] offer.grants=", Object.keys(offerConfig?.grants || {}));
-      await logInfo(req.body.sessionId, "[/issue] offer full structure:", JSON.stringify(offerConfig, null, 2));
-    } catch {}
-    const { grants } = offerConfig;
-    const apiBase = (offerConfig.credential_issuer || issuerBase).replace(/\/$/, "");
-    const issuerMeta = await discoverIssuerMetadata(apiBase);
-    try {
-      await logInfo(req.body.sessionId, "[/issue] issuerMeta.token_endpoint=", issuerMeta?.token_endpoint);
-      await logInfo(req.body.sessionId, "[/issue] issuerMeta.credential_endpoint=", issuerMeta?.credential_endpoint);
-      await logInfo(req.body.sessionId, "[/issue] issuerMeta.nonce_endpoint=", issuerMeta?.nonce_endpoint);
-      const cfgKeys = Object.keys(issuerMeta?.credential_configurations_supported || {});
-      await logInfo(req.body.sessionId, "[/issue] issuerMeta.credential_configurations_supported keys=", cfgKeys.slice(0, 5), cfgKeys.length > 5 ? `(+${cfgKeys.length - 5} more)` : "");
-    } catch {}
-    const configurationId = pickConfigurationId(offerConfig, req.body.credential);
-    if (!configurationId) {
-      await logWarn(req.body.sessionId, "[/issue] no credential_configuration_id available in offer or request.");
-      return res.status(400).json({ error: "invalid_request", error_description: "No credential_configuration_id available" });
-    }
+      const offerConfig = await resolveOfferConfig(deepLink);
+      const offeredConfigurationIds = getOfferedConfigurationIds(offerConfig);
+      try {
+        await logInfo(req.body.sessionId, "[/issue] offer.credential_issuer=", offerConfig?.credential_issuer);
+        await logInfo(req.body.sessionId, "[/issue] offer.config_ids=", offeredConfigurationIds);
+        await logInfo(req.body.sessionId, "[/issue] offer.grants=", Object.keys(offerConfig?.grants || {}));
+        await logInfo(req.body.sessionId, "[/issue] offer full structure:", JSON.stringify(offerConfig, null, 2));
+      } catch {}
+      const { grants } = offerConfig;
+      const apiBase = (offerConfig.credential_issuer || issuerBase).replace(/\/$/, "");
+      const issuerMeta = await discoverIssuerMetadata(apiBase);
+      try {
+        await logInfo(req.body.sessionId, "[/issue] issuerMeta.token_endpoint=", issuerMeta?.token_endpoint);
+        await logInfo(req.body.sessionId, "[/issue] issuerMeta.credential_endpoint=", issuerMeta?.credential_endpoint);
+        await logInfo(req.body.sessionId, "[/issue] issuerMeta.nonce_endpoint=", issuerMeta?.nonce_endpoint);
+        const cfgKeys = Object.keys(issuerMeta?.credential_configurations_supported || {});
+        await logInfo(req.body.sessionId, "[/issue] issuerMeta.credential_configurations_supported keys=", cfgKeys.slice(0, 5), cfgKeys.length > 5 ? `(+${cfgKeys.length - 5} more)` : "");
+      } catch {}
+      const configurationId = pickConfigurationId(offerConfig, req.body.credential);
+      if (!configurationId) {
+        await logWarn(req.body.sessionId, "[/issue] no credential_configuration_id available in offer or request.");
+        return res.status(400).json({ error: "invalid_request", error_description: "No credential_configuration_id available" });
+      }
 
-    let grantRoute;
-    try {
-      grantRoute = selectVciGrantRoute(activeWalletProfile, grants, { endpoint: "/issue" });
-    } catch (profileError) {
-      await logError(req.body.sessionId, "[/issue] profile violation:", profileError.message);
+      let grantRoute;
+      try {
+        grantRoute = selectVciGrantRoute(activeWalletProfile, grants, { endpoint: "/issue" });
+      } catch (profileError) {
+        await logError(req.body.sessionId, "[/issue] profile violation:", profileError.message);
+        return res.status(400).json({
+          error: profileError.errorCode || "unsupported_grant_type",
+          error_description: profileError.message,
+          profile: activeWalletProfile,
+        });
+      }
+
+      if (grantRoute === "pre-authorized_code") {
+        const preAuthGrant = grants["urn:ietf:params:oauth:grant-type:pre-authorized_code"];
+        await logInfo(req.body.sessionId, "[/issue] invoking pre-authorized issuance. configurationId=", configurationId);
+        const result = await runPreAuthorizedIssuance({
+          profile: activeWalletProfile,
+          walletClientId: resolveWalletClientId(process.env, req.body.walletClientId || req.body.clientId),
+          apiBase,
+          issuerMeta,
+          offerConfig,
+          configurationId,
+          preAuthorizedCode: preAuthGrant["pre-authorized_code"],
+          txCodeConfig: preAuthGrant.tx_code,
+          authorizationServer: preAuthGrant.authorization_server,
+          keyPath: req.body.keyPath,
+          pollTimeoutMs: req.body.pollTimeoutMs,
+          pollIntervalMs: req.body.pollIntervalMs,
+          userPin: req.body.pin,
+        });
+        return res.json(result);
+      }
+
+      if (grantRoute === "authorization_code") {
+        const authGrant = grants.authorization_code;
+        await logInfo(req.body.sessionId, "[/issue] invoking authorization code issuance. configurationId=", configurationId);
+        const result = await runAuthorizationCodeIssuance({
+          profile: activeWalletProfile,
+          walletClientId: resolveWalletClientId(process.env, req.body.walletClientId || req.body.clientId),
+          apiBase,
+          issuerMeta,
+          offerConfig,
+          configurationId,
+          issuerState: authGrant.issuer_state,
+          authorizationServer: authGrant.authorization_server,
+          keyPath: req.body.keyPath,
+          pollTimeoutMs: req.body.pollTimeoutMs,
+          pollIntervalMs: req.body.pollIntervalMs,
+        });
+        return res.json(result);
+      }
+
+      const supportedGrants = describeSupportedVciGrants(activeWalletProfile).join(", ");
+      await logError(
+        req.body.sessionId,
+        "[/issue] OIDC4VCI 1.0: No supported grant types found. Supported grants:",
+        supportedGrants,
+        "Found:",
+        Object.keys(grants || {}),
+      );
       return res.status(400).json({
-        error: profileError.errorCode || "unsupported_grant_type",
-        error_description: profileError.message,
+        error: "unsupported_grant_type",
+        error_description: `OIDC4VCI 1.0: No supported grant types found. Supported grants: ${supportedGrants}`,
         profile: activeWalletProfile,
       });
+    } catch (e) {
+      await logError(req.body.sessionId, "[/issue] error:", e);
+      return res.status(500).json({ error: "server_error", error_description: e.message || String(e) });
     }
-
-    if (grantRoute === "pre-authorized_code") {
-      const preAuthGrant = grants["urn:ietf:params:oauth:grant-type:pre-authorized_code"];
-      await logInfo(req.body.sessionId, "[/issue] invoking pre-authorized issuance. configurationId=", configurationId);
-      const result = await runPreAuthorizedIssuance({
-        profile: activeWalletProfile,
-        walletClientId: resolveWalletClientId(process.env, req.body.walletClientId || req.body.clientId),
-        apiBase,
-        issuerMeta,
-        offerConfig,
-        configurationId,
-        preAuthorizedCode: preAuthGrant["pre-authorized_code"],
-        txCodeConfig: preAuthGrant.tx_code,
-        authorizationServer: preAuthGrant.authorization_server,
-        keyPath: req.body.keyPath,
-        pollTimeoutMs: req.body.pollTimeoutMs,
-        pollIntervalMs: req.body.pollIntervalMs,
-        userPin: req.body.pin,
-      });
-      return res.json(result);
-    }
-
-    if (grantRoute === "authorization_code") {
-      const authGrant = grants.authorization_code;
-      await logInfo(req.body.sessionId, "[/issue] invoking authorization code issuance. configurationId=", configurationId);
-      const result = await runAuthorizationCodeIssuance({
-        profile: activeWalletProfile,
-        walletClientId: resolveWalletClientId(process.env, req.body.walletClientId || req.body.clientId),
-        apiBase,
-        issuerMeta,
-        offerConfig,
-        configurationId,
-        issuerState: authGrant.issuer_state,
-        authorizationServer: authGrant.authorization_server,
-        keyPath: req.body.keyPath,
-        pollTimeoutMs: req.body.pollTimeoutMs,
-        pollIntervalMs: req.body.pollIntervalMs,
-      });
-      return res.json(result);
-    }
-
-    const supportedGrants = describeSupportedVciGrants(activeWalletProfile).join(", ");
-    await logError(
-      req.body.sessionId,
-      "[/issue] OIDC4VCI 1.0: No supported grant types found. Supported grants:",
-      supportedGrants,
-      "Found:",
-      Object.keys(grants || {}),
-    );
-    return res.status(400).json({
-      error: "unsupported_grant_type",
-      error_description: `OIDC4VCI 1.0: No supported grant types found. Supported grants: ${supportedGrants}`,
-      profile: activeWalletProfile,
-    });
-  } catch (e) {
-    await logError(req.body.sessionId, "[/issue] error:", e);
-    return res.status(500).json({ error: "server_error", error_description: e.message || String(e) });
-  }
+  });
 });
 
 app.get("/health", (req, res) =>
@@ -359,7 +234,7 @@ app.get("/health", (req, res) =>
 
 // GET /logs/:sessionId
 // Returns all logs stored for a session from Redis
-app.get("/logs/:sessionId", async (req, res) => {
+async function handleSessionLogs(req, res) {
   try {
     const { sessionId } = req.params;
     if (!sessionId) {
@@ -374,7 +249,26 @@ app.get("/logs/:sessionId", async (req, res) => {
     await logError(req.params.sessionId, "[logs] error:", e);
     return res.status(500).json({ error: "server_error", error_description: e.message || String(e) });
   }
-});
+}
+
+app.get("/logs/:sessionId", handleSessionLogs);
+app.get("/log/:sessionId", handleSessionLogs);
+
+async function handleGlobalLogs(req, res) {
+  try {
+    const logs = await getGlobalLogs();
+    if (!logs) {
+      return res.status(404).json({ error: "not_found", error_description: "No global logs" });
+    }
+    return res.json({ logs });
+  } catch (e) {
+    await logError(undefined, "[logs] global error:", e);
+    return res.status(500).json({ error: "server_error", error_description: e.message || String(e) });
+  }
+}
+
+app.get("/logs", handleGlobalLogs);
+app.get("/log", handleGlobalLogs);
 
 // GET /session-status/:sessionId
 // Returns the current status of a session from Redis
@@ -427,7 +321,8 @@ app.post("/session", async (req, res) => {
 
   await setStatus("pending");
 
-  try {
+  return runWithLogContext(sessionId, async () => {
+    try {
     // VP request
     if (isOpenId4VpDeepLink(deepLink)) {
       const verifierBase = (req.body.verifier || "http://localhost:3000").replace(/\/$/, "");
@@ -501,6 +396,7 @@ app.post("/session", async (req, res) => {
           const okPayload = await setStatus("ok", { result });
           return res.json(okPayload);
         } catch (err) {
+          await logError(sessionId, "[/session] pre-authorized issuance error:", err);
           const failed = await setStatus("failed", { error: err.message || String(err) });
           return res.status(500).json({ error: "server_error", error_description: err.message || String(err), state: failed });
         }
@@ -527,6 +423,7 @@ app.post("/session", async (req, res) => {
           const okPayload = await setStatus("ok", { result });
           return res.json(okPayload);
         } catch (err) {
+          await logError(sessionId, "[/session] authorization code issuance error:", err);
           const failed = await setStatus("failed", { error: err.message || String(err) });
           return res.status(500).json({ error: "server_error", error_description: err.message || String(err), state: failed });
         }
@@ -551,104 +448,119 @@ app.post("/session", async (req, res) => {
     const failed = await setStatus("failed", { error: e.message || String(e) });
     return res.status(500).json({ error: "server_error", error_description: e.message || String(e), state: failed });
   }
+  });
 });
 
 // POST /present
 // body: { verifier?: string (default http://localhost:3000), deepLink?: string, fetchPath?: string, credential?: string (optional), keyPath?: string, sessionId?: string }
 app.post("/present", async (req, res) => {
-  try {
-    const verifierBase = (req.body.verifier || "http://localhost:3000").replace(/\/$/, "");
-    const deepLink = req.body.deepLink || (req.body.fetchPath ? await resolveDeepLinkFromEndpoint(verifierBase, req.body.fetchPath) : undefined);
-    if (!deepLink) return res.status(400).json({ error: "invalid_request", error_description: "Missing deepLink or fetchPath" });
+  return runWithLogContext(req.body.sessionId, async () => {
+    try {
+      const verifierBase = (req.body.verifier || "http://localhost:3000").replace(/\/$/, "");
+      const deepLink = req.body.deepLink || (req.body.fetchPath ? await resolveDeepLinkFromEndpoint(verifierBase, req.body.fetchPath) : undefined);
+      if (!deepLink) return res.status(400).json({ error: "invalid_request", error_description: "Missing deepLink or fetchPath" });
 
-    await logInfo(req.body.sessionId, "[/present] resolved deepLink:", deepLink);
-    if (req.body.credential) await logInfo(req.body.sessionId, "[/present] hint credential:", req.body.credential);
-    if (req.body.keyPath) await logInfo(req.body.sessionId, "[/present] keyPath provided");
+      await logInfo(req.body.sessionId, "[/present] resolved deepLink:", deepLink);
+      if (req.body.credential) await logInfo(req.body.sessionId, "[/present] hint credential:", req.body.credential);
+      if (req.body.keyPath) await logInfo(req.body.sessionId, "[/present] keyPath provided");
 
-    const result = await performPresentation({ deepLink, verifierBase, credentialType: req.body.credential, keyPath: req.body.keyPath }, req.body.sessionId);
-    return res.json(result || { status: "ok" });
-  } catch (e) {
-    await logError(req.body.sessionId, "[/present] error:", e);
-    return res.status(500).json({ error: "server_error", error_description: e.message || String(e) });
-  }
+      const result = await performPresentation({ deepLink, verifierBase, credentialType: req.body.credential, keyPath: req.body.keyPath }, req.body.sessionId);
+      return res.json(result || { status: "ok" });
+    } catch (e) {
+      await logError(req.body.sessionId, "[/present] error:", e);
+      return res.status(500).json({ error: "server_error", error_description: e.message || String(e) });
+    }
+  });
 });
 
 // Authorization Code Flow endpoint
 // body: { issuer?: string, offer?: string, fetchOfferPath?: string, credential?: string, clientIdScheme?: string }
 app.post("/issue-codeflow", async (req, res) => {
-  try {
-    const issuerBaseInput = (req.body.issuer || "http://localhost:3000").replace(/\/$/, "");
-    const deepLink = req.body.offer || (await getOfferDeepLink(issuerBaseInput, req.body.fetchOfferPath, req.body.credential));
-    await logInfo(req.body.sessionId, "[/issue-codeflow] deepLink:", deepLink || "<none>");
-    if (!deepLink) return res.status(400).json({ error: "invalid_request", error_description: "Missing offer or fetchOfferPath" });
-
-    const offerCfg = await resolveOfferConfig(deepLink);
-    const offeredConfigurationIds = getOfferedConfigurationIds(offerCfg);
+  return runWithLogContext(req.body.sessionId, async () => {
     try {
-      await logInfo(req.body.sessionId, "[/issue-codeflow] offer.credential_issuer=", offerCfg?.credential_issuer);
-      await logInfo(req.body.sessionId, "[/issue-codeflow] offer.config_ids=", offeredConfigurationIds);
-      await logInfo(req.body.sessionId, "[/issue-codeflow] offer.grants=", Object.keys(offerCfg?.grants || {}));
-      await logInfo(req.body.sessionId, "[/issue-codeflow] offer full structure:", JSON.stringify(offerCfg, null, 2));
-    } catch {}
-    const { grants } = offerCfg;
-    const apiBase = (offerCfg.credential_issuer || issuerBaseInput).replace(/\/$/, "");
-    const issuerMeta = await discoverIssuerMetadata(apiBase);
-    try {
-      await logInfo(req.body.sessionId, "[/issue-codeflow] issuerMeta.token_endpoint=", issuerMeta?.token_endpoint);
-      await logInfo(req.body.sessionId, "[/issue-codeflow] issuerMeta.credential_endpoint=", issuerMeta?.credential_endpoint);
-      await logInfo(req.body.sessionId, "[/issue-codeflow] issuerMeta.nonce_endpoint=", issuerMeta?.nonce_endpoint);
-      const cfgKeys = Object.keys(issuerMeta?.credential_configurations_supported || {});
-      await logInfo(req.body.sessionId, "[/issue-codeflow] issuerMeta.credential_configurations_supported keys=", cfgKeys.slice(0, 5), cfgKeys.length > 5 ? `(+${cfgKeys.length - 5} more)` : "");
-    } catch {}
+      const issuerBaseInput = (req.body.issuer || "http://localhost:3000").replace(/\/$/, "");
+      const deepLink = req.body.offer || (await getOfferDeepLink(issuerBaseInput, req.body.fetchOfferPath, req.body.credential));
+      await logInfo(req.body.sessionId, "[/issue-codeflow] deepLink:", deepLink || "<none>");
+      if (!deepLink) return res.status(400).json({ error: "invalid_request", error_description: "Missing offer or fetchOfferPath" });
 
-    // Expect authorization_code grant
-    const authGrant = grants?.authorization_code;
-    if (!authGrant) {
-      await logError(req.body.sessionId, "[/issue-codeflow]  VIOLATION: authorization_code grant type required in this endpoint. Found grants:", Object.keys(grants || {}));
-      return res.status(400).json({ error: "unsupported_grant_type", error_description: "authorization_code grant required" });
+      const offerCfg = await resolveOfferConfig(deepLink);
+      const offeredConfigurationIds = getOfferedConfigurationIds(offerCfg);
+      try {
+        await logInfo(req.body.sessionId, "[/issue-codeflow] offer.credential_issuer=", offerCfg?.credential_issuer);
+        await logInfo(req.body.sessionId, "[/issue-codeflow] offer.config_ids=", offeredConfigurationIds);
+        await logInfo(req.body.sessionId, "[/issue-codeflow] offer.grants=", Object.keys(offerCfg?.grants || {}));
+        await logInfo(req.body.sessionId, "[/issue-codeflow] offer full structure:", JSON.stringify(offerCfg, null, 2));
+      } catch {}
+      const { grants } = offerCfg;
+      const apiBase = (offerCfg.credential_issuer || issuerBaseInput).replace(/\/$/, "");
+      const issuerMeta = await discoverIssuerMetadata(apiBase);
+      try {
+        await logInfo(req.body.sessionId, "[/issue-codeflow] issuerMeta.token_endpoint=", issuerMeta?.token_endpoint);
+        await logInfo(req.body.sessionId, "[/issue-codeflow] issuerMeta.credential_endpoint=", issuerMeta?.credential_endpoint);
+        await logInfo(req.body.sessionId, "[/issue-codeflow] issuerMeta.nonce_endpoint=", issuerMeta?.nonce_endpoint);
+        const cfgKeys = Object.keys(issuerMeta?.credential_configurations_supported || {});
+        await logInfo(req.body.sessionId, "[/issue-codeflow] issuerMeta.credential_configurations_supported keys=", cfgKeys.slice(0, 5), cfgKeys.length > 5 ? `(+${cfgKeys.length - 5} more)` : "");
+      } catch {}
+
+      const authGrant = grants?.authorization_code;
+      if (!authGrant) {
+        await logError(req.body.sessionId, "[/issue-codeflow]  VIOLATION: authorization_code grant type required in this endpoint. Found grants:", Object.keys(grants || {}));
+        return res.status(400).json({ error: "unsupported_grant_type", error_description: "authorization_code grant required" });
+      }
+
+      const configurationId = pickConfigurationId(offerCfg, req.body.credential);
+      if (!configurationId) return res.status(400).json({ error: "invalid_request", error_description: "No credential_configuration_id available" });
+
+      const result = await runAuthorizationCodeIssuance({
+        profile: activeWalletProfile,
+        walletClientId: resolveWalletClientId(process.env, req.body.walletClientId || req.body.clientId),
+        apiBase,
+        issuerMeta,
+        offerConfig: offerCfg,
+        configurationId,
+        issuerState: authGrant.issuer_state,
+        authorizationServer: authGrant.authorization_server,
+        keyPath: req.body.keyPath,
+        pollTimeoutMs: req.body.pollTimeoutMs,
+        pollIntervalMs: req.body.pollIntervalMs,
+      });
+      return res.json(result);
+    } catch (e) {
+      await logError(req.body.sessionId, "[/issue-codeflow] error:", e);
+      return res.status(500).json({ error: "server_error", error_description: e.message || String(e) });
     }
-    // issuer_state is optional per OIDC4VCI 1.0 - only required if provided in the offer
-
-    const configurationId = pickConfigurationId(offerCfg, req.body.credential);
-    if (!configurationId) return res.status(400).json({ error: "invalid_request", error_description: "No credential_configuration_id available" });
-
-    const result = await runAuthorizationCodeIssuance({
-      profile: activeWalletProfile,
-      walletClientId: resolveWalletClientId(process.env, req.body.walletClientId || req.body.clientId),
-      apiBase,
-      issuerMeta,
-      offerConfig: offerCfg,
-      configurationId,
-      issuerState: authGrant.issuer_state, // Optional - only included if present in offer
-      authorizationServer: authGrant.authorization_server, // Optional grant-level AS identifier
-      keyPath: req.body.keyPath,
-      pollTimeoutMs: req.body.pollTimeoutMs,
-      pollIntervalMs: req.body.pollIntervalMs,
-    });
-    return res.json(result);
-  } catch (e) {
-    await logError(req.body.sessionId, "[/issue-codeflow] error:", e);
-    return res.status(500).json({ error: "server_error", error_description: e.message || String(e) });
-  }
+  });
 });
 
 const port = process.env.PORT || 4000;
-app.listen(port, () => {
-  console.log(`Wallet service listening on http://localhost:${port}`);
-  console.log(`Wallet profile: ${activeWalletProfile}`);
-  console.log(`Wallet client_id: ${activeWalletClientId}`);
-  console.log(`Wallet Unit Attestation source: ${activeAttestationConfiguration.source} (trust-framework: ${activeAttestationConfiguration.trustFrameworkIntegrated})`);
-  console.log(activeAttestationConfiguration.implementationNote);
-  if (isWebuildCs01Profile(activeWalletProfile)) {
-    if (activeCs01GrantPolicy.preAuthorizedEnabled) {
-      console.log("WE BUILD CS-01 mode: authorization_code and pre-authorized_code enabled");
-    } else {
-      console.log(
-        "WE BUILD CS-01 mode: authorization_code only (CS01_DISABLE_PRE_AUTHORIZED=true)",
-      );
+let serverInstance = null;
+
+export function startWalletServer() {
+  if (serverInstance) return serverInstance;
+  serverInstance = app.listen(port, () => {
+    console.log(`Wallet service listening on http://localhost:${port}`);
+    console.log(`Wallet profile: ${activeWalletProfile}`);
+    console.log(`Wallet client_id: ${activeWalletClientId}`);
+    console.log(`Wallet Unit Attestation source: ${activeAttestationConfiguration.source} (trust-framework: ${activeAttestationConfiguration.trustFrameworkIntegrated})`);
+    console.log(activeAttestationConfiguration.implementationNote);
+    if (isWebuildCs01Profile(activeWalletProfile)) {
+      if (activeCs01GrantPolicy.preAuthorizedEnabled) {
+        console.log("WE BUILD CS-01 mode: authorization_code and pre-authorized_code enabled");
+      } else {
+        console.log(
+          "WE BUILD CS-01 mode: authorization_code only (CS01_DISABLE_PRE_AUTHORIZED=true)",
+        );
+      }
     }
-  }
-});
+  });
+  return serverInstance;
+}
+
+if (process.env.NODE_ENV !== "test") {
+  startWalletServer();
+}
+
+export { app };
 
 async function getOfferDeepLink(issuerBase, path, credentialType) {
   if (!path) return undefined;
@@ -746,7 +658,9 @@ async function discoverIssuerMetadata(credentialIssuerBase, logSessionId) {
   console.log("[issuer-meta] trying candidates:", candidates); try { slog("[issuer-meta] candidates", { candidates }); } catch {}
   for (const url of candidates) {
     try {
-      const res = await fetch(url);
+      const res = await fetch(url, {
+        headers: { Accept: "application/json" },
+      });
       console.log("[issuer-meta]", url, "->", res.status); try { slog("[issuer-meta] fetch", { url, status: res.status }); } catch {}
       if (res.ok) { meta = await res.json(); console.log("[issuer-meta] selected:", url); break; }
       lastErr = res.status;
@@ -796,7 +710,11 @@ async function discoverAuthorizationServerMetadata(authorizationServerBase, logS
   console.log("[as-meta] trying candidates:", candidates); try { slog("[as-meta] candidates", { candidates }); } catch {}
   for (const url of candidates) {
     try {
-      const res = await fetch(url);
+      const res = await fetch(url,
+        {
+          headers: { Accept: "application/json" },
+        }
+      );
       console.log("[as-meta]", url, "->", res.status); try { slog("[as-meta] fetch", { url, status: res.status }); } catch {}
       if (res.ok) { 
         console.log("[as-meta] selected:", url); 
@@ -832,7 +750,7 @@ async function discoverAuthorizationServerMetadata(authorizationServerBase, logS
  * This is intentionally strict so the wallet-client will catch regressions
  * similar to the ones that broke interoperability with the EUDI Wallet.
  */
-function validateAuthorizationServerMetadata(meta) {
+export function validateAuthorizationServerMetadata(meta) {
   if (!meta || typeof meta !== "object") {
     throw new Error("invalid_as_metadata: metadata must be a JSON object");
   }
@@ -897,13 +815,23 @@ function validateAuthorizationServerMetadata(meta) {
     );
   }
 
-  // We expect at least the "openid" scope to be advertised. Additional scopes are fine.
-  const scopes = meta.scopes_supported;
-  if (!Array.isArray(scopes) || !scopes.includes("openid")) {
+  if (
+    meta.scopes_supported != null
+    && !Array.isArray(meta.scopes_supported)
+  ) {
     throw new Error(
-      "invalid_as_metadata: 'scopes_supported' must be an array including 'openid'"
+      "invalid_as_metadata: 'scopes_supported' must be an array when present"
     );
-  } 
+  }
+
+  if (
+    meta.authorization_details_types_supported != null
+    && !Array.isArray(meta.authorization_details_types_supported)
+  ) {
+    throw new Error(
+      "invalid_as_metadata: 'authorization_details_types_supported' must be an array when present"
+    );
+  }
 
   // Authorization Code grant is required for code flow tests.
   const grants = meta.grant_types_supported;
@@ -1711,6 +1639,24 @@ async function runAuthorizationCodeIssuance({ profile = activeWalletProfile, wal
   );
   try {
     slog("[codeflow] scope resolved", scopeResolution);
+  } catch {}
+  const authorizationDetailsSupport = runGuardedSync(
+    slog,
+    "[codeflow] authorization_details support validation failed",
+    () => assertAuthorizationDetailsSupportForCredentialRequest({
+      configurationId,
+      issuerMeta,
+      offerConfig,
+      authorizationServerMeta: authorizationServerMetaForScope,
+    }),
+    {
+      configurationId,
+      authorizationDetailsTypesSupported:
+        authorizationServerMetaForScope?.authorization_details_types_supported ?? null,
+    },
+  );
+  try {
+    slog("[codeflow] authorization_details support", authorizationDetailsSupport);
   } catch {}
 
   // Build common authorization request parameters
@@ -2754,9 +2700,3 @@ async function verifyJwsWithDid(jws, header, didOrIss) {
   }
   throw lastErr || new Error('DID verification failed');
 }
-
-
-
-
-
-

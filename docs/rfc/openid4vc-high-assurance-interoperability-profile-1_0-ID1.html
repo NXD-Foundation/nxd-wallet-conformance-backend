@@ -1,0 +1,2071 @@
+<!DOCTYPE html>
+<html lang="en" class="Internet-Draft">
+<head>
+<meta charset="utf-8">
+<meta content="Common,Latin" name="scripts">
+<meta content="initial-scale=1.0" name="viewport">
+<title>OpenID4VC High Assurance Interoperability Profile - draft 03</title>
+<meta content="Kristina Yasuda" name="author">
+<meta content="Torsten Lodderstedt" name="author">
+<meta content="
+       This document defines a profile of OpenID for Verifiable Credentials in combination with the credential formats IETF SD-JWT VC   and ISO mdoc  . The aim is to select features and to define a set of requirements for the existing specifications to enable interoperability among Issuers, Wallets and Verifiers of Credentials where a high level of security and privacy is required. The profiled specifications include OpenID for Verifiable Credential Issuance  , OpenID for Verifiable Presentations  , Self-Issued OpenID Provider v2  , IETF SD-JWT VC  , and ISO mdoc  . 
+    " name="description">
+<meta content="xml2rfc 3.16.0" name="generator">
+<meta content="security" name="keyword">
+<meta content="openid4vc" name="keyword">
+<meta content="sd-jwt" name="keyword">
+<meta content="sd-jwt-vc" name="keyword">
+<meta content="mdoc" name="keyword">
+<meta content="openid4vc-high-assurance-interoperability-profile-1_0-03" name="ietf.draft">
+<!-- Generator version information:
+  xml2rfc 3.16.0
+    Python 3.10.2
+    appdirs 1.4.4
+    ConfigArgParse 1.5.3
+    google-i18n-address 2.5.2
+    html5lib 1.1
+    intervaltree 3.1.0
+    Jinja2 3.1.2
+    lxml 4.9.2
+    MarkupSafe 2.1.2
+    pycountry 22.3.5
+    PyYAML 6.0
+    requests 2.28.2
+    setuptools 57.5.0
+    six 1.16.0
+    wcwidth 0.2.6
+-->
+<link href="./openid4vc-high-assurance-interoperability-profile-1_0-03.xml" rel="alternate" type="application/rfc+xml">
+<link href="#copyright" rel="license">
+<style type="text/css">/*
+
+  NOTE: Changes at the bottom of this file overrides some earlier settings.
+
+  Once the style has stabilized and has been adopted as an official RFC style,
+  this can be consolidated so that style settings occur only in one place, but
+  for now the contents of this file consists first of the initial CSS work as
+  provided to the RFC Formatter (xml2rfc) work, followed by itemized and
+  commented changes found necessary during the development of the v3
+  formatters.
+
+*/
+
+/* fonts */
+@import url('https://fonts.googleapis.com/css?family=Noto+Sans'); /* Sans-serif */
+@import url('https://fonts.googleapis.com/css?family=Noto+Serif'); /* Serif (print) */
+@import url('https://fonts.googleapis.com/css?family=Roboto+Mono'); /* Monospace */
+
+:root {
+  --font-sans: 'Noto Sans', Arial, Helvetica, sans-serif;
+  --font-serif: 'Noto Serif', 'Times', 'Times New Roman', serif;
+  --font-mono: 'Roboto Mono', Courier, 'Courier New', monospace;
+}
+
+@viewport {
+  zoom: 1.0;
+  width: extend-to-zoom;
+}
+@-ms-viewport {
+  width: extend-to-zoom;
+  zoom: 1.0;
+}
+/* general and mobile first */
+html {
+}
+body {
+  max-width: 90%;
+  margin: 1.5em auto;
+  color: #222;
+  background-color: #fff;
+  font-size: 14px;
+  font-family: var(--font-sans);
+  line-height: 1.6;
+  scroll-behavior: smooth;
+}
+.ears {
+  display: none;
+}
+
+/* headings */
+#title, h1, h2, h3, h4, h5, h6 {
+  margin: 1em 0 0.5em;
+  font-weight: bold;
+  line-height: 1.3;
+}
+#title {
+  clear: both;
+  border-bottom: 1px solid #ddd;
+  margin: 0 0 0.5em 0;
+  padding: 1em 0 0.5em;
+}
+.author {
+  padding-bottom: 4px;
+}
+h1 {
+  font-size: 26px;
+  margin: 1em 0;
+}
+h2 {
+  font-size: 22px;
+  margin-top: -20px;  /* provide offset for in-page anchors */
+  padding-top: 33px;
+}
+h3 {
+  font-size: 18px;
+  margin-top: -36px;  /* provide offset for in-page anchors */
+  padding-top: 42px;
+}
+h4 {
+  font-size: 16px;
+  margin-top: -36px;  /* provide offset for in-page anchors */
+  padding-top: 42px;
+}
+h5, h6 {
+  font-size: 14px;
+}
+#n-copyright-notice {
+  border-bottom: 1px solid #ddd;
+  padding-bottom: 1em;
+  margin-bottom: 1em;
+}
+/* general structure */
+p {
+  padding: 0;
+  margin: 0 0 1em 0;
+  text-align: left;
+}
+div, span {
+  position: relative;
+}
+div {
+  margin: 0;
+}
+.alignRight.art-text {
+  background-color: #f9f9f9;
+  border: 1px solid #eee;
+  border-radius: 3px;
+  padding: 1em 1em 0;
+  margin-bottom: 1.5em;
+}
+.alignRight.art-text pre {
+  padding: 0;
+}
+.alignRight {
+  margin: 1em 0;
+}
+.alignRight > *:first-child {
+  border: none;
+  margin: 0;
+  float: right;
+  clear: both;
+}
+.alignRight > *:nth-child(2) {
+  clear: both;
+  display: block;
+  border: none;
+}
+svg {
+  display: block;
+}
+svg[font-family~="serif" i], svg [font-family~="serif" i] {
+  font-family: var(--font-serif);
+}
+svg[font-family~="sans-serif" i], svg [font-family~="sans-serif" i] {
+  font-family: var(--font-sans);
+}
+svg[font-family~="monospace" i], svg [font-family~="monospace" i] {
+  font-family: var(--font-mono);
+}
+.alignCenter.art-text {
+  background-color: #f9f9f9;
+  border: 1px solid #eee;
+  border-radius: 3px;
+  padding: 1em 1em 0;
+  margin-bottom: 1.5em;
+}
+.alignCenter.art-text pre {
+  padding: 0;
+}
+.alignCenter {
+  margin: 1em 0;
+}
+.alignCenter > *:first-child {
+  display: table;
+  border: none;
+  margin: 0 auto;
+}
+
+/* lists */
+ol, ul {
+  padding: 0;
+  margin: 0 0 1em 2em;
+}
+ol ol, ul ul, ol ul, ul ol {
+  margin-left: 1em;
+}
+li {
+  margin: 0 0 0.25em 0;
+}
+.ulCompact li {
+  margin: 0;
+}
+ul.empty, .ulEmpty {
+  list-style-type: none;
+}
+ul.empty li, .ulEmpty li {
+  margin-top: 0.5em;
+}
+ul.ulBare, li.ulBare {
+  margin-left: 0em !important;
+}
+ul.compact, .ulCompact,
+ol.compact, .olCompact {
+  line-height: 100%;
+  margin: 0 0 0 2em;
+}
+
+/* definition lists */
+dl {
+}
+dl > dt {
+  float: left;
+  margin-right: 1em;
+}
+/* 
+dl.nohang > dt {
+  float: none;
+}
+*/
+dl > dd {
+  margin-bottom: .8em;
+  min-height: 1.3em;
+}
+dl.compact > dd, .dlCompact > dd {
+  margin-bottom: 0em;
+}
+dl > dd > dl {
+  margin-top: 0.5em;
+  margin-bottom: 0em;
+}
+
+/* links */
+a {
+  text-decoration: none;
+}
+a[href] {
+  color: #22e; /* Arlen: WCAG 2019 */
+}
+a[href]:hover {
+  background-color: #f2f2f2;
+}
+figcaption a[href],
+a[href].selfRef {
+  color: #222;
+}
+/* XXX probably not this:
+a.selfRef:hover {
+  background-color: transparent;
+  cursor: default;
+} */
+
+/* Figures */
+tt, code, pre {
+  background-color: #f9f9f9;
+  font-family: var(--font-mono);
+}
+pre {
+  border: 1px solid #eee;
+  margin: 0;
+  padding: 1em;
+}
+img {
+  max-width: 100%;
+}
+figure {
+  margin: 0;
+}
+figure blockquote {
+  margin: 0.8em 0.4em 0.4em;
+}
+figcaption {
+  font-style: italic;
+  margin: 0 0 1em 0;
+}
+@media screen {
+  pre {
+    overflow-x: auto;
+    max-width: 100%;
+    max-width: calc(100% - 22px);
+  }
+}
+
+/* aside, blockquote */
+aside, blockquote {
+  margin-left: 0;
+  padding: 1.2em 2em;
+}
+blockquote {
+  background-color: #f9f9f9;
+  color: #111; /* Arlen: WCAG 2019 */
+  border: 1px solid #ddd;
+  border-radius: 3px;
+  margin: 1em 0;
+}
+cite {
+  display: block;
+  text-align: right;
+  font-style: italic;
+}
+
+/* tables */
+table {
+  width: 100%;
+  margin: 0 0 1em;
+  border-collapse: collapse;
+  border: 1px solid #eee;
+}
+th, td {
+  text-align: left;
+  vertical-align: top;
+  padding: 0.5em 0.75em;
+}
+th {
+  text-align: left;
+  background-color: #e9e9e9;
+}
+tr:nth-child(2n+1) > td {
+  background-color: #f5f5f5;
+}
+table caption {
+  font-style: italic;
+  margin: 0;
+  padding: 0;
+  text-align: left;
+}
+table p {
+  /* XXX to avoid bottom margin on table row signifiers. If paragraphs should
+     be allowed within tables more generally, it would be far better to select on a class. */
+  margin: 0;
+}
+
+/* pilcrow */
+a.pilcrow {
+  color: #666; /* Arlen: AHDJ 2019 */
+  text-decoration: none;
+  visibility: hidden;
+  user-select: none;
+  -ms-user-select: none;
+  -o-user-select:none;
+  -moz-user-select: none;
+  -khtml-user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+@media screen {
+  aside:hover > a.pilcrow,
+  p:hover > a.pilcrow,
+  blockquote:hover > a.pilcrow,
+  div:hover > a.pilcrow,
+  li:hover > a.pilcrow,
+  pre:hover > a.pilcrow {
+    visibility: visible;
+  }
+  a.pilcrow:hover {
+    background-color: transparent;
+  }
+}
+
+/* misc */
+hr {
+  border: 0;
+  border-top: 1px solid #eee;
+}
+.bcp14 {
+  font-variant: small-caps;
+}
+
+.role {
+  font-variant: all-small-caps;
+}
+
+/* info block */
+#identifiers {
+  margin: 0;
+  font-size: 0.9em;
+}
+#identifiers dt {
+  width: 3em;
+  clear: left;
+}
+#identifiers dd {
+  float: left;
+  margin-bottom: 0;
+}
+/* Fix PDF info block run off issue */
+@media print {
+  #identifiers dd {
+    float: none;
+  }
+}
+#identifiers .authors .author {
+  display: inline-block;
+  margin-right: 1.5em;
+}
+#identifiers .authors .org {
+  font-style: italic;
+}
+
+/* The prepared/rendered info at the very bottom of the page */
+.docInfo {
+  color: #666; /* Arlen: WCAG 2019 */
+  font-size: 0.9em;
+  font-style: italic;
+  margin-top: 2em;
+}
+.docInfo .prepared {
+  float: left;
+}
+.docInfo .prepared {
+  float: right;
+}
+
+/* table of contents */
+#toc  {
+  padding: 0.75em 0 2em 0;
+  margin-bottom: 1em;
+}
+nav.toc ul {
+  margin: 0 0.5em 0 0;
+  padding: 0;
+  list-style: none;
+}
+nav.toc li {
+  line-height: 1.3em;
+  margin: 0.75em 0;
+  padding-left: 1.2em;
+  text-indent: -1.2em;
+}
+/* references */
+.references dt {
+  text-align: right;
+  font-weight: bold;
+  min-width: 7em;
+}
+.references dd {
+  margin-left: 8em;
+  overflow: auto;
+}
+
+.refInstance {
+  margin-bottom: 1.25em;
+}
+
+.references .ascii {
+  margin-bottom: 0.25em;
+}
+
+/* index */
+.index ul {
+  margin: 0 0 0 1em;
+  padding: 0;
+  list-style: none;
+}
+.index ul ul {
+  margin: 0;
+}
+.index li {
+  margin: 0;
+  text-indent: -2em;
+  padding-left: 2em;
+  padding-bottom: 5px;
+}
+.indexIndex {
+  margin: 0.5em 0 1em;
+}
+.index a {
+  font-weight: 700;
+}
+/* make the index two-column on all but the smallest screens */
+@media (min-width: 600px) {
+  .index ul {
+    -moz-column-count: 2;
+    -moz-column-gap: 20px;
+  }
+  .index ul ul {
+    -moz-column-count: 1;
+    -moz-column-gap: 0;
+  }
+}
+
+/* authors */
+address.vcard {
+  font-style: normal;
+  margin: 1em 0;
+}
+
+address.vcard .nameRole {
+  font-weight: 700;
+  margin-left: 0;
+}
+address.vcard .label {
+  font-family: var(--font-sans);
+  margin: 0.5em 0;
+}
+address.vcard .type {
+  display: none;
+}
+.alternative-contact {
+  margin: 1.5em 0 1em;
+}
+hr.addr {
+  border-top: 1px dashed;
+  margin: 0;
+  color: #ddd;
+  max-width: calc(100% - 16px);
+}
+
+/* temporary notes */
+.rfcEditorRemove::before {
+  position: absolute;
+  top: 0.2em;
+  right: 0.2em;
+  padding: 0.2em;
+  content: "The RFC Editor will remove this note";
+  color: #9e2a00; /* Arlen: WCAG 2019 */
+  background-color: #ffd; /* Arlen: WCAG 2019 */
+}
+.rfcEditorRemove {
+  position: relative;
+  padding-top: 1.8em;
+  background-color: #ffd; /* Arlen: WCAG 2019 */
+  border-radius: 3px;
+}
+.cref {
+  background-color: #ffd; /* Arlen: WCAG 2019 */
+  padding: 2px 4px;
+}
+.crefSource {
+  font-style: italic;
+}
+/* alternative layout for smaller screens */
+@media screen and (max-width: 1023px) {
+  body {
+    padding-top: 2em;
+  }
+  #title {
+    padding: 1em 0;
+  }
+  h1 {
+    font-size: 24px;
+  }
+  h2 {
+    font-size: 20px;
+    margin-top: -18px;  /* provide offset for in-page anchors */
+    padding-top: 38px;
+  }
+  #identifiers dd {
+    max-width: 60%;
+  }
+  #toc {
+    position: fixed;
+    z-index: 2;
+    top: 0;
+    right: 0;
+    padding: 0;
+    margin: 0;
+    background-color: inherit;
+    border-bottom: 1px solid #ccc;
+  }
+  #toc h2 {
+    margin: -1px 0 0 0;
+    padding: 4px 0 4px 6px;
+    padding-right: 1em;
+    min-width: 190px;
+    font-size: 1.1em;
+    text-align: right;
+    background-color: #444;
+    color: white;
+    cursor: pointer;
+  }
+  #toc h2::before { /* css hamburger */
+    float: right;
+    position: relative;
+    width: 1em;
+    height: 1px;
+    left: -164px;
+    margin: 6px 0 0 0;
+    background: white none repeat scroll 0 0;
+    box-shadow: 0 4px 0 0 white, 0 8px 0 0 white;
+    content: "";
+  }
+  #toc nav {
+    display: none;
+    padding: 0.5em 1em 1em;
+    overflow: auto;
+    height: calc(100vh - 48px);
+    border-left: 1px solid #ddd;
+  }
+}
+
+/* alternative layout for wide screens */
+@media screen and (min-width: 1024px) {
+  body {
+    max-width: 724px;
+    margin: 42px auto;
+    padding-left: 1.5em;
+    padding-right: 29em;
+  }
+  #toc {
+    position: fixed;
+    top: 42px;
+    right: 42px;
+    width: 25%;
+    margin: 0;
+    padding: 0 1em;
+    z-index: 1;
+  }
+  #toc h2 {
+    border-top: none;
+    border-bottom: 1px solid #ddd;
+    font-size: 1em;
+    font-weight: normal;
+    margin: 0;
+    padding: 0.25em 1em 1em 0;
+  }
+  #toc nav {
+    display: block;
+    height: calc(90vh - 84px);
+    bottom: 0;
+    padding: 0.5em 0 0;
+    overflow: auto;
+  }
+  img { /* future proofing */
+    max-width: 100%;
+    height: auto;
+  }
+}
+
+/* pagination */
+@media print {
+  body {
+
+    width: 100%;
+  }
+  p {
+    orphans: 3;
+    widows: 3;
+  }
+  #n-copyright-notice {
+    border-bottom: none;
+  }
+  #toc, #n-introduction {
+    page-break-before: always;
+  }
+  #toc {
+    border-top: none;
+    padding-top: 0;
+  }
+  figure, pre {
+    page-break-inside: avoid;
+  }
+  figure {
+    overflow: scroll;
+  }
+  .breakable pre {
+    break-inside: auto;
+  }
+  h1, h2, h3, h4, h5, h6 {
+    page-break-after: avoid;
+  }
+  h2+*, h3+*, h4+*, h5+*, h6+* {
+    page-break-before: avoid;
+  }
+  pre {
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    font-size: 10pt;
+  }
+  table {
+    border: 1px solid #ddd;
+  }
+  td {
+    border-top: 1px solid #ddd;
+  }
+}
+
+/* This is commented out here, as the string-set: doesn't
+   pass W3C validation currently */
+/*
+.ears thead .left {
+  string-set: ears-top-left content();
+}
+
+.ears thead .center {
+  string-set: ears-top-center content();
+}
+
+.ears thead .right {
+  string-set: ears-top-right content();
+}
+
+.ears tfoot .left {
+  string-set: ears-bottom-left content();
+}
+
+.ears tfoot .center {
+  string-set: ears-bottom-center content();
+}
+
+.ears tfoot .right {
+  string-set: ears-bottom-right content();
+}
+*/
+
+@page :first {
+  padding-top: 0;
+  @top-left {
+    content: normal;
+    border: none;
+  }
+  @top-center {
+    content: normal;
+    border: none;
+  }
+  @top-right {
+    content: normal;
+    border: none;
+  }
+}
+
+@page {
+  size: A4;
+  margin-bottom: 45mm;
+  padding-top: 20px;
+  /* The following is commented out here, but set appropriately by in code, as
+     the content depends on the document */
+  /*
+  @top-left {
+    content: 'Internet-Draft';
+    vertical-align: bottom;
+    border-bottom: solid 1px #ccc;
+  }
+  @top-left {
+    content: string(ears-top-left);
+    vertical-align: bottom;
+    border-bottom: solid 1px #ccc;
+  }
+  @top-center {
+    content: string(ears-top-center);
+    vertical-align: bottom;
+    border-bottom: solid 1px #ccc;
+  }
+  @top-right {
+    content: string(ears-top-right);
+    vertical-align: bottom;
+    border-bottom: solid 1px #ccc;
+  }
+  @bottom-left {
+    content: string(ears-bottom-left);
+    vertical-align: top;
+    border-top: solid 1px #ccc;
+  }
+  @bottom-center {
+    content: string(ears-bottom-center);
+    vertical-align: top;
+    border-top: solid 1px #ccc;
+  }
+  @bottom-right {
+      content: '[Page ' counter(page) ']';
+      vertical-align: top;
+      border-top: solid 1px #ccc;
+  }
+  */
+
+}
+
+/* Changes introduced to fix issues found during implementation */
+/* Make sure links are clickable even if overlapped by following H* */
+a {
+  z-index: 2;
+}
+/* Separate body from document info even without intervening H1 */
+section {
+  clear: both;
+}
+
+
+/* Top align author divs, to avoid names without organization dropping level with org names */
+.author {
+  vertical-align: top;
+}
+
+/* Leave room in document info to show Internet-Draft on one line */
+#identifiers dt {
+  width: 8em;
+}
+
+/* Don't waste quite as much whitespace between label and value in doc info */
+#identifiers dd {
+  margin-left: 1em;
+}
+
+/* Give floating toc a background color (needed when it's a div inside section */
+#toc {
+  background-color: white;
+}
+
+/* Make the collapsed ToC header render white on gray also when it's a link */
+@media screen and (max-width: 1023px) {
+  #toc h2 a,
+  #toc h2 a:link,
+  #toc h2 a:focus,
+  #toc h2 a:hover,
+  #toc a.toplink,
+  #toc a.toplink:hover {
+    color: white;
+    background-color: #444;
+    text-decoration: none;
+  }
+}
+
+/* Give the bottom of the ToC some whitespace */
+@media screen and (min-width: 1024px) {
+  #toc {
+    padding: 0 0 1em 1em;
+  }
+}
+
+/* Style section numbers with more space between number and title */
+.section-number {
+  padding-right: 0.5em;
+}
+
+/* prevent monospace from becoming overly large */
+tt, code, pre {
+  font-size: 95%;
+}
+
+/* Fix the height/width aspect for ascii art*/
+.sourcecode pre,
+.art-text pre {
+  line-height: 1.12;
+}
+
+
+/* Add styling for a link in the ToC that points to the top of the document */
+a.toplink {
+  float: right;
+  margin-right: 0.5em;
+}
+
+/* Fix the dl styling to match the RFC 7992 attributes */
+dl > dt,
+dl.dlParallel > dt {
+  float: left;
+  margin-right: 1em;
+}
+dl.dlNewline > dt {
+  float: none;
+}
+
+/* Provide styling for table cell text alignment */
+table td.text-left,
+table th.text-left {
+  text-align: left;
+}
+table td.text-center,
+table th.text-center {
+  text-align: center;
+}
+table td.text-right,
+table th.text-right {
+  text-align: right;
+}
+
+/* Make the alternative author contact information look less like just another
+   author, and group it closer with the primary author contact information */
+.alternative-contact {
+  margin: 0.5em 0 0.25em 0;
+}
+address .non-ascii {
+  margin: 0 0 0 2em;
+}
+
+/* With it being possible to set tables with alignment
+  left, center, and right, { width: 100%; } does not make sense */
+table {
+  width: auto;
+}
+
+/* Avoid reference text that sits in a block with very wide left margin,
+   because of a long floating dt label.*/
+.references dd {
+  overflow: visible;
+}
+
+/* Control caption placement */
+caption {
+  caption-side: bottom;
+}
+
+/* Limit the width of the author address vcard, so names in right-to-left
+   script don't end up on the other side of the page. */
+
+address.vcard {
+  max-width: 30em;
+  margin-right: auto;
+}
+
+/* For address alignment dependent on LTR or RTL scripts */
+address div.left {
+  text-align: left;
+}
+address div.right {
+  text-align: right;
+}
+
+/* Provide table alignment support.  We can't use the alignX classes above
+   since they do unwanted things with caption and other styling. */
+table.right {
+ margin-left: auto;
+ margin-right: 0;
+}
+table.center {
+ margin-left: auto;
+ margin-right: auto;
+}
+table.left {
+ margin-left: 0;
+ margin-right: auto;
+}
+
+/* Give the table caption label the same styling as the figcaption */
+caption a[href] {
+  color: #222;
+}
+
+@media print {
+  .toplink {
+    display: none;
+  }
+
+  /* avoid overwriting the top border line with the ToC header */
+  #toc {
+    padding-top: 1px;
+  }
+
+  /* Avoid page breaks inside dl and author address entries */
+  .vcard {
+    page-break-inside: avoid;
+  }
+
+}
+/* Tweak the bcp14 keyword presentation */
+.bcp14 {
+  font-variant: small-caps;
+  font-weight: bold;
+  font-size: 0.9em;
+}
+/* Tweak the invisible space above H* in order not to overlay links in text above */
+ h2 {
+  margin-top: -18px;  /* provide offset for in-page anchors */
+  padding-top: 31px;
+ }
+ h3 {
+  margin-top: -18px;  /* provide offset for in-page anchors */
+  padding-top: 24px;
+ }
+ h4 {
+  margin-top: -18px;  /* provide offset for in-page anchors */
+  padding-top: 24px;
+ }
+/* Float artwork pilcrow to the right */
+@media screen {
+  .artwork a.pilcrow {
+    display: block;
+    line-height: 0.7;
+    margin-top: 0.15em;
+  }
+}
+/* Make pilcrows on dd visible */
+@media screen {
+  dd:hover > a.pilcrow {
+    visibility: visible;
+  }
+}
+/* Make the placement of figcaption match that of a table's caption
+   by removing the figure's added bottom margin */
+.alignLeft.art-text,
+.alignCenter.art-text,
+.alignRight.art-text {
+   margin-bottom: 0;
+}
+.alignLeft,
+.alignCenter,
+.alignRight {
+  margin: 1em 0 0 0;
+}
+/* In print, the pilcrow won't show on hover, so prevent it from taking up space,
+   possibly even requiring a new line */
+@media print {
+  a.pilcrow {
+    display: none;
+  }
+}
+/* Styling for the external metadata */
+div#external-metadata {
+  background-color: #eee;
+  padding: 0.5em;
+  margin-bottom: 0.5em;
+  display: none;
+}
+div#internal-metadata {
+  padding: 0.5em;                       /* to match the external-metadata padding */
+}
+/* Styling for title RFC Number */
+h1#rfcnum {
+  clear: both;
+  margin: 0 0 -1em;
+  padding: 1em 0 0 0;
+}
+/* Make .olPercent look the same as <ol><li> */
+dl.olPercent > dd {
+  margin-bottom: 0.25em;
+  min-height: initial;
+}
+/* Give aside some styling to set it apart */
+aside {
+  border-left: 1px solid #ddd;
+  margin: 1em 0 1em 2em;
+  padding: 0.2em 2em;
+}
+aside > dl,
+aside > ol,
+aside > ul,
+aside > table,
+aside > p {
+  margin-bottom: 0.5em;
+}
+/* Additional page break settings */
+@media print {
+  figcaption, table caption {
+    page-break-before: avoid;
+  }
+}
+/* Font size adjustments for print */
+@media print {
+  body  { font-size: 10pt;      line-height: normal; max-width: 96%; }
+  h1    { font-size: 1.72em;    padding-top: 1.5em; } /* 1*1.2*1.2*1.2 */
+  h2    { font-size: 1.44em;    padding-top: 1.5em; } /* 1*1.2*1.2 */
+  h3    { font-size: 1.2em;     padding-top: 1.5em; } /* 1*1.2 */
+  h4    { font-size: 1em;       padding-top: 1.5em; }
+  h5, h6 { font-size: 1em;      margin: initial; padding: 0.5em 0 0.3em; }
+}
+/* Sourcecode margin in print, when there's no pilcrow */
+@media print {
+  .artwork,
+  .artwork > pre,
+  .sourcecode {
+    margin-bottom: 1em;
+  }
+}
+/* Avoid narrow tables forcing too narrow table captions, which may render badly */
+table {
+  min-width: 20em;
+}
+/* ol type a */
+ol.type-a { list-style-type: lower-alpha; }
+ol.type-A { list-style-type: upper-alpha; }
+ol.type-i { list-style-type: lower-roman; }
+ol.type-I { list-style-type: lower-roman; }
+/* Apply the print table and row borders in general, on request from the RPC,
+and increase the contrast between border and odd row background slightly */
+table {
+  border: 1px solid #ddd;
+}
+td {
+  border-top: 1px solid #ddd;
+}
+tr {
+  break-inside: avoid;
+}
+tr:nth-child(2n+1) > td {
+  background-color: #f8f8f8;
+}
+/* Use style rules to govern display of the TOC. */
+@media screen and (max-width: 1023px) {
+  #toc nav { display: none; }
+  #toc.active nav { display: block; }
+}
+/* Add support for keepWithNext */
+.keepWithNext {
+  break-after: avoid-page;
+  break-after: avoid-page;
+}
+/* Add support for keepWithPrevious */
+.keepWithPrevious {
+  break-before: avoid-page;
+}
+/* Change the approach to avoiding breaks inside artwork etc. */
+figure, pre, table, .artwork, .sourcecode  {
+  break-before: auto;
+  break-after: auto;
+}
+/* Avoid breaks between <dt> and <dd> */
+dl {
+  break-before: auto;
+  break-inside: auto;
+}
+dt {
+  break-before: auto;
+  break-after: avoid-page;
+}
+dd {
+  break-before: avoid-page;
+  break-after: auto;
+  orphans: 3;
+  widows: 3
+}
+span.break, dd.break {
+  margin-bottom: 0;
+  min-height: 0;
+  break-before: auto;
+  break-inside: auto;
+  break-after: auto;
+}
+/* Undo break-before ToC */
+@media print {
+  #toc {
+    break-before: auto;
+  }
+}
+/* Text in compact lists should not get extra bottom margin space,
+   since that would makes the list not compact */
+ul.compact p, .ulCompact p,
+ol.compact p, .olCompact p {
+ margin: 0;
+}
+/* But the list as a whole needs the extra space at the end */
+section ul.compact,
+section .ulCompact,
+section ol.compact,
+section .olCompact {
+  margin-bottom: 1em;                    /* same as p not within ul.compact etc. */
+}
+/* The tt and code background above interferes with for instance table cell
+   backgrounds.  Changed to something a bit more selective. */
+tt, code {
+  background-color: transparent;
+}
+p tt, p code, li tt, li code {
+  background-color: #f8f8f8;
+}
+/* Tweak the pre margin -- 0px doesn't come out well */
+pre {
+   margin-top: 0.5px;
+}
+/* Tweak the compact list text */
+ul.compact, .ulCompact,
+ol.compact, .olCompact,
+dl.compact, .dlCompact {
+  line-height: normal;
+}
+/* Don't add top margin for nested lists */
+li > ul, li > ol, li > dl,
+dd > ul, dd > ol, dd > dl,
+dl > dd > dl {
+  margin-top: initial;
+}
+/* Elements that should not be rendered on the same line as a <dt> */
+/* This should match the element list in writer.text.TextWriter.render_dl() */
+dd > div.artwork:first-child,
+dd > aside:first-child,
+dd > figure:first-child,
+dd > ol:first-child,
+dd > div.sourcecode:first-child,
+dd > table:first-child,
+dd > ul:first-child {
+  clear: left;
+}
+/* fix for weird browser behaviour when <dd/> is empty */
+dt+dd:empty::before{
+  content: "\00a0";
+}
+/* Make paragraph spacing inside <li> smaller than in body text, to fit better within the list */
+li > p {
+  margin-bottom: 0.5em
+}
+/* Don't let p margin spill out from inside list items */
+li > p:last-of-type:only-child {
+  margin-bottom: 0;
+}
+</style>
+<link href="rfc-local.css" rel="stylesheet" type="text/css">
+</head>
+<body class="xml2rfc">
+<script src="metadata.min.js"></script>
+<table class="ears">
+<thead><tr>
+<td class="left"></td>
+<td class="center">openid4vc-high-assurance-interoperabilit</td>
+<td class="right">February 2025</td>
+</tr></thead>
+<tfoot><tr>
+<td class="left">Yasuda &amp; Lodderstedt</td>
+<td class="center">Standards Track</td>
+<td class="right">[Page]</td>
+</tr></tfoot>
+</table>
+<div id="external-metadata" class="document-information"></div>
+<div id="internal-metadata" class="document-information">
+<dl id="identifiers">
+<dt class="label-workgroup">Workgroup:</dt>
+<dd class="workgroup">Digital Credentials Protocols</dd>
+<dt class="label-published">Published:</dt>
+<dd class="published">
+<time datetime="2025-02-07" class="published">7 February 2025</time>
+    </dd>
+<dt class="label-authors">Authors:</dt>
+<dd class="authors">
+<div class="author">
+      <div class="author-name">K. Yasuda</div>
+<div class="org">SPRIND</div>
+</div>
+<div class="author">
+      <div class="author-name">T. Lodderstedt</div>
+<div class="org">SPRIND</div>
+</div>
+</dd>
+</dl>
+</div>
+<h1 id="title">OpenID4VC High Assurance Interoperability Profile - draft 03</h1>
+<section id="section-abstract">
+      <h2 id="abstract"><a href="#abstract" class="selfRef">Abstract</a></h2>
+<p id="section-abstract-1">This document defines a profile of OpenID for Verifiable Credentials in combination with the credential formats IETF SD-JWT VC <span>[<a href="#I-D.ietf-oauth-sd-jwt-vc" class="cite xref">I-D.ietf-oauth-sd-jwt-vc</a>]</span> and ISO mdoc <span>[<a href="#ISO.18013-5" class="cite xref">ISO.18013-5</a>]</span>. The aim is to select features and to define a set of requirements for the existing specifications to enable interoperability among Issuers, Wallets and Verifiers of Credentials where a high level of security and privacy is required. The profiled specifications include OpenID for Verifiable Credential Issuance <span>[<a href="#OIDF.OID4VCI" class="cite xref">OIDF.OID4VCI</a>]</span>, OpenID for Verifiable Presentations <span>[<a href="#OIDF.OID4VP" class="cite xref">OIDF.OID4VP</a>]</span>, Self-Issued OpenID Provider v2 <span>[<a href="#OIDF.SIOPv2" class="cite xref">OIDF.SIOPv2</a>]</span>, IETF SD-JWT VC <span>[<a href="#I-D.ietf-oauth-sd-jwt-vc" class="cite xref">I-D.ietf-oauth-sd-jwt-vc</a>]</span>, and ISO mdoc <span>[<a href="#ISO.18013-5" class="cite xref">ISO.18013-5</a>]</span>.<a href="#section-abstract-1" class="pilcrow">¶</a></p>
+</section>
+<div id="toc">
+<section id="section-toc.1">
+        <a href="#" onclick="scroll(0,0)" class="toplink">▲</a><h2 id="name-table-of-contents">
+<a href="#name-table-of-contents" class="section-name selfRef">Table of Contents</a>
+        </h2>
+<nav class="toc"><ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.1">
+            <p id="section-toc.1-1.1.1" class="keepWithNext"><a href="#section-1" class="auto internal xref">1</a>.  <a href="#name-introduction" class="internal xref">Introduction</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.1.2.1">
+                <p id="section-toc.1-1.1.2.1.1" class="keepWithNext"><a href="#section-1.1" class="auto internal xref">1.1</a>.  <a href="#name-audience-target-audience-us" class="internal xref">Audience Target audience/Usage</a></p>
+</li>
+            </ul>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.2">
+            <p id="section-toc.1-1.2.1" class="keepWithNext"><a href="#section-2" class="auto internal xref">2</a>.  <a href="#name-terminology" class="internal xref">Terminology</a></p>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.3">
+            <p id="section-toc.1-1.3.1"><a href="#section-3" class="auto internal xref">3</a>.  <a href="#name-scope" class="internal xref">Scope</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.3.2.1">
+                <p id="section-toc.1-1.3.2.1.1"><a href="#section-3.1" class="auto internal xref">3.1</a>.  <a href="#name-out-of-scope" class="internal xref">Out of Scope</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.3.2.2">
+                <p id="section-toc.1-1.3.2.2.1"><a href="#section-3.2" class="auto internal xref">3.2</a>.  <a href="#name-scenarios-business-requirem" class="internal xref">Scenarios/Business Requirements</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.3.2.3">
+                <p id="section-toc.1-1.3.2.3.1"><a href="#section-3.3" class="auto internal xref">3.3</a>.  <a href="#name-standards-requirements" class="internal xref">Standards Requirements</a></p>
+</li>
+            </ul>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.4">
+            <p id="section-toc.1-1.4.1"><a href="#section-4" class="auto internal xref">4</a>.  <a href="#name-openid-for-verifiable-crede" class="internal xref">OpenID for Verifiable Credential Issuance</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.4.2.1">
+                <p id="section-toc.1-1.4.2.1.1"><a href="#section-4.1" class="auto internal xref">4.1</a>.  <a href="#name-credential-offer" class="internal xref">Credential Offer</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.4.2.2">
+                <p id="section-toc.1-1.4.2.2.1"><a href="#section-4.2" class="auto internal xref">4.2</a>.  <a href="#name-authorization-endpoint" class="internal xref">Authorization Endpoint</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.4.2.3">
+                <p id="section-toc.1-1.4.2.3.1"><a href="#section-4.3" class="auto internal xref">4.3</a>.  <a href="#name-token-endpoint" class="internal xref">Token Endpoint</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.4.2.3.2.1">
+                    <p id="section-toc.1-1.4.2.3.2.1.1"><a href="#section-4.3.1" class="auto internal xref">4.3.1</a>.  <a href="#name-wallet-attestation" class="internal xref">Wallet Attestation</a></p>
+</li>
+                </ul>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.4.2.4">
+                <p id="section-toc.1-1.4.2.4.1"><a href="#section-4.4" class="auto internal xref">4.4</a>.  <a href="#name-credential-endpoint" class="internal xref">Credential Endpoint</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.4.2.5">
+                <p id="section-toc.1-1.4.2.5.1"><a href="#section-4.5" class="auto internal xref">4.5</a>.  <a href="#name-server-metadata" class="internal xref">Server Metadata</a></p>
+</li>
+            </ul>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.5">
+            <p id="section-toc.1-1.5.1"><a href="#section-5" class="auto internal xref">5</a>.  <a href="#name-openid-for-verifiable-prese" class="internal xref">OpenID for Verifiable Presentations profile for IETF SD-JWT VC</a></p>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.6">
+            <p id="section-toc.1-1.6.1"><a href="#section-6" class="auto internal xref">6</a>.  <a href="#name-openid-for-verifiable-presen" class="internal xref">OpenID for Verifiable Presentations over W3C Digital Credentials API</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.6.2.1">
+                <p id="section-toc.1-1.6.2.1.1"><a href="#section-6.1" class="auto internal xref">6.1</a>.  <a href="#name-iso-mdoc-specific-requireme" class="internal xref">ISO mdoc specific requirements for OpenID for Verifiable Presentations over W3C Digital Credentials API</a></p>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.6.2.2">
+                <p id="section-toc.1-1.6.2.2.1"><a href="#section-6.2" class="auto internal xref">6.2</a>.  <a href="#name-ietf-sd-jwt-vc-specific-req" class="internal xref">IETF SD-JWT VC specific requirements for OpenID for Verifiable Presentations over W3C Digital Credentials API</a></p>
+</li>
+            </ul>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.7">
+            <p id="section-toc.1-1.7.1"><a href="#section-7" class="auto internal xref">7</a>.  <a href="#name-self-issued-op-v2" class="internal xref">Self-Issued OP v2</a></p>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.8">
+            <p id="section-toc.1-1.8.1"><a href="#section-8" class="auto internal xref">8</a>.  <a href="#name-sd-jwt-vcs" class="internal xref">SD-JWT VCs</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.8.2.1">
+                <p id="section-toc.1-1.8.2.1.1"><a href="#section-8.1" class="auto internal xref">8.1</a>.  <a href="#name-issuer-identification-and-k" class="internal xref">Issuer identification and key resolution to validate an issued Credential</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.8.2.1.2.1">
+                    <p id="section-toc.1-1.8.2.1.2.1.1"><a href="#section-8.1.1" class="auto internal xref">8.1.1</a>.  <a href="#name-cryptographic-holder-bindin" class="internal xref">Cryptographic Holder Binding between VC and VP</a></p>
+</li>
+                </ul>
+</li>
+              <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.8.2.2">
+                <p id="section-toc.1-1.8.2.2.1"><a href="#section-8.2" class="auto internal xref">8.2</a>.  <a href="#name-openid4vc-credential-format" class="internal xref">OpenID4VC Credential Format Profile</a></p>
+</li>
+            </ul>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.9">
+            <p id="section-toc.1-1.9.1"><a href="#section-9" class="auto internal xref">9</a>.  <a href="#name-crypto-suites" class="internal xref">Crypto Suites</a></p>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.10">
+            <p id="section-toc.1-1.10.1"><a href="#section-10" class="auto internal xref">10</a>. <a href="#name-implementations-considerati" class="internal xref">Implementations Considerations</a></p>
+<ul class="compact toc ulBare ulEmpty">
+<li class="compact toc ulBare ulEmpty" id="section-toc.1-1.10.2.1">
+                <p id="section-toc.1-1.10.2.1.1"><a href="#section-10.1" class="auto internal xref">10.1</a>.  <a href="#name-validity-period-of-the-sign" class="internal xref">Validity Period of the Signature and the Claim Values</a></p>
+</li>
+            </ul>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.11">
+            <p id="section-toc.1-1.11.1"><a href="#section-11" class="auto internal xref">11</a>. <a href="#name-security-considerations" class="internal xref">Security Considerations</a></p>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.12">
+            <p id="section-toc.1-1.12.1"><a href="#section-12" class="auto internal xref">12</a>. <a href="#name-normative-references" class="internal xref">Normative References</a></p>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.13">
+            <p id="section-toc.1-1.13.1"><a href="#section-13" class="auto internal xref">13</a>. <a href="#name-informative-references" class="internal xref">Informative References</a></p>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.14">
+            <p id="section-toc.1-1.14.1"><a href="#appendix-A" class="auto internal xref">Appendix A</a>.  <a href="#name-combined-issuance-of-sd-jwt" class="internal xref">Combined Issuance of SD-JWT VC and mdocs</a></p>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.15">
+            <p id="section-toc.1-1.15.1"><a href="#appendix-B" class="auto internal xref">Appendix B</a>.  <a href="#name-acknowledgements" class="internal xref">Acknowledgements</a></p>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.16">
+            <p id="section-toc.1-1.16.1"><a href="#appendix-C" class="auto internal xref">Appendix C</a>.  <a href="#name-notices" class="internal xref">Notices</a></p>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.17">
+            <p id="section-toc.1-1.17.1"><a href="#appendix-D" class="auto internal xref">Appendix D</a>.  <a href="#name-document-history" class="internal xref">Document History</a></p>
+</li>
+          <li class="compact toc ulBare ulEmpty" id="section-toc.1-1.18">
+            <p id="section-toc.1-1.18.1"><a href="#appendix-E" class="auto internal xref"></a><a href="#name-authors-addresses" class="internal xref">Authors' Addresses</a></p>
+</li>
+        </ul>
+</nav>
+</section>
+</div>
+<div id="introduction">
+<section id="section-1">
+      <h2 id="name-introduction">
+<a href="#section-1" class="section-number selfRef">1. </a><a href="#name-introduction" class="section-name selfRef">Introduction</a>
+      </h2>
+<p id="section-1-1">This document defines a set of requirements for the existing specifications to enable interoperability among Issuers, Wallets and Verifiers of Credentials where a high level of security and privacy is required. This document is an interoperability profile that can be used by implementations in various contexts, be it a certain industry or a certain regulatory environment.<a href="#section-1-1" class="pilcrow">¶</a></p>
+<p id="section-1-2">This document is not a specification, but a profile. It refers to the specifications required for implementations to interoperate among each other and for the optionalities mentioned in the referenced specifications, defines the set of features to be mandatory to implement.<a href="#section-1-2" class="pilcrow">¶</a></p>
+<p id="section-1-3">The profile uses OpenID for Verifiable Credential Issuance <span>[<a href="#OIDF.OID4VCI" class="cite xref">OIDF.OID4VCI</a>]</span> and OpenID for Verifiable Presentations <span>[<a href="#OIDF.OID4VP" class="cite xref">OIDF.OID4VP</a>]</span> as the base protocols for issuance and presentation of Credentials, respectively. The credential formats used are IETF SD-JWT VC as specified in <span>[<a href="#I-D.ietf-oauth-sd-jwt-vc" class="cite xref">I-D.ietf-oauth-sd-jwt-vc</a>]</span> and ISO mdoc <span>[<a href="#ISO.18013-5" class="cite xref">ISO.18013-5</a>]</span>. Additionally, considerations are given on how the issuance of Credentials in both IETF SD-JWT VC <span>[<a href="#I-D.ietf-oauth-sd-jwt-vc" class="cite xref">I-D.ietf-oauth-sd-jwt-vc</a>]</span> and ISO mdoc <span>[<a href="#ISO.18013-5" class="cite xref">ISO.18013-5</a>]</span> formats can be performed in the same transaction.<a href="#section-1-3" class="pilcrow">¶</a></p>
+<p id="section-1-4">A full list of the open standards used in this profile can be found in Overview of the Open Standards Requirements (reference).<a href="#section-1-4" class="pilcrow">¶</a></p>
+<div id="audience-target-audience-usage">
+<section id="section-1.1">
+        <h3 id="name-audience-target-audience-us">
+<a href="#section-1.1" class="section-number selfRef">1.1. </a><a href="#name-audience-target-audience-us" class="section-name selfRef">Audience Target audience/Usage</a>
+        </h3>
+<p id="section-1.1-1">The audience of the document is implementers that require a high level of security and privacy for their solutions. A non-exhaustive list of the interested parties includes <a href="https://eur-lex.europa.eu/legal-content/EN/TXT/HTML/?uri=OJ:L_202401183">eIDAS 2.0</a>, <a href="https://www.dmv.ca.gov/portal/">California Department of Motor Vehicles</a>, <a href="https://openwallet.foundation/">Open Wallet Foundation (OWF)</a>, <a href="https://idunion.org/?lang=en">IDunion</a>, <a href="https://gainforum.org/">GAIN</a>, and <a href="https://trustedweb.go.jp/en">the Trusted Web project of the Japanese government</a>, but is expected to grow to include other jurisdictions and private sector companies.<a href="#section-1.1-1" class="pilcrow">¶</a></p>
+</section>
+</div>
+</section>
+</div>
+<div id="terminology">
+<section id="section-2">
+      <h2 id="name-terminology">
+<a href="#section-2" class="section-number selfRef">2. </a><a href="#name-terminology" class="section-name selfRef">Terminology</a>
+      </h2>
+<p id="section-2-1">This specification uses the terms "Holder", "Issuer", "Verifier", "Wallet", and "Verifiable Credential" as defined in @!OIDF.OID4VCI] and <span>[<a href="#OIDF.OID4VP" class="cite xref">OIDF.OID4VP</a>]</span>.<a href="#section-2-1" class="pilcrow">¶</a></p>
+</section>
+</div>
+<div id="scope">
+<section id="section-3">
+      <h2 id="name-scope">
+<a href="#section-3" class="section-number selfRef">3. </a><a href="#name-scope" class="section-name selfRef">Scope</a>
+      </h2>
+<p id="section-3-1">The following aspects are in scope of this interoperability profile:<a href="#section-3-1" class="pilcrow">¶</a></p>
+<ul class="compact">
+<li class="compact" id="section-3-2.1">
+          <p id="section-3-2.1.1">Profile of OpenID4VCI to issue IETF SD-JWT VCs, including<a href="#section-3-2.1.1" class="pilcrow">¶</a></p>
+<ul class="compact">
+<li class="compact" id="section-3-2.1.2.1">Wallet Attestation<a href="#section-3-2.1.2.1" class="pilcrow">¶</a>
+</li>
+          </ul>
+</li>
+        <li class="compact" id="section-3-2.2">Profile of OpenID4VP to present IETF SD-JWT VCs<a href="#section-3-2.2" class="pilcrow">¶</a>
+</li>
+        <li class="compact" id="section-3-2.3">
+          <p id="section-3-2.3.1">Profile of OpenID4VP over the W3C Digital Credentials API <span>[<a href="#w3c.digital_credentials_api" class="cite xref">w3c.digital_credentials_api</a>]</span> to present<a href="#section-3-2.3.1" class="pilcrow">¶</a></p>
+<ul class="compact">
+<li class="compact" id="section-3-2.3.2.1">IETF SD-JWT VCs<a href="#section-3-2.3.2.1" class="pilcrow">¶</a>
+</li>
+            <li class="compact" id="section-3-2.3.2.2">ISO mdocs<a href="#section-3-2.3.2.2" class="pilcrow">¶</a>
+</li>
+          </ul>
+</li>
+        <li class="compact" id="section-3-2.4">Protocol for User Authentication by the Wallet at a Verifier (SIOP v2)<a href="#section-3-2.4" class="pilcrow">¶</a>
+</li>
+        <li class="compact" id="section-3-2.5">
+          <p id="section-3-2.5.1">Profile of IETF SD-JWT VC that includes the following aspects<a href="#section-3-2.5.1" class="pilcrow">¶</a></p>
+<ul class="compact">
+<li class="compact" id="section-3-2.5.2.1">Status management of the Credentials, including revocation<a href="#section-3-2.5.2.1" class="pilcrow">¶</a>
+</li>
+            <li class="compact" id="section-3-2.5.2.2">Cryptographic Key Binding<a href="#section-3-2.5.2.2" class="pilcrow">¶</a>
+</li>
+            <li class="compact" id="section-3-2.5.2.3">Issuer key resolution<a href="#section-3-2.5.2.3" class="pilcrow">¶</a>
+</li>
+            <li class="compact" id="section-3-2.5.2.4">Issuer identification (as prerequisite for trust management)<a href="#section-3-2.5.2.4" class="pilcrow">¶</a>
+</li>
+          </ul>
+</li>
+        <li class="compact" id="section-3-2.6">Crypto Suites<a href="#section-3-2.6" class="pilcrow">¶</a>
+</li>
+      </ul>
+<p id="section-3-3">Note that when OpenID4VP is used, the Wallet and the Verifier can either be remote or in-person.<a href="#section-3-3" class="pilcrow">¶</a></p>
+<p id="section-3-4">Assumptions made are the following:<a href="#section-3-4" class="pilcrow">¶</a></p>
+<ul class="compact">
+<li class="compact" id="section-3-5.1">The issuers and verifiers cannot pre-discover Wallet's capability<a href="#section-3-5.1" class="pilcrow">¶</a>
+</li>
+        <li class="compact" id="section-3-5.2">The issuer is talking to the Wallet supporting the features defined in this profile (via Wallet invocation mechanism)<a href="#section-3-5.2" class="pilcrow">¶</a>
+</li>
+        <li class="compact" id="section-3-5.3">There are mechanisms in place for the verifiers and issuers to discover each other's capability<a href="#section-3-5.3" class="pilcrow">¶</a>
+</li>
+      </ul>
+<div id="out-of-scope">
+<section id="section-3.1">
+        <h3 id="name-out-of-scope">
+<a href="#section-3.1" class="section-number selfRef">3.1. </a><a href="#name-out-of-scope" class="section-name selfRef">Out of Scope</a>
+        </h3>
+<p id="section-3.1-1">The following items are out of scope for the current version of this document, but might be added in future versions:<a href="#section-3.1-1" class="pilcrow">¶</a></p>
+<ul class="compact">
+<li class="compact" id="section-3.1-2.1">Trust Management, i.e. authorization of an issuer to issue certain types of credentials, authorization of the Wallet to be issued certain types of credentials, authorization of  the Verifier to receive certain types of credentials.<a href="#section-3.1-2.1" class="pilcrow">¶</a>
+</li>
+          <li class="compact" id="section-3.1-2.2">Protocol for presentation of Verifiable Credentials for offline use-cases, e.g. over BLE.<a href="#section-3.1-2.2" class="pilcrow">¶</a>
+</li>
+          <li class="compact" id="section-3.1-2.3">Profile of OpenID4VCI to issue ISO mdoc <span>[<a href="#ISO.18013-5" class="cite xref">ISO.18013-5</a>]</span> is defined in ISO 23220-3.<a href="#section-3.1-2.3" class="pilcrow">¶</a>
+</li>
+          <li class="compact" id="section-3.1-2.4">Profile of OpenID4VP without using W3C Digital Credentials API to present ISO mdocs is
+defined in <span>[<a href="#ISO.18013-7" class="cite xref">ISO.18013-7</a>]</span>. For more details, also see Annex B.3 in <span>[<a href="#OIDF.OID4VP" class="cite xref">OIDF.OID4VP</a>]</span>.<a href="#section-3.1-2.4" class="pilcrow">¶</a>
+</li>
+        </ul>
+</section>
+</div>
+<div id="scenarios-business-requirements">
+<section id="section-3.2">
+        <h3 id="name-scenarios-business-requirem">
+<a href="#section-3.2" class="section-number selfRef">3.2. </a><a href="#name-scenarios-business-requirem" class="section-name selfRef">Scenarios/Business Requirements</a>
+        </h3>
+<ul class="compact">
+<li class="compact" id="section-3.2-1.1">Combined Issuance of SD-JWT VC and mdoc<a href="#section-3.2-1.1" class="pilcrow">¶</a>
+</li>
+          <li class="compact" id="section-3.2-1.2">Both issuer-initiated and wallet-initiated issuance<a href="#section-3.2-1.2" class="pilcrow">¶</a>
+</li>
+          <li class="compact" id="section-3.2-1.3">eIDAS PID and (Q)EAA as defined in eIDAS ARF 1.0<a href="#section-3.2-1.3" class="pilcrow">¶</a>
+</li>
+        </ul>
+</section>
+</div>
+<div id="standards-requirements">
+<section id="section-3.3">
+        <h3 id="name-standards-requirements">
+<a href="#section-3.3" class="section-number selfRef">3.3. </a><a href="#name-standards-requirements" class="section-name selfRef">Standards Requirements</a>
+        </h3>
+<p id="section-3.3-1">This specification enables interoperable implementations of the following flows:<a href="#section-3.3-1" class="pilcrow">¶</a></p>
+<ul class="compact">
+<li class="compact" id="section-3.3-2.1">Issuance of IETF SD-JWT VC using OpenID4VCI<a href="#section-3.3-2.1" class="pilcrow">¶</a>
+</li>
+          <li class="compact" id="section-3.3-2.2">Presentation of IETF SD-JWT VC using OpenID4VP<a href="#section-3.3-2.2" class="pilcrow">¶</a>
+</li>
+          <li class="compact" id="section-3.3-2.3">Presentation of IETF SD-JWT VC using OpenID4VP over W3C Digital Credentials API<a href="#section-3.3-2.3" class="pilcrow">¶</a>
+</li>
+          <li class="compact" id="section-3.3-2.4">Presentation of ISO mdocs using OpenID4VP over W3C Digital Credentials API<a href="#section-3.3-2.4" class="pilcrow">¶</a>
+</li>
+        </ul>
+<p id="section-3.3-3">Implementations of this specification do not have to implement all of the flows listed above, but they MUST be compliant to all of the requirements for a particular flow they chose to implement.<a href="#section-3.3-3" class="pilcrow">¶</a></p>
+<p id="section-3.3-4">A parameter that is listed as optional to be implemented in a specification that is being profiled (i.e., OpenID4VCI, OpenID4VP, W3C Digital Credentials API, IETF SD-JWT VC, and ISO mdoc) remains optional unless it is stated otherwise in this specification.<a href="#section-3.3-4" class="pilcrow">¶</a></p>
+</section>
+</div>
+</section>
+</div>
+<div id="openid-for-verifiable-credential-issuance">
+<section id="section-4">
+      <h2 id="name-openid-for-verifiable-crede">
+<a href="#section-4" class="section-number selfRef">4. </a><a href="#name-openid-for-verifiable-crede" class="section-name selfRef">OpenID for Verifiable Credential Issuance</a>
+      </h2>
+<p id="section-4-1">Both the Wallet and the Credential Issuer:<a href="#section-4-1" class="pilcrow">¶</a></p>
+<ul class="compact">
+<li class="compact" id="section-4-2.1">MUST support the authorization code flow.<a href="#section-4-2.1" class="pilcrow">¶</a>
+</li>
+        <li class="compact" id="section-4-2.2">MUST support protocol extensions for the SD-JWT VC credential format profile as defined in <a href="#vc_sd_jwt_profile" class="auto internal xref">Section 8.2</a>.<a href="#section-4-2.2" class="pilcrow">¶</a>
+</li>
+        <li class="compact" id="section-4-2.3">MUST support sender-constrained tokens using the mechanism defined in <span>[<a href="#RFC9449" class="cite xref">RFC9449</a>]</span>.<a href="#section-4-2.3" class="pilcrow">¶</a>
+</li>
+        <li class="compact" id="section-4-2.4">MUST support <span>[<a href="#RFC7636" class="cite xref">RFC7636</a>]</span> with <code>S256</code> as the code challenge method.<a href="#section-4-2.4" class="pilcrow">¶</a>
+</li>
+      </ul>
+<p id="section-4-3">Both Wallet initiated and Issuer initiated issuance is supported.<a href="#section-4-3" class="pilcrow">¶</a></p>
+<div id="credential-offer">
+<section id="section-4.1">
+        <h3 id="name-credential-offer">
+<a href="#section-4.1" class="section-number selfRef">4.1. </a><a href="#name-credential-offer" class="section-name selfRef">Credential Offer</a>
+        </h3>
+<ul class="compact">
+<li class="compact" id="section-4.1-1.1">The Grant Type <code>authorization_code</code> MUST be supported as defined in Section 4.1.1 in <span>[<a href="#OIDF.OID4VCI" class="cite xref">OIDF.OID4VCI</a>]</span><a href="#section-4.1-1.1" class="pilcrow">¶</a>
+</li>
+          <li class="compact" id="section-4.1-1.2">For Grant Type <code>authorization_code</code>, the Issuer MUST include a scope value in order to allow the Wallet to identify the desired Credential Type. The Wallet MUST use that value in the <code>scope</code> Authorization parameter.<a href="#section-4.1-1.2" class="pilcrow">¶</a>
+</li>
+          <li class="compact" id="section-4.1-1.3">As a way to invoke the Wallet, at least a custom URL scheme <code>haip://</code> MUST be supported. Implementations MAY support other ways to invoke the Wallets as agreed by trust frameworks/ecosystems/jurisdictions, not limited to using other custom URL schemes.<a href="#section-4.1-1.3" class="pilcrow">¶</a>
+</li>
+        </ul>
+<p id="section-4.1-2">Note: The Authorization Code flow does not require a Credential Offer from the Issuer to the Wallet. However, it is included in the feature set to allow for Issuer initiated Credential issuance.<a href="#section-4.1-2" class="pilcrow">¶</a></p>
+<p id="section-4.1-3">Both sending Credential Offer same-device and cross-device is supported.<a href="#section-4.1-3" class="pilcrow">¶</a></p>
+</section>
+</div>
+<div id="authorization-endpoint">
+<section id="section-4.2">
+        <h3 id="name-authorization-endpoint">
+<a href="#section-4.2" class="section-number selfRef">4.2. </a><a href="#name-authorization-endpoint" class="section-name selfRef">Authorization Endpoint</a>
+        </h3>
+<ul class="compact">
+<li class="compact" id="section-4.2-1.1">MUST use Pushed Authorization Requests (PAR) <span>[<a href="#RFC9126" class="cite xref">RFC9126</a>]</span> to send the Authorization Request.<a href="#section-4.2-1.1" class="pilcrow">¶</a>
+</li>
+          <li class="compact" id="section-4.2-1.2">Wallets MUST authenticate itself at the PAR endpoint using the same rules as defined in <a href="#token-endpoint" class="auto internal xref">Section 4.3</a> for client authentication at the token endpoint.<a href="#section-4.2-1.2" class="pilcrow">¶</a>
+</li>
+          <li class="compact" id="section-4.2-1.3">MUST use the <code>scope</code> parameter to communicate credential type(s) to be issued. The scope value MUST map to a specific Credential type. The scope value may be pre-agreed, obtained from the Credential Offer, or the Credential Issuer Metadata.<a href="#section-4.2-1.3" class="pilcrow">¶</a>
+</li>
+          <li class="compact" id="section-4.2-1.4">The <code>client_id</code> value in the PAR request MUST be a string that the Wallet has used as the <code>sub</code> value in the client attestation JWT.<a href="#section-4.2-1.4" class="pilcrow">¶</a>
+</li>
+        </ul>
+</section>
+</div>
+<div id="token-endpoint">
+<section id="section-4.3">
+        <h3 id="name-token-endpoint">
+<a href="#section-4.3" class="section-number selfRef">4.3. </a><a href="#name-token-endpoint" class="section-name selfRef">Token Endpoint</a>
+        </h3>
+<ul class="compact">
+<li class="compact" id="section-4.3-1.1">The Wallets MUST perform client authentication as defined in <a href="#wallet-attestation" class="auto internal xref">Section 4.3.1</a>.<a href="#section-4.3-1.1" class="pilcrow">¶</a>
+</li>
+          <li class="compact" id="section-4.3-1.2">Refresh tokens are RECOMMENDED to be supported for credential refresh. For details, see Section 13.5 in <span>[<a href="#OIDF.OID4VCI" class="cite xref">OIDF.OID4VCI</a>]</span>.<a href="#section-4.3-1.2" class="pilcrow">¶</a>
+</li>
+        </ul>
+<p id="section-4.3-2">Note: It is RECOMMENDED to use ephemeral client attestation JWTs for client authentication in order to prevent linkability across Credential Issuers.<a href="#section-4.3-2" class="pilcrow">¶</a></p>
+<p id="section-4.3-3">Note: Issuers should be mindful of how long the usage of the refresh token is allowed to refresh a credential, as opposed to starting the issuance flow from the beginning. For example, if the User is trying to refresh a credential more than a year after its original issuance, the usage of the refresh tokens is NOT RECOMMENDED.<a href="#section-4.3-3" class="pilcrow">¶</a></p>
+<div id="wallet-attestation">
+<section id="section-4.3.1">
+          <h4 id="name-wallet-attestation">
+<a href="#section-4.3.1" class="section-number selfRef">4.3.1. </a><a href="#name-wallet-attestation" class="section-name selfRef">Wallet Attestation</a>
+          </h4>
+<p id="section-4.3.1-1">Wallets MUST use wallet attestations as defined in Annex E of <span>[<a href="#OIDF.OID4VCI" class="cite xref">OIDF.OID4VCI</a>]</span>.<a href="#section-4.3.1-1" class="pilcrow">¶</a></p>
+<p id="section-4.3.1-2">The public key, and optionally a trust chain, used to validate the signature on the Wallet Attestation MUST be included in the <code>x5c</code> JOSE header.<a href="#section-4.3.1-2" class="pilcrow">¶</a></p>
+</section>
+</div>
+</section>
+</div>
+<div id="credential-endpoint">
+<section id="section-4.4">
+        <h3 id="name-credential-endpoint">
+<a href="#section-4.4" class="section-number selfRef">4.4. </a><a href="#name-credential-endpoint" class="section-name selfRef">Credential Endpoint</a>
+        </h3>
+<ul class="compact">
+<li class="compact" id="section-4.4-1.1">The <code>JWT</code> proof type MUST be supported.<a href="#section-4.4-1.1" class="pilcrow">¶</a>
+</li>
+        </ul>
+</section>
+</div>
+<div id="server-metadata">
+<section id="section-4.5">
+        <h3 id="name-server-metadata">
+<a href="#section-4.5" class="section-number selfRef">4.5. </a><a href="#name-server-metadata" class="section-name selfRef">Server Metadata</a>
+        </h3>
+<ul class="compact">
+<li class="compact" id="section-4.5-1.1">The Credential Issuer MUST publish a mapping of every Credential Type it supports to a scope value.<a href="#section-4.5-1.1" class="pilcrow">¶</a>
+</li>
+        </ul>
+</section>
+</div>
+</section>
+</div>
+<div id="openid-for-verifiable-presentations-profile-for-ietf-sd-jwt-vc">
+<section id="section-5">
+      <h2 id="name-openid-for-verifiable-prese">
+<a href="#section-5" class="section-number selfRef">5. </a><a href="#name-openid-for-verifiable-prese" class="section-name selfRef">OpenID for Verifiable Presentations profile for IETF SD-JWT VC</a>
+      </h2>
+<p id="section-5-1">Requirements for both the Wallet and the Verifier:<a href="#section-5-1" class="pilcrow">¶</a></p>
+<ul class="compact">
+<li class="compact" id="section-5-2.1">As a way to invoke the Wallet, at least a custom URL scheme <code>haip://</code> MUST be supported. Implementations MAY support other ways to invoke the wallets as agreed by trust frameworks/ecosystems/jurisdictions, not limited to using other custom URL schemes.<a href="#section-5-2.1" class="pilcrow">¶</a>
+</li>
+        <li class="compact" id="section-5-2.2">Response type MUST be <code>vp_token</code>.<a href="#section-5-2.2" class="pilcrow">¶</a>
+</li>
+        <li class="compact" id="section-5-2.3">Response mode MUST be <code>direct_post.jwt</code>. The Verifier MUST return <code>redirect_uri</code> in response to the HTTP POST request from the Wallet, where the Wallet redirects the User to, as defined in Section 8.2 of <span>[<a href="#OIDF.OID4VP" class="cite xref">OIDF.OID4VP</a>]</span>. Implementation considerations for the response mode <code>direct_post.jwt</code> are given in Section 14.3 of <span>[<a href="#OIDF.OID4VP" class="cite xref">OIDF.OID4VP</a>]</span>.<a href="#section-5-2.3" class="pilcrow">¶</a>
+</li>
+        <li class="compact" id="section-5-2.4">Authorization Request MUST be sent using the <code>request_uri</code> parameter as defined in JWT-Secured Authorization Request (JAR) <span>[<a href="#RFC9101" class="cite xref">RFC9101</a>]</span>.<a href="#section-5-2.4" class="pilcrow">¶</a>
+</li>
+        <li class="compact" id="section-5-2.5">The Client Identifier Scheme as introduced in Section 5.10 of <span>[<a href="#OIDF.OID4VP" class="cite xref">OIDF.OID4VP</a>]</span> MUST be either <code>x509_san_dns</code> or <code>verifier_attestation</code>. The Wallet MUST support both. The Verifier MUST support at least one.<a href="#section-5-2.5" class="pilcrow">¶</a>
+</li>
+        <li class="compact" id="section-5-2.6">To obtain the issuer's public key for verification, verifiers MUST support Web-based key resolution, as defined in Section 5 of <span>[<a href="#I-D.ietf-oauth-sd-jwt-vc" class="cite xref">I-D.ietf-oauth-sd-jwt-vc</a>]</span>. The JOSE header <code>kid</code> MUST be used to identify the respective key.<a href="#section-5-2.6" class="pilcrow">¶</a>
+</li>
+        <li class="compact" id="section-5-2.7">The DCQL query and response as defined in Section 6 of <span>[<a href="#OIDF.OID4VP" class="cite xref">OIDF.OID4VP</a>]</span> MUST be used.<a href="#section-5-2.7" class="pilcrow">¶</a>
+</li>
+      </ul>
+</section>
+</div>
+<div id="openid-for-verifiable-presentations-over-w3c-digital-credentials-api">
+<section id="section-6">
+      <h2 id="name-openid-for-verifiable-presen">
+<a href="#section-6" class="section-number selfRef">6. </a><a href="#name-openid-for-verifiable-presen" class="section-name selfRef">OpenID for Verifiable Presentations over W3C Digital Credentials API</a>
+      </h2>
+<p id="section-6-1">The following requirements apply for both, the Wallet and the Verifier, unless specified otherwise:<a href="#section-6-1" class="pilcrow">¶</a></p>
+<ul class="compact">
+<li class="compact" id="section-6-2.1">
+          <p id="section-6-2.1.1">MUST support Annex A in <span>[<a href="#OIDF.OID4VP" class="cite xref">OIDF.OID4VP</a>]</span> that defines how to use OpenID4VP over the W3C Digital Credentials API.<a href="#section-6-2.1.1" class="pilcrow">¶</a></p>
+<ul class="compact">
+<li class="compact" id="section-6-2.1.2.1">The Wallet MUST support both signed and unsigned requests as defined in Annex A.3.1 and A.3.2 of <span>[<a href="#OIDF.OID4VP" class="cite xref">OIDF.OID4VP</a>]</span>. The Verifier MAY support signed requests, unsigned requests, or both.<a href="#section-6-2.1.2.1" class="pilcrow">¶</a>
+</li>
+          </ul>
+</li>
+        <li class="compact" id="section-6-2.2">Wallet Invocation is done via the W3C Digital Credentials API or an equivalent platform API. Any other mechanism, including Custom URL schemes, MUST NOT be used.<a href="#section-6-2.2" class="pilcrow">¶</a>
+</li>
+        <li class="compact" id="section-6-2.3">Response Mode MUST be <code>dc_api.jwt</code>. The response MUST be encrypted.<a href="#section-6-2.3" class="pilcrow">¶</a>
+</li>
+        <li class="compact" id="section-6-2.4">Response encryption MUST be performed as specified in <span><a href="https://openid.net/specs/openid-4-verifiable-presentations-1_0-24.html" class="relref">Section 8.3</a> of [<a href="#OIDF.OID4VP" class="cite xref">OIDF.OID4VP</a>]</span>. The JWE <code>alg</code> (algorithm) header parameter (see <span><a href="https://rfc-editor.org/rfc/rfc7516" class="relref">Section 4.1.1</a> of [<a href="#RFC7516" class="cite xref">RFC7516</a>]</span>)
+value <code>ECDH-ES</code> (as defined in <span><a href="https://rfc-editor.org/rfc/rfc7518" class="relref">Section 4.6</a> of [<a href="#RFC7518" class="cite xref">RFC7518</a>]</span>), with key agreement utilizing keys on the <code>P-256</code> curve (see <span><a href="https://rfc-editor.org/rfc/rfc7518" class="relref">Section 6.2.1.1</a> of [<a href="#RFC7518" class="cite xref">RFC7518</a>]</span>) MUST be supported.
+The JWE <code>enc</code> (encryption algorithm) header parameter (see <span><a href="https://rfc-editor.org/rfc/rfc7516" class="relref">Section 4.1.2</a> of [<a href="#RFC7516" class="cite xref">RFC7516</a>]</span>) value <code>A128GCM</code> (as defined in <span><a href="https://rfc-editor.org/rfc/rfc7518" class="relref">Section 5.3</a> of [<a href="#RFC7518" class="cite xref">RFC7518</a>]</span>) MUST be supported.<a href="#section-6-2.4" class="pilcrow">¶</a>
+</li>
+        <li class="compact" id="section-6-2.5">The DCQL query and response as defined in Section 6 of <span>[<a href="#OIDF.OID4VP" class="cite xref">OIDF.OID4VP</a>]</span> MUST be used. Presentation Exchange as defined in Sections 5.4 and 5.5 of <span>[<a href="#OIDF.OID4VP" class="cite xref">OIDF.OID4VP</a>]</span> MUST NOT be used.<a href="#section-6-2.5" class="pilcrow">¶</a>
+</li>
+      </ul>
+<div id="iso-mdoc-specific-requirements-for-openid-for-verifiable-presentations-over-w3c-digital-credentials-api">
+<section id="section-6.1">
+        <h3 id="name-iso-mdoc-specific-requireme">
+<a href="#section-6.1" class="section-number selfRef">6.1. </a><a href="#name-iso-mdoc-specific-requireme" class="section-name selfRef">ISO mdoc specific requirements for OpenID for Verifiable Presentations over W3C Digital Credentials API</a>
+        </h3>
+<p id="section-6.1-1">Requirements for both the Wallet and the Verifier:<a href="#section-6.1-1" class="pilcrow">¶</a></p>
+<ul class="compact">
+<li class="compact" id="section-6.1-2.1">The Credential Format Identifier MUST be <code>mso_mdoc</code>.<a href="#section-6.1-2.1" class="pilcrow">¶</a>
+</li>
+          <li class="compact" id="section-6.1-2.2">ISO mdoc Credential Format specific DCQL parameters as defined in Annex B.3.1 of <span>[<a href="#OIDF.OID4VP" class="cite xref">OIDF.OID4VP</a>]</span> MUST be used.<a href="#section-6.1-2.2" class="pilcrow">¶</a>
+</li>
+          <li class="compact" id="section-6.1-2.3">Verifier MAY request more than one Credential in the same request.<a href="#section-6.1-2.3" class="pilcrow">¶</a>
+</li>
+          <li class="compact" id="section-6.1-2.4">When multiple ISO mdocs are being returned, each ISO mdoc MUST be returned in a separate <code>DeviceResponse</code> (as defined in 8.3.2.1.2.2 of <span>[<a href="#ISO.18013-5" class="cite xref">ISO.18013-5</a>]</span>), each matching to a respective DCQL query. Therefore, the resulting <code>vp_token</code> contains multiple <code>DeviceResponse</code> instances.<a href="#section-6.1-2.4" class="pilcrow">¶</a>
+</li>
+          <li class="compact" id="section-6.1-2.5">The <code>SessionTranscript</code> and <code>Handover</code> CBOR structures MUST be generated in accordance with Annex B.3.4.1 of <span>[<a href="#OIDF.OID4VP" class="cite xref">OIDF.OID4VP</a>]</span>.<a href="#section-6.1-2.5" class="pilcrow">¶</a>
+</li>
+        </ul>
+</section>
+</div>
+<div id="ietf-sd-jwt-vc-specific-requirements-for-openid-for-verifiable-presentations-over-w3c-digital-credentials-api">
+<section id="section-6.2">
+        <h3 id="name-ietf-sd-jwt-vc-specific-req">
+<a href="#section-6.2" class="section-number selfRef">6.2. </a><a href="#name-ietf-sd-jwt-vc-specific-req" class="section-name selfRef">IETF SD-JWT VC specific requirements for OpenID for Verifiable Presentations over W3C Digital Credentials API</a>
+        </h3>
+<p id="section-6.2-1">Requirements for both the Wallet and the Verifier:<a href="#section-6.2-1" class="pilcrow">¶</a></p>
+<ul class="compact">
+<li class="compact" id="section-6.2-2.1">The Credential Format identifier MUST be <code>dc+sd-jwt</code>.<a href="#section-6.2-2.1" class="pilcrow">¶</a>
+</li>
+          <li class="compact" id="section-6.2-2.2">IETF SD-JWT VC Credential Format specific DCQL parameters as defined in Section 6.4.1 of <span>[<a href="#OIDF.OID4VP" class="cite xref">OIDF.OID4VP</a>]</span> MUST be used.<a href="#section-6.2-2.2" class="pilcrow">¶</a>
+</li>
+        </ul>
+</section>
+</div>
+</section>
+</div>
+<div id="self-issued-op-v2">
+<section id="section-7">
+      <h2 id="name-self-issued-op-v2">
+<a href="#section-7" class="section-number selfRef">7. </a><a href="#name-self-issued-op-v2" class="section-name selfRef">Self-Issued OP v2</a>
+      </h2>
+<p id="section-7-1">To authenticate the user, subject identifier in a Self-Issued ID Token MUST be used as defined in <span>[<a href="#OIDF.SIOPv2" class="cite xref">OIDF.SIOPv2</a>]</span>.<a href="#section-7-1" class="pilcrow">¶</a></p>
+<ul class="compact">
+<li class="compact" id="section-7-2.1">As a way to invoke the Wallet, at least a custom URL scheme <code>haip://</code> MUST be supported. Implementations MAY support other ways to invoke the Wallets as agreed by trust frameworks/ecosystems/jurisdictions, not limited to using other custom URL schemes.<a href="#section-7-2.1" class="pilcrow">¶</a>
+</li>
+        <li class="compact" id="section-7-2.2">
+          <code>subject_syntax_types_supported</code> value MUST be <code>urn:ietf:params:oauth:jwk-thumbprint</code><a href="#section-7-2.2" class="pilcrow">¶</a>
+</li>
+      </ul>
+</section>
+</div>
+<div id="sd-jwt-vc">
+<section id="section-8">
+      <h2 id="name-sd-jwt-vcs">
+<a href="#section-8" class="section-number selfRef">8. </a><a href="#name-sd-jwt-vcs" class="section-name selfRef">SD-JWT VCs</a>
+      </h2>
+<p id="section-8-1">This profile defines the following additional requirements for IETF SD-JWT VCs as defined in <span>[<a href="#I-D.ietf-oauth-sd-jwt-vc" class="cite xref">I-D.ietf-oauth-sd-jwt-vc</a>]</span>.<a href="#section-8-1" class="pilcrow">¶</a></p>
+<ul class="compact">
+<li class="compact" id="section-8-2.1">Compact serialization MUST be supported as defined in <span>[<a href="#I-D.ietf-oauth-selective-disclosure-jwt" class="cite xref">I-D.ietf-oauth-selective-disclosure-jwt</a>]</span>. JSON serialization MAY be supported.<a href="#section-8-2.1" class="pilcrow">¶</a>
+</li>
+        <li class="compact" id="section-8-2.2">The following JWT Claims MUST be supported Content (differentiate issuance &amp; presentation)<a href="#section-8-2.2" class="pilcrow">¶</a>
+</li>
+      </ul>
+<table class="center" id="table-1">
+        <caption><a href="#table-1" class="selfRef">Table 1</a></caption>
+<thead>
+          <tr>
+            <th class="text-left" rowspan="1" colspan="1">Claim</th>
+            <th class="text-left" rowspan="1" colspan="1">SD-JWT as issued by the Issuer</th>
+            <th class="text-left" rowspan="1" colspan="1">Normative Definition</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="text-left" rowspan="1" colspan="1">iss</td>
+            <td class="text-left" rowspan="1" colspan="1">MUST</td>
+            <td class="text-left" rowspan="1" colspan="1">
+              <span>[<a href="#RFC7519" class="cite xref">RFC7519</a>]</span>, Section 4.1.1</td>
+          </tr>
+          <tr>
+            <td class="text-left" rowspan="1" colspan="1">iat</td>
+            <td class="text-left" rowspan="1" colspan="1">MUST</td>
+            <td class="text-left" rowspan="1" colspan="1">
+              <span>[<a href="#RFC7519" class="cite xref">RFC7519</a>]</span>, Section 4.1.6</td>
+          </tr>
+          <tr>
+            <td class="text-left" rowspan="1" colspan="1">exp</td>
+            <td class="text-left" rowspan="1" colspan="1">SHOULD (at the discretion of the issuer)</td>
+            <td class="text-left" rowspan="1" colspan="1">
+              <span>[<a href="#RFC7519" class="cite xref">RFC7519</a>]</span>, Section 4.1.4</td>
+          </tr>
+          <tr>
+            <td class="text-left" rowspan="1" colspan="1">cnf</td>
+            <td class="text-left" rowspan="1" colspan="1"> MUST</td>
+            <td class="text-left" rowspan="1" colspan="1">
+              <span>[<a href="#RFC7800" class="cite xref">RFC7800</a>]</span>
+</td>
+          </tr>
+          <tr>
+            <td class="text-left" rowspan="1" colspan="1">vct</td>
+            <td class="text-left" rowspan="1" colspan="1"> MUST</td>
+            <td class="text-left" rowspan="1" colspan="1">
+              <span>[<a href="#I-D.ietf-oauth-sd-jwt-vc" class="cite xref">I-D.ietf-oauth-sd-jwt-vc</a>]</span>
+</td>
+          </tr>
+          <tr>
+            <td class="text-left" rowspan="1" colspan="1">status</td>
+            <td class="text-left" rowspan="1" colspan="1">SHOULD (at the discretion of the issuer)</td>
+            <td class="text-left" rowspan="1" colspan="1">
+              <span>[<a href="#I-D.ietf-oauth-status-list" class="cite xref">I-D.ietf-oauth-status-list</a>]</span>
+</td>
+          </tr>
+        </tbody>
+      </table>
+<ul class="compact">
+<li class="compact" id="section-8-4.1">The Issuer MUST NOT make any of the JWT Claims in the table above to be selectively disclosable, so that they are always present in the SD-JWT-VC presented by the Holder.<a href="#section-8-4.1" class="pilcrow">¶</a>
+</li>
+        <li class="compact" id="section-8-4.2">It is at the discretion of the Issuer whether to use <code>exp</code> claim and/or a <code>status</code> claim to express the validity period of an SD-JWT-VC. The Wallet and the verifier  MUST support both mechanisms.<a href="#section-8-4.2" class="pilcrow">¶</a>
+</li>
+        <li class="compact" id="section-8-4.3">The <code>iss</code> claim MUST be an HTTPS URL. The <code>iss</code> value is used to obtain Issuer's signing key as defined in <a href="#issuer-key-resolution" class="auto internal xref">Section 8.1</a>.<a href="#section-8-4.3" class="pilcrow">¶</a>
+</li>
+        <li class="compact" id="section-8-4.4">The <code>vct</code> JWT claim as defined in <span>[<a href="#I-D.ietf-oauth-sd-jwt-vc" class="cite xref">I-D.ietf-oauth-sd-jwt-vc</a>]</span>.<a href="#section-8-4.4" class="pilcrow">¶</a>
+</li>
+        <li class="compact" id="section-8-4.5">The <code>cnf</code> claim <span>[<a href="#RFC7800" class="cite xref">RFC7800</a>]</span> MUST conform to the definition given in <span>[<a href="#I-D.ietf-oauth-sd-jwt-vc" class="cite xref">I-D.ietf-oauth-sd-jwt-vc</a>]</span>. Implementations conforming to this profile MUST include the JSON Web Key <span>[<a href="#RFC7517" class="cite xref">RFC7517</a>]</span> in the <code>jwk</code> sub claim.<a href="#section-8-4.5" class="pilcrow">¶</a>
+</li>
+      </ul>
+<p id="section-8-5">Note: Currently this profile only supports presentation of credentials with cryptographic Holder Binding: the holder's signature is required to proof the credential is presented by the holder it was issued to. This profile might support claim-based and biometrics-based holder binding once OpenID for Verifiable Credentials adds support for other forms of Holder Binding. See <a href="https://bitbucket.org/openid/connect/issues/1537/presenting-vc-without-a-vp-using-openid4vp">https://bitbucket.org/openid/connect/issues/1537/presenting-vc-without-a-vp-using-openid4vp</a><a href="#section-8-5" class="pilcrow">¶</a></p>
+<p id="section-8-6">Note: Re-using the same Credential across Verifiers, or re-using the same JWK value across multiple Credentials gives colluding Verifiers a mechanism to correlate the User. There are currently two known ways to address this with SD-JWT VCs. First is to issue multiple instances of the same credentials with different JWK values, so that if each instance of the credential is used at only one Verifier, it can be reused multiple times. Another is to use each credential only once (ephemeral credentials). It is RECOMMENDED to adopt one of these mechanisms.<a href="#section-8-6" class="pilcrow">¶</a></p>
+<p id="section-8-7">Note: If there is a requirement to communicate information about the verification status and identity assurance data of the claims about the subject, the syntax defined by <span>[<a href="#OIDF.ekyc-ida" class="cite xref">OIDF.ekyc-ida</a>]</span> SHOULD be used. It is up to each jurisdiction and ecosystem, whether to require it to the implementers of this profile.<a href="#section-8-7" class="pilcrow">¶</a></p>
+<p id="section-8-8">Note: If there is a requirement to provide the Subject’s identifier assigned and maintained by the Issuer, the <code>sub</code> claim MAY be used. There is no requirement for a binding to exist between the <code>sub</code> and <code>cnf</code> claims. See the Implementation Considerations section in <span>[<a href="#I-D.ietf-oauth-sd-jwt-vc" class="cite xref">I-D.ietf-oauth-sd-jwt-vc</a>]</span>.<a href="#section-8-8" class="pilcrow">¶</a></p>
+<p id="section-8-9">Note: In some credential types, it is not desirable to include an expiration date (eg: diploma attestation). Therefore, this profile leaves its inclusion to the Issuer, or the body defining the respective credential type.<a href="#section-8-9" class="pilcrow">¶</a></p>
+<div id="issuer-key-resolution">
+<section id="section-8.1">
+        <h3 id="name-issuer-identification-and-k">
+<a href="#section-8.1" class="section-number selfRef">8.1. </a><a href="#name-issuer-identification-and-k" class="section-name selfRef">Issuer identification and key resolution to validate an issued Credential</a>
+        </h3>
+<p id="section-8.1-1">This profile supports two ways to represent and resolve the key required to validate the issuer signature of an SD-JWT VC, the web PKI-based key resolution and the x.509 certificates.<a href="#section-8.1-1" class="pilcrow">¶</a></p>
+<ul class="compact">
+<li class="compact" id="section-8.1-2.1">Web-based key resolution: The key used to validate the Issuer's signature on the SD-JWT VC MUST be obtained from the SD-JWT VC issuer's metadata as defined in Section 5 of <span>[<a href="#I-D.ietf-oauth-sd-jwt-vc" class="cite xref">I-D.ietf-oauth-sd-jwt-vc</a>]</span>. The JOSE header <code>kid</code> MUST be used to identify the respective key.<a href="#section-8.1-2.1" class="pilcrow">¶</a>
+</li>
+          <li class="compact" id="section-8.1-2.2">x.509 certificates: the SD-JWT VC contains the issuer's certificate along with a trust chain in the <code>x5c</code> JOSE header. In this case, the <code>iss</code> value MUST be an URL with a FQDN matching a <code>dNSName</code> Subject Alternative Name (SAN) <span>[<a href="#RFC5280" class="cite xref">RFC5280</a>]</span> entry in the leaf certificate.<a href="#section-8.1-2.2" class="pilcrow">¶</a>
+</li>
+        </ul>
+<p id="section-8.1-3">Note: The issuer MAY decide to support both options. In which case, it is at the discretion of the Wallet and the Verifier which key to use for the issuer signature validation.<a href="#section-8.1-3" class="pilcrow">¶</a></p>
+<div id="cryptographic-holder-binding-between-vc-and-vp">
+<section id="section-8.1.1">
+          <h4 id="name-cryptographic-holder-bindin">
+<a href="#section-8.1.1" class="section-number selfRef">8.1.1. </a><a href="#name-cryptographic-holder-bindin" class="section-name selfRef">Cryptographic Holder Binding between VC and VP</a>
+          </h4>
+<ul class="compact">
+<li class="compact" id="section-8.1.1-1.1">For Cryptographic Holder Binding, a KB-JWT, as defined in <span>[<a href="#I-D.ietf-oauth-sd-jwt-vc" class="cite xref">I-D.ietf-oauth-sd-jwt-vc</a>]</span>, MUST always be present when presenting an SD-JWT VC.<a href="#section-8.1.1-1.1" class="pilcrow">¶</a>
+</li>
+          </ul>
+</section>
+</div>
+</section>
+</div>
+<div id="vc_sd_jwt_profile">
+<section id="section-8.2">
+        <h3 id="name-openid4vc-credential-format">
+<a href="#section-8.2" class="section-number selfRef">8.2. </a><a href="#name-openid4vc-credential-format" class="section-name selfRef">OpenID4VC Credential Format Profile</a>
+        </h3>
+<p id="section-8.2-1">A Credential Format Profile for Credentials complying with IETF SD-JWT VCs <span>[<a href="#I-D.ietf-oauth-sd-jwt-vc" class="cite xref">I-D.ietf-oauth-sd-jwt-vc</a>]</span> is defined in Annex A.3 of <span>[<a href="#OIDF.OID4VCI" class="cite xref">OIDF.OID4VCI</a>]</span> and Annex A.4 of <span>[<a href="#OIDF.OID4VP" class="cite xref">OIDF.OID4VP</a>]</span>.<a href="#section-8.2-1" class="pilcrow">¶</a></p>
+</section>
+</div>
+</section>
+</div>
+<div id="crypto-suites">
+<section id="section-9">
+      <h2 id="name-crypto-suites">
+<a href="#section-9" class="section-number selfRef">9. </a><a href="#name-crypto-suites" class="section-name selfRef">Crypto Suites</a>
+      </h2>
+<p id="section-9-1">Issuers, holders and verifiers MUST support P-256 (secp256r1) as a key type with ES256 JWT algorithm for signing and signature validation whenever this profiles requires to do so:<a href="#section-9-1" class="pilcrow">¶</a></p>
+<ul class="compact">
+<li class="compact" id="section-9-2.1">SD-JWT-VC<a href="#section-9-2.1" class="pilcrow">¶</a>
+</li>
+        <li class="compact" id="section-9-2.2">Wallet Instance Attestation<a href="#section-9-2.2" class="pilcrow">¶</a>
+</li>
+        <li class="compact" id="section-9-2.3">DPoP<a href="#section-9-2.3" class="pilcrow">¶</a>
+</li>
+        <li class="compact" id="section-9-2.4">HB JWT<a href="#section-9-2.4" class="pilcrow">¶</a>
+</li>
+        <li class="compact" id="section-9-2.5">Authorization request during presentation<a href="#section-9-2.5" class="pilcrow">¶</a>
+</li>
+      </ul>
+<p id="section-9-3">SHA256 MUST be supported by all the entities as the hash algorithm to generate and validate the digests in the SD-JWT VC.<a href="#section-9-3" class="pilcrow">¶</a></p>
+<p id="section-9-4">Note: When using this profile with other cryptosuites, it is recommended to be explicit about which entity is required to support which curve for signing and/or signature validation<a href="#section-9-4" class="pilcrow">¶</a></p>
+</section>
+</div>
+<div id="implementations-considerations">
+<section id="section-10">
+      <h2 id="name-implementations-considerati">
+<a href="#section-10" class="section-number selfRef">10. </a><a href="#name-implementations-considerati" class="section-name selfRef">Implementations Considerations</a>
+      </h2>
+<div id="validity-period-of-the-signature-and-the-claim-values">
+<section id="section-10.1">
+        <h3 id="name-validity-period-of-the-sign">
+<a href="#section-10.1" class="section-number selfRef">10.1. </a><a href="#name-validity-period-of-the-sign" class="section-name selfRef">Validity Period of the Signature and the Claim Values</a>
+        </h3>
+<p id="section-10.1-1"><code>iat</code> and <code>exp</code> JWT claims express both the validity period of both the signature and the claims about the subject, unless there is a separate claim used to express the validity of the claims.<a href="#section-10.1-1" class="pilcrow">¶</a></p>
+</section>
+</div>
+</section>
+</div>
+<div id="security_considerations">
+<section id="section-11">
+      <h2 id="name-security-considerations">
+<a href="#section-11" class="section-number selfRef">11. </a><a href="#name-security-considerations" class="section-name selfRef">Security Considerations</a>
+      </h2>
+<p id="section-11-1">The security considerations in <span>[<a href="#OIDF.OID4VCI" class="cite xref">OIDF.OID4VCI</a>]</span> and <span>[<a href="#OIDF.OID4VP" class="cite xref">OIDF.OID4VP</a>]</span> apply.<a href="#section-11-1" class="pilcrow">¶</a></p>
+</section>
+</div>
+<section id="section-12">
+      <h2 id="name-normative-references">
+<a href="#section-12" class="section-number selfRef">12. </a><a href="#name-normative-references" class="section-name selfRef">Normative References</a>
+      </h2>
+<dl class="references">
+<dt id="I-D.ietf-oauth-sd-jwt-vc">[I-D.ietf-oauth-sd-jwt-vc]</dt>
+      <dd>
+<span class="refAuthor">Terbu, O.</span>, <span class="refAuthor">Fett, D.</span>, and <span class="refAuthor">B. Campbell</span>, <span class="refTitle">"SD-JWT-based Verifiable Credentials (SD-JWT VC)"</span>, <span class="refContent">Work in Progress</span>, <span class="seriesInfo">Internet-Draft, draft-ietf-oauth-sd-jwt-vc-08</span>, <time datetime="2024-12-03" class="refDate">3 December 2024</time>, <span>&lt;<a href="https://datatracker.ietf.org/doc/html/draft-ietf-oauth-sd-jwt-vc-08">https://datatracker.ietf.org/doc/html/draft-ietf-oauth-sd-jwt-vc-08</a>&gt;</span>. </dd>
+<dd class="break"></dd>
+<dt id="I-D.ietf-oauth-selective-disclosure-jwt">[I-D.ietf-oauth-selective-disclosure-jwt]</dt>
+      <dd>
+<span class="refAuthor">Fett, D.</span>, <span class="refAuthor">Yasuda, K.</span>, and <span class="refAuthor">B. Campbell</span>, <span class="refTitle">"Selective Disclosure for JWTs (SD-JWT)"</span>, <span class="refContent">Work in Progress</span>, <span class="seriesInfo">Internet-Draft, draft-ietf-oauth-selective-disclosure-jwt-15</span>, <time datetime="2025-01-16" class="refDate">16 January 2025</time>, <span>&lt;<a href="https://datatracker.ietf.org/doc/html/draft-ietf-oauth-selective-disclosure-jwt-15">https://datatracker.ietf.org/doc/html/draft-ietf-oauth-selective-disclosure-jwt-15</a>&gt;</span>. </dd>
+<dd class="break"></dd>
+<dt id="I-D.ietf-oauth-status-list">[I-D.ietf-oauth-status-list]</dt>
+      <dd>
+<span class="refAuthor">Looker, T.</span>, <span class="refAuthor">Bastian, P.</span>, and <span class="refAuthor">C. Bormann</span>, <span class="refTitle">"Token Status List"</span>, <span class="refContent">Work in Progress</span>, <span class="seriesInfo">Internet-Draft, draft-ietf-oauth-status-list-07</span>, <time datetime="2025-02-02" class="refDate">2 February 2025</time>, <span>&lt;<a href="https://datatracker.ietf.org/doc/html/draft-ietf-oauth-status-list-07">https://datatracker.ietf.org/doc/html/draft-ietf-oauth-status-list-07</a>&gt;</span>. </dd>
+<dd class="break"></dd>
+<dt id="ISO.18013-5">[ISO.18013-5]</dt>
+      <dd>
+<span class="refAuthor">ISO/IEC JTC 1/SC 17 Cards and security devices for personal identification</span>, <span class="refTitle">"ISO/IEC 18013-5:2021 Personal identification — ISO-compliant driving license — Part 5: Mobile driving license (mDL) application"</span>, <time datetime="2021" class="refDate">2021</time>, <span>&lt;<a href="https://www.iso.org/standard/69084.html">https://www.iso.org/standard/69084.html</a>&gt;</span>. </dd>
+<dd class="break"></dd>
+<dt id="OIDF.OID4VCI">[OIDF.OID4VCI]</dt>
+      <dd>
+<span class="refAuthor">Lodderstedt, T.</span>, <span class="refAuthor">Yasuda, K.</span>, and <span class="refAuthor">T. Looker</span>, <span class="refTitle">"OpenID for Verifiable Credential Issuance"</span>, <time datetime="2022-06-20" class="refDate">20 June 2022</time>, <span>&lt;<a href="https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html">https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html</a>&gt;</span>. </dd>
+<dd class="break"></dd>
+<dt id="OIDF.OID4VP">[OIDF.OID4VP]</dt>
+      <dd>
+<span class="refAuthor">Terbu, O.</span>, <span class="refAuthor">Lodderstedt, T.</span>, <span class="refAuthor">Yasuda, K.</span>, and <span class="refAuthor">T. Looker</span>, <span class="refTitle">"OpenID for Verifiable Presentations - draft 24"</span>, <time datetime="2025-01-27" class="refDate">27 January 2025</time>, <span>&lt;<a href="https://openid.net/specs/openid-4-verifiable-presentations-1_0-24.html">https://openid.net/specs/openid-4-verifiable-presentations-1_0-24.html</a>&gt;</span>. </dd>
+<dd class="break"></dd>
+<dt id="OIDF.SIOPv2">[OIDF.SIOPv2]</dt>
+      <dd>
+<span class="refAuthor">Microsoft</span>, <span class="refAuthor">Jones, M. B.</span>, and <span class="refAuthor">T. Lodderstedt</span>, <span class="refTitle">"Self-Issued OpenID Provider V2"</span>, <time datetime="2021-12-18" class="refDate">18 December 2021</time>, <span>&lt;<a href="https://openid.net/specs/openid-connect-self-issued-v2-1_0.html">https://openid.net/specs/openid-connect-self-issued-v2-1_0.html</a>&gt;</span>. </dd>
+<dd class="break"></dd>
+<dt id="OIDF.ekyc-ida">[OIDF.ekyc-ida]</dt>
+      <dd>
+<span class="refAuthor">yes</span>, <span class="refAuthor">Fett, D.</span>, <span class="refAuthor">Haine, M.</span>, <span class="refAuthor">Pulido, A.</span>, <span class="refAuthor">Lehmann, K.</span>, and <span class="refAuthor">K. Koiwai</span>, <span class="refTitle">"OpenID Connect for Identity Assurance 1.0"</span>, <time datetime="2022-08-19" class="refDate">19 August 2022</time>, <span>&lt;<a href="https://openid.net/specs/openid-connect-4-identity-assurance-1_0-ID4.html">https://openid.net/specs/openid-connect-4-identity-assurance-1_0-ID4.html</a>&gt;</span>. </dd>
+<dd class="break"></dd>
+<dt id="RFC5280">[RFC5280]</dt>
+      <dd>
+<span class="refAuthor">Cooper, D.</span>, <span class="refAuthor">Santesson, S.</span>, <span class="refAuthor">Farrell, S.</span>, <span class="refAuthor">Boeyen, S.</span>, <span class="refAuthor">Housley, R.</span>, and <span class="refAuthor">W. Polk</span>, <span class="refTitle">"Internet X.509 Public Key Infrastructure Certificate and Certificate Revocation List (CRL) Profile"</span>, <span class="seriesInfo">RFC 5280</span>, <span class="seriesInfo">DOI 10.17487/RFC5280</span>, <time datetime="2008-05" class="refDate">May 2008</time>, <span>&lt;<a href="https://www.rfc-editor.org/info/rfc5280">https://www.rfc-editor.org/info/rfc5280</a>&gt;</span>. </dd>
+<dd class="break"></dd>
+<dt id="RFC7516">[RFC7516]</dt>
+      <dd>
+<span class="refAuthor">Jones, M.</span> and <span class="refAuthor">J. Hildebrand</span>, <span class="refTitle">"JSON Web Encryption (JWE)"</span>, <span class="seriesInfo">RFC 7516</span>, <span class="seriesInfo">DOI 10.17487/RFC7516</span>, <time datetime="2015-05" class="refDate">May 2015</time>, <span>&lt;<a href="https://www.rfc-editor.org/info/rfc7516">https://www.rfc-editor.org/info/rfc7516</a>&gt;</span>. </dd>
+<dd class="break"></dd>
+<dt id="RFC7517">[RFC7517]</dt>
+      <dd>
+<span class="refAuthor">Jones, M.</span>, <span class="refTitle">"JSON Web Key (JWK)"</span>, <span class="seriesInfo">RFC 7517</span>, <span class="seriesInfo">DOI 10.17487/RFC7517</span>, <time datetime="2015-05" class="refDate">May 2015</time>, <span>&lt;<a href="https://www.rfc-editor.org/info/rfc7517">https://www.rfc-editor.org/info/rfc7517</a>&gt;</span>. </dd>
+<dd class="break"></dd>
+<dt id="RFC7518">[RFC7518]</dt>
+      <dd>
+<span class="refAuthor">Jones, M.</span>, <span class="refTitle">"JSON Web Algorithms (JWA)"</span>, <span class="seriesInfo">RFC 7518</span>, <span class="seriesInfo">DOI 10.17487/RFC7518</span>, <time datetime="2015-05" class="refDate">May 2015</time>, <span>&lt;<a href="https://www.rfc-editor.org/info/rfc7518">https://www.rfc-editor.org/info/rfc7518</a>&gt;</span>. </dd>
+<dd class="break"></dd>
+<dt id="RFC7519">[RFC7519]</dt>
+      <dd>
+<span class="refAuthor">Jones, M.</span>, <span class="refAuthor">Bradley, J.</span>, and <span class="refAuthor">N. Sakimura</span>, <span class="refTitle">"JSON Web Token (JWT)"</span>, <span class="seriesInfo">RFC 7519</span>, <span class="seriesInfo">DOI 10.17487/RFC7519</span>, <time datetime="2015-05" class="refDate">May 2015</time>, <span>&lt;<a href="https://www.rfc-editor.org/info/rfc7519">https://www.rfc-editor.org/info/rfc7519</a>&gt;</span>. </dd>
+<dd class="break"></dd>
+<dt id="RFC7636">[RFC7636]</dt>
+      <dd>
+<span class="refAuthor">Sakimura, N., Ed.</span>, <span class="refAuthor">Bradley, J.</span>, and <span class="refAuthor">N. Agarwal</span>, <span class="refTitle">"Proof Key for Code Exchange by OAuth Public Clients"</span>, <span class="seriesInfo">RFC 7636</span>, <span class="seriesInfo">DOI 10.17487/RFC7636</span>, <time datetime="2015-09" class="refDate">September 2015</time>, <span>&lt;<a href="https://www.rfc-editor.org/info/rfc7636">https://www.rfc-editor.org/info/rfc7636</a>&gt;</span>. </dd>
+<dd class="break"></dd>
+<dt id="RFC7800">[RFC7800]</dt>
+      <dd>
+<span class="refAuthor">Jones, M.</span>, <span class="refAuthor">Bradley, J.</span>, and <span class="refAuthor">H. Tschofenig</span>, <span class="refTitle">"Proof-of-Possession Key Semantics for JSON Web Tokens (JWTs)"</span>, <span class="seriesInfo">RFC 7800</span>, <span class="seriesInfo">DOI 10.17487/RFC7800</span>, <time datetime="2016-04" class="refDate">April 2016</time>, <span>&lt;<a href="https://www.rfc-editor.org/info/rfc7800">https://www.rfc-editor.org/info/rfc7800</a>&gt;</span>. </dd>
+<dd class="break"></dd>
+<dt id="RFC9101">[RFC9101]</dt>
+      <dd>
+<span class="refAuthor">Sakimura, N.</span>, <span class="refAuthor">Bradley, J.</span>, and <span class="refAuthor">M. Jones</span>, <span class="refTitle">"The OAuth 2.0 Authorization Framework: JWT-Secured Authorization Request (JAR)"</span>, <span class="seriesInfo">RFC 9101</span>, <span class="seriesInfo">DOI 10.17487/RFC9101</span>, <time datetime="2021-08" class="refDate">August 2021</time>, <span>&lt;<a href="https://www.rfc-editor.org/info/rfc9101">https://www.rfc-editor.org/info/rfc9101</a>&gt;</span>. </dd>
+<dd class="break"></dd>
+<dt id="RFC9126">[RFC9126]</dt>
+      <dd>
+<span class="refAuthor">Lodderstedt, T.</span>, <span class="refAuthor">Campbell, B.</span>, <span class="refAuthor">Sakimura, N.</span>, <span class="refAuthor">Tonge, D.</span>, and <span class="refAuthor">F. Skokan</span>, <span class="refTitle">"OAuth 2.0 Pushed Authorization Requests"</span>, <span class="seriesInfo">RFC 9126</span>, <span class="seriesInfo">DOI 10.17487/RFC9126</span>, <time datetime="2021-09" class="refDate">September 2021</time>, <span>&lt;<a href="https://www.rfc-editor.org/info/rfc9126">https://www.rfc-editor.org/info/rfc9126</a>&gt;</span>. </dd>
+<dd class="break"></dd>
+<dt id="RFC9449">[RFC9449]</dt>
+    <dd>
+<span class="refAuthor">Fett, D.</span>, <span class="refAuthor">Campbell, B.</span>, <span class="refAuthor">Bradley, J.</span>, <span class="refAuthor">Lodderstedt, T.</span>, <span class="refAuthor">Jones, M.</span>, and <span class="refAuthor">D. Waite</span>, <span class="refTitle">"OAuth 2.0 Demonstrating Proof of Possession (DPoP)"</span>, <span class="seriesInfo">RFC 9449</span>, <span class="seriesInfo">DOI 10.17487/RFC9449</span>, <time datetime="2023-09" class="refDate">September 2023</time>, <span>&lt;<a href="https://www.rfc-editor.org/info/rfc9449">https://www.rfc-editor.org/info/rfc9449</a>&gt;</span>. </dd>
+<dd class="break"></dd>
+</dl>
+</section>
+<section id="section-13">
+      <h2 id="name-informative-references">
+<a href="#section-13" class="section-number selfRef">13. </a><a href="#name-informative-references" class="section-name selfRef">Informative References</a>
+      </h2>
+<dl class="references">
+<dt id="ISO.18013-7">[ISO.18013-7]</dt>
+      <dd>
+<span class="refAuthor">ISO/IEC JTC 1/SC 17 Cards and security devices for personal identification</span>, <span class="refTitle">"ISO/IEC DTS 18013-7 Personal identification — ISO-compliant driving license — Part 7: Mobile driving license (mDL) add-on functions"</span>, <time datetime="2024" class="refDate">2024</time>, <span>&lt;<a href="https://www.iso.org/standard/82772.html">https://www.iso.org/standard/82772.html</a>&gt;</span>. </dd>
+<dd class="break"></dd>
+<dt id="w3c.digital_credentials_api">[w3c.digital_credentials_api]</dt>
+    <dd>
+<span class="refAuthor">Caceres, M.</span>, <span class="refAuthor">Goto, S.</span>, and <span class="refAuthor">T. Cappalli</span>, <span class="refTitle">"Digital Credentials API"</span>, <span>&lt;<a href="https://wicg.github.io/digital-credentials/">https://wicg.github.io/digital-credentials/</a>&gt;</span>. </dd>
+<dd class="break"></dd>
+</dl>
+</section>
+<div id="combined-issuance-of-sd-jwt-vc-and-mdocs">
+<section id="appendix-A">
+      <h2 id="name-combined-issuance-of-sd-jwt">
+<a href="#appendix-A" class="section-number selfRef">Appendix A. </a><a href="#name-combined-issuance-of-sd-jwt" class="section-name selfRef">Combined Issuance of SD-JWT VC and mdocs</a>
+      </h2>
+<ul class="compact">
+<li class="compact" id="appendix-A-1.1">If combined issuance is required, the Batch Credential Endpoint MUST be supported.<a href="#appendix-A-1.1" class="pilcrow">¶</a>
+</li>
+      </ul>
+</section>
+</div>
+<div id="Acknowledgements">
+<section id="appendix-B">
+      <h2 id="name-acknowledgements">
+<a href="#appendix-B" class="section-number selfRef">Appendix B. </a><a href="#name-acknowledgements" class="section-name selfRef">Acknowledgements</a>
+      </h2>
+<p id="appendix-B-1">We would like to thank Paul Bastian, Christian Bormann, Mike Jones, Oliver Terbu, Daniel Fett, and Giuseppe De Marco for their valuable feedback and contributions to this specification.<a href="#appendix-B-1" class="pilcrow">¶</a></p>
+</section>
+</div>
+<div id="notices">
+<section id="appendix-C">
+      <h2 id="name-notices">
+<a href="#appendix-C" class="section-number selfRef">Appendix C. </a><a href="#name-notices" class="section-name selfRef">Notices</a>
+      </h2>
+<p id="appendix-C-1">Copyright (c) 2025 The OpenID Foundation.<a href="#appendix-C-1" class="pilcrow">¶</a></p>
+<p id="appendix-C-2">The OpenID Foundation (OIDF) grants to any Contributor, developer, implementer, or other interested party a non-exclusive, royalty free, worldwide copyright license to reproduce, prepare derivative works from, distribute, perform and display, this Implementers Draft, Final Specification, or Final Specification Incorporating Errata Corrections solely for the purposes of (i) developing specifications, and (ii) implementing Implementers Drafts, Final Specifications, and Final Specification Incorporating Errata Corrections based on such documents, provided that attribution be made to the OIDF as the source of the material, but that such attribution does not indicate an endorsement by the OIDF.<a href="#appendix-C-2" class="pilcrow">¶</a></p>
+<p id="appendix-C-3">The technology described in this specification was made available from contributions from various sources, including members of the OpenID Foundation and others. Although the OpenID Foundation has taken steps to help ensure that the technology is available for distribution, it takes no position regarding the validity or scope of any intellectual property or other rights that might be claimed to pertain to the implementation or use of the technology described in this specification or the extent to which any license under such rights might or might not be available; neither does it represent that it has made any independent effort to identify any such rights. The OpenID Foundation and the contributors to this specification make no (and hereby expressly disclaim any) warranties (express, implied, or otherwise), including implied warranties of merchantability, non-infringement, fitness for a particular purpose, or title, related to this specification, and the entire risk as to implementing this specification is assumed by the implementer. The OpenID Intellectual Property Rights policy (found at openid.net) requires contributors to offer a patent promise not to assert certain patent claims against other contributors and against implementers. OpenID invites any interested party to bring to its attention any copyrights, patents, patent applications, or other proprietary rights that may cover technology that may be required to practice this specification.<a href="#appendix-C-3" class="pilcrow">¶</a></p>
+</section>
+</div>
+<div id="document-history">
+<section id="appendix-D">
+      <h2 id="name-document-history">
+<a href="#appendix-D" class="section-number selfRef">Appendix D. </a><a href="#name-document-history" class="section-name selfRef">Document History</a>
+      </h2>
+<p id="appendix-D-1">[[ To be removed from the final specification ]]<a href="#appendix-D-1" class="pilcrow">¶</a></p>
+<p id="appendix-D-2">-03<a href="#appendix-D-2" class="pilcrow">¶</a></p>
+<ul class="compact">
+<li class="compact" id="appendix-D-3.1">Add initial security considerations section<a href="#appendix-D-3.1" class="pilcrow">¶</a>
+</li>
+        <li class="compact" id="appendix-D-3.2">Update notices section to match latest OIDF process document<a href="#appendix-D-3.2" class="pilcrow">¶</a>
+</li>
+      </ul>
+<p id="appendix-D-4">-02<a href="#appendix-D-4" class="pilcrow">¶</a></p>
+<ul class="compact">
+<li class="compact" id="appendix-D-5.1">Mandate DCQL instead of presentation exchange<a href="#appendix-D-5.1" class="pilcrow">¶</a>
+</li>
+        <li class="compact" id="appendix-D-5.2">Refactor HAIP and add details for mdoc profile over DC API<a href="#appendix-D-5.2" class="pilcrow">¶</a>
+</li>
+        <li class="compact" id="appendix-D-5.3">Add specific requirements for response encryption<a href="#appendix-D-5.3" class="pilcrow">¶</a>
+</li>
+        <li class="compact" id="appendix-D-5.4">Add SessionTranscript requirements<a href="#appendix-D-5.4" class="pilcrow">¶</a>
+</li>
+        <li class="compact" id="appendix-D-5.5">Update OID4VP reference to draft 24<a href="#appendix-D-5.5" class="pilcrow">¶</a>
+</li>
+      </ul>
+<p id="appendix-D-6">-01<a href="#appendix-D-6" class="pilcrow">¶</a></p>
+<ul class="compact">
+<li class="compact" id="appendix-D-7.1">Remove the Wallet Attestation Schema and point to OpenID4VCI instead<a href="#appendix-D-7.1" class="pilcrow">¶</a>
+</li>
+        <li class="compact" id="appendix-D-7.2">Rename specification to enable non-SD-JWT credential formats to be included<a href="#appendix-D-7.2" class="pilcrow">¶</a>
+</li>
+        <li class="compact" id="appendix-D-7.3">Require encrypted responses<a href="#appendix-D-7.3" class="pilcrow">¶</a>
+</li>
+        <li class="compact" id="appendix-D-7.4">Remove reference to <code>client_id_scheme</code> parameter that no longer exists in OpenID4VP<a href="#appendix-D-7.4" class="pilcrow">¶</a>
+</li>
+        <li class="compact" id="appendix-D-7.5">Refresh tokens are now optional<a href="#appendix-D-7.5" class="pilcrow">¶</a>
+</li>
+      </ul>
+<p id="appendix-D-8">-00<a href="#appendix-D-8" class="pilcrow">¶</a></p>
+<ul class="compact">
+<li class="compact" id="appendix-D-9.1">initial revision<a href="#appendix-D-9.1" class="pilcrow">¶</a>
+</li>
+      </ul>
+</section>
+</div>
+<div id="authors-addresses">
+<section id="appendix-E">
+      <h2 id="name-authors-addresses">
+<a href="#name-authors-addresses" class="section-name selfRef">Authors' Addresses</a>
+      </h2>
+<address class="vcard">
+        <div dir="auto" class="left"><span class="fn nameRole">Kristina Yasuda</span></div>
+<div dir="auto" class="left"><span class="org">SPRIND</span></div>
+<div class="email">
+<span>Email:</span>
+<a href="mailto:kristina.yasuda@sprind.org" class="email">kristina.yasuda@sprind.org</a>
+</div>
+</address>
+<address class="vcard">
+        <div dir="auto" class="left"><span class="fn nameRole">Torsten Lodderstedt</span></div>
+<div dir="auto" class="left"><span class="org">SPRIND</span></div>
+<div class="email">
+<span>Email:</span>
+<a href="mailto:torsten@lodderstedt.net" class="email">torsten@lodderstedt.net</a>
+</div>
+</address>
+</section>
+</div>
+<script>const toc = document.getElementById("toc");
+toc.querySelector("h2").addEventListener("click", e => {
+  toc.classList.toggle("active");
+});
+toc.querySelector("nav").addEventListener("click", e => {
+  toc.classList.remove("active");
+});
+</script>
+</body>
+</html>

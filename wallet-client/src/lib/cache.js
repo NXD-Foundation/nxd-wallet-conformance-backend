@@ -1,4 +1,6 @@
+import "./logger.js";
 import redis from "redis";
+import { registerLogSinks } from "./logger.js";
 
 // Wallet-client dedicated Redis connection
 // Configure via WALLET_REDIS env var (host:port) or default localhost:6379
@@ -56,28 +58,38 @@ export async function storeWalletLogs(sessionId, logs) {
 }
 
 export async function getWalletLogs(sessionId) {
-  const key = `wallet:logs:${sessionId}`;
-  
+  return getLogsByKey(`wallet:logs:${sessionId}`);
+}
+
+export async function appendWalletLog(sessionId, logEntry) {
+  return appendLogByKey(`wallet:logs:${sessionId}`, logEntry);
+}
+
+export async function getGlobalLogs() {
+  return getLogsByKey("wallet:logs:global");
+}
+
+export async function appendGlobalLog(logEntry) {
+  return appendLogByKey("wallet:logs:global", logEntry);
+}
+
+async function getLogsByKey(key) {
   try {
-    // Try to get as Redis list first
     const listLength = await walletRedisClient.lLen(key);
     if (listLength > 0) {
       const logEntries = await walletRedisClient.lRange(key, 0, -1);
-      return logEntries.map(entry => JSON.parse(entry));
+      return logEntries.map((entry) => JSON.parse(entry));
     }
     return null;
   } catch (error) {
-    // If it's a WRONGTYPE error, the key contains old JSON format
-    if (error.message && error.message.includes('WRONGTYPE')) {
+    if (error.message && error.message.includes("WRONGTYPE")) {
       try {
-        // Get the old JSON data
         const val = await walletRedisClient.get(key);
         if (val) {
           const oldLogs = JSON.parse(val);
-          // Migrate to list format
           await walletRedisClient.del(key);
           if (oldLogs && oldLogs.length > 0) {
-            const logStrings = oldLogs.map(log => JSON.stringify(log));
+            const logStrings = oldLogs.map((log) => JSON.stringify(log));
             await walletRedisClient.rPush(key, ...logStrings);
             const ttlInSeconds = parseInt(process.env.WALLET_LOGS_TTL || "3600");
             await walletRedisClient.expire(key, ttlInSeconds);
@@ -94,37 +106,30 @@ export async function getWalletLogs(sessionId) {
   }
 }
 
-export async function appendWalletLog(sessionId, logEntry) {
-  const key = `wallet:logs:${sessionId}`;
+async function appendLogByKey(key, logEntry) {
   const entryWithTimestamp = {
     ...logEntry,
-    timestamp: new Date().toISOString()
+    timestamp: logEntry?.timestamp || new Date().toISOString()
   };
-  
+
   try {
-    // Use Redis list for atomic append operations
     await walletRedisClient.rPush(key, JSON.stringify(entryWithTimestamp));
-    
-    // Set TTL if this is the first entry
     const ttlInSeconds = parseInt(process.env.WALLET_LOGS_TTL || "3600");
     await walletRedisClient.expire(key, ttlInSeconds);
   } catch (error) {
-    // If it's a WRONGTYPE error, migrate the old data first
-    if (error.message && error.message.includes('WRONGTYPE')) {
+    if (error.message && error.message.includes("WRONGTYPE")) {
       try {
-        // Get the old JSON data and migrate
         const val = await walletRedisClient.get(key);
         await walletRedisClient.del(key);
-        
+
         if (val) {
           const oldLogs = JSON.parse(val);
           if (oldLogs && oldLogs.length > 0) {
-            const logStrings = oldLogs.map(log => JSON.stringify(log));
+            const logStrings = oldLogs.map((log) => JSON.stringify(log));
             await walletRedisClient.rPush(key, ...logStrings);
           }
         }
-        
-        // Now append the new entry
+
         await walletRedisClient.rPush(key, JSON.stringify(entryWithTimestamp));
         const ttlInSeconds = parseInt(process.env.WALLET_LOGS_TTL || "3600");
         await walletRedisClient.expire(key, ttlInSeconds);
@@ -137,4 +142,8 @@ export async function appendWalletLog(sessionId, logEntry) {
   }
 }
 
+registerLogSinks({
+  appendSessionLog: appendWalletLog,
+  appendGlobalLog,
+});
 
