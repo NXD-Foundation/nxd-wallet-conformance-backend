@@ -71,6 +71,12 @@ describe("CS-02 verifier request generation (Phase 3)", () => {
     expect(resolveVerifierCs02Options({ VERIFIER_CS02_COMPATIBILITY: "true" }).strict).to.equal(false);
   });
 
+  it("keeps strict mode while allowing TS12 transaction_data when VERIFIER_TS12_COMPATIBILITY=true", () => {
+    const options = resolveVerifierCs02Options({ VERIFIER_TS12_COMPATIBILITY: "true" });
+    expect(options.strict).to.equal(true);
+    expect(options.allowTs12TransactionData).to.equal(true);
+  });
+
   it("generates ES256 signed JAR with required CS-02 payload fields", async () => {
     const requestJwt = await buildStandardCs02Jar();
     const header = jose.decodeProtectedHeader(requestJwt);
@@ -155,6 +161,38 @@ describe("CS-02 verifier request generation (Phase 3)", () => {
         [encodeTxData({ type: "qes_authorization", purpose: "demo" })],
         validDcqlQuery(),
         { strict: true },
+      ),
+    ).to.not.throw();
+  });
+
+  it("rejects TS12 transaction_data by default in strict mode", () => {
+    expect(() =>
+      validateCs02TransactionDataEntries(
+        [
+          encodeTxData({
+            type: "urn:eudi:sca:payment:1",
+            credential_ids: ["cmwallet"],
+            payload: { transaction_id: "tx-1" },
+          }),
+        ],
+        validDcqlQuery(),
+        { strict: true },
+      ),
+    ).to.throw(Cs02VerifierRequestError, 'Unsupported transaction_data type "urn:eudi:sca:payment:1"');
+  });
+
+  it("accepts TS12 transaction_data only when VERIFIER_TS12_COMPATIBILITY is enabled", () => {
+    expect(() =>
+      validateCs02TransactionDataEntries(
+        [
+          encodeTxData({
+            type: "urn:eudi:sca:payment:1",
+            credential_ids: ["cmwallet"],
+            payload: { transaction_id: "tx-1" },
+          }),
+        ],
+        validDcqlQuery(),
+        { strict: true, allowTs12TransactionData: true },
       ),
     ).to.not.throw();
   });

@@ -110,6 +110,29 @@ describe("wallet-client crypto building blocks", () => {
     expect(payload).to.have.property("nonce", nonce);
   });
 
+  it("createProofJwt merges extra payload claims when provided", async () => {
+    const { privateJwk, publicJwk } = await ensureOrCreateEcKeyPair(undefined, "ES256");
+    const proofJwt = await createProofJwt({
+      privateJwk,
+      publicJwk,
+      audience: "https://verifier.example.com",
+      nonce: "test-nonce",
+      issuer: "did:jwk:example",
+      typ: "kb+jwt",
+      alg: "ES256",
+      extraPayloadClaims: {
+        response_mode: "direct_post",
+        transaction_data_hashes: ["hash-1"],
+        transaction_data_hashes_alg: ["sha-256"],
+      },
+    });
+
+    const payload = decodeJwt(proofJwt);
+    expect(payload).to.have.property("response_mode", "direct_post");
+    expect(payload).to.have.property("transaction_data_hashes").that.deep.equals(["hash-1"]);
+    expect(payload).to.have.property("transaction_data_hashes_alg").that.deep.equals(["sha-256"]);
+  });
+
   it("createOAuthClientAttestationJwt MUST use oauth-client-attestation+jwt typ and public cnf.jwk", async () => {
     const { privateJwk, publicJwk } = await ensureOrCreateEcKeyPair(undefined, "ES256");
     const jwt = await createOAuthClientAttestationJwt({

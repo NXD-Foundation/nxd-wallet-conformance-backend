@@ -31,6 +31,9 @@ export const CS02_SUPPORTED_TRANSACTION_DATA_TYPES = new Set([
   "payment_data",
   "https://cloudsignatureconsortium.org/2025/qes",
 ]);
+export const TS12_SUPPORTED_TRANSACTION_DATA_TYPES = new Set([
+  "urn:eudi:sca:payment:1",
+]);
 export const CS02_ADVERTISED_VP_FORMATS = new Set(["dc+sd-jwt", "vc+sd-jwt", "mso_mdoc"]);
 
 export class Cs02VerifierRequestError extends Error {
@@ -49,11 +52,13 @@ function truthyEnv(value) {
 
 export function resolveVerifierCs02Options(env = process.env) {
   const compatibility = truthyEnv(env.VERIFIER_CS02_COMPATIBILITY ?? env.CS02_COMPATIBILITY);
+  const ts12Compatibility = truthyEnv(env.VERIFIER_TS12_COMPATIBILITY);
   return {
     strict: !compatibility,
     allowRs256Jar: compatibility,
     allowUnsignedRedirectUriJar: compatibility,
     allowLegacyOpenId4VpInvocation: compatibility,
+    allowTs12TransactionData: compatibility || ts12Compatibility,
   };
 }
 
@@ -152,9 +157,16 @@ export function validateCs02TransactionDataEntries(transactionData, dcqlQuery, o
       );
     }
 
+    const supportedTypes = new Set(CS02_SUPPORTED_TRANSACTION_DATA_TYPES);
+    if (options.allowTs12TransactionData) {
+      for (const type of TS12_SUPPORTED_TRANSACTION_DATA_TYPES) {
+        supportedTypes.add(type);
+      }
+    }
+
     if (
       options.strict &&
-      !CS02_SUPPORTED_TRANSACTION_DATA_TYPES.has(decoded.type)
+      !supportedTypes.has(decoded.type)
     ) {
       throw new Cs02VerifierRequestError(
         `Unsupported transaction_data type "${decoded.type}"`,

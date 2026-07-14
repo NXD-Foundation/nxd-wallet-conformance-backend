@@ -35,6 +35,7 @@ export async function createProofJwt({
   alg = "ES256",
   key_attestation = null,
   sdJwt = null,
+  extraPayloadClaims = null,
 }) {
   const header = { alg, typ, jwk: publicJwk };
   if (key_attestation) {
@@ -61,6 +62,10 @@ export async function createProofJwt({
     const hash = crypto.createHash("sha256").update(sdJwtBytes).digest();
     const sdHash = base64url(hash);
     payload.sd_hash = sdHash;
+  }
+
+  if (extraPayloadClaims && typeof extraPayloadClaims === "object" && !Array.isArray(extraPayloadClaims)) {
+    Object.assign(payload, extraPayloadClaims);
   }
 
   const key = await importJWK(privateJwk, alg);
@@ -291,4 +296,3 @@ function publicJwkWithoutPrivateMaterial(jwk) {
   delete publicJwk.oth;
   return publicJwk;
 }
-

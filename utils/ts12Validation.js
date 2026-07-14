@@ -1,4 +1,5 @@
 import { computeTs12TransactionDataHash, TS12_PAYMENT_VCT } from "./ts12PaymentUtils.js";
+const TS12_TRANSACTION_HASH_ALG = "sha-256";
 
 const TS12_AMR_VALUES = {
   knowledge: new Set([
@@ -130,6 +131,23 @@ export function validateTs12KeyBindingJwt({
       ok: false,
       code: "missing_transaction_data_hashes",
       error: "Key Binding JWT is missing transaction_data_hashes",
+    };
+  }
+
+  const txHashAlgs = kbPayload.transaction_data_hashes_alg;
+  if (!Array.isArray(txHashAlgs) || txHashAlgs.length === 0) {
+    return {
+      ok: false,
+      code: "missing_transaction_data_hashes_alg",
+      error: "Key Binding JWT is missing transaction_data_hashes_alg",
+    };
+  }
+
+  if (!txHashAlgs.includes(TS12_TRANSACTION_HASH_ALG)) {
+    return {
+      ok: false,
+      code: "unsupported_transaction_data_hashes_alg",
+      error: `Key Binding JWT transaction_data_hashes_alg must include '${TS12_TRANSACTION_HASH_ALG}'`,
     };
   }
 

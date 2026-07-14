@@ -2197,7 +2197,12 @@ async function validateAndStoreCredential({ configurationId, credential, issuerM
   await storeWalletCredentialByType(configurationId, {
     credential,
     keyBinding,
-    metadata: { ...metadata, format: detectedFormat, doctype: detectedDoctype },
+    metadata: {
+      ...metadata,
+      format: detectedFormat,
+      doctype: detectedDoctype,
+      credentialConfiguration,
+    },
   });
 }
 

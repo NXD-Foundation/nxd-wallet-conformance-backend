@@ -34,6 +34,10 @@ import {
 } from "./sdJwtDisclosureSelection.js";
 import { resolvePresentationKeyBinding } from "./presentationKeyBinding.js";
 import {
+  buildTs12ProofClaims,
+  resolveTs12TransactionDataForCredential,
+} from "./ts12Presentation.js";
+import {
   OPENID4VP_PRESENT_HOST,
   isOpenId4VpPresentInvocation,
 } from "./openid4vpUri.js";
@@ -507,6 +511,14 @@ async function buildPresentableVpTokenForSelection({
     );
   }
 
+  const ts12Context = matchedQuery
+    ? resolveTs12TransactionDataForCredential({
+      transactionData: payload?.transaction_data,
+      credentialQueryId: matchedQuery.id,
+      stored,
+    })
+    : null;
+
   const kbJwt = await createProofJwt({
     privateJwk,
     publicJwk,
@@ -516,6 +528,12 @@ async function buildPresentableVpTokenForSelection({
     typ: isSdJwt ? "kb+jwt" : "openid4vp-proof+jwt",
     alg: presentationAlg,
     sdJwt: isSdJwt ? vpToken : undefined,
+    extraPayloadClaims: ts12Context
+      ? buildTs12ProofClaims({
+        encodedTransactionData: ts12Context.encodedTransactionData,
+        responseMode: payload?.response_mode || "direct_post",
+      })
+      : null,
   });
 
   if (cs02Options?.strict && isSdJwt) {
@@ -1094,6 +1112,21 @@ export async function performPresentation(
       typ: isSdJwt ? "kb+jwt" : "openid4vp-proof+jwt",
       alg: presentationAlg,
       sdJwt: isSdJwt ? vpToken : undefined,
+      extraPayloadClaims: matchedDcqlQuery
+        ? (() => {
+          const ts12Context = resolveTs12TransactionDataForCredential({
+            transactionData: payload?.transaction_data,
+            credentialQueryId: matchedDcqlQuery.id,
+            stored,
+          });
+          return ts12Context
+            ? buildTs12ProofClaims({
+              encodedTransactionData: ts12Context.encodedTransactionData,
+              responseMode: payload?.response_mode || "direct_post",
+            })
+            : null;
+        })()
+        : null,
     });
     responseSigner = {
       privateJwk,
