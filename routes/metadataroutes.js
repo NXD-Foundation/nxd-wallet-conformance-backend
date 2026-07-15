@@ -6,6 +6,7 @@ import { pemToBase64Der } from "../utils/sdjwtUtils.js";
 import {
   PROXY_PATH,
   buildOpenIdVerifierMetadataDocument,
+  buildRfc002VerifierMetadataDocument,
   getPublicIssuerBaseUrl,
 } from "../utils/routeUtils.js";
 import { buildIssuerInfo } from "../utils/issuerInfo.js";
@@ -147,6 +148,20 @@ metadataRouter.get("/.well-known/openid-verifier-metadata", (req, res) => {
     res.status(500).type("application/json").json({
       error: "server_error",
       error_description: err?.message || "Failed to build verifier metadata",
+    });
+  }
+});
+
+metadataRouter.get("/client-metadata/rfc002", (req, res) => {
+  try {
+    const serverURL = getPublicIssuerBaseUrl(req);
+    res.type("application/json").json(
+      buildRfc002VerifierMetadataDocument({ serverURL }),
+    );
+  } catch (err) {
+    res.status(500).type("application/json").json({
+      error: "server_error",
+      error_description: err?.message || "Failed to build RFC002 verifier metadata",
     });
   }
 });

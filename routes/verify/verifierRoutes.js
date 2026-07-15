@@ -55,6 +55,10 @@ import {
 } from "../../utils/cs03Validation.js";
 import { evaluateDirectPostJwtStateCorrelation } from "../../utils/vpSessionCorrelation.js";
 import { validateSdJwtKeyBindingMatchesCredential } from "../../utils/sdJwtKeyBinding.js";
+import {
+  validateDcqlClaims,
+  validateMdocDcqlClaims,
+} from "../../utils/dcqlClaimValidation.js";
 
 const getSessionTranscriptBytes = (
   oid4vpData,
@@ -606,7 +610,11 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
         const claims = mdocResult.claims;
 
         // Validate that extracted claims match what was requested
-        if (vpSession.sdsRequested && !validateMdlClaims(claims, vpSession.sdsRequested)) {
+        const mdocDcqlValidation = validateMdocDcqlClaims(claims, vpSession.dcql_query);
+        if (
+          (vpSession.sdsRequested && !validateMdlClaims(claims, vpSession.sdsRequested)) ||
+          !mdocDcqlValidation.ok
+        ) {
           const receivedClaims = Object.keys(claims || {});
           const requestedClaims = vpSession.sdsRequested;
           await logError(sessionId, "mDL claims do not match what was requested", {
@@ -631,7 +639,7 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
             res,
             400,
             VErr.FAILED_VALIDATION,
-            `mDL claims mismatch. Received: [${receivedClaims.join(', ')}], expected: [${JSON.stringify(requestedClaims)}]`,
+            `mDL claims mismatch. Received: [${receivedClaims.join(', ')}], expected: [${JSON.stringify(requestedClaims)}]. ${mdocDcqlValidation.errors.join("; ")}`,
             { sub_error: "claims_mismatch" },
           );
         }
@@ -881,7 +889,11 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
         const claims = mdocResult.claims;
 
         // Validate that extracted claims match what was requested
-        if (vpSession.sdsRequested && !validateMdlClaims(claims, vpSession.sdsRequested)) {
+        const mdocDcqlValidation = validateMdocDcqlClaims(claims, vpSession.dcql_query);
+        if (
+          (vpSession.sdsRequested && !validateMdlClaims(claims, vpSession.sdsRequested)) ||
+          !mdocDcqlValidation.ok
+        ) {
           const receivedClaims = Object.keys(claims || {});
           const requestedClaims = vpSession.sdsRequested;
           await logError(sessionId, "mDL claims mismatch in HAIP dc_api.jwt processing", {
@@ -894,7 +906,7 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
             res,
             400,
             VErr.FAILED_VALIDATION,
-            `mDL claims mismatch. Received: [${receivedClaims.join(', ')}], expected: [${JSON.stringify(requestedClaims)}]`,
+            `mDL claims mismatch. Received: [${receivedClaims.join(', ')}], expected: [${JSON.stringify(requestedClaims)}]. ${mdocDcqlValidation.errors.join("; ")}`,
             { sub_error: "claims_mismatch" },
           );
         }
@@ -1330,9 +1342,14 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
                 `mDL verification failed: ${mdocResult.error}`,
               );
             }
+            const mdocDcqlValidation = validateMdocDcqlClaims(
+              mdocResult.claims,
+              vpSession.dcql_query,
+            );
             if (
-              vpSession.sdsRequested &&
-              !validateMdlClaims(mdocResult.claims, vpSession.sdsRequested)
+              (vpSession.sdsRequested &&
+                !validateMdlClaims(mdocResult.claims, vpSession.sdsRequested)) ||
+              !mdocDcqlValidation.ok
             ) {
               const receivedClaims = Object.keys(mdocResult.claims || {});
               await logError(sessionId, "mDL claims mismatch (direct_post.jwt)", {
@@ -1352,7 +1369,7 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
                 res,
                 400,
                 VErr.FAILED_VALIDATION,
-                `mDL claims mismatch`,
+                `mDL claims mismatch. ${mdocDcqlValidation.errors.join("; ")}`,
                 { sub_error: "claims_mismatch" },
               );
             }
@@ -1523,9 +1540,14 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
                 `mDL verification failed: ${mdocResult.error}`,
               );
             }
+            const mdocDcqlValidation = validateMdocDcqlClaims(
+              mdocResult.claims,
+              vpSession.dcql_query,
+            );
             if (
-              vpSession.sdsRequested &&
-              !validateMdlClaims(mdocResult.claims, vpSession.sdsRequested)
+              (vpSession.sdsRequested &&
+                !validateMdlClaims(mdocResult.claims, vpSession.sdsRequested)) ||
+              !mdocDcqlValidation.ok
             ) {
               const receivedClaims = Object.keys(mdocResult.claims || {});
               await logError(sessionId, "mDL claims mismatch (direct_post.jwt unencrypted)", {
@@ -1545,7 +1567,7 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
                 res,
                 400,
                 VErr.FAILED_VALIDATION,
-                `mDL claims mismatch`,
+                `mDL claims mismatch. ${mdocDcqlValidation.errors.join("; ")}`,
                 { sub_error: "claims_mismatch" },
               );
             }
@@ -1892,9 +1914,16 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
         }
 
         // Process claims as before
-        if (vpSession.sdsRequested && !hasOnlyAllowedFields(claimsFromExtraction, vpSession.sdsRequested)) {
+        const dcqlValidation = validateDcqlClaims(
+          claimsFromExtraction,
+          vpSession.dcql_query?.credentials?.flatMap((credential) => credential?.claims || []) || [],
+        );
+        if (
+          (vpSession.sdsRequested && !hasOnlyAllowedFields(claimsFromExtraction, vpSession.sdsRequested)) ||
+          !dcqlValidation.ok
+        ) {
           const receivedClaims = JSON.stringify(claimsFromExtraction);
-          const requestedClaims = JSON.stringify(vpSession.sdsRequested);
+          const requestedClaims = JSON.stringify(vpSession.sdsRequested || vpSession.dcql_query);
           // Mark session as failed
           try {
             vpSession.status = "failed";
@@ -1911,7 +1940,7 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
             res,
             400,
             VErr.FAILED_VALIDATION,
-            `Claims mismatch. Received: ${receivedClaims}, expected: ${requestedClaims}`,
+            `Claims mismatch. Received: ${receivedClaims}, expected: ${requestedClaims}${dcqlValidation.errors.length ? `. ${dcqlValidation.errors.join("; ")}` : ""}`,
             { sub_error: "claims_mismatch" },
           );
         }
@@ -2643,9 +2672,16 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
 
       await logInfo(sessionId, "Nonce verification successful");
 
-      if (vpSession.sdsRequested && !hasOnlyAllowedFields(claimsFromExtraction, vpSession.sdsRequested)) {
+      const dcqlValidation = validateDcqlClaims(
+        claimsFromExtraction,
+        vpSession.dcql_query?.credentials?.flatMap((credential) => credential?.claims || []) || [],
+      );
+      if (
+        (vpSession.sdsRequested && !hasOnlyAllowedFields(claimsFromExtraction, vpSession.sdsRequested)) ||
+        !dcqlValidation.ok
+      ) {
         const receivedClaims = JSON.stringify(claimsFromExtraction);
-        const requestedClaims = JSON.stringify(vpSession.sdsRequested);
+        const requestedClaims = JSON.stringify(vpSession.sdsRequested || vpSession.dcql_query);
         // Mark session as failed
         try {
           vpSession.status = "failed";
@@ -2662,7 +2698,7 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
           res,
           400,
           VErr.FAILED_VALIDATION,
-          `Claims mismatch. Received: ${receivedClaims}, expected: ${requestedClaims}`,
+          `Claims mismatch. Received: ${receivedClaims}, expected: ${requestedClaims}${dcqlValidation.errors.length ? `. ${dcqlValidation.errors.join("; ")}` : ""}`,
           { sub_error: "claims_mismatch" },
         );
       }

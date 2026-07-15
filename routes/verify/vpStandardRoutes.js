@@ -24,6 +24,7 @@ import {
   resolvePidVpInvocationScheme,
   loadVerifierClientMetadataForRequests,
   normalizedVpSessionIdFromQuery,
+  assertRfc002DidClientId,
 } from "../../utils/routeUtils.js";
 import {
   logInfo,
@@ -188,6 +189,7 @@ vpStandardRouter.get("/vp/request", async (req, res) => {
     } else if (clientIdScheme === "did:web") {
       const didIdentifiers = generateDidIdentifiers(CONFIG.SERVER_URL);
       clientId = didIdentifiers.client_id;
+      if (isRfc002Profile) assertRfc002DidClientId(clientId);
       kid = didIdentifiers.kid;
       privateKey = fs.readFileSync("./didjwks/did_private_pkcs8.key", "utf8");
       routePath = "/vp/didVPrequest";
@@ -196,6 +198,7 @@ vpStandardRouter.get("/vp/request", async (req, res) => {
       const didJwkIdentifier = generateDidJwkIdentifier(didJwkPrivateKey);
       const didJwkIdentifiers = generateDidJwkIdentifiers(didJwkIdentifier);
       clientId = didJwkIdentifiers.client_id;
+      if (isRfc002Profile) assertRfc002DidClientId(clientId);
       kid = didJwkIdentifiers.kid;
       privateKey = didJwkPrivateKey;
       routePath = "/vp/didJwkVPrequest";

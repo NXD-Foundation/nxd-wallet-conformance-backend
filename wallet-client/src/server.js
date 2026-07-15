@@ -36,6 +36,7 @@ import {
   postCredentialRequest,
   pollDeferredCredential,
   buildIssuanceAuthorizationFields,
+  assertAuthorizationDetailsSupportForCredentialRequest,
   resolveWalletInstanceClientId,
 } from "./lib/issuance.js";
 import { jwtVerify, decodeJwt, decodeProtectedHeader, createLocalJWKSet, importJWK, importX509 } from "jose";
@@ -656,7 +657,7 @@ async function discoverIssuerMetadata(credentialIssuerBase, logSessionId) {
   console.log("[issuer-meta] trying candidates:", candidates); try { slog("[issuer-meta] candidates", { candidates }); } catch {}
   for (const url of candidates) {
     try {
-      const res = await fetch(url);
+      const res = await fetch(url, { headers: { Accept: "application/json" } });
       console.log("[issuer-meta]", url, "->", res.status); try { slog("[issuer-meta] fetch", { url, status: res.status }); } catch {}
       if (res.ok) {
         const { meta: parsedMeta, debug } = await parseIssuerMetadataHttpResponse(res);
@@ -719,7 +720,7 @@ async function discoverAuthorizationServerMetadata(authorizationServerBase, logS
   console.log("[as-meta] trying candidates:", candidates); try { slog("[as-meta] candidates", { candidates }); } catch {}
   for (const url of candidates) {
     try {
-      const res = await fetch(url);
+      const res = await fetch(url, { headers: { Accept: "application/json" } });
       console.log("[as-meta]", url, "->", res.status); try { slog("[as-meta] fetch", { url, status: res.status }); } catch {}
       if (res.ok) { 
         console.log("[as-meta] selected:", url); 
@@ -778,7 +779,7 @@ function validateAuthorizationServerMetadata(meta) {
   // https://www.ietf.org/archive/id/draft-ietf-oauth-attestation-based-client-auth-07.html#section-10.1).
   // If it's missing, we treat the AS metadata as incompatible and abort
   // the flow early.
-  if (!methods.includes("attest_jwt_client_auth")) {
+  if (!Array.isArray(methods) || !methods.includes("attest_jwt_client_auth")) {
     try {
       console.error(
         "[as-meta] missing required 'attest_jwt_client_auth' in token_endpoint_auth_methods_supported; " +
@@ -813,13 +814,19 @@ function validateAuthorizationServerMetadata(meta) {
     );
   }
 
-  // We expect at least the "openid" scope to be advertised. Additional scopes are fine.
-  const scopes = meta.scopes_supported;
-  if (!Array.isArray(scopes) || !scopes.includes("openid")) {
+  if (meta.scopes_supported != null && !Array.isArray(meta.scopes_supported)) {
     throw new Error(
-      "invalid_as_metadata: 'scopes_supported' must be an array including 'openid'"
+      "invalid_as_metadata: 'scopes_supported' must be an array when present"
     );
-  } 
+  }
+  if (
+    meta.authorization_details_types_supported != null &&
+    !Array.isArray(meta.authorization_details_types_supported)
+  ) {
+    throw new Error(
+      "invalid_as_metadata: 'authorization_details_types_supported' must be an array when present"
+    );
+  }
 
   // Authorization Code grant is required for code flow tests.
   const grants = meta.grant_types_supported;
@@ -995,6 +1002,7 @@ async function runPreAuthorizedIssuance(
     throw new Error("tx_code_required: offer indicates tx_code; provide 'pin' in request body");
   }
   let tokenEndpoint = issuerMeta.token_endpoint || null;
+  let authorizationServerMeta = null;
   let authorizationServerIssuer = deriveAuthorizationServerIssuer(tokenEndpoint, issuerMeta.credential_issuer || apiBase);
   // If token_endpoint is not in issuer metadata, try authorization server metadata per RFC 8414
   if (!tokenEndpoint) {
@@ -1042,6 +1050,7 @@ async function runPreAuthorizedIssuance(
     
     try {
       const asMeta = await discoverAuthorizationServerMetadata(asBase, logSessionId);
+      authorizationServerMeta = asMeta;
       tokenEndpoint = asMeta.token_endpoint;
       authorizationServerIssuer = deriveAuthorizationServerIssuer(tokenEndpoint, asMeta.issuer || asBase);
       if (!tokenEndpoint) {
@@ -1079,6 +1088,25 @@ async function runPreAuthorizedIssuance(
     grantType: "urn:ietf:params:oauth:grant-type:pre-authorized_code",
     credentialIssuer: issuerMeta?.credential_issuer || apiBase,
   });
+  if (!scope && !authorizationServerMeta) {
+    const authorizationServers = Array.isArray(issuerMeta.authorization_servers)
+      ? issuerMeta.authorization_servers
+      : issuerMeta.authorization_server
+        ? [issuerMeta.authorization_server]
+        : [];
+    const asBase = authorizationServer || authorizationServers[0] || issuerMeta.credential_issuer || apiBase;
+    if (authorizationServer && authorizationServers.length > 0 && !authorizationServers.includes(authorizationServer)) {
+      throw new Error("invalid_authorization_server: grant authorization_server must match issuer metadata");
+    }
+    authorizationServerMeta = await discoverAuthorizationServerMetadata(asBase, logSessionId);
+  }
+  assertAuthorizationDetailsSupportForCredentialRequest({
+    configurationId,
+    issuerMeta,
+    offer,
+    grantType: "urn:ietf:params:oauth:grant-type:pre-authorized_code",
+    authorizationServerMeta,
+  });
   try {
     slog("[preauth] authorization fields", { walletClientId, scope, configurationId });
   } catch {}
@@ -1088,7 +1116,7 @@ async function runPreAuthorizedIssuance(
       grant_type: "urn:ietf:params:oauth:grant-type:pre-authorized_code",
       "pre-authorized_code": preAuthorizedCode,
       client_id: walletClientId,
-      scope,
+      ...(scope ? { scope } : {}),
       ...(txCode ? { tx_code: txCode } : {}),
       authorization_details,
     },
@@ -1272,6 +1300,7 @@ async function runAuthorizationCodeIssuance(
   // Discover authorization server metadata to enable PAR when available
   let authorizeEndpoint = issuerMeta.authorization_endpoint || null;
   let tokenEndpointFromAS = null;
+  let authorizationServerMeta = null;
   let parEndpoint = null;
   let requirePushedAuthorizationRequests = false;
   let authorizationServerIssuer = issuerMeta.credential_issuer || apiBase;
@@ -1320,6 +1349,7 @@ async function runAuthorizationCodeIssuance(
   
   try {
     const asMeta = await discoverAuthorizationServerMetadata(asBase, logSessionId);
+    authorizationServerMeta = asMeta;
     authorizeEndpoint = authorizeEndpoint || asMeta.authorization_endpoint;
     tokenEndpointFromAS = asMeta.token_endpoint || null;
     parEndpoint = asMeta.pushed_authorization_request_endpoint || null;
@@ -1351,6 +1381,13 @@ async function runAuthorizationCodeIssuance(
     grantType: "authorization_code",
     credentialIssuer: issuerMeta?.credential_issuer || apiBase,
   });
+  assertAuthorizationDetailsSupportForCredentialRequest({
+    configurationId,
+    issuerMeta,
+    offer,
+    grantType: "authorization_code",
+    authorizationServerMeta,
+  });
   try {
     slog("[codeflow] authorization fields", { walletClientId, scope, configurationId });
   } catch {}
@@ -1362,7 +1399,7 @@ async function runAuthorizationCodeIssuance(
     redirect_uri: redirectUri,
     code_challenge: codeChallenge,
     code_challenge_method: codeChallengeMethod,
-    scope,
+    ...(scope ? { scope } : {}),
     authorization_details,
   };
 
@@ -2279,6 +2316,3 @@ async function verifyJwsWithDid(jws, header, didOrIss) {
   }
   throw lastErr || new Error('DID verification failed');
 }
-
-
-

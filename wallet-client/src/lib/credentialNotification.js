@@ -65,7 +65,7 @@ export async function postCredentialAcceptedNotification({
 
   const headers = {
     "content-type": "application/json",
-    Authorization: `Bearer ${accessToken}`,
+    Authorization: `${dpopJwt ? "DPoP" : "Bearer"} ${accessToken}`,
     ...(dpopJwt ? { DPoP: dpopJwt } : {}),
   };
 

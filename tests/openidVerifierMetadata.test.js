@@ -4,7 +4,9 @@ import request from 'supertest';
 import express from 'express';
 import metadataRouter from '../routes/metadataroutes.js';
 import {
+  assertRfc002DidClientId,
   buildOpenIdVerifierMetadataDocument,
+  buildRfc002VerifierMetadataDocument,
   loadConfigurationFiles,
   loadVerifierClientMetadataForRequests,
   OPENID_VERIFIER_METADATA_WELL_KNOWN_PATH,
@@ -41,6 +43,22 @@ describe('OpenID Verifier metadata (RFC002 §8.4)', () => {
     const doc = buildOpenIdVerifierMetadataDocument({ serverURL: SERVER_URL });
     expect(doc.verifier_info?.verifier_id).to.be.a('string');
     expect(doc.jwks?.keys?.length).to.be.at.least(2);
+  });
+
+  it('publishes a narrow RFC002 client metadata projection', async () => {
+    const app = express();
+    app.use('/', metadataRouter);
+    const res = await request(app).get('/client-metadata/rfc002').expect(200);
+    expect(Object.keys(res.body.vp_formats_supported)).to.have.members(['dc+sd-jwt', 'mso_mdoc']);
+    expect(res.body.response_modes_supported).to.include('direct_post.jwt');
+
+    const doc = buildRfc002VerifierMetadataDocument({ serverURL: SERVER_URL });
+    expect(Object.keys(doc.vp_formats_supported)).to.have.members(['dc+sd-jwt', 'mso_mdoc']);
+  });
+
+  it('requires the OpenID4VP decentralized identifier prefix for DID verifier ids', () => {
+    expect(() => assertRfc002DidClientId('did:web:example.org')).to.throw('decentralized_identifier');
+    expect(() => assertRfc002DidClientId('decentralized_identifier:did:web:example.org')).to.not.throw();
   });
 
   it('loadVerifierClientMetadataForRequests sets client_metadata_uri', () => {

@@ -49,13 +49,16 @@ export function buildIssuanceAuthorizationFields({
     grantType,
   });
   return {
-    scope,
+    ...(scope ? { scope } : {}),
     authorizationDetails,
     authorization_details: JSON.stringify(authorizationDetails),
   };
 }
 
-export { resolveScopeForCredentialConfiguration } from "./scopeResolution.js";
+export {
+  resolveScopeForCredentialConfiguration,
+  assertAuthorizationDetailsSupportForCredentialRequest,
+} from "./scopeResolution.js";
 export { resolveWalletInstanceClientId } from "./walletClientId.js";
 
 export function selectProofSigningAlg(issuerMeta, configurationId) {
@@ -343,7 +346,7 @@ export async function postCredentialRequest({
     method: "POST",
     headers: {
       "content-type": "application/json",
-      authorization: `Bearer ${accessToken}`,
+      authorization: `${credentialDpopJwt ? "DPoP" : "Bearer"} ${accessToken}`,
       ...(credentialDpopJwt ? { DPoP: credentialDpopJwt } : {}),
     },
     body: JSON.stringify(credentialRequest),
@@ -423,7 +426,7 @@ export async function pollDeferredCredential({
       deferredEndpoint,
       { transaction_id: transactionId },
       deferredDpopJwt,
-      { Authorization: `Bearer ${accessToken}` },
+      { Authorization: `${deferredDpopJwt ? "DPoP" : "Bearer"} ${accessToken}` },
     );
     const responseText = await response.text().catch(() => "");
     const contentType = response.headers.get("content-type") || "";

@@ -1941,7 +1941,7 @@ describe('Shared Issuance Flows', () => {
 
       const res = await request(app)
         .post('/credential')
-        .set('Authorization', `Bearer ${accessToken}`)
+        .set('Authorization', `DPoP ${accessToken}`)
         .set('DPoP', dpopJwt)
         .send({
           credential_configuration_id: 'test-cred-config',

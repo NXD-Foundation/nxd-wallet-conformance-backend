@@ -296,6 +296,39 @@ export function buildOpenIdVerifierMetadataDocument(options = {}) {
   };
 }
 
+/** A profile-specific metadata projection for RFC002/DCQL verifier requests. */
+export function buildRfc002VerifierMetadataDocument(options = {}) {
+  const metadata = buildOpenIdVerifierMetadataDocument(options);
+  const supportedFormats = new Set(["dc+sd-jwt", "mso_mdoc"]);
+  const vpFormats = Object.fromEntries(
+    Object.entries(metadata.vp_formats_supported || {}).filter(([format]) =>
+      supportedFormats.has(format),
+    ),
+  );
+  return {
+    ...metadata,
+    client_id_schemes_supported: (metadata.client_id_schemes_supported || [])
+      .filter((scheme) => ["x509_hash", "x509_san_dns"].includes(scheme)),
+    vp_formats_supported: vpFormats,
+    response_modes_supported: ["direct_post", "direct_post.jwt", "dc_api", "dc_api.jwt"],
+  };
+}
+
+/** OpenID4VP requires DID client identifiers to use the registered prefix. */
+export function assertRfc002DidClientId(clientId) {
+  if (typeof clientId !== "string") return;
+  if (clientId.startsWith("did:web:") || clientId.startsWith("did:jwk:")) {
+    throw new Error(
+      'RFC002 DID client_id values must use the "decentralized_identifier:" prefix',
+    );
+  }
+  if (!clientId.startsWith("decentralized_identifier:")) return;
+  const did = clientId.substring("decentralized_identifier:".length);
+  if (!did.startsWith("did:web:") && !did.startsWith("did:jwk:")) {
+    throw new Error("RFC002 supports did:web and did:jwk inside decentralized_identifier client_id values");
+  }
+}
+
 /**
  * Load primary verifier-config.json, validate encryption material, attach client_metadata_uri.
  * @param {string} [serverURL]

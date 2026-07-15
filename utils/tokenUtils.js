@@ -36,6 +36,66 @@ export function buildAccessToken(issuerURL, privateKey, cnf = null) {
   return token;
 }
 
+/** Whether a JWT access token is sender-constrained through a DPoP `cnf.jkt`. */
+export function isDpopBoundAccessTokenJwt(accessToken) {
+  try {
+    const decoded = jwt.decode(accessToken, { complete: true });
+    return Boolean(decoded?.payload?.cnf?.jkt);
+  } catch {
+    return false;
+  }
+}
+
+/** Parse the authorization scheme accepted by OIDC4VCI protected resources. */
+export function parseResourceAuthorizationHeader(authHeader) {
+  if (typeof authHeader !== "string" || !authHeader.trim()) {
+    return {
+      ok: false,
+      status: 401,
+      error: "invalid_token",
+      error_description: "Missing Authorization header",
+    };
+  }
+
+  const match = authHeader.match(/^(Bearer|DPoP)\s+(\S+)\s*$/i);
+  if (!match) {
+    return {
+      ok: false,
+      status: 401,
+      error: "invalid_token",
+      error_description:
+        "Missing or invalid Authorization header. Expected: DPoP <access_token> or Bearer <access_token>",
+    };
+  }
+
+  return {
+    ok: true,
+    scheme: match[1].toLowerCase() === "dpop" ? "DPoP" : "Bearer",
+    accessToken: match[2],
+  };
+}
+
+/** RFC 9449 prohibits presenting a DPoP-bound token using the Bearer scheme. */
+export function parseAndValidateResourceAuthorizationHeader(authHeader) {
+  const parsed = parseResourceAuthorizationHeader(authHeader);
+  if (!parsed.ok) return parsed;
+
+  if (
+    parsed.scheme === "Bearer" &&
+    isDpopBoundAccessTokenJwt(parsed.accessToken)
+  ) {
+    return {
+      ok: false,
+      status: 401,
+      error: "invalid_token",
+      error_description:
+        "DPoP-bound access token must be sent using the DPoP authorization scheme (RFC 9449)",
+    };
+  }
+
+  return parsed;
+}
+
 export function generateRefreshToken(length = 64) {
   return crypto.randomBytes(length).toString("hex");
 }

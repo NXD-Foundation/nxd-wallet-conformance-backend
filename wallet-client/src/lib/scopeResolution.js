@@ -27,9 +27,31 @@ export function resolveScopeForCredentialConfiguration({
     if (fromGrant) return fromGrant;
   }
 
-  throw new Error(
-    `scope_resolution: issuer-defined scope required for credential configuration '${configurationId}'`,
-  );
+  return null;
+}
+
+export function assertAuthorizationDetailsSupportForCredentialRequest({
+  configurationId,
+  issuerMeta = null,
+  offer = null,
+  grantType = null,
+  authorizationServerMeta = null,
+}) {
+  const scope = resolveScopeForCredentialConfiguration({
+    configurationId,
+    issuerMeta,
+    offer,
+    grantType,
+  });
+  if (scope) return { required: false, scope };
+
+  const supported = authorizationServerMeta?.authorization_details_types_supported;
+  if (!Array.isArray(supported) || !supported.includes("openid_credential")) {
+    throw new Error(
+      `authorization_details support is required for scope-less credential configuration '${configurationId}'; authorization_details_types_supported must include 'openid_credential'`,
+    );
+  }
+  return { required: true, scope: null };
 }
 
 export function readScopeFromOfferGrant(offer, grantType) {

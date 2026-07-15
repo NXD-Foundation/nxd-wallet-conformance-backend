@@ -13,6 +13,7 @@ import {
   buildAccessToken,
   generateRefreshToken,
   buildIdToken,
+  parseAndValidateResourceAuthorizationHeader,
 } from "../../utils/tokenUtils.js";
 
 import {
@@ -1743,8 +1744,16 @@ sharedRouter.post("/credential", async (req, res) => {
   
   try {
     const requestBody = await parseCredentialEndpointBody(req);
-    const authHeader = req.headers["authorization"];
-    const token = authHeader && authHeader.split(" ")[1];
+    const authParse = parseAndValidateResourceAuthorizationHeader(
+      req.headers["authorization"],
+    );
+    if (!authParse.ok) {
+      return res.status(authParse.status).json({
+        error: authParse.error,
+        error_description: authParse.error_description,
+      });
+    }
+    const token = authParse.accessToken;
 
     // RFC001 P0-4 / RFC 9449 — sender-constrained access tokens require a DPoP proof at `/credential`
     // before request-shape validation so clients get `invalid_token` / `invalid_dpop_proof` consistently.
@@ -2469,32 +2478,16 @@ sharedRouter.post("/credential_deferred", async (req, res) => {
       });
     }
 
-    const authHeader = req.headers["authorization"];
-    if (!authHeader) {
-      return res.status(401).json({
-        error: "invalid_token",
-        error_description:
-          "Missing Authorization header. Expected: Bearer <access_token> or DPoP <access_token> (RFC 9449).",
+    const authParse = parseAndValidateResourceAuthorizationHeader(
+      req.headers["authorization"],
+    );
+    if (!authParse.ok) {
+      return res.status(authParse.status).json({
+        error: authParse.error,
+        error_description: authParse.error_description,
       });
     }
-    let accessToken;
-    if (authHeader.startsWith("Bearer ")) {
-      accessToken = authHeader.slice(7).trim();
-    } else if (authHeader.startsWith("DPoP ")) {
-      accessToken = authHeader.slice(5).trim();
-    } else {
-      return res.status(401).json({
-        error: "invalid_token",
-        error_description:
-          "Unsupported Authorization scheme. Expected: Bearer or DPoP.",
-      });
-    }
-    if (!accessToken) {
-      return res.status(401).json({
-        error: "invalid_token",
-        error_description: "Empty access token in Authorization header.",
-      });
-    }
+    const accessToken = authParse.accessToken;
 
     const dpopBoundJkt = getDpopBoundJktFromAccessToken(accessToken);
     if (dpopBoundJkt) {
@@ -2765,16 +2758,25 @@ sharedRouter.post("/notification", async (req, res) => {
     }
 
   
-    // Validate Authorization header with Bearer token
-    const authHeader = req.headers["authorization"];
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
-      return res.status(401).json({
-        error: "invalid_token",
-        error_description: "Missing or invalid Authorization header. Expected: Bearer <access_token>",
+    const authParse = parseAndValidateResourceAuthorizationHeader(
+      req.headers["authorization"],
+    );
+    if (!authParse.ok) {
+      return res.status(authParse.status).json({
+        error: authParse.error,
+        error_description: authParse.error_description,
       });
     }
-
-    const accessToken = authHeader.substring(7); // Remove "Bearer " prefix
+    const accessToken = authParse.accessToken;
+    const dpopBoundJkt = getDpopBoundJktFromAccessToken(accessToken);
+    if (dpopBoundJkt) {
+      await validateDpopProofForResourceRequest(
+        req,
+        accessToken,
+        dpopBoundJkt,
+        "/notification",
+      );
+    }
 
     // Find session associated with the access token
     const sessionData = await getSessionFromToken(accessToken);
