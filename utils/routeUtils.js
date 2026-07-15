@@ -808,15 +808,8 @@ export const BOOKING_REFERENCE_PID_DCQL_QUERY = {
       meta: {
         vct_values: ["urn:eu.europa.ec.eudi:pid:1"],
       },
-      claims: [ { path: ["given_name"] },
-      { path: ["family_name"] },
-      { path: ["birth_date"] },
-      { path: ["age_over_18"] },
-      { path: ["issuance_date"] },
-      { path: ["expiry_date"] },
-      { path: ["issuing_authority"] },
-      { path: ["issuing_country"] },],
-        
+      // The booking flow needs a minimal PID attribute for identity matching.
+      claims: [{ path: ["family_name"] }],
     },
   ],
 };
