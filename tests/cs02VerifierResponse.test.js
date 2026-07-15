@@ -228,6 +228,30 @@ describe("CS-02 verifier response validation (Phase 4)", () => {
     ).to.throw(Cs02VerifierResponseError, /Unsupported JWE alg/);
   });
 
+  it("requires the JWE header to match the selected verifier encryption JWK", () => {
+    const metadata = {
+      jwks: {
+        keys: [{
+          kty: "EC",
+          crv: "P-256",
+          use: "enc",
+          kid: "enc-1",
+          alg: "ECDH-ES+A256KW",
+        }],
+      },
+      encrypted_response_alg_values_supported: ["ECDH-ES", "ECDH-ES+A256KW"],
+      encrypted_response_enc_values_supported: ["A256GCM"],
+    };
+    expect(() => validateCs02JweResponseHeader(
+      { alg: "ECDH-ES", enc: "A256GCM", kid: "enc-1" },
+      metadata,
+    )).to.throw(Cs02VerifierResponseError, /selected verifier encryption JWK/);
+    expect(() => validateCs02JweResponseHeader(
+      { alg: "ECDH-ES+A256KW", enc: "A256GCM", kid: "unknown" },
+      metadata,
+    )).to.throw(Cs02VerifierResponseError, /does not identify/);
+  });
+
   it("requires kb+jwt typ in strict key-binding validation", () => {
     expect(() =>
       validateCs02KeyBindingJwtClaims({

@@ -34,6 +34,10 @@ import {
 } from "./sdJwtDisclosureSelection.js";
 import { resolvePresentationKeyBinding } from "./presentationKeyBinding.js";
 import {
+  extractCredentialCnfJwkFromSdJwt,
+  jwkPublicEquals,
+} from "../../../utils/sdJwtKeyBinding.js";
+import {
   buildTs12ProofClaims,
   resolveTs12TransactionDataForCredential,
 } from "./ts12Presentation.js";
@@ -493,6 +497,21 @@ async function buildPresentableVpTokenForSelection({
     alg: presentationAlg,
     source: presentationKeySource,
   } = await resolvePresentationKeyBinding({ stored, keyPath });
+  if (cs02Options?.strict && isSdJwt) {
+    const credentialCnfJwk = extractCredentialCnfJwkFromSdJwt(vpToken);
+    if (!credentialCnfJwk) {
+      throw new Cs02ValidationError(
+        "SD-JWT-VC is missing cnf.jwk required for key binding",
+        "invalid_credential",
+      );
+    }
+    if (!jwkPublicEquals(credentialCnfJwk, publicJwk)) {
+      throw new Cs02ValidationError(
+        "Stored presentation key does not match the SD-JWT-VC cnf.jwk",
+        "invalid_credential",
+      );
+    }
+  }
   try {
     slog("[present] presentation key selected", {
       source: presentationKeySource,
@@ -1372,13 +1391,9 @@ export async function performPresentation(
     }
 
     if ((responseMode || "direct_post") === "direct_post.jwt") {
-      // Build a compact JWT payload and encrypt to JWE if verifier provides JWKS
-      // Wallet signs nothing here to avoid verifier signature mismatch; use JWE per spec branch in verifier
-      let responseJwtOrJwe = null;
+      // OpenID4VP 1.0 Section 8.3 uses an unsigned encrypted JWT whose
+      // plaintext is the Authorization Response JSON object.
       try {
-        if (!responseSigner?.didJwk) {
-          throw new Error("Missing wallet response signing identity for direct_post.jwt");
-        }
         const clientMetadata = resolvedClientMetadata;
         const jwks =
           clientMetadata.jwks ||
@@ -1387,12 +1402,15 @@ export async function performPresentation(
             : null);
         const encKey = jwks?.keys?.find(
           (k) =>
-            (k.use === "enc" || !k.use) &&
-            (k.kty === "EC" || k.kty === "OKP" || k.kty === "RSA"),
+            k?.use === "enc" && k?.kty === "EC" && k?.crv === "P-256" &&
+            typeof k?.kid === "string" && k.kid.length > 0 &&
+            typeof k?.alg === "string" && k.alg.startsWith("ECDH-ES"),
         );
+        if (!encKey) {
+          throw new Error("Verifier did not provide an ECDH-ES P-256 encryption JWK with alg and kid");
+        }
 
-        // Build signed JWT payload per OpenID4VP direct_post.jwt
-        const now = Math.floor(Date.now() / 1000);
+        // JWE plaintext contains top-level Authorization Response parameters.
         let presentationSubmissionObj = undefined;
         if (presentation_submission) {
           try {
@@ -1406,82 +1424,17 @@ export async function performPresentation(
             : {}),
           ...(state ? { state } : {}),
           ...(nonce ? { nonce } : {}),
-          iat: now,
-          exp: now + 300,
-          iss: responseSigner.didJwk,
-          // OID4VP direct_post.jwt aligns with JARM: aud SHOULD be the verifier's client_id
-          aud: clientId || responseUri,
         };
 
-        // Sign with wallet key (ES256)
-        const { importJWK, SignJWT, CompactEncrypt, EncryptJWT } =
-          await import("jose");
-
-        if (encKey) {
-          // Encrypt to JWE so verifier follows its JWE branch
-
-          // Prioritize encryption settings from client_metadata
-          let alg =
-            clientMetadata.authorization_encrypted_response_alg ||
-            encKey.alg ||
-            "ECDH-ES+A256KW";
-          if (alg === "ECDH-ES") alg = "ECDH-ES+A256KW"; // Ensure key wrapping alg is included
-
-          let enc = "A256GCM"; // Default enc
-          if (clientMetadata.authorization_encrypted_response_enc) {
-            enc = clientMetadata.authorization_encrypted_response_enc;
-          } else if (
-            Array.isArray(
-              clientMetadata.encrypted_response_enc_values_supported,
-            )
-          ) {
-            const supportedEnc =
-              clientMetadata.encrypted_response_enc_values_supported;
-            const preferredEnc = supportedEnc.find((e) =>
-              [
-                "A256GCM",
-                "A192GCM",
-                "A128GCM",
-                "A256CBC-HS512",
-                "A192CBC-HS384",
-                "A128CBC-HS256",
-              ].includes(e),
-            );
-            if (preferredEnc) enc = preferredEnc;
-          }
-
-          const publicKey = await importJWK(
-            encKey,
-            alg.startsWith("ECDH-ES") ? "ECDH-ES" : undefined,
-          );
-          const jweProtectedHeader = { alg, enc, kid: encKey.kid };
-          console.log("[present] JWE protected header:", jweProtectedHeader);
-
-          // OID4VP-15: "The Authorization Response is returned as a JSON object, which MUST be encrypted as the payload of a JWE"
-          // Encrypt the JSON payload directly, not a nested signed JWT.
-          responseJwtOrJwe = await new EncryptJWT(jwtPayload)
-            .setProtectedHeader(jweProtectedHeader)
-            .encrypt(publicKey);
-
-          console.log("[present] Created JWE:", responseJwtOrJwe);
-        } else {
-          // Fallback: send signed JWT directly if no enc key is provided
-          if (!responseSigner.privateJwk || !responseSigner.presentationAlg) {
-            throw new Error("Missing wallet response signing key for direct_post.jwt");
-          }
-          const signingKey = await importJWK(responseSigner.privateJwk, responseSigner.presentationAlg);
-          responseJwtOrJwe = await new SignJWT(jwtPayload)
-            .setProtectedHeader({
-              alg: responseSigner.presentationAlg,
-              typ: "JWT",
-              kid: responseSigner.didJwk,
-            })
-            .setIssuer(jwtPayload.iss)
-            .setAudience(jwtPayload.aud)
-            .setIssuedAt(jwtPayload.iat)
-            .setExpirationTime(jwtPayload.exp)
-            .sign(signingKey);
-        }
+        const { importJWK, EncryptJWT } = await import("jose");
+        const advertisedEncs = clientMetadata.encrypted_response_enc_values_supported;
+        const enc = Array.isArray(advertisedEncs) && advertisedEncs.length > 0
+          ? (advertisedEncs.includes("A256GCM") ? "A256GCM" : advertisedEncs[0])
+          : "A128GCM";
+        const publicKey = await importJWK(encKey, encKey.alg);
+        const responseJwtOrJwe = await new EncryptJWT(jwtPayload)
+          .setProtectedHeader({ alg: encKey.alg, enc, kid: encKey.kid })
+          .encrypt(publicKey);
 
         const formParams = new URLSearchParams();
         formParams.append("response", responseJwtOrJwe);
@@ -1489,10 +1442,15 @@ export async function performPresentation(
         bodyContent = formParams.toString();
         contentType = "application/x-www-form-urlencoded";
       } catch (e) {
-        console.log(
-          "[present] Failed to build direct_post.jwt response, falling back to direct_post:",
-          e.message,
+        const errorParams = new URLSearchParams();
+        errorParams.append("error", "invalid_request");
+        errorParams.append(
+          "error_description",
+          `Unable to generate encrypted direct_post.jwt response: ${e.message}`,
         );
+        if (state) errorParams.append("state", state);
+        bodyContent = errorParams.toString();
+        contentType = "application/x-www-form-urlencoded";
       }
     }
 
@@ -1610,7 +1568,7 @@ export async function performPresentation(
     if (!res.ok) {
       // Compatibility fallback for some verifiers expecting JWE payload object instead of JWT inside direct_post.jwt
 
-      if ((responseMode || "direct_post") === "direct_post.jwt") {
+      if ((responseMode || "direct_post") === "direct_post.jwt" && !cs02Options.strict) {
         try {
           console.log(
             "[present] direct_post.jwt failed (" +

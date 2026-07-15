@@ -45,6 +45,7 @@ export const CS02_REQUEST_URI_CONTENT_TYPE = "application/oauth-authz-req+jwt";
 export const CS02_ALLOWED_REQUEST_URI_METHODS = new Set(["get", "post"]);
 export const CS02_DEFAULT_REQUEST_MAX_LIFETIME_SEC = 300;
 export const CS02_DEFAULT_CLOCK_SKEW_SEC = 300;
+export const CS02_NONCE_PATTERN = /^[A-Za-z0-9_-]+$/;
 
 export class Cs02ValidationError extends Error {
   constructor(message, errorCode = "invalid_request") {
@@ -379,6 +380,7 @@ export function validateCs02JarPayload(payload, options, log = () => {}) {
   }
 
   validateCs02ClientId(payload.client_id, log);
+  validateCs02Nonce(payload.nonce, log);
 
   if (payload.client_metadata != null && options.strict) {
     try {
@@ -394,6 +396,17 @@ export function validateCs02JarPayload(payload, options, log = () => {}) {
       throw error;
     }
   }
+}
+
+export function validateCs02Nonce(nonce, log = () => {}) {
+  if (typeof nonce !== "string" || nonce.length === 0 || !CS02_NONCE_PATTERN.test(nonce)) {
+    logValidationFailure(log, "nonce_syntax", { nonceType: typeof nonce });
+    throw new Cs02ValidationError(
+      "Authorization request nonce must be a non-empty base64url string",
+      "invalid_request",
+    );
+  }
+  return nonce;
 }
 
 export function validateCs02ClientId(clientId, log = () => {}) {

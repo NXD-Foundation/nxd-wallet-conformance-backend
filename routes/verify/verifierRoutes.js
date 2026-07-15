@@ -1214,17 +1214,9 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
               primaryVpJwt = vpToken;
             }
           } else if (decrypted && decrypted.vp_token) {
-            // Wallet-specific behavior: JWE decrypted to payload object
-            if (cs02ResponseOptions.strict) {
-              return failVpSessionAndRespond(
-                res,
-                sessionId,
-                vpSession,
-                "invalid_response",
-                "direct_post.jwt JWE plaintext must be a signed response JWT in CS-02 mode",
-              );
-            }
-            await logInfo(sessionId, "Processing payload object from JWE (wallet-specific behavior)");
+            // OpenID4VP 1.0 Section 8.3: JWE plaintext is the Authorization
+            // Response JSON object, not a nested signed JWT.
+            await logInfo(sessionId, "Processing Authorization Response object from JWE");
             await logDebug(sessionId, "Decrypted payload keys", {
               allKeys: Object.keys(decrypted),
               hasNonce: 'nonce' in decrypted,

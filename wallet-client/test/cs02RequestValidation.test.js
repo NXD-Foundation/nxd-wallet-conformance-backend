@@ -13,6 +13,7 @@ import {
   validateCs02RequestUriResponseContentType,
   validateCs02JarHeader,
   validateCs02JarPayload,
+  validateCs02Nonce,
   validateCs02ClientId,
   validateCs02DeepLinkClientIdConsistency,
   validateAndVerifyCs02AuthorizationRequest,
@@ -224,6 +225,16 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
           strictOptions(),
         ),
       ).to.throw(Cs02ValidationError);
+    });
+
+    it("rejects a nonce with non-base64url characters", () => {
+      expect(() => validateCs02Nonce("nonce with spaces")).to.throw(
+        "base64url",
+      );
+      expect(() => validateCs02JarPayload(
+        baseJarPayload({ nonce: "nonce+not-url-safe" }),
+        strictOptions(),
+      )).to.throw(Cs02ValidationError);
     });
 
     it("rejects unsupported client identifier schemes", () => {

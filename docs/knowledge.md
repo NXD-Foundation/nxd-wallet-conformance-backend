@@ -104,6 +104,12 @@ Section 4.5.
   In particular, state/nonce checks, DCQL response shape, transaction-data
   bindings, mdoc claim matching, and SD-JWT key binding each have explicit
   enforcement paths.
+- For strict `direct_post.jwt`, OpenID4VP encrypted-response processing uses
+  an unsigned encrypted JWT whose plaintext is the top-level Authorization
+  Response JSON object. The Wallet selects an `EC`/`P-256`, `use=enc` JWK with
+  both `kid` and `alg`, uses that exact `alg`, prefers `A256GCM`, and returns a
+  protocol error rather than downgrading a successful response if encryption
+  cannot be created.
 - Verifier metadata should use the OpenID4VP 1.0 verifier-metadata model, not
   older `client_metadata` representations.
 
@@ -116,6 +122,8 @@ Sources: [CS-02](./core/cs-02-credential-presentation%20%281%29.md),
 - SD-JWT key-binding JWTs must be signed by the holder key in the issued
   credential's `cnf.jwk`. The verifier checks its signature, `nonce`, `aud`,
   and `sd_hash`.
+- In strict CS-02 presentation, the Wallet also checks that its stored
+  presentation key is the credential's `cnf.jwk` before producing a KB-JWT.
 - For mdoc issuance, construct ISO/IEC 18013-5 `IssuerSigned` and return
   `base64url(CBOR(IssuerSigned))` as the OID4VCI credential value.
 - mdoc metadata claim paths must contain both namespace and element identifier;

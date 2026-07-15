@@ -355,6 +355,12 @@ export async function buildVpRequestJWT(
   });
 
   if (!nonce) nonce = generateNonce(16);
+  if (typeof nonce !== "string" || nonce.length === 0 || !/^[A-Za-z0-9_-]+$/.test(nonce)) {
+    throw new Cs02VerifierRequestError(
+      "CS-02 nonce must be a non-empty base64url string",
+      "invalid_request",
+    );
+  }
   if (!state) {
     // State is REQUIRED for direct_post modes per OpenID4VP spec
     // Generate only if not provided to maintain backwards compatibility with tests
@@ -941,29 +947,12 @@ export async function decryptJWE(jweToken, privateKeyPEM, mode) {
     const decryptedPayload = await jose.jwtDecrypt(jweToken, privateKey);
 
     if (mode === "direct_post.jwt") {
-      // For direct_post.jwt, according to OpenID4VP spec, the JWE should decrypt to a JWT
-      // console.log("Raw decryptedPayload for direct_post.jwt:", decryptedPayload);
-
-      // First, try to get JWT from plaintext (per OpenID4VP spec)
-      if (decryptedPayload.plaintext && decryptedPayload.plaintext.length > 0) {
-        const decryptedJWT = new TextDecoder().decode(
-          decryptedPayload.plaintext
-        );
-        // console.log("Found JWT in plaintext (per OpenID4VP spec):", decryptedJWT.substring(0, 100) + "...");
-        return decryptedJWT; // Return JWT string for verification
-      }
-
-      // Fallback: check if vp_token is directly in payload (wallet-specific behavior)
-      if (decryptedPayload.payload && decryptedPayload.payload.vp_token) {
-        console.log(
-          "Found vp_token in decrypted payload (wallet-specific behavior) DIVERGENT BEHAVIOR"
-        );
+      // OpenID4VP 1.0 Section 8.3 defines a JWE whose plaintext is the
+      // Authorization Response JSON object. EncryptJWT exposes it as payload.
+      if (decryptedPayload.payload && typeof decryptedPayload.payload === "object") {
         return decryptedPayload.payload;
       }
-
-      throw new Error(
-        "No JWT in plaintext or vp_token in payload for direct_post.jwt"
-      );
+      throw new Error("Encrypted direct_post.jwt response has no JSON payload");
     } else if (mode === "dc_api.jwt") {
       console.log("Decrypted JWE payload:", decryptedPayload.payload);
       // For HAIP dc_api.jwt, return the full decrypted payload

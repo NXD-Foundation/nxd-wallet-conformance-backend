@@ -6,6 +6,7 @@ import {
   decodeProtectedHeader,
   decodeJwt,
   importJWK,
+  importX509,
   jwtVerify,
 } from "jose";
 import { createHash } from "crypto";
@@ -345,6 +346,26 @@ export function validateCs02JweResponseHeader(header, clientMetadata = {}) {
   }
   if (!header.kid) {
     throw new Cs02VerifierResponseError("JWE protected header must include kid", "invalid_response");
+  }
+
+  const configuredKeys = clientMetadata?.jwks?.keys;
+  if (Array.isArray(configuredKeys)) {
+    const selectedKey = configuredKeys.find((key) => key?.kid === header.kid);
+    if (!selectedKey) {
+      throw new Cs02VerifierResponseError("JWE kid does not identify a verifier encryption key", "invalid_response");
+    }
+    if (
+      selectedKey.use !== "enc" ||
+      selectedKey.kty !== "EC" ||
+      selectedKey.crv !== "P-256" ||
+      typeof selectedKey.alg !== "string" ||
+      selectedKey.alg !== header.alg
+    ) {
+      throw new Cs02VerifierResponseError(
+        "JWE header does not match the selected verifier encryption JWK",
+        "invalid_response",
+      );
+    }
   }
 }
 
@@ -704,6 +725,17 @@ async function resolveIssuerVerificationKey({ header, payload, options }) {
       return true;
     });
     if (jwk) return importJWK(jwk, header.alg);
+  }
+  if (Array.isArray(header?.x5c) && typeof header.x5c[0] === "string" && header.x5c[0].length > 0) {
+    const leafPem = `-----BEGIN CERTIFICATE-----\n${header.x5c[0].match(/.{1,64}/g).join("\n")}\n-----END CERTIFICATE-----\n`;
+    try {
+      return await importX509(leafPem, header.alg);
+    } catch {
+      throw new Cs02VerifierResponseError(
+        "SD-JWT-VC issuer x5c leaf cannot be used for signature verification",
+        "invalid_credential",
+      );
+    }
   }
   return null;
 }
