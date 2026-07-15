@@ -16,8 +16,9 @@ RUN npm install --omit=dev && npm cache clean --force
 # Copy source code
 COPY src ./src
 
-# Copy utils directory
+# Copy utils and data directories
 COPY utils ./utils
+COPY data ./data
 
 # Copy key/cert and DID materials required at runtime
 COPY didjwks ./didjwks

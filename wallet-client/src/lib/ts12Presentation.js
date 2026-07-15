@@ -1,10 +1,10 @@
-import ts12PaymentSchema from "../../../data/ts12-urn-eudi-sca-payment-1-data-model.json" with { type: "json" };
+import ts12PaymentSchema from "../../data/ts12-urn-eudi-sca-payment-1-data-model.json" with { type: "json" };
 import {
   computeTs12TransactionDataHash,
   TS12_PAYMENT_TRANSACTION_TYPE,
   TS12_PAYMENT_VCT,
   TS12_SCA_CATEGORY,
-} from "../../../utils/ts12PaymentUtils.js";
+} from "../../utils/ts12PaymentUtils.js";
 
 export const TS12_TRANSACTION_HASH_ALGORITHM = "sha-256";
 export const DEFAULT_TS12_AMR = [
@@ -174,6 +174,6 @@ export function buildTs12ProofClaims({
     response_mode: responseMode,
     amr,
     transaction_data_hashes: [computeTs12TransactionDataHash(encodedTransactionData)],
-    transaction_data_hashes_alg: [TS12_TRANSACTION_HASH_ALGORITHM],
+    transaction_data_hashes_alg: TS12_TRANSACTION_HASH_ALGORITHM,
   };
 }

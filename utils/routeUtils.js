@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from "uuid";
 import qr from "qr-image";
 import imageDataURI from "image-data-uri";
 import { streamToBuffer } from "@jorgeferrero/stream-to-buffer";
-import { generateNonce, buildVpRequestJWT } from "./cryptoUtils.js";
+import { generateNonce, buildVpRequestJWT, derBase64ToPemCert } from "./cryptoUtils.js";
 import {
   filterClientMetadataForCs02,
   createOpenId4VpRequestUrl,
@@ -1632,7 +1632,7 @@ export async function verifyWuaJwtSignature(wuaJwt, decodedHeader, issuerMetadat
   try {
     let key;
     if (Array.isArray(decodedHeader?.x5c) && decodedHeader.x5c.length > 0) {
-      key = await jose.importX509(base64DerToPem(decodedHeader.x5c[0]), alg);
+      key = await jose.importX509(derBase64ToPemCert(decodedHeader.x5c[0]), alg);
     } else {
       const verificationJwk = resolveWuaVerificationJwk(decodedHeader, meta);
       key = await jose.importJWK(verificationJwk, alg);

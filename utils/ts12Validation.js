@@ -134,8 +134,8 @@ export function validateTs12KeyBindingJwt({
     };
   }
 
-  const txHashAlgs = kbPayload.transaction_data_hashes_alg;
-  if (!Array.isArray(txHashAlgs) || txHashAlgs.length === 0) {
+  const txHashAlg = kbPayload.transaction_data_hashes_alg;
+  if (txHashAlg == null || txHashAlg === "") {
     return {
       ok: false,
       code: "missing_transaction_data_hashes_alg",
@@ -143,11 +143,19 @@ export function validateTs12KeyBindingJwt({
     };
   }
 
-  if (!txHashAlgs.includes(TS12_TRANSACTION_HASH_ALG)) {
+  if (typeof txHashAlg !== "string") {
+    return {
+      ok: false,
+      code: "invalid_transaction_data_hashes_alg",
+      error: "Key Binding JWT transaction_data_hashes_alg must be a string",
+    };
+  }
+
+  if (txHashAlg !== TS12_TRANSACTION_HASH_ALG) {
     return {
       ok: false,
       code: "unsupported_transaction_data_hashes_alg",
-      error: `Key Binding JWT transaction_data_hashes_alg must include '${TS12_TRANSACTION_HASH_ALG}'`,
+      error: `Key Binding JWT transaction_data_hashes_alg must be '${TS12_TRANSACTION_HASH_ALG}'`,
     };
   }
 

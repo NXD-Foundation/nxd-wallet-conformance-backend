@@ -11,7 +11,7 @@ import {
   encodeTs12TransactionData,
   TS12_PAYMENT_VCT,
   TS12_SCA_CATEGORY,
-} from "../../utils/ts12PaymentUtils.js";
+} from "../utils/ts12PaymentUtils.js";
 
 describe("wallet-client ts12Presentation", () => {
   function buildStoredCredential(overrides = {}) {
@@ -124,6 +124,6 @@ describe("wallet-client ts12Presentation", () => {
     expect(claims.transaction_data_hashes).to.deep.equal([
       computeTs12TransactionDataHash(encoded),
     ]);
-    expect(claims.transaction_data_hashes_alg).to.deep.equal(["sha-256"]);
+    expect(claims.transaction_data_hashes_alg).to.equal("sha-256");
   });
 });

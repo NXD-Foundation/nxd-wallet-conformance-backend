@@ -2201,7 +2201,7 @@ async function validateAndStoreCredential({ configurationId, credential, issuerM
       ...metadata,
       format: detectedFormat,
       doctype: detectedDoctype,
-      credentialConfiguration,
+      credentialConfiguration: credentialConfig,
     },
   });
 }

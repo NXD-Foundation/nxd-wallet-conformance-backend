@@ -127,6 +127,24 @@ Sources: [SD-JWT key-binding fixes](./sd-jwt-key-binding-interop.md),
 [mdoc generation](./mdoc-credential-generation.md), and
 [mdoc interop fixes](./mdoc-interop-fixes.md).
 
+### TS-12 Payment SCA
+
+- The implemented TS-12 scope is the `urn:eudi:sca:payment:1` SCA
+  attestation and payment transaction type, requested with DCQL and presented
+  as an SD-JWT-VC with a KB-JWT.
+- `VERIFIER_TS12_COMPATIBILITY=true` is a narrow CS-02 strict-mode exception:
+  it permits that TS-12 `transaction_data.type`; it does not enable the other
+  CS-02 compatibility relaxations.
+- The encoded OpenID4VP `transaction_data` contains its required
+  `transaction_data_hashes_alg` algorithm list. For TS-12 dynamic linking, the
+  KB-JWT separately contains `transaction_data_hashes` and the required
+  `transaction_data_hashes_alg` string (`"sha-256"`). The verifier checks the
+  hash against the exact encoded request entry, enforces the TS-12 `amr`
+  factors, and rejects reused KB-JWT `jti` values.
+
+Source: [TS-12 SCA with wallet](./ts12/ts12-electronic-payments-SCA-implementation-with-wallet%20%281%29.md),
+Section 3.6 and Section 4.2.
+
 ### Wallet Attestation And Trust
 
 - Current WUA-required issuance rejects missing or expired core WIA and key
@@ -161,7 +179,7 @@ Source: [JAR x5c chain plan](./jar-x5c-certificate-chain-plan.md).
 | [CS-02 credential presentation](./core/cs-02-credential-presentation%20%281%29.md) | WE BUILD presentation and verifier requirements | Normative profile |
 | [CS-03 remote signing](./core/cs-03-remote-signing-with-wallet-units%20%283%29.md) | Wallet- and QTSP-centric remote signing | Normative profile |
 | [CS-04 WUA lifecycle](./core/cs-04-wua-lifecycle.md) | WUA lifecycle, binding, revocation, and key attestation | Normative profile |
-| [TS-12 SCA with wallet](./ts12-electronic-payments-SCA-implementation-with-wallet%20%281%29.md) | Wallet-based strong customer authentication and transaction data | External specification |
+| [TS-12 SCA with wallet](./ts12/ts12-electronic-payments-SCA-implementation-with-wallet%20%281%29.md) | Wallet-based strong customer authentication and transaction data | External specification |
 | [`docs/rfc/`](./rfc/) | Local copies of OpenID4VCI 1.0, HAIP 1.0 draft 03, RFC 7591, RFC 9449, and OpenID4VP material | Reference copies |
 
 ### Current Design, Behaviour, And Interoperability
@@ -209,5 +227,6 @@ Source: [JAR x5c chain plan](./jar-x5c-certificate-chain-plan.md).
 | VP requests, metadata, response modes, or DCQL | CS-02, verifier metadata model, VP matrix |
 | Remote qualified signing | CS-03 and CS-03 verifier flow summary |
 | SD-JWT holder binding | SD-JWT key-binding fixes |
+| TS-12 payment SCA and transaction data | TS-12 SCA with wallet |
 | mdoc metadata, issuance, or presentation | mdoc generation and mdoc interop fixes |
 | X.509 JAR signing certificates | JAR x5c certificate-chain plan |

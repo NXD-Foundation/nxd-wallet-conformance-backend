@@ -140,7 +140,7 @@ describe("TS12 payment validation", () => {
         response_mode: "direct_post",
         amr: [{ knowledge: "pin_6_or_more_digits" }, { possession: "key_in_local_native_wscd" }],
         transaction_data_hashes: [hash],
-        transaction_data_hashes_alg: ["sha-256"],
+        transaction_data_hashes_alg: "sha-256",
       },
       expectedResponseMode: "direct_post",
       encodedTransactionData: encoded,
@@ -157,7 +157,7 @@ describe("TS12 payment validation", () => {
         response_mode: "direct_post",
         amr: [{ knowledge: "pin_6_or_more_digits" }, { possession: "key_in_local_native_wscd" }],
         transaction_data_hashes: [computeTs12TransactionDataHash(encoded)],
-        transaction_data_hashes_alg: ["sha-256"],
+        transaction_data_hashes_alg: "sha-256",
       },
       expectedResponseMode: "direct_post",
       encodedTransactionData: encoded,
@@ -176,7 +176,7 @@ describe("TS12 payment validation", () => {
         response_mode: "direct_post",
         amr: [{ knowledge: "pin_6_or_more_digits" }, { knowledge: "passphrase_12_or_more_chars" }],
         transaction_data_hashes: [computeTs12TransactionDataHash(encoded)],
-        transaction_data_hashes_alg: ["sha-256"],
+        transaction_data_hashes_alg: "sha-256",
       },
       expectedResponseMode: "direct_post",
       encodedTransactionData: encoded,
@@ -197,7 +197,7 @@ describe("TS12 payment validation", () => {
         response_mode: "direct_post",
         amr: [{ location: "device" }, { possession: "key_in_local_native_wscd" }],
         transaction_data_hashes: [hash],
-        transaction_data_hashes_alg: ["sha-256"],
+        transaction_data_hashes_alg: "sha-256",
       },
       expectedResponseMode: "direct_post",
       encodedTransactionData: encoded,
@@ -211,7 +211,7 @@ describe("TS12 payment validation", () => {
         response_mode: "direct_post",
         amr: [{ knowledge: "pin" }, { possession: "key_in_local_native_wscd" }],
         transaction_data_hashes: [hash],
-        transaction_data_hashes_alg: ["sha-256"],
+        transaction_data_hashes_alg: "sha-256",
       },
       expectedResponseMode: "direct_post",
       encodedTransactionData: encoded,
@@ -228,7 +228,7 @@ describe("TS12 payment validation", () => {
         response_mode: "direct_post",
         amr: [{ knowledge: "pin_6_or_more_digits" }, { inherence: "fingerprint_device" }],
         transaction_data_hashes: ["wrong-hash"],
-        transaction_data_hashes_alg: ["sha-256"],
+        transaction_data_hashes_alg: "sha-256",
       },
       expectedResponseMode: "direct_post",
       encodedTransactionData: encoded,
@@ -238,7 +238,7 @@ describe("TS12 payment validation", () => {
     assert.equal(result.code, "transaction_data_hash_mismatch");
   });
 
-  it("rejects missing or unsupported transaction_data_hashes_alg", () => {
+  it("rejects missing, array-shaped, or unsupported transaction_data_hashes_alg", () => {
     const encoded = encodeTs12TransactionData(buildTs12PaymentTransactionData());
     const hash = computeTs12TransactionDataHash(encoded);
 
@@ -255,13 +255,27 @@ describe("TS12 payment validation", () => {
     assert.equal(missing.ok, false);
     assert.equal(missing.code, "missing_transaction_data_hashes_alg");
 
+    const arrayShaped = validateTs12KeyBindingJwt({
+      kbPayload: {
+        jti: "auth-code-array-alg",
+        response_mode: "direct_post",
+        amr: [{ knowledge: "pin_6_or_more_digits" }, { possession: "key_in_local_native_wscd" }],
+        transaction_data_hashes: [hash],
+        transaction_data_hashes_alg: ["sha-256"],
+      },
+      expectedResponseMode: "direct_post",
+      encodedTransactionData: encoded,
+    });
+    assert.equal(arrayShaped.ok, false);
+    assert.equal(arrayShaped.code, "invalid_transaction_data_hashes_alg");
+
     const unsupported = validateTs12KeyBindingJwt({
       kbPayload: {
         jti: "auth-code-unsupported-alg",
         response_mode: "direct_post",
         amr: [{ knowledge: "pin_6_or_more_digits" }, { possession: "key_in_local_native_wscd" }],
         transaction_data_hashes: [hash],
-        transaction_data_hashes_alg: ["sha-512"],
+        transaction_data_hashes_alg: "sha-512",
       },
       expectedResponseMode: "direct_post",
       encodedTransactionData: encoded,
@@ -284,7 +298,7 @@ describe("TS12 payment validation", () => {
         response_mode: "direct_post",
         amr: [{ knowledge: "pin_6_or_more_digits" }, { possession: "key_in_local_native_wscd" }],
         transaction_data_hashes: [computeTs12TransactionDataHash(encoded)],
-        transaction_data_hashes_alg: ["sha-256"],
+        transaction_data_hashes_alg: "sha-256",
       },
       extractedClaims: [credential],
       vpSession: {
