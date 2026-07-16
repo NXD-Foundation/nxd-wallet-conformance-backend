@@ -1,5 +1,6 @@
 import { digest } from "@sd-jwt/crypto-nodejs";
 import { decodeSdJwtSync, splitSdJwt, unpackSync } from "@sd-jwt/decode";
+import { selectSatisfiedCs02ClaimSet } from "./cs02DcqlCore.js";
 
 function own(object, key) {
   return !!object && Object.prototype.hasOwnProperty.call(object, key);
@@ -94,24 +95,5 @@ export function claimSatisfiesSdJwtConstraints(claim, claims) {
 }
 
 export function selectSatisfiedSdJwtClaimSet(credQuery, claims) {
-  const claimSets = Array.isArray(credQuery?.claim_sets) ? credQuery.claim_sets : [];
-  if (claimSets.length === 0) return null;
-
-  const claimsById = new Map(
-    (credQuery?.claims || [])
-      .filter((claim) => typeof claim?.id === "string" && claim.id.length > 0)
-      .map((claim) => [claim.id, claim]),
-  );
-
-  for (const claimSet of claimSets) {
-    const references = Array.isArray(claimSet) ? claimSet : claimSet?.ids;
-    if (!Array.isArray(references) || references.length === 0) continue;
-    const referencedClaims = references.map((id) => claimsById.get(id)).filter(Boolean);
-    if (referencedClaims.length !== references.length) continue;
-    if (referencedClaims.every((claim) => claimSatisfiesSdJwtConstraints(claim, claims))) {
-      return new Set(references);
-    }
-  }
-
-  return null;
+  return selectSatisfiedCs02ClaimSet(credQuery, (claim) => claimSatisfiesSdJwtConstraints(claim, claims));
 }

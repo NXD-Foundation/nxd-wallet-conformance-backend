@@ -34,7 +34,8 @@ import {
   logError,
   logDebug,
   setSessionContext,
-  clearSessionContext
+  clearSessionContext,
+  consumeVPSessionKeyBindingJti
 } from "../../services/cacheServiceRedis.js";
 import { makeSessionLogger, logHttpRequest, logHttpResponse } from "../../utils/sessionLogger.js";
 import redirectUriRouter from "../redirectUriRoutes.js";
@@ -56,6 +57,7 @@ import {
   buildCs02FailedSessionPatch,
   resolveCs02ResponseOptions,
   validateCs02DcqlVpTokenResponse,
+  validateCs02EncryptedAuthorizationResponse,
   validateCs02JweResponseHeader,
   validateCs02KeyBindingJwtClaims,
   validateCs02ResponseSubmission,
@@ -428,6 +430,20 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
       }
       return res.status(400).json({ error: `Session ID ${sessionId} not found.` });
     }
+
+    // A presentation session is single-use in strict CS-02 mode. Reject
+    // replayed submissions after a terminal success/failure state rather than
+    // re-processing credentials or overwriting the original result.
+    const strictSessionPolicy = resolveCs02ResponseOptions();
+    if (
+      strictSessionPolicy.strict &&
+      (vpSession.status === "success" || vpSession.status === "failed")
+    ) {
+      return res.status(409).json({
+        error: "invalid_request",
+        error_description: "Presentation session is already terminal and cannot be reused",
+      });
+    }
     
     if (slog) {
       try {
@@ -443,7 +459,7 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
       } catch {}
     }
 
-    const cs02ResponseOptions = resolveCs02ResponseOptions();
+    const cs02ResponseOptions = strictSessionPolicy;
     try {
       const submissionCheck = validateCs02ResponseSubmission(
         req.body,
@@ -1118,7 +1134,11 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
           await logInfo(sessionId, "Processing encrypted JWE response for direct_post.jwt");
 
           if (cs02ResponseOptions.strict) {
-            validateCs02JweResponseHeader(decodeProtectedHeader(jwtResponse), clientMetadata);
+            validateCs02JweResponseHeader(
+              decodeProtectedHeader(jwtResponse),
+              clientMetadata,
+              vpSession.encryption_key || null,
+            );
           }
 
           // Decrypt the JWE - this may return JWT string (per spec) or payload object (wallet-specific)
@@ -1213,9 +1233,23 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
             if (typeof vpToken === 'string') {
               primaryVpJwt = vpToken;
             }
-          } else if (decrypted && decrypted.vp_token) {
+          } else if (decrypted && typeof decrypted === 'object') {
             // OpenID4VP 1.0 Section 8.3: JWE plaintext is the Authorization
             // Response JSON object, not a nested signed JWT.
+            try {
+              validateCs02EncryptedAuthorizationResponse(decrypted, vpSession);
+            } catch (error) {
+              if (error instanceof Cs02VerifierResponseError) {
+                return failVpSessionAndRespond(
+                  res,
+                  sessionId,
+                  vpSession,
+                  error.errorCode,
+                  error.message,
+                );
+              }
+              throw error;
+            }
             await logInfo(sessionId, "Processing Authorization Response object from JWE");
             await logDebug(sessionId, "Decrypted payload keys", {
               allKeys: Object.keys(decrypted),
@@ -1306,6 +1340,18 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
             
             // VP 1.0: For encrypted responses, state acts as the correlation mechanism
             // The wallet includes state in the encrypted payload for verification
+            if (vpSession.state && (typeof decrypted.state !== "string" || decrypted.state.length === 0)) {
+              await logError(sessionId, "State missing in encrypted response", {
+                expected: vpSession.state,
+              });
+              return res.status(400).json({
+                error: withSpecRef(
+                  "Encrypted authorization response must include state",
+                  SPEC_REFS.VP_STATE,
+                  SPEC_REFS.VP_RESPONSE_MODE_DIRECT_POST_JWT,
+                ),
+              });
+            }
             if (decrypted.state && typeof decrypted.state === 'string') {
               await logDebug(sessionId, "Found state in decrypted response payload (VP 1.0)", {
                 state: decrypted.state
@@ -1666,6 +1712,19 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
               );
             }
             throw error;
+          }
+
+          if (cs02ResponseOptions.strict && kbPayload.jti) {
+            const jtiAccepted = await consumeVPSessionKeyBindingJti(sessionId, kbPayload.jti);
+            if (!jtiAccepted) {
+              return failVpSessionAndRespond(
+                res,
+                sessionId,
+                vpSession,
+                "invalid_key_binding_jwt",
+                "Key Binding JWT jti has already been used or could not be recorded",
+              );
+            }
           }
 
           if (!kbPayload.sd_hash) {
@@ -2403,6 +2462,19 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
             );
           }
           throw error;
+        }
+
+        if (cs02ResponseOptions.strict && kbPayload.jti) {
+          const jtiAccepted = await consumeVPSessionKeyBindingJti(sessionId, kbPayload.jti);
+          if (!jtiAccepted) {
+            return failVpSessionAndRespond(
+              res,
+              sessionId,
+              vpSession,
+              "invalid_key_binding_jwt",
+              "Key Binding JWT jti has already been used or could not be recorded",
+            );
+          }
         }
 
         if (!kbPayload.sd_hash) {

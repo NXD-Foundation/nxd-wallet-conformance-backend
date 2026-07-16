@@ -12,6 +12,7 @@ import {
 } from "../../utils/mdocClaims.js";
 import { parseSdJwtClaims, selectSatisfiedSdJwtClaimSet, claimSatisfiesSdJwtConstraints } from "../../utils/sdJwtClaims.js";
 import { extractMdocDocType } from "./mdocDocType.js";
+import { evaluateCs02CredentialSets } from "../../../utils/cs02DcqlCore.js";
 
 function safeSlog(slog, event, data) {
   if (typeof slog !== "function") return;
@@ -367,29 +368,13 @@ async function findWalletMatchesForDcqlQuery({
 
 function resolveTargetCredentialQueryIds(dcqlQuery, matchesByQueryId) {
   const matchedIds = new Set(matchesByQueryId.keys());
-  const credentialSets = Array.isArray(dcqlQuery?.credential_sets)
-    ? dcqlQuery.credential_sets
-    : [];
-  const requiredSets = credentialSets.filter((set) => set?.required !== false);
-
-  if (requiredSets.length === 0) {
+  const evaluation = evaluateCs02CredentialSets(dcqlQuery, Object.fromEntries([...matchedIds].map((id) => [id, true])));
+  if (!evaluation.satisfied) return null;
+  if (evaluation.requiredSets.length === 0) {
     const requestedIds = dcqlQuery.credentials.map((credQuery) => credQuery?.id).filter(Boolean);
     return requestedIds.every((id) => matchedIds.has(id)) ? requestedIds : null;
   }
-
-  const selectedIds = new Set();
-  for (const set of requiredSets) {
-    let selectedOption = null;
-    for (const option of set.options) {
-      if (option.every((id) => matchedIds.has(id))) {
-        selectedOption = option;
-        break;
-      }
-    }
-    if (!selectedOption) return null;
-    for (const id of selectedOption) selectedIds.add(id);
-  }
-  return Array.from(selectedIds);
+  return Array.from(evaluation.allowedIds);
 }
 
 /**

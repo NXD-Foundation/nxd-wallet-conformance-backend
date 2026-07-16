@@ -1,3 +1,5 @@
+import { isStrictCs02EcP256Jwk } from "./cs02Encoding.js";
+
 /**
  * WE BUILD CS-02 shared trust and metadata policy for wallet and verifier.
  *
@@ -82,6 +84,49 @@ export function getCs02EnforcedMetadataProfile() {
   };
 }
 
+/**
+ * Single capability source for the WE BUILD CS-02 implementation and FCAF
+ * applicability register. Keep this profile limited to protocol/security
+ * capabilities; credential data-model and trust-anchor decisions are deferred.
+ */
+export function getCs02CapabilityProfile() {
+  return {
+    profile: "webuild-cs02",
+    request: {
+      jarAlg: CS02_ENFORCED_JAR_ALG,
+      kbJwtAlgs: Array.from(CS02_ENFORCED_KB_JWT_ALGS),
+      sdJwtAlgs: Array.from(CS02_ENFORCED_SD_JWT_ALGS),
+      vpFormats: Array.from(CS02_ENFORCED_VP_FORMATS),
+      responseModes: Array.from(CS02_ENFORCED_RESPONSE_MODES),
+    },
+    sessionEncryption: {
+      jweAlgs: Array.from(CS02_ENFORCED_JWE_ALGS),
+      jweEncs: Array.from(CS02_ENFORCED_JWE_ENCS),
+    },
+    trust: {
+      structuralOnly: true,
+      trustAnchorsEnforced: false,
+      verifierAttestationIssuersEnforced: false,
+      registryEnforced: false,
+    },
+    exclusions: ["alg=none", "RS384", "x509_hash", "redirect_uri", "PID mdoc Rulebook"],
+  };
+}
+
+export function selectCs02VerifierEncryptionJwk(clientMetadata = {}) {
+  const keys = Array.isArray(clientMetadata?.jwks?.keys) ? clientMetadata.jwks.keys : [];
+  return keys.find(
+    (key) =>
+      key?.use === "enc" &&
+      key?.kty === "EC" &&
+      key?.crv === "P-256" &&
+      typeof key.kid === "string" &&
+      key.kid.length > 0 &&
+      typeof key.alg === "string" &&
+      CS02_ENFORCED_JWE_ALGS.has(key.alg),
+  ) || null;
+}
+
 export function buildStrictCs02ClientMetadata(clientMetadata = {}, responseMode = "direct_post") {
   const metadata = filterClientMetadataForCs02Enforcement(clientMetadata, responseMode, { strict: true });
   if (metadata?.vp_formats_supported && typeof metadata.vp_formats_supported === "object") {
@@ -115,7 +160,7 @@ export function assertEs256P256Jwk(jwk, context = "JWK") {
   if (!jwk || typeof jwk !== "object") {
     throw new Cs02TrustPolicyError(`${context} must be an object`, "invalid_client");
   }
-  if (jwk.kty !== "EC" || jwk.crv !== "P-256") {
+  if (!isStrictCs02EcP256Jwk(jwk)) {
     throw new Cs02TrustPolicyError(`${context} must use EC/P-256`, "invalid_client");
   }
   if (jwk.alg && jwk.alg !== CS02_ENFORCED_JAR_ALG) {
@@ -205,6 +250,15 @@ export async function validateX509SanDnsTrustAnchor(_clientId, _header, _leafCer
       "Validate x5c chain, certificate validity, ES256/P-256 leaf key, and SAN DNS against configured trust anchors.",
     clientId: _clientId ?? null,
     hasX5c: Array.isArray(_header?.x5c) && _header.x5c.length > 0,
+    structureValid:
+      Array.isArray(_header?.x5c) &&
+      _header.x5c.length > 0 &&
+      _header.x5c.every((entry) => {
+        if (typeof entry !== "string" || entry.length === 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(entry)) {
+          return false;
+        }
+        try { return Buffer.from(entry, "base64").length > 0; } catch { return false; }
+      }),
   };
   recordTrustPlaceholder("x509_san_dns", result);
   return result;
@@ -215,6 +269,23 @@ export async function validateVerifierAttestationTrust(_header, _clientId) {
   // TODO(CS-02 verifier-attestation trust framework): verify VA-JWT signature and trusted issuer.
   // TODO(CS-02 verifier-attestation trust framework): enforce sub, exp, iat, and JAR signing-key binding.
   // TODO(CS-02 verifier-attestation trust framework): reject development/self-signed attestation when trust is configured.
+  let parsedHeader = null;
+  let parsedPayload = null;
+  let structureValid = false;
+  const jwtParts = typeof _header?.jwt === "string" ? _header.jwt.split(".") : [];
+  if (jwtParts.length === 3 && jwtParts.every((part) => part.length > 0)) {
+    try {
+      parsedHeader = JSON.parse(Buffer.from(jwtParts[0], "base64url").toString("utf8"));
+      parsedPayload = JSON.parse(Buffer.from(jwtParts[1], "base64url").toString("utf8"));
+      structureValid =
+        isPlainObject(parsedHeader) &&
+        isPlainObject(parsedPayload) &&
+        typeof parsedPayload.iss === "string" &&
+        typeof parsedPayload.sub === "string" &&
+        Number.isFinite(Number(parsedPayload.iat)) &&
+        Number.isFinite(Number(parsedPayload.exp));
+    } catch {}
+  }
   const result = {
     trusted: true,
     placeholder: true,
@@ -225,6 +296,15 @@ export async function validateVerifierAttestationTrust(_header, _clientId) {
       "Verify verifier-attestation JWT issuer, subject, expiry, issuance time, and JAR signing-key binding against configured trusted issuers.",
     clientId: _clientId ?? null,
     hasJwtHeader: typeof _header?.jwt === "string" && _header.jwt.length > 0,
+    structureValid,
+    parsedHeader,
+    parsedPayload,
+    clientBindingValid:
+      structureValid &&
+      (_clientId == null ||
+        parsedPayload.sub === _clientId ||
+        parsedPayload.sub === String(_clientId).replace(/^[^:]+:/, "") ||
+        parsedPayload.aud === _clientId),
   };
   recordTrustPlaceholder("verifier_attestation", result);
   return result;
@@ -232,6 +312,25 @@ export async function validateVerifierAttestationTrust(_header, _clientId) {
 
 export async function validateCs02TrustedAuthoritiesPolicy(credQuery, log = () => {}) {
   // TODO(CS-02 trust registry): enforce trusted_authorities against configured trust registry.
+  const authorities = credQuery?.trusted_authorities ?? credQuery?.meta?.trusted_authorities;
+  const structureValid =
+    authorities == null ||
+    (Array.isArray(authorities) &&
+      authorities.length > 0 &&
+      authorities.every((entry) =>
+        (typeof entry === "string" && entry.length > 0) ||
+        (isPlainObject(entry) &&
+          typeof entry.type === "string" &&
+          entry.type.length > 0 &&
+          typeof entry.entity_id === "string" &&
+          entry.entity_id.length > 0),
+      ));
+  if (!structureValid) {
+    throw new Cs02TrustPolicyError(
+      "trusted_authorities must be a non-empty array of strings",
+      "invalid_request",
+    );
+  }
   try {
     log?.("[CS02] trusted_authorities ignored (no trust registry configured)", {
       credentialId: credQuery?.id,
@@ -239,7 +338,7 @@ export async function validateCs02TrustedAuthoritiesPolicy(credQuery, log = () =
         credQuery?.trusted_authorities ?? credQuery?.meta?.trusted_authorities ?? null,
     });
   } catch {}
-  return { enforced: false, placeholder: true };
+  return { enforced: false, placeholder: true, structureValid };
 }
 
 export async function validateCs02IssuerTrust(_issuer, _options = resolveCs02TrustPolicyOptions()) {

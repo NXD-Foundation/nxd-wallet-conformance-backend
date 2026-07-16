@@ -211,6 +211,8 @@ Source: [JAR x5c chain plan](./jar-x5c-certificate-chain-plan.md).
 | [CS-01 pre-auth relaxation plan](./cs01-pre-authorized-flow-relaxation-plan.md) | Add CS-01 pre-auth only after the specification permits it, preserving HA controls |
 | [Future WUA stricter enforcement](./futureWUAstricterEnforcements.md) | Status-list completeness and configured Wallet Provider trust material |
 | [JAR x5c certificate-chain plan](./jar-x5c-certificate-chain-plan.md) | Supply an X.509 JAR chain for wallets that validate it |
+| [WE BUILD-constrained FCAF alignment](./fcaf-we-build-alignment-plan.md) | Align non-data-model FCAF coverage without weakening WE BUILD profiles or enabling trust decisions |
+| [WE BUILD FCAF applicability register](../FCAFs/we-build-fcaf-applicability.json) | Machine-readable scope, disposition, and evidence policy for the alignment work |
 
 ## Working Rules
 

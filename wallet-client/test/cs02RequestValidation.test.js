@@ -14,6 +14,8 @@ import {
   validateCs02JarHeader,
   validateCs02JarPayload,
   validateCs02Nonce,
+  validateCs02TransactionData,
+  validateCs02ResponseUri,
   validateCs02ClientId,
   validateCs02DeepLinkClientIdConsistency,
   validateAndVerifyCs02AuthorizationRequest,
@@ -211,6 +213,54 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
       expect(() => validateCs02JarPayload(payload, strictOptions())).to.throw(Cs02ValidationError);
     });
 
+    it("requires state for CS-02 authorization requests", () => {
+      const payload = baseJarPayload();
+      delete payload.state;
+      expect(() => validateCs02JarPayload(payload, strictOptions())).to.throw(
+        Cs02ValidationError,
+        /state/,
+      );
+    });
+
+    it("rejects malformed transaction_data entries", () => {
+      const encoded = Buffer.from(JSON.stringify({ type: "qes_authorization" })).toString("base64url");
+      expect(() => validateCs02TransactionData([encoded], strictOptions())).to.not.throw();
+      expect(() => validateCs02TransactionData(["not-json"], strictOptions())).to.throw(
+        Cs02ValidationError,
+        /valid JSON object/,
+      );
+      const missingType = Buffer.from(JSON.stringify({})).toString("base64url");
+      expect(() => validateCs02TransactionData([missingType])).to.throw(Cs02ValidationError, /non-empty type/);
+      const unsupportedType = Buffer.from(JSON.stringify({ type: "unknown" })).toString("base64url");
+      expect(() => validateCs02TransactionData([unsupportedType])).to.throw(
+        Cs02ValidationError,
+        /Unsupported transaction_data type/,
+      );
+      const unknownId = Buffer.from(JSON.stringify({
+        type: "qes_authorization",
+        credential_ids: ["unknown"],
+      })).toString("base64url");
+      expect(() => validateCs02TransactionData(
+        [unknownId],
+        () => {},
+        { credentials: [{ id: "pid" }] },
+      )).to.throw(Cs02ValidationError, /unknown DCQL id/);
+    });
+
+    it("requires an absolute HTTPS response_uri in strict mode", () => {
+      expect(validateCs02ResponseUri("https://verifier.example/response", strictOptions())).to.equal(
+        "https://verifier.example/response",
+      );
+      expect(() => validateCs02ResponseUri("http://verifier.example/response", strictOptions())).to.throw(
+        Cs02ValidationError,
+        /HTTPS/,
+      );
+      expect(() => validateCs02ResponseUri("/relative", strictOptions())).to.throw(
+        Cs02ValidationError,
+        /absolute/,
+      );
+    });
+
     it("requires response_type vp_token", () => {
       expect(() =>
         validateCs02JarPayload(baseJarPayload({ response_type: "code" }), strictOptions()),
@@ -342,6 +392,17 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
       }
     });
 
+    it("rejects malformed x5c certificate encodings", async () => {
+      const requestJwt = await signJar(baseJarPayload(), { x5c: ["not-base64%%%"] });
+      try {
+        await validateAndVerifyCs02AuthorizationRequest(requestJwt, { options: strictOptions() });
+        expect.fail("expected malformed x5c rejection");
+      } catch (error) {
+        expect(error).to.be.instanceOf(Cs02ValidationError);
+        expect(error.errorCode).to.equal("invalid_client");
+      }
+    });
+
     it("rejects verifier_attestation JAR without jwt header", async () => {
       const requestJwt = await signJar(
         baseJarPayload({ client_id: "verifier_attestation:verifier-1" }),
@@ -358,9 +419,16 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
     it("invokes verifier_attestation placeholder when JOSE header jwt is present", async () => {
       const records = [];
       setCs02TrustPlaceholderRecorder((record) => records.push(record));
+      const now = Math.floor(Date.now() / 1000);
+      const vaPart = (value) => Buffer.from(JSON.stringify(value)).toString("base64url");
+      const vaJwt = [
+        vaPart({ alg: "ES256", typ: "JWT" }),
+        vaPart({ iss: "https://attestation.example", sub: "verifier-1", iat: now - 5, exp: now + 300 }),
+        "signature",
+      ].join(".");
       const requestJwt = await signJar(
         baseJarPayload({ client_id: "verifier_attestation:verifier-1" }),
-        { jwt: "header.payload.signature" },
+        { jwt: vaJwt },
       );
 
       const verified = await validateAndVerifyCs02AuthorizationRequest(requestJwt, {
@@ -374,6 +442,23 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
         record.enforced === false &&
         record.hasJwtHeader === true
       )).to.equal(true);
+    });
+
+    it("rejects structurally valid but client-unbound verifier attestations", async () => {
+      const now = Math.floor(Date.now() / 1000);
+      const b = (value) => Buffer.from(JSON.stringify(value)).toString("base64url");
+      const vaJwt = [b({ alg: "ES256", typ: "JWT" }), b({ iss: "https://attestation.example", sub: "other-verifier", iat: now - 5, exp: now + 300 }), "sig"].join(".");
+      const requestJwt = await signJar(
+        baseJarPayload({ client_id: "verifier_attestation:verifier-1" }),
+        { jwt: vaJwt },
+      );
+      try {
+        await validateAndVerifyCs02AuthorizationRequest(requestJwt, { options: strictOptions() });
+        expect.fail("expected unbound attestation rejection");
+      } catch (error) {
+        expect(error).to.be.instanceOf(Cs02ValidationError);
+        expect(error.errorCode).to.equal("invalid_client");
+      }
     });
   });
 

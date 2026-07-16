@@ -6,7 +6,8 @@
   "type": "module",
   "scripts": {
     "test": "mocha tests/**/*.js",
-    "test:cs02": "mocha tests/cs02TrustPolicy.test.js tests/cs02StatusList.test.js tests/cs02VerifierResponse.test.js --exit",
+    "test:cs02": "mocha tests/cs02TrustPolicy.test.js tests/cs02StatusList.test.js tests/cs02VerifierResponse.test.js tests/cs02SuccessfulFlowMatrix.test.js tests/cs02Encoding.test.js tests/fcafApplicability.test.js tests/fcafDispositionRegister.test.js --exit",
+    "fcaf:disposition-template": "node scripts/fcafDispositionRegister.js",
     "dev": "SERVER_URL=https://5761-2a02-587-8701-ab00-afa6-a2d-ebbb-e269.ngrok-free.app node server.js"
   },
   "author": "",

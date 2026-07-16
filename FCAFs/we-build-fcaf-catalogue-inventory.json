@@ -1,0 +1,26 @@
+{
+  "profile": "webuild-cs02",
+  "available_catalogues": [
+    {
+      "layer": "MessageStructure",
+      "declared_count": 236,
+      "explicit_table_rows": 222,
+      "source": "/home/ni/code/fcafs/message-structure-analysis/fcaf-ms-specs-categorized.md",
+      "per_id_register_ready": true,
+      "reconciliation_note": "Source heading declares 236; extractor finds 222 explicit rows. Missing 14 rows require source reconciliation."
+    },
+    {
+      "layer": "SecurityMechanisms",
+      "count": 79,
+      "source": "/home/ni/code/fcafs/security-mechanism-analysis/fcaf-sm-specs-categorized.md",
+      "per_id_register_ready": true
+    }
+  ],
+  "unavailable_catalogues": [
+    { "layer": "Interaction", "reason": "No categorized FCAF ID catalogue found in checkout." },
+    { "layer": "Shared", "reason": "No categorized FCAF ID catalogue found in checkout." },
+    { "layer": "UseCases", "reason": "No categorized FCAF ID catalogue found in checkout." },
+    { "layer": "DataModel", "reason": "PID/mdoc rulebook is explicitly out of scope for this increment." }
+  ],
+  "policy": "Do not fabricate IDs or dispositions for unavailable catalogues; add them when the source catalogue is supplied."
+}

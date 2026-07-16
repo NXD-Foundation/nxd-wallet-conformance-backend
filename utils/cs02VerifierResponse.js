@@ -21,6 +21,7 @@ import {
   resolveCs02TrustPolicyOptions,
 } from "./cs02TrustPolicy.js";
 import { extractMdocDocType } from "../wallet-client/src/lib/mdocDocType.js";
+import { isStrictCs02EcP256Jwk } from "./cs02Encoding.js";
 import {
   claimSatisfiesMdocConstraints,
   extractMdocClaimsByNamespace,
@@ -31,6 +32,7 @@ import {
   parseSdJwtClaims,
   selectSatisfiedSdJwtClaimSet,
 } from "./sdJwtClaims.js";
+import { isSupportedCs02ClaimPathSegment, validateSupportedCs02ClaimPath, evaluateCs02CredentialSets } from "./cs02DcqlCore.js";
 
 export { resolveVerifierCs02Options, isVerifierCs02StrictMode } from "./cs02VerifierRequest.js";
 
@@ -58,6 +60,34 @@ export class Cs02VerifierResponseError extends Error {
     this.name = "Cs02VerifierResponseError";
     this.errorCode = errorCode;
   }
+}
+
+export function validateCs02EncryptedAuthorizationResponse(payload, session) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Cs02VerifierResponseError(
+      "Encrypted authorization response must decrypt to a JSON object",
+      "invalid_request",
+    );
+  }
+  if (payload.vp_token == null || payload.vp_token === "") {
+    throw new Cs02VerifierResponseError(
+      "Encrypted authorization response must include vp_token",
+      "invalid_request",
+    );
+  }
+  if (session?.state && (typeof payload.state !== "string" || payload.state.length === 0)) {
+    throw new Cs02VerifierResponseError(
+      "Encrypted authorization response must include state",
+      "invalid_request",
+    );
+  }
+  if (session?.state && payload.state !== session.state) {
+    throw new Cs02VerifierResponseError(
+      "State mismatch in encrypted authorization response",
+      "invalid_state",
+    );
+  }
+  return payload;
 }
 
 function isPlainObject(value) {
@@ -104,6 +134,18 @@ export function validateCs02ResponseSubmission(body, session, options = { strict
   const hasVpToken = body?.vp_token != null && body.vp_token !== "";
 
   if (responseMode === "direct_post.jwt") {
+    if (hasResponse && typeof body.response !== "string") {
+      throw new Cs02VerifierResponseError(
+        "direct_post.jwt response parameter must be a non-empty string",
+        "invalid_request",
+      );
+    }
+    if (hasResponse && body.response.split(".").length !== 5) {
+      throw new Cs02VerifierResponseError(
+        "direct_post.jwt response parameter must be a compact JWE",
+        "invalid_request",
+      );
+    }
     if (hasVpToken && !hasResponse) {
       throw new Cs02VerifierResponseError(
         "bare vp_token submission is not allowed when the session expects direct_post.jwt",
@@ -132,9 +174,9 @@ export function validateCs02ResponseSubmission(body, session, options = { strict
         "invalid_request",
       );
     }
-    if (body?.state == null || body?.state === "") {
+    if (typeof body?.state !== "string" || body.state.length === 0) {
       throw new Cs02VerifierResponseError(
-        "direct_post response requires state",
+        "direct_post response requires a non-empty string state",
         "invalid_request",
       );
     }
@@ -220,12 +262,7 @@ function requiredCredentialSetsSatisfied(requiredSets, vpTokenObject) {
 
 function allowedCredentialIdsForResponse(dcqlQuery, vpTokenObject) {
   const credentials = Array.isArray(dcqlQuery?.credentials) ? dcqlQuery.credentials : [];
-  const knownIds = new Set(credentials.map((cred) => cred.id).filter(Boolean));
-  const credentialSets = Array.isArray(dcqlQuery?.credential_sets)
-    ? dcqlQuery.credential_sets
-    : [];
-  const requiredSets = credentialSets.filter((set) => set?.required !== false);
-
+  const { knownIds, requiredSets } = evaluateCs02CredentialSets(dcqlQuery, vpTokenObject);
   if (requiredSets.length === 0) {
     return knownIds;
   }
@@ -257,8 +294,13 @@ export function validateCs02DcqlVpTokenResponse(
     );
   }
 
-  const credentials = Array.isArray(dcqlQuery?.credentials) ? dcqlQuery.credentials : [];
-  const knownIds = new Set(credentials.map((cred) => cred.id).filter(Boolean));
+  const { knownIds, requiredSets, satisfied, allowedIds, unknownOptionIds } = evaluateCs02CredentialSets(dcqlQuery, vpTokenObject);
+  if (options.strict && unknownOptionIds.length > 0) {
+    throw new Cs02VerifierResponseError(
+      `DCQL credential_sets references unknown credential id(s): ${unknownOptionIds.join(", ")}`,
+      "invalid_vp_token",
+    );
+  }
   const receivedKeys = Object.keys(vpTokenObject);
 
   for (const key of receivedKeys) {
@@ -269,11 +311,6 @@ export function validateCs02DcqlVpTokenResponse(
       );
     }
   }
-
-  const credentialSets = Array.isArray(dcqlQuery?.credential_sets)
-    ? dcqlQuery.credential_sets
-    : [];
-  const requiredSets = credentialSets.filter((set) => set?.required !== false);
 
   if (requiredSets.length === 0) {
     for (const id of knownIds) {
@@ -286,7 +323,7 @@ export function validateCs02DcqlVpTokenResponse(
         }
       }
     }
-  } else if (options.strict && !requiredCredentialSetsSatisfied(requiredSets, vpTokenObject)) {
+  } else if (options.strict && !satisfied) {
     throw new Cs02VerifierResponseError(
       "DCQL vp_token does not satisfy required credential_sets options",
       "invalid_vp_token",
@@ -294,7 +331,6 @@ export function validateCs02DcqlVpTokenResponse(
   }
 
   if (options.strict && requiredSets.length > 0) {
-    const allowedIds = allowedCredentialIdsForResponse(dcqlQuery, vpTokenObject);
     for (const key of receivedKeys) {
       if (!allowedIds.has(key)) {
         throw new Cs02VerifierResponseError(
@@ -317,7 +353,7 @@ export function validateCs02DcqlVpTokenResponse(
   return vpTokenObject;
 }
 
-export function validateCs02JweResponseHeader(header, clientMetadata = {}) {
+export function validateCs02JweResponseHeader(header, clientMetadata = {}, sessionKey = null) {
   if (!header || typeof header !== "object") {
     throw new Cs02VerifierResponseError("JWE protected header is missing", "invalid_response");
   }
@@ -348,6 +384,15 @@ export function validateCs02JweResponseHeader(header, clientMetadata = {}) {
     throw new Cs02VerifierResponseError("JWE protected header must include kid", "invalid_response");
   }
 
+  if (sessionKey) {
+    if (sessionKey.kid !== header.kid || sessionKey.alg !== header.alg || sessionKey.use !== "enc") {
+      throw new Cs02VerifierResponseError(
+        "JWE header does not match the session-selected verifier encryption key",
+        "invalid_response",
+      );
+    }
+  }
+
   const configuredKeys = clientMetadata?.jwks?.keys;
   if (Array.isArray(configuredKeys)) {
     const selectedKey = configuredKeys.find((key) => key?.kid === header.kid);
@@ -356,8 +401,7 @@ export function validateCs02JweResponseHeader(header, clientMetadata = {}) {
     }
     if (
       selectedKey.use !== "enc" ||
-      selectedKey.kty !== "EC" ||
-      selectedKey.crv !== "P-256" ||
+      !isStrictCs02EcP256Jwk(selectedKey) ||
       typeof selectedKey.alg !== "string" ||
       selectedKey.alg !== header.alg
     ) {
@@ -591,7 +635,7 @@ function requestedTopLevelClaimNames(credQuery) {
   for (const claim of credQuery?.claims || []) {
     const path = claim?.path;
     if (!Array.isArray(path) || path.length === 0) continue;
-    if (path.every((segment) => typeof segment === "string" && segment.length > 0)) {
+    if (path.every(isSupportedCs02ClaimPathSegment)) {
       names.add(path[0]);
     }
   }
@@ -600,7 +644,9 @@ function requestedTopLevelClaimNames(credQuery) {
 
 function assertSupportedSdJwtClaimPaths(credQuery) {
   for (const claim of credQuery?.claims || []) {
-    if (!Array.isArray(claim?.path) || claim.path.length === 0) {
+    try {
+      validateSupportedCs02ClaimPath(claim?.path);
+    } catch {
       throw new Cs02VerifierResponseError(
         `Unsupported SD-JWT DCQL claim path "${Array.isArray(claim?.path) ? claim.path.join(".") : "unknown"}"`,
         "invalid_request",
@@ -727,6 +773,17 @@ async function resolveIssuerVerificationKey({ header, payload, options }) {
     if (jwk) return importJWK(jwk, header.alg);
   }
   if (Array.isArray(header?.x5c) && typeof header.x5c[0] === "string" && header.x5c[0].length > 0) {
+    const validChainEncoding = header.x5c.every((entry) =>
+      typeof entry === "string" && entry.length > 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(entry) && (() => {
+        try { return Buffer.from(entry, "base64").length > 0; } catch { return false; }
+      })(),
+    );
+    if (!validChainEncoding) {
+      throw new Cs02VerifierResponseError(
+        "SD-JWT-VC issuer x5c chain is malformed",
+        "invalid_credential",
+      );
+    }
     const leafPem = `-----BEGIN CERTIFICATE-----\n${header.x5c[0].match(/.{1,64}/g).join("\n")}\n-----END CERTIFICATE-----\n`;
     try {
       return await importX509(leafPem, header.alg);

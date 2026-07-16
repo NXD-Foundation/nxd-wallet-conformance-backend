@@ -97,6 +97,8 @@ describe("CS-02 DCQL validation (Phase 2)", () => {
     expect(() => validateDcqlClaimPath([""], "test")).to.throw(Cs02ValidationError);
     expect(() => validateDcqlClaimPath([false], "test")).to.throw(Cs02ValidationError);
     expect(() => validateDcqlClaimPath([-1], "test")).to.throw(Cs02ValidationError);
+    expect(() => validateDcqlClaimPath(["claims[0]"], "test")).to.throw(Cs02ValidationError);
+    expect(() => validateDcqlClaimPath(["$.claims"], "test")).to.throw(Cs02ValidationError);
   });
 
   it("accepts nested SD-JWT claim paths with string segments", () => {
@@ -224,6 +226,21 @@ describe("CS-02 DCQL validation (Phase 2)", () => {
         strictOptions,
       ),
     ).to.throw(Cs02ValidationError);
+  });
+
+  it("validates credential_sets required and option id structure", () => {
+    expect(() => validateCs02DcqlQuery({
+      credentials: [{ id: "pid", format: "dc+sd-jwt" }],
+      credential_sets: [{ required: "true", options: [["pid"]] }],
+    }, { strict: true })).to.throw(Cs02ValidationError, /required/);
+    expect(() => validateCs02DcqlQuery({
+      credentials: [{ id: "pid", format: "dc+sd-jwt" }],
+      credential_sets: [{ options: [["pid", "pid"]] }],
+    }, { strict: true })).to.throw(Cs02ValidationError, /duplicate/);
+    expect(() => validateCs02DcqlQuery({
+      credentials: [{ id: "pid", format: "dc+sd-jwt" }],
+      credential_sets: [{ options: [["pid", 1]] }],
+    }, { strict: true })).to.throw(Cs02ValidationError, /non-empty strings/);
   });
 
   it("rejects require_cryptographic_holder_binding=false for SD-JWT", () => {

@@ -1,0 +1,81 @@
+{
+  "schema_version": "1.0",
+  "profile": "WE BUILD CS-02",
+  "source_of_truth": "docs/knowledge.md",
+  "scope": {
+    "datamodels": "out-of-scope-datamodel",
+    "trust_framework": "structural-only",
+    "negative_e2e": "not-required",
+    "negative_behavior": "must-be-rejected-by-runtime"
+  },
+  "disposition_definitions": {
+    "implemented": "Runtime behavior and focused tests cover the applicable requirement.",
+    "partial": "Applicable behavior exists, but one or more focused coverage items remain.",
+    "structural-only": "Required fields/shape are checked; trust or cryptographic authority is intentionally not decided.",
+    "inapplicable-cs02": "The requirement is not part of the WE BUILD CS-02 profile (for example unsigned JAR or x509_hash).",
+    "out-of-scope-datamodel": "Credential/PID rulebook and detailed data-model semantics are deferred.",
+    "not-required": "No separate end-to-end negative test is planned; rejection remains a runtime requirement."
+  },
+  "layers": {
+    "MessageStructure": {
+      "total_fafcs": 236,
+      "status": "partial",
+      "areas": {
+        "ProtocolMessages": { "fafcs": 158, "status": "partial" },
+        "AuthorizationRequest": { "fafcs": 61, "status": "partial" },
+        "Response": { "fafcs": 17, "status": "partial" }
+      }
+    },
+    "Interaction": {
+      "total_fafcs": 71,
+      "status": "partial",
+      "areas": {
+        "MainInteraction": { "fafcs": 53, "status": "partial" },
+        "Engagement": { "fafcs": 2, "status": "partial" },
+        "ProtocolFlow": { "fafcs": 2, "status": "partial" },
+        "Supportive": { "fafcs": 4, "status": "partial" },
+        "Metadata": { "fafcs": 10, "status": "partial" }
+      }
+    },
+    "SecurityMechanisms": {
+      "total_fafcs": 79,
+      "status": "partial",
+      "areas": {
+        "RpIntegrity": { "fafcs": 37, "status": "partial" },
+        "TrustMechanisms": { "fafcs": 14, "status": "structural-only" },
+        "DeviceBinding": { "fafcs": 11, "status": "partial" },
+        "SessionEncryption": { "fafcs": 11, "status": "partial" },
+        "SessionBinding": { "fafcs": 3, "status": "partial" },
+        "IssuerIntegrity": { "fafcs": 3, "status": "structural-only" }
+      }
+    },
+    "Shared": {
+      "total_fafcs": 29,
+      "status": "partial",
+      "areas": {
+        "Encoding": { "fafcs": 22, "status": "partial" },
+        "Cryptography": { "fafcs": 7, "status": "partial" }
+      }
+    },
+    "UseCases": {
+      "total_fafcs": 2,
+      "status": "partial"
+    },
+    "DataModel": {
+      "total_fafcs": 142,
+      "status": "out-of-scope-datamodel"
+    }
+  },
+  "profile_exclusions": [
+    "Unsigned request objects (alg=none)",
+    "RS384 request/JAR signing",
+    "x509_hash client-id trust resolution",
+    "redirect_uri client-id identity",
+    "PID mdoc Rulebook and detailed credential data-model validation"
+  ],
+  "evidence_policy": {
+    "success_e2e": "Representative wallet-client/verifier flows only",
+    "negative_cases": "Focused unit/service/route tests plus fail-closed runtime behavior",
+    "trust": "Presence and shape of x5c, verifier-attestation JWT, trust metadata and key references; no trust decision"
+  }
+}

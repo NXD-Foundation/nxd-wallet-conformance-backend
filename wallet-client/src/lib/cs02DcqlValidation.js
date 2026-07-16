@@ -5,6 +5,10 @@
 
 import { Cs02ValidationError } from "./cs02RequestValidation.js";
 import { validateCs02TrustedAuthoritiesPolicy } from "../../utils/cs02TrustPolicy.js";
+import {
+  isSupportedCs02ClaimPathSegment,
+  validateSupportedCs02ClaimPath,
+} from "../../../utils/cs02DcqlCore.js";
 
 export const CS02_ALLOWED_DCQL_FORMATS = new Set(["dc+sd-jwt", "vc+sd-jwt", "mso_mdoc"]);
 export const CS02_COMPATIBILITY_DCQL_FORMATS = new Set(["jwt_vc_json", "jwt_vc_json-ld"]);
@@ -28,11 +32,13 @@ function isPlainObject(value) {
 }
 
 export function isSupportedDcqlClaimPathSegment(segment) {
-  return typeof segment === "string" && segment.length > 0;
+  return isSupportedCs02ClaimPathSegment(segment);
 }
 
 export function validateDcqlClaimPath(path, context, log = () => {}) {
-  if (!Array.isArray(path) || path.length === 0) {
+  try {
+    validateSupportedCs02ClaimPath(path);
+  } catch {
     logDcqlFailure(log, "claim_path_empty", { context });
     throw new Cs02ValidationError(
       `DCQL claim path must be a non-empty array (${context})`,
@@ -271,6 +277,20 @@ function validateDcqlCredentialSets(dcqlQuery, knownIds, log = () => {}) {
     : [];
   for (let setIndex = 0; setIndex < credentialSets.length; setIndex += 1) {
     const set = credentialSets[setIndex];
+    if (!isPlainObject(set)) {
+      logDcqlFailure(log, "credential_set_not_object", { setIndex });
+      throw new Cs02ValidationError(
+        "DCQL credential_sets entries must be objects",
+        "invalid_request",
+      );
+    }
+    if (set.required != null && typeof set.required !== "boolean") {
+      logDcqlFailure(log, "credential_set_required_invalid", { setIndex });
+      throw new Cs02ValidationError(
+        "DCQL credential_sets required must be a boolean when present",
+        "invalid_request",
+      );
+    }
     const options = Array.isArray(set?.options) ? set.options : [];
     if (options.length === 0) {
       logDcqlFailure(log, "credential_sets_empty", { setIndex });
@@ -285,6 +305,20 @@ function validateDcqlCredentialSets(dcqlQuery, knownIds, log = () => {}) {
         logDcqlFailure(log, "credential_sets_option_empty", { setIndex, optionIndex });
         throw new Cs02ValidationError(
           "DCQL credential_sets options must be non-empty arrays",
+          "invalid_request",
+        );
+      }
+      if (!option.every((id) => typeof id === "string" && id.length > 0)) {
+        logDcqlFailure(log, "credential_sets_option_id_invalid", { setIndex, optionIndex });
+        throw new Cs02ValidationError(
+          "DCQL credential_sets option ids must be non-empty strings",
+          "invalid_request",
+        );
+      }
+      if (new Set(option).size !== option.length) {
+        logDcqlFailure(log, "credential_sets_option_duplicate_id", { setIndex, optionIndex });
+        throw new Cs02ValidationError(
+          "DCQL credential_sets options must not contain duplicate credential ids",
           "invalid_request",
         );
       }

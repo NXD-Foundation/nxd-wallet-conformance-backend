@@ -1,4 +1,5 @@
 import { decode } from "cbor-x";
+import { selectSatisfiedCs02ClaimSet } from "./cs02DcqlCore.js";
 
 function normalizeNameSpaces(nameSpaces) {
   if (!nameSpaces) return {};
@@ -91,24 +92,5 @@ export function claimSatisfiesMdocConstraints(claim, claimsByNamespace) {
 }
 
 export function selectSatisfiedMdocClaimSet(credQuery, claimsByNamespace) {
-  const claimSets = Array.isArray(credQuery?.claim_sets) ? credQuery.claim_sets : [];
-  if (claimSets.length === 0) return null;
-
-  const claimsById = new Map(
-    (credQuery?.claims || [])
-      .filter((claim) => typeof claim?.id === "string" && claim.id.length > 0)
-      .map((claim) => [claim.id, claim]),
-  );
-
-  for (const claimSet of claimSets) {
-    const references = Array.isArray(claimSet) ? claimSet : claimSet?.ids;
-    if (!Array.isArray(references) || references.length === 0) continue;
-    const referencedClaims = references.map((id) => claimsById.get(id)).filter(Boolean);
-    if (referencedClaims.length !== references.length) continue;
-    if (referencedClaims.every((claim) => claimSatisfiesMdocConstraints(claim, claimsByNamespace))) {
-      return new Set(references);
-    }
-  }
-
-  return null;
+  return selectSatisfiedCs02ClaimSet(credQuery, (claim) => claimSatisfiesMdocConstraints(claim, claimsByNamespace));
 }

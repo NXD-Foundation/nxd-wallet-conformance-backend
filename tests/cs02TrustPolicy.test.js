@@ -4,6 +4,8 @@ import {
   Cs02TrustPolicyError,
   filterClientMetadataForCs02Enforcement,
   getCs02EnforcedMetadataProfile,
+  getCs02CapabilityProfile,
+  selectCs02VerifierEncryptionJwk,
   validateCs02ClientMetadata,
   validateCs02RequestUriQueryPrecedence,
   validateDidJwkTrustRules,
@@ -13,6 +15,7 @@ import {
   validateCs02ClientMetadataUri,
   validateVerifierAttestationTrust,
   validateX509SanDnsTrustAnchor,
+  validateCs02TrustedAuthoritiesPolicy,
   setCs02TrustPlaceholderRecorder,
 } from "../utils/cs02TrustPolicy.js";
 
@@ -24,12 +27,43 @@ describe("CS-02 trust and metadata policy (Phase 5)", () => {
     expect(profile.response_modes_supported).to.include("direct_post.jwt");
   });
 
+  it("exposes one CS-02 capability profile for applicability tracking", () => {
+    const profile = getCs02CapabilityProfile();
+    expect(profile.profile).to.equal("webuild-cs02");
+    expect(profile.request.jarAlg).to.equal("ES256");
+    expect(profile.request.responseModes).to.include("direct_post.jwt");
+    expect(profile.trust.structuralOnly).to.equal(true);
+    expect(profile.trust.trustAnchorsEnforced).to.equal(false);
+    expect(profile.exclusions).to.include("PID mdoc Rulebook");
+  });
+
+  it("selects only a structurally valid CS-02 verifier encryption JWK", () => {
+    expect(selectCs02VerifierEncryptionJwk({
+      jwks: { keys: [{ kid: "enc-1", use: "enc", kty: "EC", crv: "P-256", alg: "ECDH-ES+A256KW" }] },
+    })).to.include({ kid: "enc-1", alg: "ECDH-ES+A256KW" });
+    expect(selectCs02VerifierEncryptionJwk({
+      jwks: { keys: [{ kid: "bad", use: "sig", kty: "RSA", alg: "RS256" }] },
+    })).to.equal(null);
+  });
+
   it("returns placeholder trust for x509_san_dns until anchors are configured", async () => {
     const result = await validateX509SanDnsTrustAnchor("x509_san_dns:example.com", {}, "pem");
     expect(result.placeholder).to.equal(true);
     expect(result.enforced).to.equal(false);
     expect(result.trustConfigured).to.equal(false);
     expect(result.futureBehavior).to.match(/SAN DNS/);
+    expect(result.structureValid).to.equal(false);
+  });
+
+  it("recognizes structurally encoded x5c entries without evaluating trust", async () => {
+    const result = await validateX509SanDnsTrustAnchor(
+      "x509_san_dns:example.com",
+      { x5c: [Buffer.from("certificate-bytes").toString("base64")] },
+      "pem",
+    );
+    expect(result.structureValid).to.equal(true);
+    expect(result.trusted).to.equal(true);
+    expect(result.enforced).to.equal(false);
   });
 
   it("returns placeholder trust for verifier_attestation until trusted issuers are configured", async () => {
@@ -42,6 +76,19 @@ describe("CS-02 trust and metadata policy (Phase 5)", () => {
     expect(result.trustConfigured).to.equal(false);
     expect(result.nonProduction).to.equal(true);
     expect(result.hasJwtHeader).to.equal(true);
+    expect(result.structureValid).to.equal(false);
+  });
+
+  it("validates trusted_authorities structure without making a trust decision", async () => {
+    const result = await validateCs02TrustedAuthoritiesPolicy({ trusted_authorities: ["etsi:example"] });
+    expect(result).to.include({ enforced: false, structureValid: true });
+    try {
+      await validateCs02TrustedAuthoritiesPolicy({ trusted_authorities: [42] });
+      throw new Error("expected trusted_authorities validation to fail");
+    } catch (error) {
+      expect(error).to.be.instanceOf(Cs02TrustPolicyError);
+      expect(error.message).to.match(/non-empty array/);
+    }
   });
 
   it("requires did:jwk keys to be EC/P-256 ES256", () => {

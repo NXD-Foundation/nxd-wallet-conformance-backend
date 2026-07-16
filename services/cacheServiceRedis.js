@@ -1,4 +1,5 @@
 import redis from "redis";
+import { selectCs02VerifierEncryptionJwk } from "../utils/cs02TrustPolicy.js";
 
 //
 const VCI_CODE_FLOW_TIMEOUT = process.env.VCI_CODE_FLOW_TIMEOUT || 180;
@@ -246,11 +247,27 @@ export async function getDeferredSessionTransactionId(transaction_id) {
   return lookup?.sessionKey ?? null;
 }
 
+export function withVPSessionLifecycle(sessionValue, now = Math.floor(Date.now() / 1000), ttlInSeconds = Number(VP_TIMEOUT) || 180) {
+  if (!sessionValue || typeof sessionValue !== "object") return sessionValue;
+  const selectedEncryptionKey =
+    sessionValue.encryption_key ||
+    (sessionValue.response_mode === "direct_post.jwt"
+      ? selectCs02VerifierEncryptionJwk(sessionValue.client_metadata)
+      : null);
+  return {
+    ...sessionValue,
+    created_at: sessionValue.created_at ?? now,
+    expires_at: sessionValue.expires_at ?? now + ttlInSeconds,
+    ...(selectedEncryptionKey ? { encryption_key: selectedEncryptionKey } : {}),
+  };
+}
+
 export async function storeVPSession(sessionKey, sessionValue) {
   try {
     const key = `vp-sessions:${sessionKey}`;
-    const ttlInSeconds = VP_TIMEOUT; // env, default: 3 minutes
-    await client.setEx(key, ttlInSeconds, JSON.stringify(sessionValue)); // Set with expiration
+    const ttlInSeconds = Number(VP_TIMEOUT) || 180;
+    const value = withVPSessionLifecycle(sessionValue, Math.floor(Date.now() / 1000), ttlInSeconds);
+    await client.setEx(key, ttlInSeconds, JSON.stringify(value)); // Set with expiration
     console.log(`VP Session stored under key: ${key}`);
   } catch (err) {
     console.error("Error storing session:", err);
@@ -262,14 +279,33 @@ export async function getVPSession(sessionKey) {
     const key = `vp-sessions:${sessionKey}`;
     const result = await client.get(key);
     if (result) {
-      // console.log("VP Session retrieved:", JSON.parse(result));
-      return JSON.parse(result);
+      const session = JSON.parse(result);
+      if (session?.expires_at != null && Number(session.expires_at) <= Math.floor(Date.now() / 1000)) {
+        await client.del(key);
+        return null;
+      }
+      return session;
     } else {
       console.log("Session not found for key:", key);
       return null;
     }
   } catch (err) {
     console.error("Error retrieving session:", err);
+  }
+}
+
+export async function consumeVPSessionKeyBindingJti(sessionKey, jti, ttlInSeconds = Number(VP_TIMEOUT) || 180) {
+  if (!sessionKey || typeof jti !== "string" || jti.length === 0 || !client.isReady) return false;
+  try {
+    const result = await client.set(
+      `vp-kb-jti:${sessionKey}:${jti}`,
+      "1",
+      { NX: true, EX: ttlInSeconds },
+    );
+    return result === "OK";
+  } catch (error) {
+    console.error("Error consuming VP key-binding jti:", error);
+    return false;
   }
 }
 

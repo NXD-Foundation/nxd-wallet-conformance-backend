@@ -4,6 +4,7 @@
 
 import * as jose from "jose";
 import { validateCs02DcqlQuery } from "../wallet-client/src/lib/cs02DcqlValidation.js";
+import { isStrictCs02Base64Url, decodeStrictCs02Base64Url } from "./cs02Encoding.js";
 import {
   buildStrictCs02ClientMetadata,
   validateX509SanDnsTrustAnchor as validateX509SanDnsTrustForRequestGeneration,
@@ -35,6 +36,7 @@ export const TS12_SUPPORTED_TRANSACTION_DATA_TYPES = new Set([
   "urn:eudi:sca:payment:1",
 ]);
 export const CS02_ADVERTISED_VP_FORMATS = new Set(["dc+sd-jwt", "vc+sd-jwt", "mso_mdoc"]);
+export const CS02_NONCE_PATTERN = /^[A-Za-z0-9_-]+$/;
 
 export class Cs02VerifierRequestError extends Error {
   constructor(message, errorCode = "invalid_request") {
@@ -42,6 +44,16 @@ export class Cs02VerifierRequestError extends Error {
     this.name = "Cs02VerifierRequestError";
     this.errorCode = errorCode;
   }
+}
+
+export function validateCs02Nonce(nonce) {
+  if (!isStrictCs02Base64Url(nonce)) {
+    throw new Cs02VerifierRequestError(
+      "CS-02 authorization request nonce must be a non-empty base64url string",
+      "invalid_request",
+    );
+  }
+  return nonce;
 }
 
 function truthyEnv(value) {
@@ -139,7 +151,7 @@ export function validateCs02TransactionDataEntries(transactionData, dcqlQuery, o
 
     let decoded;
     try {
-      decoded = JSON.parse(Buffer.from(entry, "base64url").toString("utf8"));
+      decoded = JSON.parse(decodeStrictCs02Base64Url(entry).toString("utf8"));
     } catch {
       if (options.strict) {
         throw new Cs02VerifierRequestError(
@@ -198,10 +210,12 @@ export function validateCs02TransactionDataEntries(transactionData, dcqlQuery, o
 
 export function validateCs02JarGenerationInput({
   client_id,
+  response_uri = null,
   presentation_definition,
   dcql_query,
   response_mode,
   response_type = "vp_token",
+  nonce = null,
   transaction_data = null,
   options = { strict: true },
 }) {
@@ -237,6 +251,16 @@ export function validateCs02JarGenerationInput({
 
   validateCs02DcqlQuery(dcql_query, options);
   validateCs02ResponseMode(response_mode, options);
+  if (response_uri != null) {
+    let parsed;
+    try { parsed = new URL(response_uri); } catch {
+      throw new Cs02VerifierRequestError("CS-02 response_uri must be an absolute URI", "invalid_request");
+    }
+    if (parsed.protocol !== "https:") {
+      throw new Cs02VerifierRequestError("CS-02 response_uri must use HTTPS", "invalid_request");
+    }
+  }
+  if (nonce != null) validateCs02Nonce(nonce);
 
   if (response_type !== "vp_token") {
     throw new Cs02VerifierRequestError('CS-02 response_type must be "vp_token"', "invalid_request");
@@ -332,6 +356,7 @@ export function validateCs02SignedJar(requestJwt, options = { strict: true }) {
   }
 
   validateCs02ResponseMode(payload.response_mode, options);
+  validateCs02Nonce(payload.nonce);
 
   if (payload.exp - payload.iat > CS02_MAX_REQUEST_LIFETIME_SEC + 5) {
     if (payload.response_mode !== "dc_api" && payload.response_mode !== "dc_api.jwt") {

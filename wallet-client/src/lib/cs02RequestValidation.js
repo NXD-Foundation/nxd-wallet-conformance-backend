@@ -26,6 +26,7 @@ import {
   resolveCs02EffectiveClientMetadata,
   Cs02TrustPolicyError,
 } from "../../utils/cs02TrustPolicy.js";
+import { isStrictCs02Base64Url, decodeStrictCs02Base64Url, isStrictCs02EcP256Jwk } from "../../../utils/cs02Encoding.js";
 
 export {
   validateX509SanDnsTrustAnchor,
@@ -46,6 +47,11 @@ export const CS02_ALLOWED_REQUEST_URI_METHODS = new Set(["get", "post"]);
 export const CS02_DEFAULT_REQUEST_MAX_LIFETIME_SEC = 300;
 export const CS02_DEFAULT_CLOCK_SKEW_SEC = 300;
 export const CS02_NONCE_PATTERN = /^[A-Za-z0-9_-]+$/;
+export const CS02_SUPPORTED_TRANSACTION_DATA_TYPES = new Set([
+  "qes_authorization",
+  "payment_data",
+  "https://cloudsignatureconsortium.org/2025/qes",
+]);
 
 export class Cs02ValidationError extends Error {
   constructor(message, errorCode = "invalid_request") {
@@ -143,7 +149,7 @@ export function resolveCs02DidMethod(clientId) {
 }
 
 export function isP256Jwk(jwk) {
-  return jwk?.kty === "EC" && jwk?.crv === "P-256" && jwk?.x && jwk?.y;
+  return isStrictCs02EcP256Jwk(jwk) && jwk?.x && jwk?.y;
 }
 
 function assertEs256P256Jwk(jwk, context) {
@@ -322,6 +328,7 @@ export function validateCs02JarPayload(payload, options, log = () => {}) {
     "client_id",
     "nonce",
     "response_uri",
+    "state",
     "response_type",
     "response_mode",
     "iat",
@@ -381,6 +388,8 @@ export function validateCs02JarPayload(payload, options, log = () => {}) {
 
   validateCs02ClientId(payload.client_id, log);
   validateCs02Nonce(payload.nonce, log);
+  validateCs02ResponseUri(payload.response_uri, options, log);
+  validateCs02TransactionData(payload.transaction_data, log, payload.dcql_query);
 
   if (payload.client_metadata != null && options.strict) {
     try {
@@ -398,8 +407,89 @@ export function validateCs02JarPayload(payload, options, log = () => {}) {
   }
 }
 
+export function validateCs02ResponseUri(responseUri, options = {}, log = () => {}) {
+  if (typeof responseUri !== "string" || responseUri.length === 0) {
+    logValidationFailure(log, "response_uri_missing");
+    throw new Cs02ValidationError("Authorization response_uri must be a non-empty URI", "invalid_request");
+  }
+  let parsed;
+  try {
+    parsed = new URL(responseUri);
+  } catch {
+    logValidationFailure(log, "response_uri_invalid");
+    throw new Cs02ValidationError("Authorization response_uri must be an absolute URI", "invalid_request");
+  }
+  if (parsed.protocol !== "https:" && !(options.allowHttp === true && parsed.protocol === "http:")) {
+    logValidationFailure(log, "response_uri_https", { protocol: parsed.protocol });
+    throw new Cs02ValidationError(
+      "CS-02 authorization response_uri must use HTTPS",
+      "invalid_request",
+    );
+  }
+  return responseUri;
+}
+
+export function validateCs02TransactionData(transactionData, log = () => {}, dcqlQuery = null) {
+  if (transactionData == null) return;
+  if (!Array.isArray(transactionData)) {
+    logValidationFailure(log, "transaction_data_array");
+    throw new Cs02ValidationError("transaction_data must be an array", "invalid_request");
+  }
+  for (let index = 0; index < transactionData.length; index += 1) {
+    const entry = transactionData[index];
+    if (!isStrictCs02Base64Url(entry)) {
+      logValidationFailure(log, "transaction_data_encoding", { index });
+      throw new Cs02ValidationError(
+        `transaction_data[${index}] must be a non-empty base64url string`,
+        "invalid_request",
+      );
+    }
+    let decoded;
+    try {
+      decoded = JSON.parse(decodeStrictCs02Base64Url(entry).toString("utf8"));
+    } catch {
+      logValidationFailure(log, "transaction_data_json", { index });
+      throw new Cs02ValidationError(
+        `transaction_data[${index}] must contain a valid JSON object with type`,
+        "invalid_request",
+      );
+    }
+    if (!decoded || typeof decoded !== "object" || Array.isArray(decoded)) {
+      throw new Cs02ValidationError(`transaction_data[${index}] must contain a JSON object`, "invalid_request");
+    }
+    if (typeof decoded.type !== "string" || decoded.type.length === 0) {
+      throw new Cs02ValidationError(`transaction_data[${index}] must include a non-empty type`, "invalid_request");
+    }
+    if (!CS02_SUPPORTED_TRANSACTION_DATA_TYPES.has(decoded.type)) {
+      throw new Cs02ValidationError(
+        `Unsupported transaction_data type "${decoded.type}"`,
+        "invalid_request",
+      );
+    }
+    if (decoded.credential_ids != null && (
+      !Array.isArray(decoded.credential_ids) ||
+      decoded.credential_ids.length === 0 ||
+      !decoded.credential_ids.every((id) => typeof id === "string" && id.length > 0)
+    )) {
+      throw new Cs02ValidationError(
+        `transaction_data[${index}].credential_ids must be a non-empty string array`,
+        "invalid_request",
+      );
+    }
+    if (decoded.credential_ids != null && Array.isArray(dcqlQuery?.credentials)) {
+      const knownIds = new Set(dcqlQuery.credentials.map((credential) => credential?.id));
+      if (decoded.credential_ids.some((id) => !knownIds.has(id))) {
+        throw new Cs02ValidationError(
+          `transaction_data[${index}].credential_ids reference an unknown DCQL id`,
+          "invalid_request",
+        );
+      }
+    }
+  }
+}
+
 export function validateCs02Nonce(nonce, log = () => {}) {
-  if (typeof nonce !== "string" || nonce.length === 0 || !CS02_NONCE_PATTERN.test(nonce)) {
+  if (!isStrictCs02Base64Url(nonce)) {
     logValidationFailure(log, "nonce_syntax", { nonceType: typeof nonce });
     throw new Cs02ValidationError(
       "Authorization request nonce must be a non-empty base64url string",
@@ -481,6 +571,12 @@ function x5cLeafPem(header) {
   if (!Array.isArray(header?.x5c) || header.x5c.length === 0) {
     throw new Cs02ValidationError("x509_san_dns authorization request must include x5c", "invalid_client");
   }
+  if (header.x5c.some((entry) => {
+    if (typeof entry !== "string" || entry.length === 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(entry)) return true;
+    try { return Buffer.from(entry, "base64").length === 0; } catch { return true; }
+  })) {
+    throw new Cs02ValidationError("x509_san_dns authorization request contains malformed x5c", "invalid_client");
+  }
   const der = header.x5c[0];
   return `-----BEGIN CERTIFICATE-----\n${der.match(/.{1,64}/g).join("\n")}\n-----END CERTIFICATE-----\n`;
 }
@@ -537,7 +633,13 @@ async function verifyJarWithVerifierAttestation(requestJwt, header, clientId, op
       "invalid_client",
     );
   }
-  await validateVerifierAttestationTrust(header, clientId);
+  const attestation = await validateVerifierAttestationTrust(header, clientId);
+  if (!attestation.structureValid || !attestation.clientBindingValid) {
+    throw new Cs02ValidationError(
+      "verifier_attestation JWT is malformed or not bound to the client",
+      "invalid_client",
+    );
+  }
   return verifyJarWithX5cLeaf(requestJwt, header, clientId, "verifier_attestation x5c");
 }
 

@@ -3,6 +3,7 @@ import { encode } from "cbor-x";
 import * as jose from "jose";
 import { createHash } from "crypto";
 import {
+  validateCs02EncryptedAuthorizationResponse,
   Cs02VerifierResponseError,
   validateCs02DcqlVpTokenResponse,
   validateCs02JweResponseHeader,
@@ -104,6 +105,36 @@ function buildMdocB64ForTests(docType, namespace = null, claims = {}) {
 }
 
 describe("CS-02 verifier response validation (Phase 4)", () => {
+  it("validates the top-level direct_post.jwt response object", () => {
+    const payload = validateCs02EncryptedAuthorizationResponse(
+      { vp_token: { credential: "value" }, state: "state-1" },
+      { state: "state-1" },
+    );
+    expect(payload.state).to.equal("state-1");
+    expect(() => validateCs02EncryptedAuthorizationResponse(
+      { vp_token: "token" },
+      { state: "state-1" },
+    )).to.throw(Cs02VerifierResponseError, /include state/);
+    expect(() => validateCs02EncryptedAuthorizationResponse(
+      { vp_token: "token", state: "wrong" },
+      { state: "state-1" },
+    )).to.throw(Cs02VerifierResponseError, /State mismatch/);
+  });
+
+  it("binds JWE headers to a session-selected encryption key when present", () => {
+    const key = { kid: "session-enc", alg: "ECDH-ES+A256KW", use: "enc" };
+    expect(() => validateCs02JweResponseHeader(
+      { alg: key.alg, enc: "A256GCM", kid: key.kid },
+      { encrypted_response_alg_values_supported: [key.alg], encrypted_response_enc_values_supported: ["A256GCM"] },
+      key,
+    )).to.not.throw();
+    expect(() => validateCs02JweResponseHeader(
+      { alg: key.alg, enc: "A256GCM", kid: "other" },
+      { encrypted_response_alg_values_supported: [key.alg], encrypted_response_enc_values_supported: ["A256GCM"] },
+      key,
+    )).to.throw(Cs02VerifierResponseError, /session-selected/);
+  });
+
   it("rejects bare vp_token when session expects direct_post.jwt", () => {
     expect(() =>
       validateCs02ResponseSubmission(
@@ -113,6 +144,25 @@ describe("CS-02 verifier response validation (Phase 4)", () => {
       ),
     ).to.throw(Cs02VerifierResponseError);
   });
+
+  it("requires string response and state parameters for direct_post modes", () => {
+    expect(() => validateCs02ResponseSubmission(
+      { response: { encrypted: true } },
+      { response_mode: "direct_post.jwt" },
+      { strict: true },
+    )).to.throw(Cs02VerifierResponseError, /response parameter/);
+    expect(() => validateCs02ResponseSubmission(
+      { response: "not-a-jwe" },
+      { response_mode: "direct_post.jwt" },
+      { strict: true },
+    )).to.throw(Cs02VerifierResponseError, /compact JWE/);
+    expect(() => validateCs02ResponseSubmission(
+      { vp_token: "token", state: 42 },
+      { response_mode: "direct_post" },
+      { strict: true },
+    )).to.throw(Cs02VerifierResponseError, /state/);
+  });
+
 
   it("rejects response-only submission when session expects direct_post", () => {
     expect(() =>

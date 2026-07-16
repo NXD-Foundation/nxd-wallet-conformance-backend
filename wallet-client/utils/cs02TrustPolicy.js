@@ -215,6 +215,19 @@ export async function validateVerifierAttestationTrust(_header, _clientId) {
   // TODO(CS-02 verifier-attestation trust framework): verify VA-JWT signature and trusted issuer.
   // TODO(CS-02 verifier-attestation trust framework): enforce sub, exp, iat, and JAR signing-key binding.
   // TODO(CS-02 verifier-attestation trust framework): reject development/self-signed attestation when trust is configured.
+  let parsedHeader = null;
+  let parsedPayload = null;
+  let structureValid = false;
+  const parts = typeof _header?.jwt === "string" ? _header.jwt.split(".") : [];
+  if (parts.length === 3 && parts.every((part) => part.length > 0)) {
+    try {
+      parsedHeader = JSON.parse(Buffer.from(parts[0], "base64url").toString("utf8"));
+      parsedPayload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
+      structureValid = isPlainObject(parsedHeader) && isPlainObject(parsedPayload) &&
+        typeof parsedPayload.iss === "string" && typeof parsedPayload.sub === "string" &&
+        Number.isFinite(Number(parsedPayload.iat)) && Number.isFinite(Number(parsedPayload.exp));
+    } catch {}
+  }
   const result = {
     trusted: true,
     placeholder: true,
@@ -225,6 +238,13 @@ export async function validateVerifierAttestationTrust(_header, _clientId) {
       "Verify verifier-attestation JWT issuer, subject, expiry, issuance time, and JAR signing-key binding against configured trusted issuers.",
     clientId: _clientId ?? null,
     hasJwtHeader: typeof _header?.jwt === "string" && _header.jwt.length > 0,
+    structureValid,
+    parsedHeader,
+    parsedPayload,
+    clientBindingValid: structureValid && (_clientId == null ||
+      parsedPayload.sub === _clientId ||
+      parsedPayload.sub === String(_clientId).replace(/^[^:]+:/, "") ||
+      parsedPayload.aud === _clientId),
   };
   recordTrustPlaceholder("verifier_attestation", result);
   return result;

@@ -22,6 +22,7 @@ import {
   validateX509SanDnsTrustForRequestGeneration,
   Cs02VerifierRequestError,
 } from "./cs02VerifierRequest.js";
+import { isStrictCs02Base64Url } from "./cs02Encoding.js";
 
 /**
  * Extract certificate chain from a PEM file (fullchain or single cert)
@@ -346,6 +347,7 @@ export async function buildVpRequestJWT(
 
   validateCs02JarGenerationInput({
     client_id,
+    response_uri: redirect_uri,
     presentation_definition,
     dcql_query,
     response_mode,
@@ -355,7 +357,7 @@ export async function buildVpRequestJWT(
   });
 
   if (!nonce) nonce = generateNonce(16);
-  if (typeof nonce !== "string" || nonce.length === 0 || !/^[A-Za-z0-9_-]+$/.test(nonce)) {
+  if (!isStrictCs02Base64Url(nonce)) {
     throw new Cs02VerifierRequestError(
       "CS-02 nonce must be a non-empty base64url string",
       "invalid_request",

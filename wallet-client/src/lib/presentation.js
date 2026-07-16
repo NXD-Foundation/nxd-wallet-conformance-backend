@@ -1404,7 +1404,7 @@ export async function performPresentation(
           (k) =>
             k?.use === "enc" && k?.kty === "EC" && k?.crv === "P-256" &&
             typeof k?.kid === "string" && k.kid.length > 0 &&
-            typeof k?.alg === "string" && k.alg.startsWith("ECDH-ES"),
+            ["ECDH-ES", "ECDH-ES+A128KW", "ECDH-ES+A192KW", "ECDH-ES+A256KW"].includes(k?.alg),
         );
         if (!encKey) {
           throw new Error("Verifier did not provide an ECDH-ES P-256 encryption JWK with alg and kid");

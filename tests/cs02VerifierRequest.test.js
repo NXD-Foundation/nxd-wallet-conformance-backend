@@ -4,11 +4,13 @@ import * as jose from "jose";
 import { buildVpRequestJWT } from "../utils/cryptoUtils.js";
 import { DEFAULT_DCQL_QUERY } from "../utils/routeUtils.js";
 import {
+  validateCs02Nonce,
   Cs02VerifierRequestError,
   createOpenId4VpRequestUrl,
   filterClientMetadataForCs02,
   resolveVerifierCs02Options,
   validateCs02TransactionDataEntries,
+  validateCs02JarGenerationInput,
 } from "../utils/cs02VerifierRequest.js";
 import { setCs02TrustPlaceholderRecorder } from "../utils/cs02TrustPolicy.js";
 
@@ -51,6 +53,25 @@ async function buildStandardCs02Jar(overrides = {}) {
 }
 
 describe("CS-02 verifier request generation (Phase 3)", () => {
+  it("accepts base64url nonces and rejects non-conforming nonce syntax", () => {
+    expect(validateCs02Nonce("nonce-phase3_01")).to.equal("nonce-phase3_01");
+    expect(() => validateCs02Nonce("nonce with spaces")).to.throw(
+      Cs02VerifierRequestError,
+      /base64url/,
+    );
+  });
+
+  it("requires an HTTPS response_uri for strict request generation", () => {
+    expect(() => validateCs02JarGenerationInput({
+      client_id: "x509_san_dns:verifier.example",
+      response_uri: "http://verifier.example/response",
+      dcql_query: validDcqlQuery(),
+      response_mode: "direct_post",
+      nonce: "nonce-1",
+      options: { strict: true },
+    })).to.throw(Cs02VerifierRequestError, /HTTPS/);
+  });
+
   const originalCompatibility = process.env.VERIFIER_CS02_COMPATIBILITY;
 
   afterEach(() => {
