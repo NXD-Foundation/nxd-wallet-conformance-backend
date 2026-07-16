@@ -31,9 +31,49 @@
   },
   "MessageStructure.Metadata.110": {
     "disposition": "inapplicable-cs02",
-    "we_build_rationale": "x509_hash client identification is excluded by the WE BUILD CS-02 profile.",
+    "we_build_rationale": "redirect_uri client identification is excluded by the WE BUILD CS-02 profile.",
     "remaining_gap": "None for the selected profile."
   },
+  "MessageStructure.Metadata.111": {
+    "disposition": "implemented",
+    "we_build_rationale": "Supported strict signing prefixes are accepted after scheme validation.",
+    "implementation_paths": ["wallet-client/src/lib/cs02RequestValidation.js", "utils/cs02VerifierRequest.js"],
+    "test_paths": ["wallet-client/test/cs02RequestValidation.test.js", "tests/cs02VerifierRequest.test.js"],
+    "remaining_gap": null
+  },
+  "MessageStructure.Metadata.129": { "disposition": "inapplicable-cs02", "we_build_rationale": "x509_hash is excluded by the WE BUILD CS-02 profile.", "remaining_gap": "None for the selected profile." },
+  "MessageStructure.Metadata.130": { "disposition": "inapplicable-cs02", "we_build_rationale": "x509_hash is excluded by the WE BUILD CS-02 profile.", "remaining_gap": "None for the selected profile." },
+  "MessageStructure.Metadata.131": { "disposition": "inapplicable-cs02", "we_build_rationale": "x509_hash is excluded by the WE BUILD CS-02 profile.", "remaining_gap": "None for the selected profile." },
+  "MessageStructure.Metadata.132": { "disposition": "inapplicable-cs02", "we_build_rationale": "x509_hash is excluded by the WE BUILD CS-02 profile.", "remaining_gap": "None for the selected profile." },
+  "MessageStructure.Metadata.116": { "disposition": "implemented", "we_build_rationale": "Verifier-attestation JWT subject/client binding is checked structurally.", "implementation_paths": ["utils/cs02TrustPolicy.js", "wallet-client/src/lib/cs02RequestValidation.js"], "test_paths": ["wallet-client/test/cs02RequestValidation.test.js"], "remaining_gap": "Attestation issuer trust is out of scope." },
+  "MessageStructure.Metadata.117": { "disposition": "implemented", "we_build_rationale": "Client-unbound verifier attestations are rejected.", "implementation_paths": ["wallet-client/src/lib/cs02RequestValidation.js"], "test_paths": ["wallet-client/test/cs02RequestValidation.test.js"], "remaining_gap": "Attestation issuer trust is out of scope." },
+  "MessageStructure.Metadata.118": { "disposition": "implemented", "we_build_rationale": "The verifier-attestation JWT is parsed from the JOSE jwt header field.", "implementation_paths": ["utils/cs02TrustPolicy.js"], "test_paths": ["wallet-client/test/cs02RequestValidation.test.js"], "remaining_gap": "Attestation issuer trust is out of scope." },
+  "MessageStructure.Metadata.119": { "disposition": "implemented", "we_build_rationale": "Verifier-attestation requests without a jwt header are rejected.", "implementation_paths": ["wallet-client/src/lib/cs02RequestValidation.js"], "test_paths": ["wallet-client/test/cs02RequestValidation.test.js"], "remaining_gap": null },
+  "MessageStructure.Metadata.125": { "disposition": "structural-only", "we_build_rationale": "x509_san_dns certificate/key structure is checked without evaluating SAN trust.", "implementation_paths": ["wallet-client/src/lib/cs02RequestValidation.js", "utils/cs02TrustPolicy.js"], "test_paths": ["wallet-client/test/cs02RequestValidation.test.js", "tests/cs02TrustPolicy.test.js"], "remaining_gap": "SAN DNS matching and trust anchors are out of scope." },
+  "MessageStructure.Metadata.126": { "disposition": "structural-only", "we_build_rationale": "SAN mismatch rejection requires trust-framework evaluation not enabled in this profile.", "implementation_paths": ["utils/cs02TrustPolicy.js"], "test_paths": ["tests/cs02TrustPolicy.test.js"], "remaining_gap": "SAN DNS matching is out of scope." },
+  "MessageStructure.Metadata.127": { "disposition": "structural-only", "we_build_rationale": "x509_san_dns metadata structure is accepted while SAN trust is deferred.", "implementation_paths": ["utils/cs02TrustPolicy.js"], "test_paths": ["tests/cs02TrustPolicy.test.js"], "remaining_gap": "SAN DNS matching is out of scope." },
+  "MessageStructure.Metadata.128": { "disposition": "structural-only", "we_build_rationale": "FQDN mismatch decisions require deferred SAN trust evaluation.", "implementation_paths": ["utils/cs02TrustPolicy.js"], "test_paths": ["tests/cs02TrustPolicy.test.js"], "remaining_gap": "SAN DNS matching is out of scope." },
+  "MessageStructure.Metadata.133": { "disposition": "inapplicable-cs02", "we_build_rationale": "origin: client identification outside DC API is excluded by the WE BUILD CS-02 profile.", "remaining_gap": "None for the selected profile." },
+  "MessageStructure.Metadata.136": { "disposition": "implemented", "we_build_rationale": "Strict metadata advertises the supported request-object signing algorithms.", "implementation_paths": ["utils/cs02TrustPolicy.js"], "test_paths": ["tests/cs02TrustPolicy.test.js"], "remaining_gap": null },
+  "MessageStructure.Metadata.141": { "disposition": "structural-only", "we_build_rationale": "x5c structure is validated while certificate trust-chain evaluation is deferred.", "implementation_paths": ["wallet-client/src/lib/cs02RequestValidation.js", "utils/cs02TrustPolicy.js"], "test_paths": ["wallet-client/test/cs02RequestValidation.test.js", "tests/cs02TrustPolicy.test.js"], "remaining_gap": "Certificate trust-chain validation is out of scope." },
+  "MessageStructure.Metadata.135": { "disposition": "implemented", "we_build_rationale": "Strict direct_post.jwt request validation requires client metadata and a supported encrypted-response encoding before processing.", "implementation_paths": ["wallet-client/src/lib/cs02RequestValidation.js", "utils/cs02TrustPolicy.js"], "test_paths": ["wallet-client/test/cs02RequestValidation.test.js", "tests/cs02TrustPolicy.test.js"], "remaining_gap": null },
+  "MessageStructure.Metadata.138": { "disposition": "implemented", "we_build_rationale": "Strict POST request-URI flows generate a wallet nonce, send it as UTF-8 form data, and require the returned signed request to echo it.", "implementation_paths": ["wallet-client/src/lib/cs02RequestValidation.js", "wallet-client/src/lib/presentation.js"], "test_paths": ["wallet-client/test/cs02RequestValidation.test.js"], "remaining_gap": null },
+  "MessageStructure.Metadata.139": { "disposition": "implemented", "we_build_rationale": "A strict wallet_nonce mismatch raises invalid_request before credential selection.", "implementation_paths": ["wallet-client/src/lib/cs02RequestValidation.js"], "test_paths": ["wallet-client/test/cs02RequestValidation.test.js"], "remaining_gap": null },
+  "MessageStructure.Metadata.140": { "disposition": "implemented", "we_build_rationale": "A strict POST request that omits the echoed wallet_nonce is rejected before presentation processing.", "implementation_paths": ["wallet-client/src/lib/cs02RequestValidation.js"], "test_paths": ["wallet-client/test/cs02RequestValidation.test.js"], "remaining_gap": null },
+  "MessageStructure.Metadata.134": { "disposition": "implemented", "we_build_rationale": "Strict encrypted request/response metadata is filtered, required for direct_post.jwt, and exercised through the selected-key successful flow.", "implementation_paths": ["utils/cs02TrustPolicy.js", "services/cacheServiceRedis.js", "wallet-client/src/lib/presentation.js", "wallet-client/src/lib/cs02RequestValidation.js"], "test_paths": ["tests/cs02TrustPolicy.test.js", "tests/vpSessionLifecycle.test.js", "tests/cs02SuccessfulFlowMatrix.test.js", "wallet-client/test/cs02RequestValidation.test.js"], "remaining_gap": null },
+  "MessageStructure.Metadata.137": { "disposition": "inapplicable-cs02", "we_build_rationale": "redirect_uri-specific signing-algorithm omission is outside the strict WE BUILD CS-02 profile.", "remaining_gap": "None for the selected profile." },
+  "MessageStructure.Metadata.112": { "disposition": "inapplicable-cs02", "we_build_rationale": "openid_federation trust-chain processing is outside the strict WE BUILD CS-02 profile.", "remaining_gap": "None for the selected profile." },
+  "MessageStructure.Metadata.113": { "disposition": "inapplicable-cs02", "we_build_rationale": "openid_federation trust-chain processing is outside the strict WE BUILD CS-02 profile.", "remaining_gap": "None for the selected profile." },
+  "MessageStructure.Metadata.114": { "disposition": "inapplicable-cs02", "we_build_rationale": "openid_federation metadata precedence is outside the strict WE BUILD CS-02 profile.", "remaining_gap": "None for the selected profile." },
+  "MessageStructure.Metadata.115": { "disposition": "inapplicable-cs02", "we_build_rationale": "openid_federation resolution is outside the strict WE BUILD CS-02 profile.", "remaining_gap": "None for the selected profile." },
+  "MessageStructure.Metadata.120": { "disposition": "implemented", "we_build_rationale": "Strict metadata validates HTTPS redirect_uris and matches the signed response_uri when supplied.", "implementation_paths": ["utils/cs02TrustPolicy.js", "wallet-client/src/lib/cs02RequestValidation.js"], "test_paths": ["tests/cs02TrustPolicy.test.js", "wallet-client/test/cs02RequestValidation.test.js"], "remaining_gap": null },
+  "MessageStructure.Metadata.121": { "disposition": "implemented", "we_build_rationale": "A response_uri not listed in strict redirect_uris metadata is rejected as invalid_client.", "implementation_paths": ["wallet-client/src/lib/cs02RequestValidation.js"], "test_paths": ["wallet-client/test/cs02RequestValidation.test.js"], "remaining_gap": null },
+  "MessageStructure.Metadata.122": { "disposition": "implemented", "we_build_rationale": "Strict policy explicitly treats redirect_uris as optional metadata; if supplied, entries must be HTTPS and include the signed response_uri.", "implementation_paths": ["utils/cs02TrustPolicy.js", "wallet-client/src/lib/cs02RequestValidation.js"], "test_paths": ["tests/cs02TrustPolicy.test.js", "wallet-client/test/cs02RequestValidation.test.js"], "remaining_gap": null },
+  "MessageStructure.Metadata.123": { "disposition": "structural-only", "we_build_rationale": "Strict processing limits key material to client_metadata and parses VA structure; external attestation metadata authorization is deferred.", "implementation_paths": ["utils/cs02TrustPolicy.js"], "test_paths": ["tests/cs02TrustPolicy.test.js"], "remaining_gap": "Verifier-attestation metadata authorization is trust-framework work." },
+  "MessageStructure.Metadata.124": { "disposition": "structural-only", "we_build_rationale": "Key metadata inside client_metadata participates in structural response-key selection without a trusted attestation authorization decision.", "implementation_paths": ["utils/cs02TrustPolicy.js", "services/cacheServiceRedis.js"], "test_paths": ["tests/cs02TrustPolicy.test.js", "tests/vpSessionLifecycle.test.js"], "remaining_gap": "Verifier-attestation metadata authorization is deferred." },
+  "MessageStructure.ProtocolMessages.124": { "disposition": "implemented", "we_build_rationale": "Unknown fields in decrypted direct_post.jwt authorization responses do not affect recognized-field validation.", "implementation_paths": ["utils/cs02VerifierResponse.js"], "test_paths": ["tests/cs02VerifierResponse.test.js"], "remaining_gap": null },
+  "MessageStructure.ProtocolMessages.127": { "disposition": "implemented", "we_build_rationale": "Verifier JSON responses validate recognized fields while ignoring unrelated parameters.", "implementation_paths": ["utils/cs02VerifierResponse.js"], "test_paths": ["tests/cs02VerifierResponse.test.js"], "remaining_gap": null },
+  "MessageStructure.ProtocolMessages.128": { "disposition": "implemented", "we_build_rationale": "Unrecognized response parameters do not bypass state, mode, or vp_token validation.", "implementation_paths": ["utils/cs02VerifierResponse.js", "routes/verify/verifierRoutes.js"], "test_paths": ["tests/cs02VerifierResponse.test.js", "tests/cs02SuccessfulFlowMatrix.test.js"], "remaining_gap": null },
   "SecurityMechanisms.TrustMechanisms.002": {
     "disposition": "structural-only",
     "we_build_rationale": "Trust input structure is checked; issuer/anchor trust evaluation is deferred.",
@@ -188,6 +228,37 @@
     "test_paths": ["tests/cs02SuccessfulFlowMatrix.test.js", "tests/cs02VerifierResponse.test.js"],
     "remaining_gap": null
   },
+  "MessageStructure.ProtocolMessages.140": {
+    "disposition": "implemented",
+    "we_build_rationale": "Verifier sessions transition to terminal status and reject replayed submissions.",
+    "implementation_paths": ["routes/verify/verifierRoutes.js", "services/cacheServiceRedis.js"],
+    "test_paths": ["tests/cs02VerifierResponse.test.js", "tests/vpSessionLifecycle.test.js"],
+    "remaining_gap": null
+  },
+  "MessageStructure.ProtocolMessages.142": {
+    "disposition": "implemented",
+    "we_build_rationale": "Strict CS-02 rejects vp_token requests that omit required DCQL data instructions.",
+    "implementation_paths": ["wallet-client/src/lib/cs02DcqlValidation.js", "wallet-client/src/lib/cs02RequestValidation.js"],
+    "test_paths": ["wallet-client/test/cs02DcqlValidation.test.js", "wallet-client/test/cs02RequestValidation.test.js"],
+    "remaining_gap": null
+  },
+  "MessageStructure.ProtocolMessages.150": {
+    "disposition": "implemented",
+    "we_build_rationale": "Unsupported credential presentation formats are rejected by strict CS-02 format validation.",
+    "implementation_paths": ["wallet-client/src/lib/cs02DcqlValidation.js", "utils/cs02VerifierResponse.js"],
+    "test_paths": ["wallet-client/test/cs02DcqlValidation.test.js", "tests/cs02VerifierResponse.test.js"],
+    "remaining_gap": null
+  },
+  "MessageStructure.ProtocolMessages.151": {
+    "disposition": "implemented",
+    "we_build_rationale": "Unsupported response credential formats are rejected consistently in strict CS-02 validation.",
+    "implementation_paths": ["utils/cs02VerifierResponse.js", "wallet-client/src/lib/cs02DcqlValidation.js"],
+    "test_paths": ["tests/cs02VerifierResponse.test.js", "wallet-client/test/cs02DcqlValidation.test.js"],
+    "remaining_gap": null
+  },
+  "MessageStructure.ProtocolMessages.147": { "disposition": "implemented", "we_build_rationale": "Wallet protocol errors are normalized to the allowed CS-02 error vocabulary, with unknown wallet errors mapped to access_denied.", "implementation_paths": ["utils/cs02VerifierResponse.js", "routes/verify/verifierRoutes.js"], "test_paths": ["tests/cs02VerifierResponse.test.js"], "remaining_gap": null },
+  "MessageStructure.ProtocolMessages.148": { "disposition": "inapplicable-cs02", "we_build_rationale": "Interactive user-consent UI is outside this headless wallet service boundary and must be supplied by a production wallet wrapper.", "implementation_paths": ["wallet-client/src/lib/dcqlCredentialSelection.js"], "test_paths": [], "remaining_gap": "Consent UX remains an external integration responsibility." },
+  "MessageStructure.ProtocolMessages.149": { "disposition": "inapplicable-cs02", "we_build_rationale": "Interactive user-authentication UI is outside this headless wallet service boundary and must be supplied by a production wallet wrapper.", "implementation_paths": ["wallet-client/src/lib/dcqlCredentialSelection.js"], "test_paths": [], "remaining_gap": "Authentication UX remains an external integration responsibility." },
   "SecurityMechanisms.SessionBinding.001": {
     "disposition": "implemented",
     "we_build_rationale": "Strict authorization requests accept a non-empty URL-safe nonce.",
@@ -551,5 +622,304 @@
     "implementation_paths": ["wallet-client/src/lib/cs02DcqlValidation.js"],
     "test_paths": ["wallet-client/test/cs02DcqlValidation.test.js"],
     "remaining_gap": null
-  }
+  },
+  "MessageStructure.ProtocolMessages.032": {
+    "disposition": "inapplicable-cs02",
+    "we_build_rationale": "Strict WE BUILD CS-02 requires state for authorization-response correlation.",
+    "remaining_gap": "No-state success is retained only for non-strict compatibility profiles."
+  },
+  "MessageStructure.ProtocolMessages.033": {
+    "disposition": "implemented",
+    "we_build_rationale": "Malformed or non-URL-safe state values are rejected by strict request validation.",
+    "implementation_paths": ["wallet-client/src/lib/cs02RequestValidation.js", "utils/cs02VerifierResponse.js"],
+    "test_paths": ["wallet-client/test/cs02RequestValidation.test.js", "tests/cs02VerifierResponse.test.js"],
+    "remaining_gap": null
+  },
+  "MessageStructure.ProtocolMessages.036": {
+    "disposition": "implemented",
+    "we_build_rationale": "Authorization responses are required to carry vp_token in the validated top-level response object.",
+    "implementation_paths": ["utils/cs02VerifierResponse.js", "wallet-client/src/lib/presentation.js"],
+    "test_paths": ["tests/cs02VerifierResponse.test.js", "tests/cs02SuccessfulFlowMatrix.test.js"],
+    "remaining_gap": null
+  },
+  "MessageStructure.ProtocolMessages.037": {
+    "disposition": "implemented",
+    "we_build_rationale": "Strict authorization response validation handles VP response parameters without OAuth code/access-token fields.",
+    "implementation_paths": ["utils/cs02VerifierResponse.js"],
+    "test_paths": ["tests/cs02VerifierResponse.test.js", "tests/cs02SuccessfulFlowMatrix.test.js"],
+    "remaining_gap": null
+  },
+  "MessageStructure.ProtocolMessages.042": {
+    "disposition": "implemented",
+    "we_build_rationale": "POST request-object retrieval uses HTTPS and the required form/request-object content negotiation.",
+    "implementation_paths": ["wallet-client/src/lib/cs02RequestValidation.js"],
+    "test_paths": ["wallet-client/test/cs02RequestValidation.test.js"],
+    "remaining_gap": null
+  },
+  "MessageStructure.ProtocolMessages.047": {
+    "disposition": "implemented",
+    "we_build_rationale": "Request URI responses with the signed authorization-request content type are processed as JARs.",
+    "implementation_paths": ["wallet-client/src/lib/cs02RequestValidation.js"],
+    "test_paths": ["wallet-client/test/cs02RequestValidation.test.js"],
+    "remaining_gap": null
+  },
+  "MessageStructure.ProtocolMessages.049": {
+    "disposition": "implemented",
+    "we_build_rationale": "Signed JAR values take precedence and contradictions from the invocation query are rejected.",
+    "implementation_paths": ["utils/cs02TrustPolicy.js", "wallet-client/src/lib/cs02RequestValidation.js"],
+    "test_paths": ["tests/cs02TrustPolicy.test.js", "wallet-client/test/cs02RequestValidation.test.js"],
+    "remaining_gap": null
+  },
+  "MessageStructure.ProtocolMessages.050": {
+    "disposition": "implemented",
+    "we_build_rationale": "Matching invocation and signed-JAR client_id values are accepted.",
+    "implementation_paths": ["wallet-client/src/lib/cs02RequestValidation.js"],
+    "test_paths": ["wallet-client/test/cs02RequestValidation.test.js"],
+    "remaining_gap": null
+  },
+  "MessageStructure.ProtocolMessages.051": {
+    "disposition": "implemented",
+    "we_build_rationale": "Invocation/JAR client_id mismatches are rejected before presentation processing.",
+    "implementation_paths": ["wallet-client/src/lib/cs02RequestValidation.js"],
+    "test_paths": ["wallet-client/test/cs02RequestValidation.test.js"],
+    "remaining_gap": null
+  },
+  "MessageStructure.ProtocolMessages.052": {
+    "disposition": "implemented",
+    "we_build_rationale": "Strict DCQL validation accepts non-empty credential arrays with valid entries.",
+    "implementation_paths": ["wallet-client/src/lib/cs02DcqlValidation.js"],
+    "test_paths": ["wallet-client/test/cs02DcqlValidation.test.js"],
+    "remaining_gap": null
+  },
+  "MessageStructure.ProtocolMessages.053": {
+    "disposition": "implemented",
+    "we_build_rationale": "Malformed DCQL credential entries are rejected.",
+    "implementation_paths": ["wallet-client/src/lib/cs02DcqlValidation.js"],
+    "test_paths": ["wallet-client/test/cs02DcqlValidation.test.js"],
+    "remaining_gap": null
+  },
+  "MessageStructure.ProtocolMessages.054": {
+    "disposition": "implemented",
+    "we_build_rationale": "A missing credentials property is rejected in strict DCQL mode.",
+    "implementation_paths": ["wallet-client/src/lib/cs02DcqlValidation.js"],
+    "test_paths": ["wallet-client/test/cs02DcqlValidation.test.js"],
+    "remaining_gap": null
+  },
+  "MessageStructure.ProtocolMessages.055": {
+    "disposition": "implemented",
+    "we_build_rationale": "An empty credentials array is rejected in strict DCQL mode.",
+    "implementation_paths": ["wallet-client/src/lib/cs02DcqlValidation.js"],
+    "test_paths": ["wallet-client/test/cs02DcqlValidation.test.js"],
+    "remaining_gap": null
+  },
+  "MessageStructure.ProtocolMessages.096": {
+    "disposition": "implemented",
+    "we_build_rationale": "Strict DCQL credential_sets accept valid required/options structures.",
+    "implementation_paths": ["wallet-client/src/lib/cs02DcqlValidation.js", "utils/cs02DcqlCore.js"],
+    "test_paths": ["wallet-client/test/cs02DcqlValidation.test.js", "tests/cs02DcqlCore.test.js"],
+    "remaining_gap": null
+  },
+  "MessageStructure.ProtocolMessages.097": {
+    "disposition": "implemented",
+    "we_build_rationale": "Malformed credential_sets entries are rejected before selection.",
+    "implementation_paths": ["wallet-client/src/lib/cs02DcqlValidation.js"],
+    "test_paths": ["wallet-client/test/cs02DcqlValidation.test.js"],
+    "remaining_gap": null
+  },
+  "MessageStructure.ProtocolMessages.098": {
+    "disposition": "implemented",
+    "we_build_rationale": "Credential-set options must be non-empty arrays of known IDs.",
+    "implementation_paths": ["wallet-client/src/lib/cs02DcqlValidation.js", "utils/cs02DcqlCore.js"],
+    "test_paths": ["wallet-client/test/cs02DcqlValidation.test.js", "tests/cs02DcqlCore.test.js"],
+    "remaining_gap": null
+  },
+  "MessageStructure.ProtocolMessages.105": {
+    "disposition": "implemented",
+    "we_build_rationale": "Strict DCQL accepts supported non-empty claim paths for credential queries.",
+    "implementation_paths": ["utils/cs02DcqlCore.js", "wallet-client/src/lib/cs02DcqlValidation.js"],
+    "test_paths": ["tests/cs02DcqlCore.test.js", "wallet-client/test/cs02DcqlValidation.test.js"],
+    "remaining_gap": null
+  },
+  "MessageStructure.ProtocolMessages.106": {
+    "disposition": "implemented",
+    "we_build_rationale": "Array-index, JSONPath, and unsupported claim-path segments are rejected.",
+    "implementation_paths": ["utils/cs02DcqlCore.js", "wallet-client/src/lib/cs02DcqlValidation.js"],
+    "test_paths": ["tests/cs02DcqlCore.test.js", "wallet-client/test/cs02DcqlValidation.test.js"],
+    "remaining_gap": null
+  },
+  "MessageStructure.ProtocolMessages.107": {
+    "disposition": "implemented",
+    "we_build_rationale": "Supported string claim values constraints are validated and applied by wallet/verifier adapters.",
+    "implementation_paths": ["utils/sdJwtClaims.js", "utils/mdocClaims.js", "wallet-client/src/lib/cs02DcqlValidation.js"],
+    "test_paths": ["tests/cs02VerifierResponse.test.js", "wallet-client/test/cs02DcqlValidation.test.js"],
+    "remaining_gap": null
+  },
+  "MessageStructure.ProtocolMessages.108": {
+    "disposition": "implemented",
+    "we_build_rationale": "Malformed claim values constraints are rejected during strict DCQL validation.",
+    "implementation_paths": ["wallet-client/src/lib/cs02DcqlValidation.js"],
+    "test_paths": ["wallet-client/test/cs02DcqlValidation.test.js"],
+    "remaining_gap": null
+  },
+  "MessageStructure.ProtocolMessages.109": {
+    "disposition": "implemented",
+    "we_build_rationale": "Strict DCQL claim_sets require known claim IDs and non-empty options.",
+    "implementation_paths": ["wallet-client/src/lib/cs02DcqlValidation.js", "utils/sdJwtClaims.js", "utils/mdocClaims.js"],
+    "test_paths": ["wallet-client/test/cs02DcqlValidation.test.js", "tests/cs02VerifierResponse.test.js"],
+    "remaining_gap": null
+  },
+  "MessageStructure.ProtocolMessages.056": { "disposition": "implemented", "we_build_rationale": "Strict DCQL requires credentials to be an array when present.", "implementation_paths": ["wallet-client/src/lib/cs02DcqlValidation.js"], "test_paths": ["wallet-client/test/cs02DcqlValidation.test.js"], "remaining_gap": null },
+  "MessageStructure.ProtocolMessages.057": { "disposition": "implemented", "we_build_rationale": "DCQL without credential_sets remains valid and uses the credential query list.", "implementation_paths": ["utils/cs02DcqlCore.js"], "test_paths": ["tests/cs02DcqlCore.test.js"], "remaining_gap": null },
+  "MessageStructure.ProtocolMessages.058": { "disposition": "implemented", "we_build_rationale": "Empty credential_sets are rejected by strict DCQL validation.", "implementation_paths": ["wallet-client/src/lib/cs02DcqlValidation.js"], "test_paths": ["wallet-client/test/cs02DcqlValidation.test.js"], "remaining_gap": null },
+  "MessageStructure.ProtocolMessages.059": { "disposition": "implemented", "we_build_rationale": "Unknown top-level DCQL properties do not bypass validation of recognized fields.", "implementation_paths": ["wallet-client/src/lib/cs02DcqlValidation.js"], "test_paths": ["wallet-client/test/cs02DcqlValidation.test.js"], "remaining_gap": null },
+  "MessageStructure.ProtocolMessages.060": { "disposition": "implemented", "we_build_rationale": "Unknown non-top-level DCQL properties are ignored while recognized constraints are enforced.", "implementation_paths": ["wallet-client/src/lib/cs02DcqlValidation.js"], "test_paths": ["wallet-client/test/cs02DcqlValidation.test.js"], "remaining_gap": null },
+  "MessageStructure.ProtocolMessages.061": { "disposition": "implemented", "we_build_rationale": "Credential entries without an id are rejected.", "implementation_paths": ["wallet-client/src/lib/cs02DcqlValidation.js"], "test_paths": ["wallet-client/test/cs02DcqlValidation.test.js"], "remaining_gap": null },
+  "MessageStructure.ProtocolMessages.062": { "disposition": "implemented", "we_build_rationale": "Credential ids must be strings.", "implementation_paths": ["wallet-client/src/lib/cs02DcqlValidation.js"], "test_paths": ["wallet-client/test/cs02DcqlValidation.test.js"], "remaining_gap": null },
+  "MessageStructure.ProtocolMessages.063": { "disposition": "implemented", "we_build_rationale": "Empty credential ids are rejected.", "implementation_paths": ["wallet-client/src/lib/cs02DcqlValidation.js"], "test_paths": ["wallet-client/test/cs02DcqlValidation.test.js"], "remaining_gap": null },
+  "MessageStructure.ProtocolMessages.064": { "disposition": "implemented", "we_build_rationale": "Alphanumeric, underscore, and hyphen credential ids are accepted.", "implementation_paths": ["wallet-client/src/lib/cs02DcqlValidation.js"], "test_paths": ["wallet-client/test/cs02DcqlValidation.test.js"], "remaining_gap": null },
+  "MessageStructure.ProtocolMessages.065": { "disposition": "implemented", "we_build_rationale": "Credential ids with invalid characters are rejected.", "implementation_paths": ["wallet-client/src/lib/cs02DcqlValidation.js"], "test_paths": ["wallet-client/test/cs02DcqlValidation.test.js"], "remaining_gap": null },
+  "MessageStructure.ProtocolMessages.066": { "disposition": "implemented", "we_build_rationale": "Duplicate credential ids are rejected during strict DCQL validation.", "implementation_paths": ["wallet-client/src/lib/cs02DcqlValidation.js"], "test_paths": ["wallet-client/test/cs02DcqlValidation.test.js"], "remaining_gap": null },
+  "MessageStructure.ProtocolMessages.068": { "disposition": "implemented", "we_build_rationale": "A missing credential format is rejected in strict DCQL mode.", "implementation_paths": ["wallet-client/src/lib/cs02DcqlValidation.js"], "test_paths": ["wallet-client/test/cs02DcqlValidation.test.js"], "remaining_gap": null },
+  "MessageStructure.ProtocolMessages.069": { "disposition": "implemented", "we_build_rationale": "Unsupported credential formats are rejected in strict CS-02 validation.", "implementation_paths": ["wallet-client/src/lib/cs02DcqlValidation.js"], "test_paths": ["wallet-client/test/cs02DcqlValidation.test.js"], "remaining_gap": null },
+  "MessageStructure.ProtocolMessages.070": { "disposition": "implemented", "we_build_rationale": "The shared DCQL cardinality predicate defaults multiple to false.", "implementation_paths": ["utils/cs02DcqlCore.js"], "test_paths": ["tests/cs02DcqlCore.test.js"], "remaining_gap": null },
+  "MessageStructure.ProtocolMessages.071": { "disposition": "implemented", "we_build_rationale": "The shared evaluator applies an explicit multiple value consistently at wallet and verifier.", "implementation_paths": ["utils/cs02DcqlCore.js"], "test_paths": ["tests/cs02DcqlCore.test.js", "tests/cs02VerifierResponse.test.js"], "remaining_gap": null },
+  "MessageStructure.ProtocolMessages.072": { "disposition": "implemented", "we_build_rationale": "Non-boolean multiple values are rejected by strict DCQL validation.", "implementation_paths": ["wallet-client/src/lib/cs02DcqlValidation.js"], "test_paths": ["wallet-client/test/cs02DcqlValidation.test.js"], "remaining_gap": null },
+  "MessageStructure.ProtocolMessages.081": { "disposition": "implemented", "we_build_rationale": "Invalid require_cryptographic_holder_binding values are rejected.", "implementation_paths": ["wallet-client/src/lib/cs02DcqlValidation.js"], "test_paths": ["wallet-client/test/cs02DcqlValidation.test.js"], "remaining_gap": null },
+  "MessageStructure.ProtocolMessages.082": { "disposition": "implemented", "we_build_rationale": "Credentials without claims remain structurally valid.", "implementation_paths": ["wallet-client/src/lib/cs02DcqlValidation.js"], "test_paths": ["wallet-client/test/cs02DcqlValidation.test.js"], "remaining_gap": null },
+  "MessageStructure.ProtocolMessages.083": { "disposition": "implemented", "we_build_rationale": "Empty claims arrays are rejected in strict DCQL mode.", "implementation_paths": ["wallet-client/src/lib/cs02DcqlValidation.js"], "test_paths": ["wallet-client/test/cs02DcqlValidation.test.js"], "remaining_gap": null },
+  "MessageStructure.ProtocolMessages.084": { "disposition": "implemented", "we_build_rationale": "Claims must be represented as an array when provided.", "implementation_paths": ["wallet-client/src/lib/cs02DcqlValidation.js"], "test_paths": ["wallet-client/test/cs02DcqlValidation.test.js"], "remaining_gap": null },
+  "MessageStructure.ProtocolMessages.085": { "disposition": "implemented", "we_build_rationale": "Empty claim_sets are rejected by strict DCQL validation.", "implementation_paths": ["wallet-client/src/lib/cs02DcqlValidation.js"], "test_paths": ["wallet-client/test/cs02DcqlValidation.test.js"], "remaining_gap": null },
+  "MessageStructure.ProtocolMessages.086": { "disposition": "implemented", "we_build_rationale": "claim_sets must be arrays when present.", "implementation_paths": ["wallet-client/src/lib/cs02DcqlValidation.js"], "test_paths": ["wallet-client/test/cs02DcqlValidation.test.js"], "remaining_gap": null }
+  ,"MessageStructure.ProtocolMessages.110": { "disposition": "implemented", "we_build_rationale": "Duplicate claim ids are rejected during strict DCQL validation.", "implementation_paths": ["wallet-client/src/lib/cs02DcqlValidation.js"], "test_paths": ["wallet-client/test/cs02DcqlValidation.test.js"], "remaining_gap": null }
+  ,"MessageStructure.ProtocolMessages.111": { "disposition": "implemented", "we_build_rationale": "Claim ids must be non-empty strings.", "implementation_paths": ["wallet-client/src/lib/cs02DcqlValidation.js"], "test_paths": ["wallet-client/test/cs02DcqlValidation.test.js"], "remaining_gap": null }
+  ,"MessageStructure.ProtocolMessages.112": { "disposition": "implemented", "we_build_rationale": "Claim ids use the supported alphanumeric, underscore, and hyphen grammar.", "implementation_paths": ["wallet-client/src/lib/cs02DcqlValidation.js"], "test_paths": ["wallet-client/test/cs02DcqlValidation.test.js"], "remaining_gap": null }
+  ,"MessageStructure.ProtocolMessages.113": { "disposition": "implemented", "we_build_rationale": "Claims entries require a path before selection or verification.", "implementation_paths": ["wallet-client/src/lib/cs02DcqlValidation.js"], "test_paths": ["wallet-client/test/cs02DcqlValidation.test.js"], "remaining_gap": null }
+  ,"MessageStructure.ProtocolMessages.114": { "disposition": "implemented", "we_build_rationale": "Empty claim paths are rejected.", "implementation_paths": ["utils/cs02DcqlCore.js"], "test_paths": ["tests/cs02DcqlCore.test.js"], "remaining_gap": null }
+  ,"MessageStructure.ProtocolMessages.115": { "disposition": "implemented", "we_build_rationale": "Claim paths must be arrays in strict DCQL.", "implementation_paths": ["utils/cs02DcqlCore.js"], "test_paths": ["tests/cs02DcqlCore.test.js"], "remaining_gap": null }
+  ,"MessageStructure.ProtocolMessages.116": { "disposition": "implemented", "we_build_rationale": "Claims without values constraints remain valid.", "implementation_paths": ["wallet-client/src/lib/cs02DcqlValidation.js", "utils/cs02DcqlCore.js"], "test_paths": ["tests/cs02DcqlCore.test.js"], "remaining_gap": null }
+  ,"MessageStructure.ProtocolMessages.117": { "disposition": "implemented", "we_build_rationale": "Without credential_sets the shared evaluator evaluates the available credential queries directly.", "implementation_paths": ["utils/cs02DcqlCore.js", "wallet-client/src/lib/dcqlCredentialSelection.js"], "test_paths": ["tests/cs02DcqlCore.test.js", "wallet-client/test/dcqlCredentialSelection.test.js"], "remaining_gap": null }
+  ,"MessageStructure.ProtocolMessages.118": { "disposition": "inapplicable-cs02", "we_build_rationale": "The broad FCAF path form permits array indexes; WE BUILD strict CS-02 deliberately supports only non-empty string path segments.", "implementation_paths": ["utils/cs02DcqlCore.js"], "test_paths": ["tests/cs02DcqlCore.test.js"], "remaining_gap": "Broader array-index claim paths remain outside the strict CS-02 profile." }
+  ,"MessageStructure.ProtocolMessages.119": { "disposition": "implemented", "we_build_rationale": "Empty claim paths are rejected before wallet selection.", "implementation_paths": ["utils/cs02DcqlCore.js", "wallet-client/src/lib/cs02DcqlValidation.js"], "test_paths": ["tests/cs02DcqlCore.test.js"], "remaining_gap": null }
+  ,"MessageStructure.ProtocolMessages.120": { "disposition": "implemented", "we_build_rationale": "Boolean claim-path segments are rejected by the supported path grammar.", "implementation_paths": ["utils/cs02DcqlCore.js"], "test_paths": ["tests/cs02DcqlCore.test.js"], "remaining_gap": null }
+  ,"MessageStructure.ProtocolMessages.121": { "disposition": "implemented", "we_build_rationale": "Negative integer path segments are rejected by strict path validation.", "implementation_paths": ["utils/cs02DcqlCore.js"], "test_paths": ["tests/cs02DcqlCore.test.js"], "remaining_gap": null }
+  ,"MessageStructure.ProtocolMessages.122": { "disposition": "implemented", "we_build_rationale": "Non-array claim paths are rejected.", "implementation_paths": ["utils/cs02DcqlCore.js"], "test_paths": ["tests/cs02DcqlCore.test.js"], "remaining_gap": null }
+  ,"MessageStructure.ProtocolMessages.123": { "disposition": "implemented", "we_build_rationale": "Unsupported claim paths abort strict DCQL processing with a protocol error.", "implementation_paths": ["utils/cs02DcqlCore.js"], "test_paths": ["tests/cs02DcqlCore.test.js"], "remaining_gap": null }
+  ,"MessageStructure.Metadata.081": { "disposition": "structural-only", "we_build_rationale": "JOSE status claims are parsed and structurally checked; status-list trust and bit evaluation remain out of scope.", "implementation_paths": ["utils/cs02StatusList.js"], "test_paths": ["tests/cs02StatusList.test.js"], "remaining_gap": "Status-list retrieval, signature, and status-bit evaluation are deferred." }
+  ,"MessageStructure.Metadata.082": { "disposition": "implemented", "we_build_rationale": "Missing status handling follows the configured strict status policy without claiming revocation validity.", "implementation_paths": ["utils/cs02StatusList.js"], "test_paths": ["tests/cs02StatusList.test.js"], "remaining_gap": null }
+  ,"MessageStructure.Metadata.083": { "disposition": "implemented", "we_build_rationale": "status_list references require a valid non-negative index and URI structure.", "implementation_paths": ["utils/cs02StatusList.js"], "test_paths": ["tests/cs02StatusList.test.js"], "remaining_gap": null }
+  ,"MessageStructure.Metadata.084": { "disposition": "implemented", "we_build_rationale": "Malformed status objects without a status_list reference are rejected when strict status validation is enabled.", "implementation_paths": ["utils/cs02StatusList.js"], "test_paths": ["tests/cs02StatusList.test.js"], "remaining_gap": null }
+  ,"MessageStructure.Metadata.085": { "disposition": "implemented", "we_build_rationale": "status_list idx accepts non-negative integers.", "implementation_paths": ["utils/cs02StatusList.js"], "test_paths": ["tests/cs02StatusList.test.js"], "remaining_gap": null }
+  ,"MessageStructure.Metadata.086": { "disposition": "implemented", "we_build_rationale": "Negative status-list indexes are rejected.", "implementation_paths": ["utils/cs02StatusList.js"], "test_paths": ["tests/cs02StatusList.test.js"], "remaining_gap": null }
+  ,"MessageStructure.Metadata.087": { "disposition": "implemented", "we_build_rationale": "A missing status-list index is rejected by structural validation.", "implementation_paths": ["utils/cs02StatusList.js"], "test_paths": ["tests/cs02StatusList.test.js"], "remaining_gap": null }
+  ,"MessageStructure.Metadata.088": { "disposition": "implemented", "we_build_rationale": "Status-list URI values must be absolute HTTPS references in strict mode.", "implementation_paths": ["utils/cs02StatusList.js"], "test_paths": ["tests/cs02StatusList.test.js"], "remaining_gap": null }
+  ,"MessageStructure.Metadata.089": { "disposition": "implemented", "we_build_rationale": "Malformed status-list URIs are rejected.", "implementation_paths": ["utils/cs02StatusList.js"], "test_paths": ["tests/cs02StatusList.test.js"], "remaining_gap": null }
+  ,"MessageStructure.Metadata.090": { "disposition": "implemented", "we_build_rationale": "Missing status-list URIs are rejected by structural validation.", "implementation_paths": ["utils/cs02StatusList.js"], "test_paths": ["tests/cs02StatusList.test.js"], "remaining_gap": null }
+  ,"MessageStructure.ProtocolMessages.125": { "disposition": "implemented", "we_build_rationale": "Unexpected non-JSON verifier responses are surfaced as protocol errors after successful HTTP transport.", "implementation_paths": ["utils/cs02VerifierResponse.js"], "test_paths": ["tests/cs02VerifierResponse.test.js"], "remaining_gap": null }
+  ,"MessageStructure.ProtocolMessages.126": { "disposition": "implemented", "we_build_rationale": "Verifier HTTP error responses are propagated as protocol failures rather than accepted as presentations.", "implementation_paths": ["utils/cs02VerifierResponse.js"], "test_paths": ["tests/cs02VerifierResponse.test.js"], "remaining_gap": null }
+  ,"MessageStructure.ProtocolMessages.131": { "disposition": "implemented", "we_build_rationale": "Strict encrypted-response generation selects the advertised encryption or the A128GCM default.", "implementation_paths": ["wallet-client/src/lib/presentation.js", "utils/cs02VerifierResponse.js"], "test_paths": ["tests/cs02SuccessfulFlowMatrix.test.js", "tests/cs02VerifierResponse.test.js"], "remaining_gap": null }
+  ,"MessageStructure.ProtocolMessages.133": { "disposition": "implemented", "we_build_rationale": "direct_post.jwt responses are submitted through the verifier response URI using HTTP POST.", "implementation_paths": ["wallet-client/src/lib/presentation.js"], "test_paths": ["tests/cs02SuccessfulFlowMatrix.test.js"], "remaining_gap": null }
+  ,"MessageStructure.Metadata.107": { "disposition": "implemented", "we_build_rationale": "Strict POST request-URI retrieval works without inline client_metadata; metadata remains in the signed request object when supplied.", "implementation_paths": ["wallet-client/src/lib/cs02RequestValidation.js"], "test_paths": ["wallet-client/test/cs02RequestValidation.test.js"], "remaining_gap": null }
+  ,"MessageStructure.ProtocolMessages.011": { "disposition": "implemented", "we_build_rationale": "Strict request-URI retrieval accepts the supported POST method and validates the returned signed request object.", "implementation_paths": ["wallet-client/src/lib/cs02RequestValidation.js"], "test_paths": ["wallet-client/test/cs02RequestValidation.test.js"], "remaining_gap": null }
+  ,"MessageStructure.ProtocolMessages.020": { "disposition": "inapplicable-cs02", "we_build_rationale": "WE BUILD strict CS-02 uses DCQL as the presentation query; the broader scope-based alternative is intentionally excluded.", "implementation_paths": ["utils/cs02VerifierRequest.js"], "test_paths": ["tests/cs02VerifierRequest.test.js"], "remaining_gap": "Scope-based presentation queries remain outside the strict DCQL profile." }
+  ,"MessageStructure.ProtocolMessages.145": { "disposition": "inapplicable-cs02", "we_build_rationale": "Trusted verifier-registry precedence is a trust-framework decision and is excluded from the current strict CS-02 increment.", "implementation_paths": ["utils/cs02TrustPolicy.js"], "test_paths": ["tests/cs02TrustPolicy.test.js"], "remaining_gap": "Registry-backed verifier trust is deferred." }
+  ,"MessageStructure.ProtocolMessages.146": { "disposition": "inapplicable-cs02", "we_build_rationale": "Overriding a trusted registry with inline metadata requires trust-framework state that is explicitly out of scope.", "implementation_paths": ["utils/cs02TrustPolicy.js"], "test_paths": ["tests/cs02TrustPolicy.test.js"], "remaining_gap": "Trusted registry integration is deferred." }
+  ,"SecurityMechanisms.RpIntegrity.031": { "disposition": "implemented", "we_build_rationale": "Strict wallet request validation accepts ES256 JARs with EC/P-256 signing keys.", "implementation_paths": ["wallet-client/src/lib/cs02RequestValidation.js"], "test_paths": ["wallet-client/test/cs02RequestValidation.test.js", "tests/cs02SuccessfulFlowMatrix.test.js"], "remaining_gap": null }
+  ,"SecurityMechanisms.RpIntegrity.032": { "disposition": "inapplicable-cs02", "we_build_rationale": "WE BUILD strict CS-02 requires ES256/P-256 and deliberately rejects RS384 JAR compatibility.", "implementation_paths": ["wallet-client/src/lib/cs02RequestValidation.js"], "test_paths": ["wallet-client/test/cs02RequestValidation.test.js"], "remaining_gap": "RS384 remains compatibility-only and is not a strict-profile target." }
+  ,"SecurityMechanisms.SessionEncryption.010": { "disposition": "implemented", "we_build_rationale": "Strict encrypted responses require verifier-supplied selected encryption key material.", "implementation_paths": ["utils/cs02TrustPolicy.js", "utils/cs02VerifierResponse.js"], "test_paths": ["tests/cs02TrustPolicy.test.js", "tests/cs02VerifierResponse.test.js"], "remaining_gap": null }
+  ,"SecurityMechanisms.SessionEncryption.011": { "disposition": "implemented", "we_build_rationale": "The selected per-request encryption key is retained and bound to the JWE response.", "implementation_paths": ["utils/cs02VerifierResponse.js", "routes/verify/verifierRoutes.js"], "test_paths": ["tests/cs02VerifierResponse.test.js", "tests/cs02SuccessfulFlowMatrix.test.js"], "remaining_gap": null }
+  ,"SecurityMechanisms.RpIntegrity.001": { "disposition": "implemented", "we_build_rationale": "Malformed or unbound verifier-attestation material is rejected before strict request processing; trust issuer evaluation remains deferred.", "implementation_paths": ["utils/cs02TrustPolicy.js", "wallet-client/src/lib/cs02RequestValidation.js"], "test_paths": ["tests/cs02TrustPolicy.test.js"], "remaining_gap": null }
+  ,"SecurityMechanisms.RpIntegrity.002": { "disposition": "implemented", "we_build_rationale": "Strict JAR signature validation rejects signed authorization requests with invalid signatures.", "implementation_paths": ["wallet-client/src/lib/cs02RequestValidation.js"], "test_paths": ["wallet-client/test/cs02RequestValidation.test.js"], "remaining_gap": null }
+  ,"SecurityMechanisms.RpIntegrity.003": { "disposition": "inapplicable-cs02", "we_build_rationale": "Unsigned DC API request processing is not a strict OpenID4VP CS-02 path.", "implementation_paths": ["wallet-client/src/lib/cs02RequestValidation.js"], "test_paths": ["wallet-client/test/cs02RequestValidation.test.js"], "remaining_gap": "W3C DC API unsigned requests remain outside strict CS-02." }
+  ,"SecurityMechanisms.RpIntegrity.004": { "disposition": "inapplicable-cs02", "we_build_rationale": "DC API signed-request semantics are outside the strict OpenID4VP CS-02 transport profile.", "implementation_paths": ["wallet-client/src/lib/cs02RequestValidation.js"], "test_paths": [], "remaining_gap": "W3C DC API request variants are deferred." }
+  ,"SecurityMechanisms.RpIntegrity.005": { "disposition": "implemented", "we_build_rationale": "Invalid authorization-request signatures are rejected by strict JAR verification.", "implementation_paths": ["wallet-client/src/lib/cs02RequestValidation.js"], "test_paths": ["wallet-client/test/cs02RequestValidation.test.js"], "remaining_gap": null }
+  ,"SecurityMechanisms.RpIntegrity.028": { "disposition": "inapplicable-cs02", "we_build_rationale": "W3C DC API unsigned requests are not part of strict OpenID4VP CS-02.", "implementation_paths": [], "test_paths": [], "remaining_gap": "DC API transport is deferred." }
+  ,"SecurityMechanisms.RpIntegrity.029": { "disposition": "inapplicable-cs02", "we_build_rationale": "W3C DC API signed requests are not part of strict OpenID4VP CS-02.", "implementation_paths": [], "test_paths": [], "remaining_gap": "DC API transport is deferred." }
+  ,"SecurityMechanisms.RpIntegrity.030": { "disposition": "inapplicable-cs02", "we_build_rationale": "Multi-signed DC API requests are outside strict CS-02 and are not accepted for compatibility coverage.", "implementation_paths": [], "test_paths": [], "remaining_gap": "Multi-signature DC API support is deferred." }
+  ,"SecurityMechanisms.RpIntegrity.033": { "disposition": "inapplicable-cs02", "we_build_rationale": "COSE alg -7 request objects are outside the strict JOSE/JAR CS-02 profile.", "implementation_paths": [], "test_paths": [], "remaining_gap": "COSE request-object support is deferred." }
+  ,"SecurityMechanisms.RpIntegrity.034": { "disposition": "inapplicable-cs02", "we_build_rationale": "COSE alg -9 request objects are outside the strict JOSE/JAR CS-02 profile.", "implementation_paths": [], "test_paths": [], "remaining_gap": "COSE request-object support is deferred." }
+  ,"SecurityMechanisms.DeviceBinding.002": { "disposition": "implemented", "we_build_rationale": "Verifier-attestation parsing checks the required nonce/client binding material when supplied.", "implementation_paths": ["utils/cs02TrustPolicy.js"], "test_paths": ["tests/cs02TrustPolicy.test.js"], "remaining_gap": null }
+  ,"SecurityMechanisms.DeviceBinding.003": { "disposition": "implemented", "we_build_rationale": "Malformed or missing VA binding claims are rejected before trust is evaluated.", "implementation_paths": ["utils/cs02TrustPolicy.js"], "test_paths": ["tests/cs02TrustPolicy.test.js"], "remaining_gap": null }
+  ,"SecurityMechanisms.DeviceBinding.004": { "disposition": "structural-only", "we_build_rationale": "Structurally valid verifier attestations produce an explicit trust_not_evaluated result.", "implementation_paths": ["utils/cs02TrustPolicy.js"], "test_paths": ["tests/cs02TrustPolicy.test.js"], "remaining_gap": "VA issuer trust and signature-chain evaluation are deferred." }
+  ,"SecurityMechanisms.DeviceBinding.005": { "disposition": "implemented", "we_build_rationale": "Invalid verifier-attestation proof structure or binding is rejected.", "implementation_paths": ["utils/cs02TrustPolicy.js"], "test_paths": ["tests/cs02TrustPolicy.test.js"], "remaining_gap": null }
+  ,"SecurityMechanisms.DeviceBinding.006": { "disposition": "implemented", "we_build_rationale": "Unrecognized VA attachment data does not bypass required JOSE and binding checks.", "implementation_paths": ["utils/cs02TrustPolicy.js"], "test_paths": ["tests/cs02TrustPolicy.test.js"], "remaining_gap": null }
+  ,"SecurityMechanisms.DeviceBinding.009": { "disposition": "structural-only", "we_build_rationale": "Optional cnf material is parsed structurally; holder-binding trust semantics remain profile-dependent.", "implementation_paths": ["utils/cs02TrustPolicy.js", "utils/cs02VerifierResponse.js"], "test_paths": ["tests/cs02VerifierResponse.test.js"], "remaining_gap": "No trust decision is made for optional cnf claims." }
+  ,"SecurityMechanisms.IssuerIntegrity.013": { "disposition": "structural-only", "we_build_rationale": "X.509 key material can be parsed for issuer verification, without chain or trust-anchor evaluation.", "implementation_paths": ["utils/cryptoUtils.js", "utils/cs02VerifierResponse.js"], "test_paths": ["tests/cryptoUtilsX5c.test.js", "tests/cs02VerifierResponse.test.js"], "remaining_gap": "Issuer certificate trust is deferred." }
+  ,"SecurityMechanisms.IssuerIntegrity.014": { "disposition": "structural-only", "we_build_rationale": "x5c input is treated as presented key material; trust-anchor inclusion and chain decisions are not evaluated.", "implementation_paths": ["utils/cryptoUtils.js"], "test_paths": ["tests/cryptoUtilsX5c.test.js"], "remaining_gap": "Certificate-chain policy is deferred." }
+  ,"SecurityMechanisms.RpIntegrity.008": { "disposition": "implemented", "we_build_rationale": "Verifier-attestation cnf binding is checked against the JAR signing key when present.", "implementation_paths": ["utils/cs02TrustPolicy.js"], "test_paths": ["tests/cs02TrustPolicy.test.js"], "remaining_gap": null }
+  ,"SecurityMechanisms.RpIntegrity.009": { "disposition": "implemented", "we_build_rationale": "A missing or mismatched verifier-attestation cnf/JAR key binding is rejected.", "implementation_paths": ["utils/cs02TrustPolicy.js"], "test_paths": ["tests/cs02TrustPolicy.test.js"], "remaining_gap": null }
+  ,"SecurityMechanisms.RpIntegrity.010": { "disposition": "inapplicable-cs02", "we_build_rationale": "Determining whether a VA issuer is trusted requires trust-framework registry state, which is out of scope.", "implementation_paths": ["utils/cs02TrustPolicy.js"], "test_paths": [], "remaining_gap": "Trusted VA issuer evaluation is deferred." }
+  ,"SecurityMechanisms.RpIntegrity.011": { "disposition": "inapplicable-cs02", "we_build_rationale": "Rejecting an otherwise structured VA solely because its issuer is untrusted is a deferred trust decision.", "implementation_paths": ["utils/cs02TrustPolicy.js"], "test_paths": [], "remaining_gap": "Trusted VA issuer evaluation is deferred." }
+  ,"SecurityMechanisms.RpIntegrity.012": { "disposition": "structural-only", "we_build_rationale": "VA JWT structure and key binding are checked; issuer signature/trust evaluation is explicitly deferred.", "implementation_paths": ["utils/cs02TrustPolicy.js"], "test_paths": ["tests/cs02TrustPolicy.test.js"], "remaining_gap": "VA issuer signature and trust-chain evaluation are deferred." }
+  ,"SecurityMechanisms.RpIntegrity.017": { "disposition": "structural-only", "we_build_rationale": "X.509 chains are parsed for presented key material without evaluating trust anchors or chain validity.", "implementation_paths": ["utils/cs02TrustPolicy.js"], "test_paths": ["tests/cs02TrustPolicy.test.js", "tests/cryptoUtilsX5c.test.js"], "remaining_gap": "X.509 chain and SAN trust evaluation is deferred." }
+  ,"SecurityMechanisms.RpIntegrity.018": { "disposition": "inapplicable-cs02", "we_build_rationale": "x509_hash trust-chain acceptance is not part of the strict CS-02 client-identifier schemes.", "implementation_paths": [], "test_paths": [], "remaining_gap": "x509_hash is compatibility-only." }
+  ,"SecurityMechanisms.RpIntegrity.019": { "disposition": "inapplicable-cs02", "we_build_rationale": "x509_hash chain rejection is outside strict CS-02, which uses x509_san_dns structural inputs instead.", "implementation_paths": [], "test_paths": [], "remaining_gap": "x509_hash is compatibility-only." }
+  ,"SecurityMechanisms.RpIntegrity.020": { "disposition": "inapplicable-cs02", "we_build_rationale": "x509_hash client metadata semantics are outside the strict CS-02 profile.", "implementation_paths": [], "test_paths": [], "remaining_gap": "x509_hash is compatibility-only." }
+  ,"SecurityMechanisms.RpIntegrity.021": { "disposition": "inapplicable-cs02", "we_build_rationale": "x509_hash metadata filtering is outside strict CS-02.", "implementation_paths": [], "test_paths": [], "remaining_gap": "x509_hash is compatibility-only." }
+  ,"SecurityMechanisms.RpIntegrity.022": { "disposition": "inapplicable-cs02", "we_build_rationale": "DC API origin audience semantics are outside the strict OpenID4VP CS-02 flow.", "implementation_paths": [], "test_paths": [], "remaining_gap": "DC API origin transport is deferred." }
+  ,"SecurityMechanisms.RpIntegrity.023": { "disposition": "inapplicable-cs02", "we_build_rationale": "The strict CS-02 client identifier schemes exclude x509_hash.", "implementation_paths": ["wallet-client/src/lib/cs02RequestValidation.js"], "test_paths": ["wallet-client/test/cs02RequestValidation.test.js"], "remaining_gap": "x509_hash is compatibility-only." }
+  ,"SecurityMechanisms.RpIntegrity.024": { "disposition": "inapplicable-cs02", "we_build_rationale": "x509_hash verifier consistency checks are outside strict CS-02.", "implementation_paths": [], "test_paths": [], "remaining_gap": "x509_hash is compatibility-only." }
+  ,"SecurityMechanisms.RpIntegrity.025": { "disposition": "inapplicable-cs02", "we_build_rationale": "Trust-anchor certificate-chain rules are not evaluated for the strict CS-02 structural x5c placeholder.", "implementation_paths": ["utils/cs02TrustPolicy.js"], "test_paths": [], "remaining_gap": "X.509 trust-anchor policy is deferred." }
+  ,"SecurityMechanisms.RpIntegrity.026": { "disposition": "inapplicable-cs02", "we_build_rationale": "Self-signed certificate rejection is a trust-chain decision outside the current strict CS-02 scope.", "implementation_paths": ["utils/cs02TrustPolicy.js"], "test_paths": [], "remaining_gap": "X.509 trust-chain policy is deferred." }
+  ,"SecurityMechanisms.RpIntegrity.027": { "disposition": "inapplicable-cs02", "we_build_rationale": "Redirect-flow request identity is explicitly excluded from the strict CS-02 profile.", "implementation_paths": [], "test_paths": [], "remaining_gap": "Redirect-URI identity variants are compatibility-only." }
+  ,"SecurityMechanisms.RpIntegrity.CS002": { "disposition": "inapplicable-cs02", "we_build_rationale": "CS002 duplicates the strict RS384 exclusion already represented by RpIntegrity.032.", "implementation_paths": ["wallet-client/src/lib/cs02RequestValidation.js"], "test_paths": ["wallet-client/test/cs02RequestValidation.test.js"], "remaining_gap": null }
+  ,"SecurityMechanisms.RpIntegrity.CS003": { "disposition": "inapplicable-cs02", "we_build_rationale": "CS003 duplicates COSE alg -7, which is outside strict JOSE/JAR CS-02.", "implementation_paths": [], "test_paths": [], "remaining_gap": "COSE request-object support is deferred." }
+  ,"SecurityMechanisms.RpIntegrity.CS004": { "disposition": "inapplicable-cs02", "we_build_rationale": "CS004 duplicates COSE alg -9, which is outside strict JOSE/JAR CS-02.", "implementation_paths": [], "test_paths": [], "remaining_gap": "COSE request-object support is deferred." }
+  ,"MessageStructure.CredentialFormats.029": { "disposition": "structural-only", "we_build_rationale": "JWT referenced-token status references are structurally represented; status retrieval and evaluation are deferred.", "implementation_paths": ["utils/cs02StatusList.js"], "test_paths": ["tests/cs02StatusList.test.js"], "remaining_gap": "Status trust and bit evaluation are deferred." }
+  ,"MessageStructure.CredentialFormats.030": { "disposition": "structural-only", "we_build_rationale": "SD-JWT referenced-token status references are structurally represented without revocation evaluation.", "implementation_paths": ["utils/cs02StatusList.js"], "test_paths": ["tests/cs02StatusList.test.js"], "remaining_gap": "Status trust and bit evaluation are deferred." }
+  ,"MessageStructure.CredentialFormats.031": { "disposition": "structural-only", "we_build_rationale": "SD-JWT VC status references are structurally validated; status-list trust is deferred.", "implementation_paths": ["utils/cs02StatusList.js"], "test_paths": ["tests/cs02StatusList.test.js"], "remaining_gap": "Status trust and bit evaluation are deferred." }
+  ,"MessageStructure.CredentialFormats.032": { "disposition": "inapplicable-cs02", "we_build_rationale": "CWT status credential handling is outside the strict SD-JWT/mso_mdoc CS-02 credential formats.", "implementation_paths": [], "test_paths": [], "remaining_gap": "CWT credential support is deferred." }
+  ,"MessageStructure.CredentialFormats.033": { "disposition": "inapplicable-cs02", "we_build_rationale": "Referenced mdoc status-token semantics are outside the current strict credential-model scope.", "implementation_paths": [], "test_paths": [], "remaining_gap": "Broader mdoc status-token support is deferred." }
+  ,"MessageStructure.CredentialFormats.034": { "disposition": "inapplicable-cs02", "we_build_rationale": "Broad CBOR-to-JSON mdoc value conversion is a data-model rulebook concern excluded from this increment.", "implementation_paths": [], "test_paths": [], "remaining_gap": "mdoc data-model conversion rules are deferred." }
+  ,"MessageStructure.CredentialFormats.035": { "disposition": "implemented", "we_build_rationale": "Wallet and verifier retain structural ISO mdoc presentation support with doctype and requested-claim checks.", "implementation_paths": ["utils/mdocClaims.js", "wallet-client/src/lib/presentation.js"], "test_paths": ["tests/cs02VerifierResponse.test.js", "tests/cs02SuccessfulFlowMatrix.test.js"], "remaining_gap": null }
+  ,"MessageStructure.CredentialFormats.036": { "disposition": "implemented", "we_build_rationale": "Wallet and verifier support compact SD-JWT VC presentation with strict disclosure and holder-binding checks.", "implementation_paths": ["utils/sdJwtClaims.js", "wallet-client/src/lib/presentation.js"], "test_paths": ["tests/cs02VerifierResponse.test.js", "tests/cs02SuccessfulFlowMatrix.test.js"], "remaining_gap": null }
+  ,"MessageStructure.CredentialFormats.037": { "disposition": "implemented", "we_build_rationale": "The strict capability profile exposes both supported SD-JWT and mso_mdoc presentation families.", "implementation_paths": ["utils/cs02TrustPolicy.js"], "test_paths": ["tests/cs02TrustPolicy.test.js", "tests/cs02SuccessfulFlowMatrix.test.js"], "remaining_gap": null }
+  ,"MessageStructure.CredentialFormats.038": { "disposition": "implemented", "we_build_rationale": "Strict response validation handles response_type=vp_token presentations.", "implementation_paths": ["utils/cs02VerifierResponse.js"], "test_paths": ["tests/cs02VerifierResponse.test.js"], "remaining_gap": null }
+  ,"MessageStructure.CredentialFormats.039": { "disposition": "inapplicable-cs02", "we_build_rationale": "Combined vp_token id_token response handling is outside the strict CS-02 response type.", "implementation_paths": [], "test_paths": [], "remaining_gap": "Hybrid response types are deferred." }
+  ,"MessageStructure.CredentialFormats.040": { "disposition": "inapplicable-cs02", "we_build_rationale": "OAuth code response handling is outside the strict OpenID4VP CS-02 presentation flow.", "implementation_paths": [], "test_paths": [], "remaining_gap": "Code response types are deferred." }
+  ,"MessageStructure.CredentialFormats.041": { "disposition": "inapplicable-cs02", "we_build_rationale": "Multiple independent mdoc DeviceResponses are outside the current strict mso_mdoc presentation path.", "implementation_paths": [], "test_paths": [], "remaining_gap": "Multiple mdoc response support is deferred." }
+  ,"MessageStructure.CredentialFormats.045": { "disposition": "implemented", "we_build_rationale": "Compact SD-JWT VC presentations with key binding are verified through KB-JWT nonce, audience, sd_hash, and replay checks.", "implementation_paths": ["utils/sdJwtClaims.js", "utils/cs02VerifierResponse.js"], "test_paths": ["tests/cs02VerifierResponse.test.js"], "remaining_gap": null }
+  ,"MessageStructure.CredentialFormats.046": { "disposition": "inapplicable-cs02", "we_build_rationale": "Unbound SD-JWT VC presentation is not accepted where strict holder binding is required.", "implementation_paths": ["utils/cs02VerifierResponse.js"], "test_paths": ["tests/cs02VerifierResponse.test.js"], "remaining_gap": "Holder-binding-optional profiles are deferred." }
+  ,"MessageStructure.CredentialFormats.048": { "disposition": "inapplicable-cs02", "we_build_rationale": "JSON credential serialization is outside the strict compact SD-JWT/mso_mdoc CS-02 formats.", "implementation_paths": [], "test_paths": [], "remaining_gap": "JSON serialization support is deferred." }
+  ,"MessageStructure.CredentialFormats.049": { "disposition": "structural-only", "we_build_rationale": "Status claims in wallet presentations are structurally checked without status-list evaluation.", "implementation_paths": ["utils/cs02StatusList.js"], "test_paths": ["tests/cs02StatusList.test.js"], "remaining_gap": "Status trust and bit evaluation are deferred." }
+  ,"MessageStructure.ProtocolMessages.008": { "disposition": "implemented", "we_build_rationale": "Strict request validation requires the signed JAR client identity and rejects requests missing required identity claims.", "implementation_paths": ["wallet-client/src/lib/cs02RequestValidation.js"], "test_paths": ["wallet-client/test/cs02RequestValidation.test.js"], "remaining_gap": null }
+  ,"MessageStructure.ProtocolMessages.009": { "disposition": "implemented", "we_build_rationale": "Contradictory client identity claims are rejected before presentation processing.", "implementation_paths": ["wallet-client/src/lib/cs02RequestValidation.js"], "test_paths": ["wallet-client/test/cs02RequestValidation.test.js"], "remaining_gap": null }
+  ,"MessageStructure.ProtocolMessages.034": { "disposition": "implemented", "we_build_rationale": "Strict response processing requires state correlation even when holder binding is not requested.", "implementation_paths": ["utils/cs02VerifierResponse.js"], "test_paths": ["tests/cs02VerifierResponse.test.js"], "remaining_gap": null }
+  ,"MessageStructure.ProtocolMessages.044": { "disposition": "implemented", "we_build_rationale": "Request-URI POST bodies use UTF-8 form encoding for strict request-object retrieval.", "implementation_paths": ["wallet-client/src/lib/cs02RequestValidation.js"], "test_paths": ["wallet-client/test/cs02RequestValidation.test.js"], "remaining_gap": null }
+  ,"MessageStructure.ProtocolMessages.067": { "disposition": "inapplicable-cs02", "we_build_rationale": "The broad Appendix B format set exceeds the strict SD-JWT/mso_mdoc CS-02 capability profile.", "implementation_paths": ["utils/cs02TrustPolicy.js"], "test_paths": ["tests/cs02TrustPolicy.test.js"], "remaining_gap": "Additional credential formats are compatibility-only." }
+  ,"MessageStructure.ProtocolMessages.073": { "disposition": "implemented", "we_build_rationale": "Supported vct_values and doctype_value metadata constraints are validated and applied by wallet/verifier adapters.", "implementation_paths": ["wallet-client/src/lib/cs02DcqlValidation.js", "wallet-client/src/lib/dcqlCredentialSelection.js", "utils/sdJwtClaims.js", "utils/mdocClaims.js"], "test_paths": ["wallet-client/test/cs02DcqlValidation.test.js", "tests/cs02VerifierResponse.test.js"], "remaining_gap": null }
+  ,"MessageStructure.ProtocolMessages.074": { "disposition": "implemented", "we_build_rationale": "Format-inapplicable DCQL metadata fields are rejected in strict validation.", "implementation_paths": ["wallet-client/src/lib/cs02DcqlValidation.js"], "test_paths": ["wallet-client/test/cs02DcqlValidation.test.js"], "remaining_gap": null }
+  ,"MessageStructure.ProtocolMessages.075": { "disposition": "implemented", "we_build_rationale": "Strict CS-02 treats meta as optional for supported formats; when supplied, format-specific constraints are validated and matched.", "implementation_paths": ["wallet-client/src/lib/cs02DcqlValidation.js", "wallet-client/src/lib/dcqlCredentialSelection.js"], "test_paths": ["wallet-client/test/cs02DcqlValidation.test.js"], "remaining_gap": null }
+  ,"MessageStructure.ProtocolMessages.076": { "disposition": "implemented", "we_build_rationale": "Empty meta contributes no additional matching constraints.", "implementation_paths": ["utils/cs02DcqlCore.js"], "test_paths": ["tests/cs02DcqlCore.test.js"], "remaining_gap": null }
+  ,"MessageStructure.ProtocolMessages.077": { "disposition": "structural-only", "we_build_rationale": "Trusted-authority arrays are structurally validated without resolving or trusting authorities.", "implementation_paths": ["utils/cs02TrustPolicy.js"], "test_paths": ["tests/cs02TrustPolicy.test.js"], "remaining_gap": "Authority registry/trust evaluation is deferred." }
+  ,"MessageStructure.ProtocolMessages.078": { "disposition": "structural-only", "we_build_rationale": "trusted_authorities type shape is checked before any deferred trust decision.", "implementation_paths": ["utils/cs02TrustPolicy.js"], "test_paths": ["tests/cs02TrustPolicy.test.js"], "remaining_gap": "Authority registry/trust evaluation is deferred." }
+  ,"MessageStructure.ProtocolMessages.079": { "disposition": "structural-only", "we_build_rationale": "Supported trusted-authority object structure is preserved without evaluating authority trust.", "implementation_paths": ["utils/cs02TrustPolicy.js"], "test_paths": ["tests/cs02TrustPolicy.test.js"], "remaining_gap": "Authority registry/trust evaluation is deferred." }
+  ,"MessageStructure.ProtocolMessages.080": { "disposition": "implemented", "we_build_rationale": "Omitting trusted_authorities does not invalidate the strict request.", "implementation_paths": ["utils/cs02TrustPolicy.js"], "test_paths": ["tests/cs02TrustPolicy.test.js"], "remaining_gap": null }
+  ,"MessageStructure.ProtocolMessages.099": { "disposition": "implemented", "we_build_rationale": "Credential-set options must reference declared credential IDs.", "implementation_paths": ["utils/cs02DcqlCore.js"], "test_paths": ["tests/cs02DcqlCore.test.js"], "remaining_gap": null }
+  ,"MessageStructure.ProtocolMessages.100": { "disposition": "implemented", "we_build_rationale": "Non-matching credential-set options are rejected by shared DCQL evaluation.", "implementation_paths": ["utils/cs02DcqlCore.js"], "test_paths": ["tests/cs02DcqlCore.test.js", "tests/cs02VerifierResponse.test.js"], "remaining_gap": null }
+  ,"MessageStructure.ProtocolMessages.101": { "disposition": "implemented", "we_build_rationale": "Required credential sets must be satisfied before a strict response is accepted.", "implementation_paths": ["utils/cs02DcqlCore.js", "utils/cs02VerifierResponse.js"], "test_paths": ["tests/cs02VerifierResponse.test.js"], "remaining_gap": null }
+  ,"MessageStructure.ProtocolMessages.102": { "disposition": "out-of-scope-datamodel", "we_build_rationale": "PID availability and missing-attribute behavior require the excluded PID data model/rulebook.", "implementation_paths": [], "test_paths": [], "remaining_gap": "PID data-model behavior is deferred." }
+  ,"MessageStructure.ProtocolMessages.103": { "disposition": "implemented", "we_build_rationale": "The shared evaluator defaults omitted required to true for credential sets.", "implementation_paths": ["utils/cs02DcqlCore.js"], "test_paths": ["tests/cs02DcqlCore.test.js"], "remaining_gap": null }
+  ,"MessageStructure.ProtocolMessages.104": { "disposition": "implemented", "we_build_rationale": "Optional credential sets may be unsatisfied while other required sets proceed.", "implementation_paths": ["utils/cs02DcqlCore.js"], "test_paths": ["tests/cs02DcqlCore.test.js"], "remaining_gap": null }
+  ,"MessageStructure.ProtocolMessages.135": { "disposition": "implemented", "we_build_rationale": "Wallet KB-JWTs hash requested transaction_data bytes with SHA-256 and the verifier compares the hashes to the session request.", "implementation_paths": ["wallet-client/src/lib/presentation.js", "utils/cs02VerifierResponse.js", "routes/verify/verifierRoutes.js"], "test_paths": ["tests/cs02VerifierResponse.test.js", "tests/cs02VerifierRequest.test.js"], "remaining_gap": null }
+  ,"MessageStructure.ProtocolMessages.136": { "disposition": "implemented", "we_build_rationale": "Wallets that cannot process supported transaction_data fail explicitly instead of silently proceeding.", "implementation_paths": ["wallet-client/src/lib/cs02RequestValidation.js"], "test_paths": ["wallet-client/test/cs02RequestValidation.test.js"], "remaining_gap": null }
+  ,"MessageStructure.ProtocolMessages.137": { "disposition": "inapplicable-cs02", "we_build_rationale": "Scope errors are outside strict DCQL CS-02 because scope-based presentation is excluded.", "implementation_paths": [], "test_paths": [], "remaining_gap": "Scope-based presentation is deferred." }
+  ,"MessageStructure.ProtocolMessages.138": { "disposition": "inapplicable-cs02", "we_build_rationale": "Malformed scope handling is outside strict DCQL CS-02.", "implementation_paths": [], "test_paths": [], "remaining_gap": "Scope-based presentation is deferred." }
+  ,"MessageStructure.ProtocolMessages.139": { "disposition": "inapplicable-cs02", "we_build_rationale": "Empty scope handling is outside strict DCQL CS-02.", "implementation_paths": [], "test_paths": [], "remaining_gap": "Scope-based presentation is deferred." }
+  ,"MessageStructure.Metadata.091": { "disposition": "inapplicable-cs02", "we_build_rationale": "COSE status CBOR is outside the strict JOSE/SD-JWT status structure targeted in this increment.", "implementation_paths": [], "test_paths": [], "remaining_gap": "COSE status processing is deferred." }
+  ,"MessageStructure.Metadata.092": { "disposition": "inapplicable-cs02", "we_build_rationale": "COSE status-map validation is outside strict CS-02 status handling.", "implementation_paths": [], "test_paths": [], "remaining_gap": "COSE status processing is deferred." }
+  ,"MessageStructure.Metadata.093": { "disposition": "inapplicable-cs02", "we_build_rationale": "COSE status-list references are outside strict JOSE status handling.", "implementation_paths": [], "test_paths": [], "remaining_gap": "COSE status processing is deferred." }
+  ,"MessageStructure.Metadata.094": { "disposition": "inapplicable-cs02", "we_build_rationale": "COSE status-map omission behavior is outside strict CS-02.", "implementation_paths": [], "test_paths": [], "remaining_gap": "COSE status processing is deferred." }
+  ,"MessageStructure.Metadata.095": { "disposition": "inapplicable-cs02", "we_build_rationale": "COSE integer encoding rules are outside strict JOSE status handling.", "implementation_paths": [], "test_paths": [], "remaining_gap": "COSE status processing is deferred." }
+  ,"MessageStructure.Metadata.096": { "disposition": "inapplicable-cs02", "we_build_rationale": "COSE status index type validation is outside strict CS-02.", "implementation_paths": [], "test_paths": [], "remaining_gap": "COSE status processing is deferred." }
+  ,"MessageStructure.Metadata.097": { "disposition": "inapplicable-cs02", "we_build_rationale": "COSE status index requirements are outside strict CS-02.", "implementation_paths": [], "test_paths": [], "remaining_gap": "COSE status processing is deferred." }
+  ,"MessageStructure.Metadata.098": { "disposition": "inapplicable-cs02", "we_build_rationale": "COSE text-string URI encoding is outside strict JOSE status handling.", "implementation_paths": [], "test_paths": [], "remaining_gap": "COSE status processing is deferred." }
+  ,"MessageStructure.Metadata.099": { "disposition": "inapplicable-cs02", "we_build_rationale": "COSE status URI validation is outside strict CS-02.", "implementation_paths": [], "test_paths": [], "remaining_gap": "COSE status processing is deferred." }
+  ,"MessageStructure.Metadata.100": { "disposition": "inapplicable-cs02", "we_build_rationale": "COSE status URI presence is outside strict CS-02.", "implementation_paths": [], "test_paths": [], "remaining_gap": "COSE status processing is deferred." }
+  ,"MessageStructure.Metadata.101": { "disposition": "inapplicable-cs02", "we_build_rationale": "COSE label 65535 status handling is outside strict JOSE status handling.", "implementation_paths": [], "test_paths": [], "remaining_gap": "COSE status processing is deferred." }
+  ,"MessageStructure.Metadata.102": { "disposition": "inapplicable-cs02", "we_build_rationale": "COSE label 65535 omission behavior is outside strict CS-02.", "implementation_paths": [], "test_paths": [], "remaining_gap": "COSE status processing is deferred." }
+  ,"MessageStructure.Metadata.103": { "disposition": "inapplicable-cs02", "we_build_rationale": "StatusListInfo CBOR data-model validation is outside the current strict CS-02 scope.", "implementation_paths": [], "test_paths": [], "remaining_gap": "COSE status data-model processing is deferred." }
+  ,"MessageStructure.ProtocolMessages.045": { "disposition": "implemented", "we_build_rationale": "Strict POST request-URI tests cover wallet_nonce generation, UTF-8 form submission, and signed-request echo correlation.", "implementation_paths": ["routes/verify/verifierRoutes.js", "wallet-client/src/lib/cs02RequestValidation.js", "wallet-client/src/lib/presentation.js"], "test_paths": ["wallet-client/test/cs02RequestValidation.test.js"], "remaining_gap": null }
+  ,"MessageStructure.ProtocolMessages.046": { "disposition": "implemented", "we_build_rationale": "Returned request-object nonce correlation is validated and mismatches are rejected before presentation.", "implementation_paths": ["wallet-client/src/lib/cs02RequestValidation.js"], "test_paths": ["wallet-client/test/cs02RequestValidation.test.js"], "remaining_gap": null }
+  ,"MessageStructure.ProtocolMessages.087": { "disposition": "implemented", "we_build_rationale": "Duplicate credential query identifiers are rejected by strict DCQL validation and cannot create ambiguous selection.", "implementation_paths": ["wallet-client/src/lib/cs02DcqlValidation.js", "utils/cs02DcqlCore.js"], "test_paths": ["wallet-client/test/cs02DcqlValidation.test.js", "tests/cs02DcqlCore.test.js"], "remaining_gap": null }
+  ,"MessageStructure.ProtocolMessages.095": { "disposition": "structural-only", "we_build_rationale": "etsi_tl trusted-authority entries are accepted only as structural inputs; no list or issuer trust is evaluated.", "implementation_paths": ["utils/cs02TrustPolicy.js"], "test_paths": ["tests/cs02TrustPolicy.test.js"], "remaining_gap": "ETSI trusted-list resolution and trust evaluation are deferred." }
 }

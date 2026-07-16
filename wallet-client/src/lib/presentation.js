@@ -345,6 +345,21 @@ function attachKbJwtToSdJwt(sdJwt, kbJwt) {
   return `${token}~${kbJwt}`;
 }
 
+function buildCs02TransactionDataProofClaims(transactionData) {
+  if (!Array.isArray(transactionData) || transactionData.length === 0) return null;
+  const hashes = transactionData.map((entry) => {
+    if (typeof entry !== "string" || entry.length === 0) {
+      throw new Cs02ValidationError("transaction_data entries must be non-empty strings", "invalid_request");
+    }
+    let bytes;
+    try { bytes = Buffer.from(entry, "base64url"); } catch {
+      throw new Cs02ValidationError("transaction_data entries must be base64url", "invalid_request");
+    }
+    return crypto.createHash("sha256").update(bytes).digest("base64url");
+  });
+  return { transaction_data_hashes: hashes, transaction_data_hashes_alg: "sha-256" };
+}
+
 async function buildJwtVpToken({
   credentialJwt,
   privateJwk,
@@ -547,12 +562,15 @@ async function buildPresentableVpTokenForSelection({
     typ: isSdJwt ? "kb+jwt" : "openid4vp-proof+jwt",
     alg: presentationAlg,
     sdJwt: isSdJwt ? vpToken : undefined,
-    extraPayloadClaims: ts12Context
+    extraPayloadClaims: {
+      ...(buildCs02TransactionDataProofClaims(payload?.transaction_data) || {}),
+      ...(ts12Context
       ? buildTs12ProofClaims({
         encodedTransactionData: ts12Context.encodedTransactionData,
         responseMode: payload?.response_mode || "direct_post",
       })
-      : null,
+      : {}),
+    },
   });
 
   if (cs02Options?.strict && isSdJwt) {
@@ -723,11 +741,20 @@ export async function performPresentation(
     let payload;
     let effectiveClientMetadata = null;
     if (cs02Options.strict) {
-      const fetched = await fetchCs02AuthorizationRequestJwt(requestUri, method, cs02Options, slog);
+      const requestWalletNonce = method === "post"
+        ? crypto.randomBytes(16).toString("base64url")
+        : null;
+      const fetched = await fetchCs02AuthorizationRequestJwt(
+        requestUri,
+        method,
+        { ...cs02Options, walletNonce: requestWalletNonce },
+        slog,
+      );
       requestJwt = fetched.requestJwt;
       ({ header, payload, effectiveClientMetadata } = await validateAndVerifyCs02AuthorizationRequest(requestJwt, {
         deepLinkClientId: clientId,
         deepLinkUrl,
+        expectedWalletNonce: fetched.walletNonce,
         options: cs02Options,
         log: slog,
       }));
@@ -1131,7 +1158,9 @@ export async function performPresentation(
       typ: isSdJwt ? "kb+jwt" : "openid4vp-proof+jwt",
       alg: presentationAlg,
       sdJwt: isSdJwt ? vpToken : undefined,
-      extraPayloadClaims: matchedDcqlQuery
+      extraPayloadClaims: {
+        ...(buildCs02TransactionDataProofClaims(payload?.transaction_data) || {}),
+        ...(matchedDcqlQuery
         ? (() => {
           const ts12Context = resolveTs12TransactionDataForCredential({
             transactionData: payload?.transaction_data,
@@ -1145,7 +1174,8 @@ export async function performPresentation(
             })
             : null;
         })()
-        : null,
+        : {}),
+      },
     });
     responseSigner = {
       privateJwk,

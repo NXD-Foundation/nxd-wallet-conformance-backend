@@ -524,6 +524,23 @@ describe("CS-02 client_metadata_uri policy (Phase B)", () => {
     }
   });
 
+  it("requires encrypted response encoding metadata for direct_post.jwt", () => {
+    expect(() => validateCs02ClientMetadata({
+      jwks: { keys: [{ kid: "enc", kty: "EC", crv: "P-256", use: "enc" }] },
+    }, { responseMode: "direct_post.jwt", strict: true })).to.throw(/encrypted response encoding/);
+  });
+
+  it("validates strict redirect_uris metadata structure", () => {
+    expect(() => validateCs02ClientMetadata({ redirect_uris: ["http://verifier.example/response"] }, { strict: true }))
+      .to.throw(/HTTPS/);
+    expect(() => validateCs02ClientMetadata({ redirect_uris: [] }, { strict: true }))
+      .to.throw(/non-empty/);
+  });
+
+  it("allows omitted redirect_uris under the explicit strict optional-field policy", () => {
+    expect(() => validateCs02ClientMetadata({ client_name: "Verifier" }, { strict: true })).not.to.throw();
+  });
+
   it("accepts valid HTTPS remote metadata with supported JWKs", async () => {
     const result = await validateCs02ClientMetadataUri(metadataUri, {
       fetchImpl: mockMetadataFetch(validMetadata),

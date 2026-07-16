@@ -170,6 +170,24 @@ describe("CS-02 DCQL validation (Phase 2)", () => {
     ).to.throw(Cs02ValidationError, /must be a non-empty array/);
   });
 
+  it("rejects format-inapplicable DCQL meta constraints", () => {
+    expect(() => validateCs02PresentationQuery({ dcql_query: {
+      credentials: [{ id: "sd", format: "dc+sd-jwt", meta: { doctype_value: "org.iso.18013.5.1.mDL" } }],
+    }}, { strict: true })).to.throw(/not applicable/);
+    expect(() => validateCs02PresentationQuery({ dcql_query: {
+      credentials: [{ id: "mdoc", format: "mso_mdoc", meta: { vct_values: ["pid"] } }],
+    }}, { strict: true })).to.throw(/not applicable/);
+  });
+
+  it("allows omitted meta for supported credential formats", () => {
+    expect(() => validateCs02PresentationQuery({ dcql_query: {
+      credentials: [
+        { id: "sd", format: "dc+sd-jwt" },
+        { id: "mdoc", format: "mso_mdoc" },
+      ],
+    }}, { strict: true })).not.to.throw();
+  });
+
   it("logs trusted_authorities as advisory when no trust registry is configured", () => {
     const logs = [];
     validateCs02DcqlQuery(

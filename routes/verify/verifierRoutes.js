@@ -159,6 +159,7 @@ async function runCs02SdJwtVpTokenChecks(sessionId, vpSession, vpTokenObject, cs
       {
         sessionNonce: vpSession.nonce,
         clientId: vpSession.client_id,
+        transactionData: vpSession.transaction_data,
         computeSdHash: computeSdHashFromPresentedToken,
       },
       cs02ResponseOptions,

@@ -7,6 +7,9 @@ const register = JSON.parse(
 const inventory = JSON.parse(
   fs.readFileSync(new URL("../FCAFs/we-build-fcaf-catalogue-inventory.json", import.meta.url), "utf8"),
 );
+const dispositionOverrides = JSON.parse(
+  fs.readFileSync(new URL("../FCAFs/we-build-cs02-disposition-overrides.json", import.meta.url), "utf8"),
+);
 
 const dispositions = new Set([
   "implemented",
@@ -68,5 +71,21 @@ describe("FCAF applicability register", () => {
     expect(register.layers.SecurityMechanisms.areas.TrustMechanisms.status).to.equal(
       "structural-only",
     );
+  });
+
+  it("keeps the aggregate disposition snapshot synchronized", () => {
+    const snapshot = register.cs02_disposition_register;
+    expect(snapshot).to.include({ explicit_catalogue_rows: 301, classified_rows: 301, unclassified_rows: 0 });
+    const counts = {};
+    for (const entry of Object.values(dispositionOverrides)) {
+      counts[entry.disposition] = (counts[entry.disposition] || 0) + 1;
+    }
+    expect(snapshot.dispositions).to.deep.equal({
+      implemented: counts.implemented,
+      partial: counts.partial || 0,
+      "structural-only": counts["structural-only"],
+      "inapplicable-cs02": counts["inapplicable-cs02"],
+      "out-of-scope-datamodel": counts["out-of-scope-datamodel"] || 0,
+    });
   });
 });

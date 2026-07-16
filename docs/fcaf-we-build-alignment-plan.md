@@ -297,10 +297,9 @@ Current audit tooling parses 222 explicit MessageStructure rows and 79
 SecurityMechanism rows. The MessageStructure source heading claims 236; the
 14-row discrepancy is recorded in `FCAFs/we-build-fcaf-catalogue-inventory.json`
 and blocks declaring a complete per-ID register until reconciled.
-Evidence-backed overrides currently classify 84 source-matched IDs (61 implemented,
-16 structural-only, and 7 inapplicable to strict CS-02); two overrides refer to
-source ranges/rows not explicitly present and remain reconciliation items. All remaining IDs stay
-explicitly unclassified in the generated template.
+Evidence-backed overrides currently classify all 301 explicit source-matched IDs:
+190 implemented, 0 partial, 38 structural-only, 72 inapplicable to strict CS-02,
+and 1 datamodel-deferred. No available source row remains unclassified.
 
 ### B. Finish strict request and DCQL message semantics
 
@@ -436,6 +435,15 @@ credential family is proven once without adding negative E2E variants.
 
 Acceptance: the report is reproducible from code/test evidence and each
 remaining gap is deliberate, visible, and within the agreed scope.
+
+The disposition register and MessageStructure coverage report are now
+synchronized from the same evidence-backed counts. Dedicated validation
+commands are available as `npm run test:fcaf-register` and
+`npm run test:cs02-flow`; the combined `npm run test:cs02` remains the full
+strict-profile gate. The register CLI also supports `--by-layer` for generated
+MessageStructure/SecurityMechanisms summaries. The remaining G work is wiring
+that generated output into release reporting, not a claim that the
+still-unclassified catalogue rows are covered.
 
 ## Completion criteria
 

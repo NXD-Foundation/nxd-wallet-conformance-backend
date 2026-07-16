@@ -19,6 +19,7 @@ import {
   validateCs02ClientId,
   validateCs02DeepLinkClientIdConsistency,
   validateAndVerifyCs02AuthorizationRequest,
+  fetchCs02AuthorizationRequestJwt,
   parseCs02ClientIdScheme,
   decodeJarParts,
 } from "../src/lib/cs02RequestValidation.js";
@@ -805,5 +806,80 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
       });
       expect(verified.effectiveClientMetadata.jwks.keys[0].kid).to.equal("inline");
     });
+  });
+
+  it("requires a POST request wallet_nonce to match the returned signed request", async () => {
+    const requestJwt = await signJar(baseJarPayload({ wallet_nonce: "wallet-nonce-1" }));
+    const verified = await validateAndVerifyCs02AuthorizationRequest(requestJwt, {
+      expectedWalletNonce: "wallet-nonce-1",
+      options: strictOptions(),
+    });
+    expect(verified.payload.wallet_nonce).to.equal("wallet-nonce-1");
+    try {
+      await validateAndVerifyCs02AuthorizationRequest(requestJwt, {
+        expectedWalletNonce: "wallet-nonce-2",
+        options: strictOptions(),
+      });
+      expect.fail("expected wallet_nonce mismatch");
+    } catch (error) {
+      expect(error).to.be.instanceOf(Cs02ValidationError);
+      expect(error.message).to.match(/wallet_nonce/);
+    }
+  });
+
+  it("requires response_uri to match strict redirect_uris metadata", async () => {
+    const requestJwt = await signJar(baseJarPayload({
+      client_metadata: { redirect_uris: ["https://other.example/response"] },
+    }));
+    try {
+      await validateAndVerifyCs02AuthorizationRequest(requestJwt, { options: strictOptions() });
+      expect.fail("expected redirect URI mismatch");
+    } catch (error) {
+      expect(error).to.be.instanceOf(Cs02ValidationError);
+      expect(error.message).to.match(/redirect_uris/);
+    }
+  });
+
+  it("rejects direct_post.jwt requests without encryption metadata", async () => {
+    const requestJwt = await signJar(baseJarPayload({ response_mode: "direct_post.jwt" }));
+    try {
+      await validateAndVerifyCs02AuthorizationRequest(requestJwt, { options: strictOptions() });
+      expect.fail("expected missing encryption metadata rejection");
+    } catch (error) {
+      expect(error).to.be.instanceOf(Cs02ValidationError);
+      expect(error.message).to.match(/require client metadata/);
+    }
+  });
+
+  it("sends wallet_nonce in strict POST request-URI form bodies", async () => {
+    let request;
+    const response = await fetchCs02AuthorizationRequestJwt(
+      "https://verifier.example/request",
+      "post",
+      strictOptions({ walletNonce: "wallet-nonce-3", fetchImpl: async (_url, init) => {
+        request = init;
+        return {
+          ok: true,
+          headers: { get: () => CS02_REQUEST_URI_CONTENT_TYPE },
+          text: async () => "a.b.c",
+        };
+      } }),
+    );
+    expect(response.walletNonce).to.equal("wallet-nonce-3");
+    expect(request.body).to.equal("wallet_nonce=wallet-nonce-3");
+  });
+
+  it("supports POST request-URI retrieval without inline client_metadata", async () => {
+    const result = await fetchCs02AuthorizationRequestJwt(
+      "https://verifier.example/request",
+      "post",
+      strictOptions({ fetchImpl: async () => ({
+        ok: true,
+        headers: { get: () => CS02_REQUEST_URI_CONTENT_TYPE },
+        text: async () => "a.b.c",
+      }) }),
+    );
+    expect(result.requestJwt).to.equal("a.b.c");
+    expect(result.walletNonce).to.equal(null);
   });
 });

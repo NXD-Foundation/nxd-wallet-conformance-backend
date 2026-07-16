@@ -205,4 +205,22 @@ Legend:
 
 Against the original broad FCAFS report, this repo still does not cover the full 236-spec MessageStructure surface. Against the narrower WE BUILD CS-02 profile, the implementation is now substantially closer than the original report indicated: strict wallet request validation, DCQL validation, multi-credential response generation, verifier response validation, KB-JWT checks, status-list placeholders, and shared trust/metadata policy are in place.
 
-The remaining CS-02 blockers are now narrower and mostly about trust and policy completion: strict-route metadata consumption consistency, configured issuer trust, future status-list enforcement, production x509/verifier-attestation trust, wallet-side disclosure/request minimization, explicit external consent gating, and a fuller negative-test matrix.
+The auditable disposition register in
+`FCAFs/we-build-cs02-disposition-overrides.json` currently contains 301
+evidence-backed source-row mappings: 190 implemented, 0 partial, 38
+structural-only, and 72 explicitly inapplicable to strict CS-02, plus one
+out-of-scope datamodel row. The available
+catalogues contain 301 explicit rows (222 MessageStructure and 79
+SecurityMechanisms); no explicit catalogue rows remain unclassified. The
+source MessageStructure heading claims 236 rows, but 14 of those rows are not
+present as explicit table entries and remain a catalogue-reconciliation item.
+
+The generated per-layer view is: MessageStructure 156 implemented, 0 partial,
+14 structural-only, 47 inapplicable, and one datamodel-deferred row (222 explicit rows);
+SecurityMechanisms 34 implemented, 22 structural-only, 23 inapplicable, and no unclassified rows
+(79 explicit rows).
+
+No applicable strict CS-02 FCAF row remains partial in the disposition register. The
+remaining work is deliberately outside this increment: trust-anchor and issuer
+trust decisions, status-list retrieval/evaluation, PID/data-model rules,
+interactive consent/authentication UX, and broader compatibility profiles.

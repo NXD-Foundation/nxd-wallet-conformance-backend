@@ -402,6 +402,21 @@ export function validateCs02ClientMetadata(metadata, { responseMode, strict = tr
     }
   }
 
+  if (strict && metadata.redirect_uris != null) {
+    if (!Array.isArray(metadata.redirect_uris) || metadata.redirect_uris.length === 0) {
+      throw new Cs02TrustPolicyError("client_metadata.redirect_uris must be a non-empty array", "invalid_request");
+    }
+    for (const redirectUri of metadata.redirect_uris) {
+      let parsed;
+      try { parsed = new URL(redirectUri); } catch {
+        throw new Cs02TrustPolicyError("client_metadata.redirect_uris entries must be absolute HTTPS URIs", "invalid_request");
+      }
+      if (parsed.protocol !== "https:") {
+        throw new Cs02TrustPolicyError("client_metadata.redirect_uris entries must use HTTPS", "invalid_request");
+      }
+    }
+  }
+
   if (responseMode === "direct_post" && strict) {
     if (
       metadata.authorization_encrypted_response_alg ||
@@ -417,6 +432,16 @@ export function validateCs02ClientMetadata(metadata, { responseMode, strict = tr
   }
 
   if (responseMode === "direct_post.jwt" && strict) {
+    const hasEncryptedResponseEncoding =
+      typeof metadata.authorization_encrypted_response_enc === "string" ||
+      (Array.isArray(metadata.encrypted_response_enc_values_supported) &&
+        metadata.encrypted_response_enc_values_supported.length > 0);
+    if (!hasEncryptedResponseEncoding) {
+      throw new Cs02TrustPolicyError(
+        "client_metadata must advertise an encrypted response encoding for direct_post.jwt",
+        "invalid_request",
+      );
+    }
     for (const alg of metadata.encrypted_response_alg_values_supported || []) {
       if (!CS02_ENFORCED_JWE_ALGS.has(alg)) {
         throw new Cs02TrustPolicyError(

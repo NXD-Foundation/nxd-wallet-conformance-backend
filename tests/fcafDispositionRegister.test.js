@@ -1,6 +1,6 @@
 import { expect } from "chai";
 import fs from "fs";
-import { extractFcafSpecs, extractCategorizedSpecs, buildDispositionRegister, createDispositionTemplate, summarizeDispositionTemplate } from "../scripts/fcafDispositionRegister.js";
+import { extractFcafSpecs, extractCategorizedSpecs, buildDispositionRegister, createDispositionTemplate, summarizeDispositionTemplate, summarizeDispositionByLayer } from "../scripts/fcafDispositionRegister.js";
 
 const overrides = JSON.parse(fs.readFileSync(new URL("../FCAFs/we-build-cs02-disposition-overrides.json", import.meta.url), "utf8"));
 
@@ -12,7 +12,7 @@ describe("FCAF per-ID disposition tooling", () => {
   });
 
   it("fails closed when an available ID has no explicit disposition", () => {
-    const specs = extractFcafSpecs("| 032 | no state |", "MessageStructure", "ProtocolMessages");
+    const specs = extractFcafSpecs("| 999 | synthetic unclassified |", "MessageStructure", "ProtocolMessages");
     expect(() => buildDispositionRegister(specs, {})).to.throw(/Missing disposition mappings/);
   });
 
@@ -40,17 +40,18 @@ describe("FCAF per-ID disposition tooling", () => {
   });
 
   it("keeps strict-profile exclusions explicit", () => {
-    expect(Object.keys(overrides)).to.have.length(85);
-    expect(Object.values(overrides).filter((entry) => entry.disposition === "structural-only")).to.have.length(16);
-    expect(Object.values(overrides).filter((entry) => entry.disposition === "inapplicable-cs02")).to.have.length(7);
-    expect(Object.values(overrides).filter((entry) => entry.disposition === "implemented")).to.have.length(62);
+    expect(Object.keys(overrides)).to.have.length(301);
+    expect(Object.values(overrides).filter((entry) => entry.disposition === "structural-only")).to.have.length(38);
+    expect(Object.values(overrides).filter((entry) => entry.disposition === "inapplicable-cs02")).to.have.length(72);
+    expect(Object.values(overrides).filter((entry) => entry.disposition === "implemented")).to.have.length(190);
+    expect(Object.values(overrides).filter((entry) => entry.disposition === "partial")).to.have.length(0);
   });
 
   it("creates an explicit unclassified template for remaining IDs", () => {
-    const specs = extractFcafSpecs("| 032 | no state |", "MessageStructure", "ProtocolMessages");
+    const specs = extractFcafSpecs("| 999 | synthetic unclassified |", "MessageStructure", "ProtocolMessages");
     const template = createDispositionTemplate(specs, overrides);
-    expect(template["MessageStructure.ProtocolMessages.032"].disposition).to.equal(null);
-    expect(template["MessageStructure.ProtocolMessages.032"].remaining_gap).to.equal("Unclassified");
+    expect(template["MessageStructure.ProtocolMessages.999"].disposition).to.equal(null);
+    expect(template["MessageStructure.ProtocolMessages.999"].remaining_gap).to.equal("Unclassified");
   });
 
   it("preserves scoped overrides when parsing categorized sources", () => {
@@ -61,8 +62,22 @@ describe("FCAF per-ID disposition tooling", () => {
   });
 
   it("summarizes classified and unclassified IDs without publishing coverage percentages", () => {
-    const specs = extractFcafSpecs("| 027 | one |\n| 032 | two |", "MessageStructure", "ProtocolMessages");
+    const specs = extractFcafSpecs("| 027 | one |\n| 999 | two |", "MessageStructure", "ProtocolMessages");
     const summary = summarizeDispositionTemplate(createDispositionTemplate(specs, overrides));
     expect(summary).to.include({ total: 2, classified: 1, implemented: 1, unclassified: 1 });
+  });
+
+  it("summarizes each catalogue layer independently", () => {
+    const template = createDispositionTemplate([
+      { id: "MessageStructure.ProtocolMessages.001", layer: "MessageStructure" },
+      { id: "SecurityMechanisms.RpIntegrity.001", layer: "SecurityMechanisms" },
+      { id: "SecurityMechanisms.RpIntegrity.002", layer: "SecurityMechanisms" },
+    ], {
+      "MessageStructure.ProtocolMessages.001": { disposition: "implemented" },
+      "SecurityMechanisms.RpIntegrity.001": { disposition: "structural-only" },
+    });
+    const summary = summarizeDispositionByLayer(template);
+    expect(summary.MessageStructure).to.include({ total: 1, classified: 1, implemented: 1 });
+    expect(summary.SecurityMechanisms).to.include({ total: 2, classified: 1, "structural-only": 1, unclassified: 1 });
   });
 });

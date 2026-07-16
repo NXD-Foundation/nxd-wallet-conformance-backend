@@ -184,6 +184,15 @@ describe("CS-02 verifier response validation (Phase 4)", () => {
     expect(result.walletError.error_description).to.equal("User declined");
   });
 
+  it("normalizes unknown wallet errors to access_denied", () => {
+    const result = validateCs02ResponseSubmission(
+      { error: "wallet_specific_error", error_description: "cancelled" },
+      { response_mode: "direct_post", state: "s1" },
+      { strict: true },
+    );
+    expect(result.walletError).to.include({ error: "access_denied", error_description: "cancelled" });
+  });
+
   it("rejects unknown DCQL credential ids in strict mode", () => {
     expect(() =>
       validateCs02DcqlVpTokenResponse(
@@ -317,6 +326,27 @@ describe("CS-02 verifier response validation (Phase 4)", () => {
         options: { strict: true },
       }),
     ).to.throw(Cs02VerifierResponseError, /typ kb\+jwt/);
+  });
+
+  it("binds requested transaction_data hashes in the KB-JWT", () => {
+    const encoded = Buffer.from(JSON.stringify({ type: "payment_data", amount: 10 }), "utf8").toString("base64url");
+    const hash = createHash("sha256").update(Buffer.from(encoded, "base64url")).digest("base64url");
+    expect(() => validateCs02KeyBindingJwtClaims({
+      kbHeader: { typ: "kb+jwt", alg: "ES256" },
+      kbPayload: {
+        nonce: "n1", aud: "client", iat: Math.floor(Date.now() / 1000), sd_hash: "abc",
+        transaction_data_hashes_alg: "sha-256", transaction_data_hashes: [hash],
+      },
+      sessionNonce: "n1", clientId: "client", transactionData: [encoded], options: { strict: true },
+    })).not.to.throw();
+    expect(() => validateCs02KeyBindingJwtClaims({
+      kbHeader: { typ: "kb+jwt", alg: "ES256" },
+      kbPayload: {
+        nonce: "n1", aud: "client", iat: Math.floor(Date.now() / 1000), sd_hash: "abc",
+        transaction_data_hashes_alg: "sha-256", transaction_data_hashes: ["wrong"],
+      },
+      sessionNonce: "n1", clientId: "client", transactionData: [encoded], options: { strict: true },
+    })).to.throw(/transaction_data_hashes/);
   });
 
   it("verifies outer response JWT signature and aud/state claims", async () => {

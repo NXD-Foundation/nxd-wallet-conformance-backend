@@ -212,7 +212,7 @@ Source: [JAR x5c chain plan](./jar-x5c-certificate-chain-plan.md).
 | [Future WUA stricter enforcement](./futureWUAstricterEnforcements.md) | Status-list completeness and configured Wallet Provider trust material |
 | [JAR x5c certificate-chain plan](./jar-x5c-certificate-chain-plan.md) | Supply an X.509 JAR chain for wallets that validate it |
 | [WE BUILD-constrained FCAF alignment](./fcaf-we-build-alignment-plan.md) | Align non-data-model FCAF coverage without weakening WE BUILD profiles or enabling trust decisions |
-| [WE BUILD FCAF applicability register](../FCAFs/we-build-fcaf-applicability.json) | Machine-readable scope, disposition, and evidence policy for the alignment work |
+| [WE BUILD FCAF applicability register](../FCAFs/we-build-fcaf-applicability.json) | Machine-readable scope, disposition, and evidence policy for the alignment work; 301 explicit catalogue rows are classified |
 
 ## Working Rules
 

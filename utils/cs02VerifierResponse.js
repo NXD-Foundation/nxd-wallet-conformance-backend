@@ -115,10 +115,20 @@ export function normalizeDcqlVpToken(vpToken) {
   return vpToken;
 }
 
+export const CS02_WALLET_ERROR_CODES = new Set([
+  "access_denied",
+  "invalid_request",
+  "invalid_client",
+  "invalid_scope",
+  "temporarily_unavailable",
+  "server_error",
+]);
+
 export function detectWalletProtocolError(body) {
-  if (!body || typeof body !== "object" || !body.error) return null;
+  if (!body || typeof body !== "object" || typeof body.error !== "string" || body.error.length === 0) return null;
+  const error = CS02_WALLET_ERROR_CODES.has(body.error) ? body.error : "access_denied";
   return {
-    error: body.error,
+    error,
     error_description: body.error_description,
   };
 }
@@ -512,6 +522,7 @@ export function validateCs02KeyBindingJwtClaims({
   kbPayload,
   sessionNonce,
   clientId,
+  transactionData,
   options = { strict: true },
 }) {
   if (!options.strict) return;
@@ -557,6 +568,18 @@ export function validateCs02KeyBindingJwtClaims({
       "Key Binding JWT is missing sd_hash",
       "invalid_key_binding_jwt",
     );
+  }
+  if (Array.isArray(transactionData) && transactionData.length > 0) {
+    if (kbPayload.transaction_data_hashes_alg !== "sha-256" || !Array.isArray(kbPayload.transaction_data_hashes)) {
+      throw new Cs02VerifierResponseError("Key Binding JWT is missing transaction_data_hashes", "invalid_key_binding_jwt");
+    }
+    const expected = transactionData.map((entry) => createHash("sha256")
+      .update(Buffer.from(entry, "base64url"))
+      .digest("base64url"));
+    if (expected.length !== kbPayload.transaction_data_hashes.length ||
+        expected.some((hash, index) => hash !== kbPayload.transaction_data_hashes[index])) {
+      throw new Cs02VerifierResponseError("Key Binding JWT transaction_data_hashes do not match the request", "invalid_key_binding_jwt");
+    }
   }
 }
 
@@ -884,6 +907,7 @@ export async function validateCs02SdJwtPresentation({
   sdJwt,
   sessionNonce,
   clientId,
+  transactionData,
   computeSdHash,
   credQuery,
   options = { strict: true },
@@ -923,6 +947,7 @@ export async function validateCs02SdJwtPresentation({
     kbPayload,
     sessionNonce,
     clientId,
+    transactionData,
     options,
   });
 
@@ -990,6 +1015,7 @@ export async function validateCs02SdJwtEntriesInVpToken(
         sdJwt: presentation,
         sessionNonce: context.sessionNonce,
         clientId: context.clientId,
+        transactionData: context.transactionData,
         computeSdHash: context.computeSdHash,
         credQuery,
         options: {

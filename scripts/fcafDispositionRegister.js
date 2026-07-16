@@ -45,6 +45,19 @@ export function summarizeDispositionTemplate(template) {
   return { ...counts, total: Object.keys(template).length, classified: Object.keys(template).length - counts.unclassified };
 }
 
+export function summarizeDispositionByLayer(template) {
+  const layers = {};
+  for (const [id, entry] of Object.entries(template)) {
+    const layer = entry.layer || String(id).split(".")[0] || "Unknown";
+    layers[layer] ||= {};
+    const bucket = entry.disposition || "unclassified";
+    layers[layer][bucket] = (layers[layer][bucket] || 0) + 1;
+    layers[layer].total = (layers[layer].total || 0) + 1;
+  }
+  for (const counts of Object.values(layers)) counts.classified = counts.total - (counts.unclassified || 0);
+  return layers;
+}
+
 export function loadMarkdown(path) { return fs.readFileSync(path, "utf8"); }
 export function extractCategorizedSpecs(markdown, layer) {
   const sections = String(markdown).split(/^##\s+/m).slice(1);
@@ -63,5 +76,10 @@ if (process.argv[1] && new URL(`file://${process.argv[1]}`).pathname === new URL
   const overridesPath = new URL("../FCAFs/we-build-cs02-disposition-overrides.json", import.meta.url);
   const overrides = JSON.parse(fs.readFileSync(overridesPath, "utf8"));
   const template = createDispositionTemplate(specs, overrides);
-  process.stdout.write(`${JSON.stringify(process.argv.includes("--summary") ? summarizeDispositionTemplate(template) : template, null, 2)}\n`);
+  const output = process.argv.includes("--by-layer")
+    ? summarizeDispositionByLayer(template)
+    : process.argv.includes("--summary")
+      ? summarizeDispositionTemplate(template)
+      : template;
+  process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
 }

@@ -690,7 +690,7 @@ export async function verifyCs02JarSignature(requestJwt, header, payload, option
 
 export async function validateAndVerifyCs02AuthorizationRequest(
   requestJwt,
-  { deepLinkClientId, deepLinkUrl, options, log = () => {} } = {},
+  { deepLinkClientId, deepLinkUrl, expectedWalletNonce, options, log = () => {} } = {},
 ) {
   if (!requestJwt || typeof requestJwt !== "string") {
     logValidationFailure(log, "unsigned_or_malformed_jar");
@@ -705,6 +705,22 @@ export async function validateAndVerifyCs02AuthorizationRequest(
   const { header, payload } = decodeJarParts(requestJwt);
   validateCs02JarHeader(header, log);
   validateCs02JarPayload(payload, options, log);
+  if (options.strict && payload.response_mode === "direct_post.jwt" &&
+      payload.client_metadata == null && payload.client_metadata_uri == null) {
+    throw new Cs02ValidationError(
+      "direct_post.jwt authorization requests require client metadata for encrypted response negotiation",
+      "invalid_request",
+    );
+  }
+  if (expectedWalletNonce != null) {
+    if (typeof payload.wallet_nonce !== "string" || payload.wallet_nonce !== expectedWalletNonce) {
+      logValidationFailure(log, "wallet_nonce_mismatch");
+      throw new Cs02ValidationError(
+        "Authorization request wallet_nonce does not match the POST request",
+        "invalid_request",
+      );
+    }
+  }
   validateCs02DeepLinkClientIdConsistency(deepLinkClientId, payload.client_id, log);
   if (deepLinkUrl && options.strict) {
     try {
@@ -731,6 +747,13 @@ export async function validateAndVerifyCs02AuthorizationRequest(
         log,
       });
       effectiveClientMetadata = resolved.effectiveMetadata;
+      if (Array.isArray(effectiveClientMetadata?.redirect_uris) &&
+          !effectiveClientMetadata.redirect_uris.includes(payload.response_uri)) {
+        throw new Cs02ValidationError(
+          "response_uri is not listed in client_metadata.redirect_uris",
+          "invalid_client",
+        );
+      }
     } catch (error) {
       if (error instanceof Cs02TrustPolicyError) {
         logValidationFailure(log, "client_metadata_uri", { message: error.message });
@@ -765,6 +788,7 @@ export async function validateAndVerifyCs02AuthorizationRequest(
 export async function fetchCs02AuthorizationRequestJwt(requestUri, method, options, log = () => {}) {
   const normalizedMethod = validateCs02RequestUriMethod(method, log);
   validateCs02RequestUri(requestUri, options, log);
+  const fetchImpl = options?.fetchImpl || fetch;
 
   const headers = {
     Accept: CS02_REQUEST_URI_CONTENT_TYPE,
@@ -773,7 +797,8 @@ export async function fetchCs02AuthorizationRequestJwt(requestUri, method, optio
   let response;
   if (normalizedMethod === "post") {
     const form = new URLSearchParams();
-    response = await fetch(requestUri, {
+    if (options?.walletNonce != null) form.set("wallet_nonce", options.walletNonce);
+    response = await fetchImpl(requestUri, {
       method: "POST",
       headers: {
         ...headers,
@@ -782,7 +807,7 @@ export async function fetchCs02AuthorizationRequestJwt(requestUri, method, optio
       body: form.toString(),
     });
   } else {
-    response = await fetch(requestUri, { method: "GET", headers });
+    response = await fetchImpl(requestUri, { method: "GET", headers });
   }
 
   const contentType = response.headers.get("content-type") || "";
@@ -809,7 +834,7 @@ export async function fetchCs02AuthorizationRequestJwt(requestUri, method, optio
     );
   }
 
-  return { requestJwt: body, contentType };
+  return { requestJwt: body, contentType, walletNonce: options?.walletNonce ?? null };
 }
 
 export function summarizeJarForLog(requestJwt) {

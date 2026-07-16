@@ -193,6 +193,13 @@ function validateDcqlMeta(credQuery, { strict }, log = () => {}) {
     }
   }
 
+  if (strict && SD_JWT_FORMATS.has(format) && meta.doctype_value != null) {
+    throw new Cs02ValidationError("DCQL meta.doctype_value is not applicable to SD-JWT formats", "invalid_request");
+  }
+  if (strict && format === "mso_mdoc" && meta.vct_values != null) {
+    throw new Cs02ValidationError("DCQL meta.vct_values is not applicable to mso_mdoc", "invalid_request");
+  }
+
   if (meta.trusted_authorities != null) {
     validateCs02TrustedAuthorities(credQuery, log);
   }

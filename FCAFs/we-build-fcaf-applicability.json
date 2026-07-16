@@ -77,5 +77,33 @@
     "success_e2e": "Representative wallet-client/verifier flows only",
     "negative_cases": "Focused unit/service/route tests plus fail-closed runtime behavior",
     "trust": "Presence and shape of x5c, verifier-attestation JWT, trust metadata and key references; no trust decision"
+  },
+  "cs02_disposition_register": {
+    "source": "FCAFs/we-build-cs02-disposition-overrides.json",
+    "explicit_catalogue_rows": 301,
+    "classified_rows": 301,
+    "unclassified_rows": 0,
+    "dispositions": {
+      "implemented": 190,
+      "partial": 0,
+      "structural-only": 38,
+      "inapplicable-cs02": 72,
+      "out-of-scope-datamodel": 1
+    },
+    "by_layer": {
+      "MessageStructure": {
+        "total": 222,
+        "implemented": 156,
+        "structural-only": 16,
+        "inapplicable-cs02": 49,
+        "out-of-scope-datamodel": 1
+      },
+      "SecurityMechanisms": {
+        "total": 79,
+        "implemented": 34,
+        "structural-only": 22,
+        "inapplicable-cs02": 23
+      }
+    }
   }
 }
