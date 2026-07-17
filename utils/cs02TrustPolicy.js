@@ -11,6 +11,7 @@ export const CS02_ENFORCED_JAR_ALG = "ES256";
 export const CS02_ENFORCED_KB_JWT_ALGS = new Set(["ES256"]);
 export const CS02_ENFORCED_SD_JWT_ALGS = new Set(["ES256", "ES384"]);
 export const CS02_ENFORCED_VP_FORMATS = new Set(["dc+sd-jwt", "vc+sd-jwt", "mso_mdoc"]);
+export const CS03_X509_DCQL_FORMAT = "https://cloudsignatureconsortium.org/2025/x509";
 export const CS02_ENFORCED_RESPONSE_MODES = new Set([
   "direct_post",
   "direct_post.jwt",
@@ -127,12 +128,22 @@ export function selectCs02VerifierEncryptionJwk(clientMetadata = {}) {
   ) || null;
 }
 
-export function buildStrictCs02ClientMetadata(clientMetadata = {}, responseMode = "direct_post") {
-  const metadata = filterClientMetadataForCs02Enforcement(clientMetadata, responseMode, { strict: true });
+export function buildStrictCs02ClientMetadata(
+  clientMetadata = {},
+  responseMode = "direct_post",
+  { allowCs03CredentialFormat = false } = {},
+) {
+  const metadata = filterClientMetadataForCs02Enforcement(clientMetadata, responseMode, {
+    strict: true,
+    allowCs03CredentialFormat,
+  });
   if (metadata?.vp_formats_supported && typeof metadata.vp_formats_supported === "object") {
     metadata.vp_formats_supported = Object.fromEntries(
       Object.entries(metadata.vp_formats_supported)
-        .filter(([format]) => CS02_ENFORCED_VP_FORMATS.has(format))
+        .filter(([format]) =>
+          CS02_ENFORCED_VP_FORMATS.has(format) ||
+          (allowCs03CredentialFormat && format === CS03_X509_DCQL_FORMAT),
+        )
         .map(([format, config]) => {
           if ((format === "dc+sd-jwt" || format === "vc+sd-jwt") && isPlainObject(config)) {
             return [
@@ -355,7 +366,10 @@ function isPlainObject(value) {
   );
 }
 
-export function validateCs02ClientMetadata(metadata, { responseMode, strict = true } = {}) {
+export function validateCs02ClientMetadata(
+  metadata,
+  { responseMode, strict = true, allowCs03CredentialFormat = false } = {},
+) {
   if (metadata == null) return metadata;
   if (!isPlainObject(metadata)) {
     throw new Cs02TrustPolicyError("client_metadata must be an object", "invalid_request");
@@ -366,7 +380,8 @@ export function validateCs02ClientMetadata(metadata, { responseMode, strict = tr
       throw new Cs02TrustPolicyError("client_metadata.vp_formats_supported must be an object", "invalid_request");
     }
     for (const format of Object.keys(metadata.vp_formats_supported)) {
-      if (!CS02_ENFORCED_VP_FORMATS.has(format)) {
+      const cs03Allowed = allowCs03CredentialFormat && format === CS03_X509_DCQL_FORMAT;
+      if (!CS02_ENFORCED_VP_FORMATS.has(format) && !cs03Allowed) {
         throw new Cs02TrustPolicyError(
           `client_metadata advertises unsupported vp format "${format}"`,
           "vp_formats_not_supported",
@@ -463,13 +478,22 @@ export function validateCs02ClientMetadata(metadata, { responseMode, strict = tr
   return metadata;
 }
 
-export function filterClientMetadataForCs02Enforcement(clientMetadata, responseMode, { strict = true } = {}) {
+export function filterClientMetadataForCs02Enforcement(
+  clientMetadata,
+  responseMode,
+  { strict = true, allowCs03CredentialFormat = false } = {},
+) {
   const metadata = { ...(clientMetadata || {}) };
 
   if (metadata.vp_formats_supported && typeof metadata.vp_formats_supported === "object") {
     metadata.vp_formats_supported = Object.fromEntries(
       Object.entries(metadata.vp_formats_supported)
-        .filter(([format]) => (strict ? CS02_ENFORCED_VP_FORMATS.has(format) : true))
+        .filter(([format]) =>
+          strict
+            ? CS02_ENFORCED_VP_FORMATS.has(format) ||
+              (allowCs03CredentialFormat && format === CS03_X509_DCQL_FORMAT)
+            : true,
+        )
         .map(([format, config]) => [
           format,
           isPlainObject(config)

@@ -36,6 +36,7 @@ export const TS12_SUPPORTED_TRANSACTION_DATA_TYPES = new Set([
   "urn:eudi:sca:payment:1",
 ]);
 export const CS02_ADVERTISED_VP_FORMATS = new Set(["dc+sd-jwt", "vc+sd-jwt", "mso_mdoc"]);
+export const CS03_X509_DCQL_FORMAT = "https://cloudsignatureconsortium.org/2025/x509";
 export const CS02_NONCE_PATTERN = /^[A-Za-z0-9_-]+$/;
 
 export class Cs02VerifierRequestError extends Error {
@@ -64,9 +65,14 @@ function truthyEnv(value) {
 
 export function resolveVerifierCs02Options(env = process.env) {
   const compatibility = truthyEnv(env.VERIFIER_CS02_COMPATIBILITY ?? env.CS02_COMPATIBILITY);
+  const cs03Compatibility = truthyEnv(
+    env.VERIFIER_CS03_COMPATIBILITY ?? env.CS03_COMPATIBILITY,
+  );
   const ts12Compatibility = truthyEnv(env.VERIFIER_TS12_COMPATIBILITY);
   return {
     strict: !compatibility,
+    allowCs03CredentialFormat: cs03Compatibility,
+    cs03Compatibility,
     allowRs256Jar: compatibility,
     allowUnsignedRedirectUriJar: compatibility,
     allowLegacyOpenId4VpInvocation: compatibility,
@@ -372,7 +378,10 @@ export function validateCs02SignedJar(requestJwt, options = { strict: true }) {
 }
 
 export function filterClientMetadataForCs02(clientMetadata, responseMode) {
-  return buildStrictCs02ClientMetadata(clientMetadata, responseMode);
+  const options = resolveVerifierCs02Options();
+  return buildStrictCs02ClientMetadata(clientMetadata, responseMode, {
+    allowCs03CredentialFormat: options.allowCs03CredentialFormat,
+  });
 }
 
 export {

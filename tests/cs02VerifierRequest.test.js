@@ -92,6 +92,37 @@ describe("CS-02 verifier request generation (Phase 3)", () => {
     expect(resolveVerifierCs02Options({ VERIFIER_CS02_COMPATIBILITY: "true" }).strict).to.equal(false);
   });
 
+  it("keeps the CS-03 credential format disabled unless CS03 compatibility is enabled", () => {
+    const cs03Query = {
+      credentials: [{
+        id: "signing-cert-01",
+        format: "https://cloudsignatureconsortium.org/2025/x509",
+        meta: { certificatePolicies: ["0.4.0.2042.1"] },
+      }],
+    };
+
+    expect(() => validateCs02JarGenerationInput({
+      client_id: "x509_san_dns:verifier.example",
+      response_uri: "https://verifier.example/response",
+      dcql_query: cs03Query,
+      response_mode: "direct_post",
+      nonce: "nonce-cs03",
+      options: resolveVerifierCs02Options({}),
+    })).to.throw(/Unsupported DCQL credential format/);
+
+    const enabled = resolveVerifierCs02Options({ CS03_COMPATIBILITY: "true" });
+    expect(enabled.strict).to.equal(true);
+    expect(enabled.allowCs03CredentialFormat).to.equal(true);
+    expect(() => validateCs02JarGenerationInput({
+      client_id: "x509_san_dns:verifier.example",
+      response_uri: "https://verifier.example/response",
+      dcql_query: cs03Query,
+      response_mode: "direct_post",
+      nonce: "nonce-cs03",
+      options: enabled,
+    })).not.to.throw();
+  });
+
   it("keeps strict mode while allowing TS12 transaction_data when VERIFIER_TS12_COMPATIBILITY=true", () => {
     const options = resolveVerifierCs02Options({ VERIFIER_TS12_COMPATIBILITY: "true" });
     expect(options.strict).to.equal(true);

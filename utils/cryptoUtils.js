@@ -22,6 +22,7 @@ import {
   validateX509SanDnsTrustForRequestGeneration,
   Cs02VerifierRequestError,
 } from "./cs02VerifierRequest.js";
+import { buildStrictCs02ClientMetadata } from "./cs02TrustPolicy.js";
 import { isStrictCs02Base64Url } from "./cs02Encoding.js";
 
 /**
@@ -392,7 +393,11 @@ export async function buildVpRequestJWT(
   // encrypted_response_enc_values_supported MUST be absent when using direct_post (non-JWT) response mode.
   let clientMetadataForPayload = client_metadata;
   if (cs02Options.strict) {
-    clientMetadataForPayload = filterClientMetadataForCs02(client_metadata, response_mode);
+    clientMetadataForPayload = buildStrictCs02ClientMetadata(
+      client_metadata,
+      response_mode,
+      { allowCs03CredentialFormat: cs02Options.allowCs03CredentialFormat },
+    );
   }
   if (response_mode === "direct_post" && clientMetadataForPayload && typeof clientMetadataForPayload === "object") {
     const {

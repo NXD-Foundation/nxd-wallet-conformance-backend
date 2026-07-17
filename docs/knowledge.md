@@ -117,6 +117,39 @@ Sources: [CS-02](./core/cs-02-credential-presentation%20%281%29.md),
 [verifier metadata model](./openid4vp-cs02-verifier-metadata-model.md), and
 [VP verification matrix](./vp-verification-wallet-matrix.md).
 
+### CS-07 Digital Credentials API Presentation
+
+- The CS-07 target is the W3C Digital Credentials Working Draft dated
+  15 July 2026 together with OpenID4VP 1.0 Appendix A; the exact W3C draft is
+  pinned locally and must not be replaced by the moving editor's draft.
+- Existing `dc_api.jwt` request/decryption fragments are groundwork, not a
+  complete browser-mediated verifier flow. The planned route must use
+  `openid4vp-v1-signed`, a compact signed request in `data.request`,
+  `response_mode=dc_api.jwt`, configured `expected_origins`, and an audience
+  of `origin:<verifier-origin>` for response proofs.
+- DC API transport must remain a thin adapter over the CS-02 DCQL and
+  credential-verification core. It must distinguish wallet protocol errors in
+  fulfilled `DigitalCredential.data` values from browser promise rejection.
+
+Sources: [CS-07](./core/cs-07-credential-presentation-dc-api-updated.md),
+[pinned W3C DC API draft](./rfc/w3c-digital-credentials-WD-20260715.html), and
+[verifier implementation plan](./cs07-dc-api-verifier-implementation-plan.md).
+
+### CS-03 Remote Qualified Signing Compatibility
+
+- CS-03 request generation remains explicitly selected with `cs03=1` on the
+  `/x509/generateVPRequestDCQL` route (and `cs03_oob=1` for callback delivery).
+- The CSC X.509 DCQL format is not part of the strict CS-02 credential-format
+  set. To enable the intentional CS-03 compatibility allowance, set
+  `CS03_COMPATIBILITY=true`. The verifier may use the scoped alias
+  `VERIFIER_CS03_COMPATIBILITY=true`; the wallet may use
+  `WALLET_CS03_COMPATIBILITY=true`.
+- The flag only permits the CSC X.509 DCQL format through the existing CS-03
+  flow. It does not enable CS-03 by itself, relax all CS-02 checks, or make
+  trust evaluation effective. Keep it disabled for ordinary CS-02 sessions.
+
+Source: [CS-03 verifier flow summary](./cs03-verifier-flow-summary.md).
+
 ### Credential And Presentation Binding
 
 - SD-JWT key-binding JWTs must be signed by the holder key in the issued
@@ -187,8 +220,9 @@ Source: [JAR x5c chain plan](./jar-x5c-certificate-chain-plan.md).
 | [CS-02 credential presentation](./core/cs-02-credential-presentation%20%281%29.md) | WE BUILD presentation and verifier requirements | Normative profile |
 | [CS-03 remote signing](./core/cs-03-remote-signing-with-wallet-units%20%283%29.md) | Wallet- and QTSP-centric remote signing | Normative profile |
 | [CS-04 WUA lifecycle](./core/cs-04-wua-lifecycle.md) | WUA lifecycle, binding, revocation, and key attestation | Normative profile |
+| [CS-07 DC API presentation and issuance](./core/cs-07-credential-presentation-dc-api-updated.md) | Pre-flight browser-mediated credential presentation and issuance requirements | Normative pre-flight profile |
 | [TS-12 SCA with wallet](./ts12/ts12-electronic-payments-SCA-implementation-with-wallet%20%281%29.md) | Wallet-based strong customer authentication and transaction data | External specification |
-| [`docs/rfc/`](./rfc/) | Local copies of OpenID4VCI 1.0, HAIP 1.0 draft 03, RFC 7591, RFC 9449, and OpenID4VP material | Reference copies |
+| [`docs/rfc/`](./rfc/) | Local copies of OpenID4VCI 1.0, OpenID4VP 1.0, the CS-07-pinned W3C DC API draft, HAIP 1.0 draft 03, RFC 7591, and RFC 9449 | Reference copies |
 
 ### Current Design, Behaviour, And Interoperability
 
@@ -211,6 +245,7 @@ Source: [JAR x5c chain plan](./jar-x5c-certificate-chain-plan.md).
 | [CS-01 pre-auth relaxation plan](./cs01-pre-authorized-flow-relaxation-plan.md) | Add CS-01 pre-auth only after the specification permits it, preserving HA controls |
 | [Future WUA stricter enforcement](./futureWUAstricterEnforcements.md) | Status-list completeness and configured Wallet Provider trust material |
 | [JAR x5c certificate-chain plan](./jar-x5c-certificate-chain-plan.md) | Supply an X.509 JAR chain for wallets that validate it |
+| [CS-07 DC API verifier plan](./cs07-dc-api-verifier-implementation-plan.md) | Add browser-mediated `openid4vp-v1-signed` presentation without weakening the CS-02 verification core |
 | [WE BUILD-constrained FCAF alignment](./fcaf-we-build-alignment-plan.md) | Align non-data-model FCAF coverage without weakening WE BUILD profiles or enabling trust decisions |
 | [WE BUILD FCAF applicability register](../FCAFs/we-build-fcaf-applicability.json) | Machine-readable scope, disposition, and evidence policy for the alignment work; 301 explicit catalogue rows are classified |
 
@@ -235,6 +270,7 @@ Source: [JAR x5c chain plan](./jar-x5c-certificate-chain-plan.md).
 | Credential offers, PAR, token, proofs, or deferred issuance | CS-01, attestation options, relevant VCI matrix |
 | WUA/WIA/KA validation or trust | CS-04 and future WUA enforcement |
 | VP requests, metadata, response modes, or DCQL | CS-02, verifier metadata model, VP matrix |
+| Browser-mediated DC API presentation | CS-07, pinned W3C DC API draft, OpenID4VP Appendix A, CS-07 verifier plan |
 | Remote qualified signing | CS-03 and CS-03 verifier flow summary |
 | SD-JWT holder binding | SD-JWT key-binding fixes |
 | TS-12 payment SCA and transaction data | TS-12 SCA with wallet |

@@ -12,6 +12,7 @@ import {
 
 export const CS02_ALLOWED_DCQL_FORMATS = new Set(["dc+sd-jwt", "vc+sd-jwt", "mso_mdoc"]);
 export const CS02_COMPATIBILITY_DCQL_FORMATS = new Set(["jwt_vc_json", "jwt_vc_json-ld"]);
+export const CS03_X509_DCQL_FORMAT = "https://cloudsignatureconsortium.org/2025/x509";
 export const CS02_CREDENTIAL_QUERY_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 
 const SD_JWT_FORMATS = new Set(["dc+sd-jwt", "vc+sd-jwt"]);
@@ -247,7 +248,8 @@ function validateDcqlCredentialQuery(credQuery, index, options, log = () => {}) 
 
   const format = String(credQuery.format);
   if (options.strict) {
-    if (!CS02_ALLOWED_DCQL_FORMATS.has(format)) {
+    const cs03Allowed = options.allowCs03CredentialFormat === true && format === CS03_X509_DCQL_FORMAT;
+    if (!CS02_ALLOWED_DCQL_FORMATS.has(format) && !cs03Allowed) {
       logDcqlFailure(log, "unsupported_format", { credentialId: credQuery.id, format });
       throw new Cs02ValidationError(
         `Unsupported DCQL credential format "${format}" in CS-02 mode`,

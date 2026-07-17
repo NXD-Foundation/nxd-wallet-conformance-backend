@@ -80,8 +80,13 @@ function parseWalletAudiences(raw) {
 export function resolveCs02ValidationOptions(env = process.env) {
   const profile = resolveWalletProfile(env);
   const compatibility = truthyEnv(env.CS02_COMPATIBILITY);
+  const cs03Compatibility = truthyEnv(
+    env.WALLET_CS03_COMPATIBILITY ?? env.CS03_COMPATIBILITY,
+  );
   return {
     strict: isWebuildCs02Profile(profile) || !compatibility,
+    allowCs03CredentialFormat: cs03Compatibility,
+    cs03Compatibility,
     allowHttp: truthyEnv(env.CS02_ALLOW_HTTP),
     allowLegacyInvocation: truthyEnv(env.CS02_ALLOW_LEGACY_INVOCATION),
     walletAudiences: parseWalletAudiences(env.CS02_WALLET_AUDIENCES),
@@ -396,6 +401,7 @@ export function validateCs02JarPayload(payload, options, log = () => {}) {
       validateCs02ClientMetadata(payload.client_metadata, {
         responseMode: payload.response_mode,
         strict: true,
+        allowCs03CredentialFormat: options.allowCs03CredentialFormat,
       });
     } catch (error) {
       if (error instanceof Cs02TrustPolicyError) {
