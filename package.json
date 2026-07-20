@@ -9,9 +9,10 @@
     "test:cs02": "mocha tests/cs02TrustPolicy.test.js tests/cs02StatusList.test.js tests/cs02VerifierResponse.test.js tests/cs02SuccessfulFlowMatrix.test.js tests/cs02Encoding.test.js tests/fcafApplicability.test.js tests/fcafDispositionRegister.test.js --exit",
     "test:fcaf-register": "mocha tests/fcafApplicability.test.js tests/fcafDispositionRegister.test.js --exit",
     "test:cs02-flow": "mocha tests/cs02SuccessfulFlowMatrix.test.js --exit",
-    "test:cs07": "mocha tests/cs07DcApi.test.js tests/cs07SuccessfulFlow.test.js --exit",
+    "test:cs07": "mocha tests/cs07DcApi.test.js tests/cs07SuccessfulFlow.test.js tests/verifierEncryptionKeys.test.js --exit",
     "fcaf:disposition-template": "node scripts/fcafDispositionRegister.js",
-    "dev": "SERVER_URL=https://5761-2a02-587-8701-ab00-afa6-a2d-ebbb-e269.ngrok-free.app node server.js"
+    "dev": "SERVER_URL=https://4a4c-2a02-587-8712-b400-54ba-63a8-7ff9-c5ea.ngrok-free.app node server.js",
+    "dc-api:demo": "node clients/dc-api/serve.js"
   },
   "author": "",
   "license": "ISC",

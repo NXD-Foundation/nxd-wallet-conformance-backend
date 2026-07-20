@@ -23,8 +23,8 @@
       {
         "kty": "EC",
         "crv": "P-256",
-        "x": "7ymGipkLd1oxRGYCIat84OqzuPfL0YoL-rYAoKqPjxk",
-        "y": "EJLD8Db88LP2sd2HClVkZrdxl0yipmGUfKF85IfUU6Q",
+        "x": "dMLtMHM-bYdiJRHJmfA7ypihS8JDAmci4q3FOeLy6mA",
+        "y": "8ZXh3dOsLoJFT1Y6F--HgR6uBjsOifnTIiiVnQfgoWs",
         "use": "enc",
         "kid": "enc-key-1",
         "alg": "ECDH-ES+A256KW"

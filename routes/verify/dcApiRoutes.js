@@ -25,6 +25,7 @@ import { makeSessionLogger, logHttpRequest, logHttpResponse } from "../../utils/
 import { getVPSession, storeVPSession } from "../../services/cacheServiceRedis.js";
 import { loadCs07Config, resolveCs07Profile } from "../../utils/cs07Config.js";
 import { validateCs07CredentialPresentations } from "../../utils/cs07ResponseValidation.js";
+import { loadVerifierEncryptionKey } from "../../utils/verifierEncryptionKeys.js";
 
 const dcApiRouter = express.Router();
 // Load and validate once at startup. Profile mappings and DCQL are immutable
@@ -121,6 +122,7 @@ dcApiRouter.post("/vp/dc-api/request", enforceBodyLimit(MAX_REQUEST_BODY_BYTES),
       profileId: req.body?.profile,
       origin: verifierOrigin,
     });
+    const encryptionKey = loadVerifierEncryptionKey();
     const clientMetadata = JSON.parse(fs.readFileSync("./data/verifier-config.json", "utf8"));
     const cs03Signing = profile.workflow === "cs03-inline-signing";
     const qesRequest = cs03Signing
@@ -149,6 +151,9 @@ dcApiRouter.post("/vp/dc-api/request", enforceBodyLimit(MAX_REQUEST_BODY_BYTES),
 
     const storedSession = await getVPSession(sessionId);
     if (!storedSession) throw new Error("CS-07 session persistence failed");
+    storedSession.encryption_key_kid = encryptionKey.kid;
+    storedSession.encryption_key_alg = encryptionKey.alg;
+    await storeVPSession(sessionId, storedSession);
     const responseEndpoint = new URL(`/vp/dc-api/response/${sessionId}`, CONFIG.SERVER_URL).toString();
     const statusEndpoint = new URL(`/vp/dc-api/session/${sessionId}`, CONFIG.SERVER_URL).toString();
     const response = {
@@ -229,8 +234,8 @@ dcApiRouter.post("/vp/dc-api/response/:sessionId", enforceBodyLimit(MAX_RESPONSE
 
     let decryptedResponse;
     try {
-      const privateKey = fs.readFileSync("./x509EC/ec_private_pkcs8.key", "utf8");
-      decryptedResponse = await decryptJWE(normalized.encryptedResponse, privateKey, "dc_api.jwt");
+      const encryptionKey = loadVerifierEncryptionKey();
+      decryptedResponse = await decryptJWE(normalized.encryptedResponse, encryptionKey.privateKeyPem, "dc_api.jwt");
     } catch (error) {
       session.status = "failed";
       session.error = "invalid_response";

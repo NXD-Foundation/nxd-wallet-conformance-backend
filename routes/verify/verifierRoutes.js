@@ -38,6 +38,7 @@ import {
   consumeVPSessionKeyBindingJti
 } from "../../services/cacheServiceRedis.js";
 import { makeSessionLogger, logHttpRequest, logHttpResponse } from "../../utils/sessionLogger.js";
+import { loadVerifierEncryptionKey } from "../../utils/verifierEncryptionKeys.js";
 import redirectUriRouter from "../redirectUriRoutes.js";
 import x509Router from "./x509Routes.js";
 import didRouter from "./didRoutes.js";
@@ -890,7 +891,7 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
 
         // Decrypt the JWT using X509 EC private key
         await logDebug(sessionId, "Starting HAIP dc_api.jwt decryption");
-        const privateKeyForDecryption = fs.readFileSync("./x509EC/ec_private_pkcs8.key", "utf8");
+        const privateKeyForDecryption = loadVerifierEncryptionKey().privateKeyPem;
 
         let decryptedResponse;
         try {

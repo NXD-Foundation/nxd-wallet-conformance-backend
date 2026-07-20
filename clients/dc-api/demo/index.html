@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CS-07 DC API RP demo</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --panel: #1a2332;
+      --text: #e7ecf3;
+      --muted: #9aa8b8;
+      --accent: #3d9a6a;
+      --accent-hover: #48b37a;
+      --danger: #d45d5d;
+      --border: #2a3648;
+      --mono: ui-monospace, "Cascadia Code", "SF Mono", Menlo, monospace;
+      --sans: "Segoe UI", system-ui, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: var(--sans);
+      color: var(--text);
+      background:
+        radial-gradient(ellipse 80% 50% at 20% -10%, #1e3a2f 0%, transparent 55%),
+        radial-gradient(ellipse 60% 40% at 100% 0%, #243044 0%, transparent 50%),
+        var(--bg);
+      padding: 1.25rem;
+    }
+    main {
+      max-width: 36rem;
+      margin: 0 auto;
+    }
+    h1 {
+      font-size: 1.35rem;
+      font-weight: 600;
+      margin: 0 0 0.35rem;
+    }
+    .lede {
+      color: var(--muted);
+      font-size: 0.95rem;
+      margin: 0 0 1.5rem;
+      line-height: 1.45;
+    }
+    label {
+      display: block;
+      font-size: 0.8rem;
+      color: var(--muted);
+      margin-bottom: 0.35rem;
+    }
+    input {
+      width: 100%;
+      padding: 0.65rem 0.75rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--panel);
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 0.85rem;
+      margin-bottom: 1rem;
+    }
+    input:focus {
+      outline: 2px solid #3d6a9a;
+      outline-offset: 1px;
+    }
+    .row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      align-items: center;
+      margin-bottom: 1rem;
+    }
+    button {
+      appearance: none;
+      border: none;
+      border-radius: 6px;
+      padding: 0.75rem 1.15rem;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      background: var(--accent);
+      color: #fff;
+    }
+    button:hover:not(:disabled) { background: var(--accent-hover); }
+    button:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+    button.secondary {
+      background: transparent;
+      color: var(--text);
+      border: 1px solid var(--border);
+      font-weight: 500;
+    }
+    .badge {
+      display: inline-block;
+      font-size: 0.75rem;
+      font-family: var(--mono);
+      padding: 0.25rem 0.5rem;
+      border-radius: 4px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      color: var(--muted);
+    }
+    .badge.ok { color: var(--accent); border-color: #2a5a42; }
+    .badge.bad { color: var(--danger); border-color: #5a2a2a; }
+    #log {
+      margin-top: 1.25rem;
+      padding: 0.85rem;
+      border-radius: 6px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      white-space: pre-wrap;
+      word-break: break-word;
+      min-height: 6rem;
+      color: var(--muted);
+    }
+    #log.error { color: var(--danger); }
+    #log.ok { color: var(--accent); }
+    .hint {
+      font-size: 0.8rem;
+      color: var(--muted);
+      line-height: 1.4;
+      margin-top: 1.5rem;
+    }
+    .hint code {
+      font-family: var(--mono);
+      font-size: 0.75rem;
+      background: var(--panel);
+      padding: 0.1rem 0.35rem;
+      border-radius: 3px;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>CS-07 DC API RP demo</h1>
+    <p class="lede">
+      Fake relying-party page for phone testing. Calls the verifier over HTTPS,
+      then <code>navigator.credentials.get()</code> from the button click.
+    </p>
+
+    <label for="verifierBaseUrl">Verifier base URL (ngrok)</label>
+    <input id="verifierBaseUrl" type="url" autocomplete="off"
+      placeholder="https://xxxx.ngrok-free.app" />
+
+    <label for="profile">Profile id</label>
+    <input id="profile" type="text" autocomplete="off" value="pid-basic" />
+
+    <div class="row">
+      <span id="supportBadge" class="badge">checking…</span>
+      <span id="originBadge" class="badge"></span>
+    </div>
+
+    <div class="row">
+      <button id="present" type="button" disabled>Present credential</button>
+      <button id="prepare" type="button" class="secondary">Re-prepare</button>
+    </div>
+
+    <div id="log">Idle.</div>
+
+    <p class="hint">
+      Serve this folder with <code>npm run dc-api:demo</code>, tunnel that port
+      with ngrok, and authorize this page’s origin in
+      <code>data/dc-api-config.json</code> under <code>relying_parties</code>.
+      Query params: <code>?verifier=…&amp;profile=…</code>
+    </p>
+  </main>
+
+  <script type="module">
+    import { createDcApiVerifierClient } from "../rp-client.js";
+
+    const STORAGE_KEY = "cs07-dc-api-demo-verifier";
+    const params = new URLSearchParams(location.search);
+    const verifierInput = document.querySelector("#verifierBaseUrl");
+    const profileInput = document.querySelector("#profile");
+    const presentBtn = document.querySelector("#present");
+    const prepareBtn = document.querySelector("#prepare");
+    const logEl = document.querySelector("#log");
+    const supportBadge = document.querySelector("#supportBadge");
+    const originBadge = document.querySelector("#originBadge");
+
+    originBadge.textContent = location.origin;
+
+    const fromQuery = params.get("verifier");
+    const stored = localStorage.getItem(STORAGE_KEY);
+    verifierInput.value = fromQuery || stored || "";
+    if (params.get("profile")) profileInput.value = params.get("profile");
+
+    let client = null;
+    let prepared = null;
+
+    function log(message, kind = "") {
+      logEl.textContent = typeof message === "string" ? message : JSON.stringify(message, null, 2);
+      logEl.className = kind;
+    }
+
+    function makeClient() {
+      const verifierBaseUrl = verifierInput.value.trim().replace(/\/$/, "");
+      if (!verifierBaseUrl) throw new Error("Set the verifier base URL first");
+      localStorage.setItem(STORAGE_KEY, verifierBaseUrl);
+      return createDcApiVerifierClient({ verifierBaseUrl });
+    }
+
+    function refreshSupport() {
+      try {
+        client = makeClient();
+      } catch {
+        client = null;
+      }
+      const supported = client?.isSupported() === true;
+      supportBadge.textContent = supported ? "DC API supported" : "DC API unsupported";
+      supportBadge.className = `badge ${supported ? "ok" : "bad"}`;
+      presentBtn.disabled = !supported || !prepared;
+      return supported;
+    }
+
+    async function prepareRequest() {
+      try {
+        if (!refreshSupport()) {
+          log("Digital Credentials API is unavailable in this browser/context.", "error");
+          return;
+        }
+        log("Preparing request…");
+        prepared = await client.prepare({ profile: profileInput.value.trim() || undefined });
+        presentBtn.disabled = false;
+        log({
+          status: "prepared",
+          sessionId: prepared.sessionId,
+          expiresAt: prepared.expiresAt,
+          protocol: prepared.request?.protocol,
+        });
+      } catch (error) {
+        prepared = null;
+        presentBtn.disabled = true;
+        log(`${error.code || "error"}: ${error.message}`, "error");
+      }
+    }
+
+    verifierInput.addEventListener("change", () => {
+      prepared = null;
+      presentBtn.disabled = true;
+      refreshSupport();
+    });
+    prepareBtn.addEventListener("click", () => prepareRequest());
+
+    presentBtn.addEventListener("click", async () => {
+      try {
+        if (!prepared) await prepareRequest();
+        if (!prepared) return;
+        log("Calling navigator.credentials.get()…");
+        const result = await client.present(prepared);
+        log(result, "ok");
+        prepared = null;
+        presentBtn.disabled = true;
+      } catch (error) {
+        log(`${error.code || "error"}: ${error.message}`, "error");
+        prepared = null;
+        presentBtn.disabled = true;
+      }
+    });
+
+    refreshSupport();
+    if (verifierInput.value.trim()) {
+      prepareRequest();
+    } else {
+      log("Enter your verifier ngrok URL, then Present (or Re-prepare).");
+    }
+  </script>
+</body>
+</html>

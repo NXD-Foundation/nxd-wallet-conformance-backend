@@ -32,3 +32,26 @@ false.
   });
 </script>
 ```
+
+## Local phone demo
+
+A fake RP page lives at `demo/index.html`. Serve it with the zero-dependency
+static server (default port **4173**, not the verifier’s 3000):
+
+```bash
+npm run dc-api:demo
+# or: DC_API_DEMO_PORT=4173 node clients/dc-api/serve.js
+```
+
+Then tunnel that port separately:
+
+```bash
+ngrok http 4173
+```
+
+1. Add the **RP** ngrok HTTPS origin to `data/dc-api-config.json` →
+   `relying_parties` (e.g. `"https://rp-xxxx.ngrok-free.app": { "profiles": ["pid-basic"] }`) and restart the verifier.
+2. Open the RP ngrok URL on your phone (`/` redirects to the demo).
+3. Paste your **verifier** ngrok base URL into the form (or use
+   `?verifier=https://…&profile=pid-basic`).
+4. Tap **Present credential** (user activation is required for DC API).

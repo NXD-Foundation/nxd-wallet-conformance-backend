@@ -27,5 +27,12 @@
       }
     }
   },
-  "relying_parties": {}
+  "relying_parties": {
+    "https://4a4c-2a02-587-8712-b400-54ba-63a8-7ff9-c5ea.ngrok-free.app": {
+      "profiles": ["pid-basic"]
+    },
+    "https://1ff8-2a02-587-8712-b400-54ba-63a8-7ff9-c5ea.ngrok-free.app": {
+      "profiles": ["pid-basic"]
+    }
+  }
 }
