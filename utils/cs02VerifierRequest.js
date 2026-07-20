@@ -314,6 +314,11 @@ export function validateCs02SignedJar(requestJwt, options = { strict: true }) {
 
   const header = jose.decodeProtectedHeader(requestJwt);
   const payload = jose.decodeJwt(requestJwt);
+  const isCs07DcApiRequest =
+    payload.response_mode === "dc_api.jwt" &&
+    Array.isArray(payload.expected_origins) &&
+    payload.state == null &&
+    payload.response_uri == null;
 
   if (header.alg !== CS02_JAR_ALG) {
     throw new Cs02VerifierRequestError(
@@ -328,17 +333,18 @@ export function validateCs02SignedJar(requestJwt, options = { strict: true }) {
     );
   }
 
-  for (const field of [
+  const requiredFields = [
     "client_id",
     "nonce",
-    "state",
-    "response_uri",
     "response_type",
     "response_mode",
     "iat",
     "exp",
     "dcql_query",
-  ]) {
+  ];
+  if (!isCs07DcApiRequest) requiredFields.push("state", "response_uri");
+  if (isCs07DcApiRequest) requiredFields.push("expected_origins");
+  for (const field of requiredFields) {
     if (payload[field] == null || payload[field] === "") {
       throw new Cs02VerifierRequestError(
         `Generated CS-02 JAR missing required field "${field}"`,
@@ -363,6 +369,15 @@ export function validateCs02SignedJar(requestJwt, options = { strict: true }) {
 
   validateCs02ResponseMode(payload.response_mode, options);
   validateCs02Nonce(payload.nonce);
+  if (isCs07DcApiRequest) {
+    if (payload.response_type !== "vp_token" || payload.response_mode !== "dc_api.jwt") {
+      throw new Cs02VerifierRequestError("Invalid CS-07 DC API request profile", "invalid_request");
+    }
+    if (payload.expected_origins.length === 0 ||
+        payload.expected_origins.some((origin) => typeof origin !== "string" || origin.length === 0)) {
+      throw new Cs02VerifierRequestError("CS-07 expected_origins must be non-empty", "invalid_request");
+    }
+  }
 
   if (payload.exp - payload.iat > CS02_MAX_REQUEST_LIFETIME_SEC + 5) {
     if (payload.response_mode !== "dc_api" && payload.response_mode !== "dc_api.jwt") {

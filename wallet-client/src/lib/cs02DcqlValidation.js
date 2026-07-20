@@ -8,7 +8,7 @@ import { validateCs02TrustedAuthoritiesPolicy } from "../../utils/cs02TrustPolic
 import {
   isSupportedCs02ClaimPathSegment,
   validateSupportedCs02ClaimPath,
-} from "../../../utils/cs02DcqlCore.js";
+} from "../../utils/cs02DcqlCore.js";
 
 export const CS02_ALLOWED_DCQL_FORMATS = new Set(["dc+sd-jwt", "vc+sd-jwt", "mso_mdoc"]);
 export const CS02_COMPATIBILITY_DCQL_FORMATS = new Set(["jwt_vc_json", "jwt_vc_json-ld"]);

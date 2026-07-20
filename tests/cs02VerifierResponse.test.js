@@ -820,7 +820,6 @@ describe("CS-02 verifier response validation (Phase 4)", () => {
       }
     });
 
-    it.skip("rejects untrusted SD-JWT issuers once configured issuer trust exists", () => {});
   });
 
   describe("mso_mdoc request constraints (Phase G)", () => {

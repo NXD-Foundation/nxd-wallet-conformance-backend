@@ -26,7 +26,7 @@ import {
   resolveCs02EffectiveClientMetadata,
   Cs02TrustPolicyError,
 } from "../../utils/cs02TrustPolicy.js";
-import { isStrictCs02Base64Url, decodeStrictCs02Base64Url, isStrictCs02EcP256Jwk } from "../../../utils/cs02Encoding.js";
+import { isStrictCs02Base64Url, decodeStrictCs02Base64Url, isStrictCs02EcP256Jwk } from "../../utils/cs02Encoding.js";
 
 export {
   validateX509SanDnsTrustAnchor,
@@ -329,17 +329,22 @@ function audienceMatchesPolicy(aud, allowedAudiences) {
 }
 
 export function validateCs02JarPayload(payload, options, log = () => {}) {
+  const isCs07DcApiRequest =
+    payload?.response_mode === "dc_api.jwt" &&
+    Array.isArray(payload?.expected_origins) &&
+    payload?.state == null &&
+    payload?.response_uri == null;
   const requiredFields = [
     "client_id",
     "nonce",
-    "response_uri",
-    "state",
     "response_type",
     "response_mode",
     "iat",
     "exp",
     "dcql_query",
   ];
+  if (!isCs07DcApiRequest) requiredFields.splice(2, 0, "response_uri", "state");
+  if (isCs07DcApiRequest) requiredFields.push("expected_origins");
   for (const field of requiredFields) {
     if (payload?.[field] == null || payload[field] === "") {
       logValidationFailure(log, "missing_jar_field", { field });
@@ -383,7 +388,7 @@ export function validateCs02JarPayload(payload, options, log = () => {}) {
     throw new Cs02ValidationError("Authorization request lifetime exceeds accepted maximum", "invalid_request");
   }
 
-  if (!audienceMatchesPolicy(payload.aud, options.walletAudiences)) {
+  if (!isCs07DcApiRequest && !audienceMatchesPolicy(payload.aud, options.walletAudiences)) {
     logValidationFailure(log, "jar_audience", {
       aud: payload.aud,
       allowed: options.walletAudiences,
@@ -393,7 +398,17 @@ export function validateCs02JarPayload(payload, options, log = () => {}) {
 
   validateCs02ClientId(payload.client_id, log);
   validateCs02Nonce(payload.nonce, log);
-  validateCs02ResponseUri(payload.response_uri, options, log);
+  if (!isCs07DcApiRequest) {
+    validateCs02ResponseUri(payload.response_uri, options, log);
+  } else if (
+    payload.expected_origins.length === 0 ||
+    payload.expected_origins.some((origin) => typeof origin !== "string" || origin.length === 0)
+  ) {
+    throw new Cs02ValidationError(
+      "CS-07 expected_origins must be a non-empty string array",
+      "invalid_request",
+    );
+  }
   validateCs02TransactionData(payload.transaction_data, log, payload.dcql_query);
 
   if (payload.client_metadata != null && options.strict) {

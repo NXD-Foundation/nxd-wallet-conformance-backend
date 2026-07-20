@@ -18,6 +18,7 @@ import mdlRouter from "./routes/verify/mdlRoutes.js";
 import loggingRouter from "./routes/loggingRoutes.js";
 import vciStandardRouter from "./routes/issue/vciStandardRoutes.js";
 import vpStandardRouter from "./routes/verify/vpStandardRoutes.js";
+import dcApiRouter from "./routes/verify/dcApiRoutes.js";
 import ts12PaymentRouter from "./routes/verify/ts12PaymentRoutes.js";
 import vAttestationRouter from "./routes/verify/verifierAttestationRoutes.js";
 import bodyParser from "body-parser"; // Body parser middleware
@@ -88,6 +89,7 @@ app.use((req, res, next) => {
 //Middleware to log all requests and responses for issuer endpoints
 app.use((req, res, next) => {
   const startTime = Date.now();
+  const isDcApiRoute = req.path === "/vp/dc-api" || req.path.startsWith("/vp/dc-api/");
   const sessionId =
     req.sessionLoggingId ||
     req.query.sessionId ||
@@ -100,7 +102,7 @@ app.use((req, res, next) => {
   console.log(`[${sessionId}] ---> ${req.method} ${req.url}`, {
     headers: req.headers,
     query: req.query,
-    body: req.method !== 'GET' ? req.body : undefined,
+    body: isDcApiRoute ? "[redacted: dc-api payload]" : (req.method !== 'GET' ? req.body : undefined),
     userAgent: req.get('User-Agent'),
     ip: req.ip || req.connection.remoteAddress
   });
@@ -137,7 +139,7 @@ app.use((req, res, next) => {
     console.log(`[${sessionId}] <--- ${req.method} ${req.url} ${responseStatus || res.statusCode} (${duration}ms)`, {
       status: responseStatus || res.statusCode,
       headers: res.getHeaders(),
-      body: responseBody ? (responseBody.length > 1000 ? responseBody.substring(0, 1000) + '...' : responseBody) : undefined,
+      body: isDcApiRoute ? "[redacted: dc-api response]" : (responseBody ? (responseBody.length > 1000 ? responseBody.substring(0, 1000) + '...' : responseBody) : undefined),
       contentLength: res.get('Content-Length'),
       duration: `${duration}ms`
     });
@@ -175,6 +177,7 @@ app.use("/mdl", mdlRouter);
 app.use("/", loggingRouter);
 app.use("/", vciStandardRouter);
 app.use("/", vpStandardRouter);
+app.use("/", dcApiRouter);
 app.use("/", ts12PaymentRouter);
 app.use("/", vAttestationRouter);
 // Error handler for validation errors

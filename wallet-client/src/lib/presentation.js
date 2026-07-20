@@ -36,7 +36,7 @@ import { resolvePresentationKeyBinding } from "./presentationKeyBinding.js";
 import {
   extractCredentialCnfJwkFromSdJwt,
   jwkPublicEquals,
-} from "../../../utils/sdJwtKeyBinding.js";
+} from "../../utils/sdJwtKeyBinding.js";
 import {
   buildTs12ProofClaims,
   resolveTs12TransactionDataForCredential,

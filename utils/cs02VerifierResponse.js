@@ -522,6 +522,7 @@ export function validateCs02KeyBindingJwtClaims({
   kbPayload,
   sessionNonce,
   clientId,
+  expectedAudience = clientId,
   transactionData,
   options = { strict: true },
 }) {
@@ -545,15 +546,15 @@ export function validateCs02KeyBindingJwtClaims({
       "invalid_nonce",
     );
   }
-  if (clientId && !kbPayload.aud) {
+  if (expectedAudience && !kbPayload.aud) {
     throw new Cs02VerifierResponseError(
       "Key Binding JWT is missing aud",
       "invalid_key_binding_jwt",
     );
   }
-  if (clientId && kbPayload.aud !== clientId) {
+  if (expectedAudience && kbPayload.aud !== expectedAudience) {
     throw new Cs02VerifierResponseError(
-      "Key Binding JWT aud does not match verifier client_id",
+      "Key Binding JWT aud does not match the expected verifier audience",
       "invalid_audience",
     );
   }
@@ -907,6 +908,7 @@ export async function validateCs02SdJwtPresentation({
   sdJwt,
   sessionNonce,
   clientId,
+  expectedAudience = clientId,
   transactionData,
   computeSdHash,
   credQuery,
@@ -947,6 +949,7 @@ export async function validateCs02SdJwtPresentation({
     kbPayload,
     sessionNonce,
     clientId,
+    expectedAudience,
     transactionData,
     options,
   });
@@ -1015,6 +1018,7 @@ export async function validateCs02SdJwtEntriesInVpToken(
         sdJwt: presentation,
         sessionNonce: context.sessionNonce,
         clientId: context.clientId,
+        expectedAudience: context.expectedAudience,
         transactionData: context.transactionData,
         computeSdHash: context.computeSdHash,
         credQuery,

@@ -100,7 +100,7 @@ function withSpecRef(message, ...refs) {
  *
  * This helper reconstructs the string that is hashed for sd_hash.
  */
-function computeSdHashFromPresentedToken(sdJwtToken) {
+export function computeSdHashFromPresentedToken(sdJwtToken) {
   if (typeof sdJwtToken !== "string") return null;
 
   let prefix = sdJwtToken;
@@ -1666,18 +1666,21 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
         }
 
         // Verify audience if key-binding JWT provided
-        if (jwtFromKeybind && jwtFromKeybind.payload && vpSession.client_id && jwtFromKeybind.payload.aud) {
-          if (jwtFromKeybind.payload.aud !== vpSession.client_id) {
+        const expectedResponseAudience = vpSession.transport_profile === "cs07-dc-api"
+          ? vpSession.expected_audience
+          : vpSession.client_id;
+        if (jwtFromKeybind && jwtFromKeybind.payload && expectedResponseAudience && jwtFromKeybind.payload.aud) {
+          if (jwtFromKeybind.payload.aud !== expectedResponseAudience) {
             await logError(sessionId, "aud claim does not match verifier client_id", {
               received: jwtFromKeybind.payload.aud,
-              expected: vpSession.client_id,
+              expected: expectedResponseAudience,
               specRef: SPEC_REFS.VP_CREDENTIAL_RESPONSE
             });
             // Mark session as failed
             try {
               vpSession.status = "failed";
               vpSession.error = "invalid_audience";
-              vpSession.error_description = `aud claim does not match verifier client_id. Received: '${jwtFromKeybind.payload.aud}', expected: '${vpSession.client_id}'. See ${SPEC_REFS.VP_CREDENTIAL_RESPONSE}`;
+              vpSession.error_description = `aud claim does not match the expected verifier audience. Received: '${jwtFromKeybind.payload.aud}', expected: '${expectedResponseAudience}'. See ${SPEC_REFS.VP_CREDENTIAL_RESPONSE}`;
               await storeVPSession(sessionId, vpSession);
             } catch (storageError) {
               await logError(sessionId, "Failed to update session status after audience mismatch", {
@@ -1685,7 +1688,7 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
                 stack: storageError.stack
               }).catch(() => {});
             }
-            return res.status(400).json({ error: `aud claim does not match verifier client_id. Received: '${jwtFromKeybind.payload.aud}', expected: '${vpSession.client_id}'. See ${SPEC_REFS.VP_CREDENTIAL_RESPONSE}` });
+            return res.status(400).json({ error: `aud claim does not match the expected verifier audience. Received: '${jwtFromKeybind.payload.aud}', expected: '${expectedResponseAudience}'. See ${SPEC_REFS.VP_CREDENTIAL_RESPONSE}` });
           }
         }
 
@@ -1700,6 +1703,7 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
               kbPayload,
               sessionNonce: vpSession.nonce,
               clientId: vpSession.client_id,
+              expectedAudience: expectedResponseAudience,
               options: cs02ResponseOptions,
             });
           } catch (error) {
@@ -2416,18 +2420,21 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
       }
       
       // Verify audience if key-binding JWT provided
-      if (jwtFromKeybind && jwtFromKeybind.payload && vpSession.client_id && jwtFromKeybind.payload.aud) {
-        if (jwtFromKeybind.payload.aud !== vpSession.client_id) {
+      const expectedResponseAudience = vpSession.transport_profile === "cs07-dc-api"
+        ? vpSession.expected_audience
+        : vpSession.client_id;
+      if (jwtFromKeybind && jwtFromKeybind.payload && expectedResponseAudience && jwtFromKeybind.payload.aud) {
+        if (jwtFromKeybind.payload.aud !== expectedResponseAudience) {
           await logError(sessionId, "aud claim does not match verifier client_id", {
             received: jwtFromKeybind.payload.aud,
-            expected: vpSession.client_id,
+            expected: expectedResponseAudience,
             specRef: SPEC_REFS.VP_CREDENTIAL_RESPONSE
           });
           // Mark session as failed
           try {
             vpSession.status = "failed";
             vpSession.error = "invalid_audience";
-            vpSession.error_description = `aud claim does not match verifier client_id. Received: '${jwtFromKeybind.payload.aud}', expected: '${vpSession.client_id}'. See ${SPEC_REFS.VP_CREDENTIAL_RESPONSE}`;
+            vpSession.error_description = `aud claim does not match the expected verifier audience. Received: '${jwtFromKeybind.payload.aud}', expected: '${expectedResponseAudience}'. See ${SPEC_REFS.VP_CREDENTIAL_RESPONSE}`;
             await storeVPSession(sessionId, vpSession);
           } catch (storageError) {
             await logError(sessionId, "Failed to update session status after audience mismatch", {
@@ -2435,7 +2442,7 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
               stack: storageError.stack
             }).catch(() => {});
           }
-          return res.status(400).json({ error: `aud claim does not match verifier client_id. Received: '${jwtFromKeybind.payload.aud}', expected: '${vpSession.client_id}'. See ${SPEC_REFS.VP_CREDENTIAL_RESPONSE}` });
+          return res.status(400).json({ error: `aud claim does not match the expected verifier audience. Received: '${jwtFromKeybind.payload.aud}', expected: '${expectedResponseAudience}'. See ${SPEC_REFS.VP_CREDENTIAL_RESPONSE}` });
         }
       }
 
@@ -2450,6 +2457,7 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
             kbPayload,
             sessionNonce: vpSession.nonce,
             clientId: vpSession.client_id,
+            expectedAudience: expectedResponseAudience,
             options: cs02ResponseOptions,
           });
         } catch (error) {

@@ -9,6 +9,12 @@ import {
   createOpenId4VpRequestUrl,
   isVerifierCs02StrictMode,
 } from "./cs02VerifierRequest.js";
+import {
+  CS07_DC_API_PROTOCOL,
+  buildCs07DigitalCredentialRequest,
+  cs07ExpectedAudience,
+  resolveCs07VerifierOrigin,
+} from "./cs07DcApi.js";
 import { getSDsFromPresentationDef } from "./vpHeplers.js";
 import {
   storeVPSession,
@@ -1126,6 +1132,9 @@ export async function generateVPRequest(params) {
     ts12Payment = false,
     ts12PaymentPayload = null,
     ts12ExpectedVct = null,
+    cs07DcApi = false,
+    cs07VerifierOrigin = null,
+    cs07ProfileId = null,
   } = params;
   const cs02StrictMode = isVerifierCs02StrictMode();
   let effectivePresentationDefinition = presentationDefinition;
@@ -1154,7 +1163,10 @@ export async function generateVPRequest(params) {
 
   const nonce = generateNonce(CONFIG.DEFAULT_NONCE_LENGTH);
   const state = generateNonce(CONFIG.DEFAULT_NONCE_LENGTH);
-  const responseUri = `${serverURL}/direct_post/${sessionId}`;
+  const resolvedCs07Origin = cs07DcApi
+    ? (cs07VerifierOrigin || resolveCs07VerifierOrigin({ serverURL }))
+    : null;
+  const responseUri = cs07DcApi ? null : `${serverURL}/direct_post/${sessionId}`;
   
   await logDebug(sessionId, "Generated nonce and response URI", {
     nonce,
@@ -1166,10 +1178,17 @@ export async function generateVPRequest(params) {
   const sessionData = {
     nonce,
     response_mode: responseMode,
-    state,
+    state: cs07DcApi ? null : state,
     jar_alg: jarAlg || CONFIG.DEFAULT_JAR_ALG,
     client_id: clientId,
   };
+  if (cs07DcApi) {
+    sessionData.transport_profile = "cs07-dc-api";
+    sessionData.profile_id = cs07ProfileId;
+    sessionData.verifier_origin = resolvedCs07Origin;
+    sessionData.expected_audience = cs07ExpectedAudience(resolvedCs07Origin);
+    sessionData.protocol = CS07_DC_API_PROTOCOL;
+  }
 
   if (effectivePresentationDefinition) {
     sessionData.presentation_definition = effectivePresentationDefinition;
@@ -1240,7 +1259,7 @@ export async function generateVPRequest(params) {
   const metadataForRequest = isVerifierCs02StrictMode()
     ? filterClientMetadataForCs02(clientMetadata, responseMode)
     : clientMetadata;
-  await buildVpRequestJWT(
+  const vpRequestJWT = await buildVpRequestJWT(
     clientId,
     responseUri,
     effectivePresentationDefinition,
@@ -1258,9 +1277,19 @@ export async function generateVPRequest(params) {
     null,
     null,
     state,
-    jarAlg || CONFIG.DEFAULT_JAR_ALG
+    jarAlg || CONFIG.DEFAULT_JAR_ALG,
+    cs07DcApi,
+    resolvedCs07Origin,
   );
   await logInfo(sessionId, "VP request JWT built successfully");
+
+  if (cs07DcApi) {
+    return {
+      sessionId,
+      protocol: CS07_DC_API_PROTOCOL,
+      request: buildCs07DigitalCredentialRequest(vpRequestJWT),
+    };
+  }
 
   // Create OpenID4VP request URL
   const requestUri = `${serverURL}${routePath}/${sessionId}`;

@@ -1,0 +1,31 @@
+{
+  "default_profile": "pid-basic",
+  "profiles": {
+    "pid-basic": {
+      "workflow": "presentation",
+      "dcql_query": {
+        "credentials": [
+          {
+            "id": "cmwallet",
+            "format": "dc+sd-jwt",
+            "meta": { "vct_values": ["urn:eu.europa.ec.eudi:pid:1"] },
+            "claims": [{ "path": ["family_name"] }]
+          }
+        ]
+      }
+    },
+    "qualified-signing": {
+      "workflow": "cs03-inline-signing",
+      "dcql_query": {
+        "credentials": [
+          {
+            "id": "signing-cert-01",
+            "format": "https://cloudsignatureconsortium.org/2025/x509",
+            "meta": { "certificatePolicies": ["0.4.0.2042.1"] }
+          }
+        ]
+      }
+    }
+  },
+  "relying_parties": {}
+}

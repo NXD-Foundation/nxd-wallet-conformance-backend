@@ -125,8 +125,4 @@ describe("CS-02 status-list validation (Phase 5 placeholder)", () => {
     expect(logs[0][1].statusState).to.equal("structurally_valid_placeholder");
   });
 
-  it.skip("rejects revoked SD-JWT-VC credentials once status-list trust exists", () => {});
-  it.skip("rejects suspended SD-JWT-VC credentials once status-list trust exists", () => {});
-  it.skip("fails closed on status-list fetch timeout once fetching is implemented", () => {});
-  it.skip("fails closed on oversized status-list responses once fetching is implemented", () => {});
 });

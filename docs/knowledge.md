@@ -122,18 +122,35 @@ Sources: [CS-02](./core/cs-02-credential-presentation%20%281%29.md),
 - The CS-07 target is the W3C Digital Credentials Working Draft dated
   15 July 2026 together with OpenID4VP 1.0 Appendix A; the exact W3C draft is
   pinned locally and must not be replaced by the moving editor's draft.
-- Existing `dc_api.jwt` request/decryption fragments are groundwork, not a
-  complete browser-mediated verifier flow. The planned route must use
+- The verifier-side CS-07 API consists of `POST /vp/dc-api/request`,
+  `POST /vp/dc-api/response/:sessionId`, and the sanitized polling endpoint
+  `GET /vp/dc-api/session/:sessionId`. The verifier does not host the RP HTML
+  page or invoke the browser API on behalf of a client. A separate,
+  dependency-free RP ESM adapter is implemented under `clients/dc-api/`; it fetches
+  the signed request, invokes `navigator.credentials.get()` in the RP's own
+  user-activation handler, and forwards only `protocol` and `data`.
+- The backend must authorize configured RP origins and profile identifiers,
+  bind `expected_origins` and proof audiences to the calling RP origin, and
+  keep DCQL queries in verifier-owned profile configuration. Its response path
+  validates the envelope, decrypts the JWE, checks DCQL shape, and dispatches
+  SD-JWT/mDoc and specialized workflows through shared validators.
+  Encrypted `dc_api.jwt` response parsing and shared SD-JWT/mDoc dispatch have
+  dedicated CS-07 success-flow coverage.
+  The browser flow must use
   `openid4vp-v1-signed`, a compact signed request in `data.request`,
   `response_mode=dc_api.jwt`, configured `expected_origins`, and an audience
   of `origin:<verifier-origin>` for response proofs.
+- Profile and RP authorization are configured in `data/dc-api-config.json`
+  (or `DC_API_CONFIG_PATH`); the checked-in file intentionally has no relying
+  parties enabled and must be populated for a deployment.
 - DC API transport must remain a thin adapter over the CS-02 DCQL and
   credential-verification core. It must distinguish wallet protocol errors in
   fulfilled `DigitalCredential.data` values from browser promise rejection.
 
 Sources: [CS-07](./core/cs-07-credential-presentation-dc-api-updated.md),
 [pinned W3C DC API draft](./rfc/w3c-digital-credentials-WD-20260715.html), and
-[verifier implementation plan](./cs07-dc-api-verifier-implementation-plan.md).
+[verifier implementation plan](./cs07-dc-api-verifier-implementation-plan.md),
+[verifier API integration guide](./cs07-dc-api-verifier-api.md).
 
 ### CS-03 Remote Qualified Signing Compatibility
 

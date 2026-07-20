@@ -24,6 +24,7 @@ import {
 } from "./cs02VerifierRequest.js";
 import { buildStrictCs02ClientMetadata } from "./cs02TrustPolicy.js";
 import { isStrictCs02Base64Url } from "./cs02Encoding.js";
+import { resolveCs07VerifierOrigin } from "./cs07DcApi.js";
 
 /**
  * Extract certificate chain from a PEM file (fullchain or single cert)
@@ -336,9 +337,20 @@ export async function buildVpRequestJWT(
   wallet_metadata = null,
   va_jwt = null, // Optional Verifier Attestation JWT for verifier_attestation scheme
   state = null, // Add state parameter (last param to match test ordering)
-  jar_alg = null // Optional JAR signature algorithm override (e.g., 'ES256') for x509 schemes
+  jar_alg = null, // Optional JAR signature algorithm override (e.g., 'ES256') for x509 schemes
+  cs07DcApi = false,
+  cs07VerifierOrigin = null,
 ) {
   const cs02Options = resolveVerifierCs02Options(process.env);
+  const cs07Origin = cs07DcApi
+    ? (cs07VerifierOrigin || resolveCs07VerifierOrigin({ serverURL }))
+    : null;
+  if (cs07DcApi && response_mode !== "dc_api.jwt") {
+    throw new Cs02VerifierRequestError(
+      'CS-07 DC API requests must use response_mode "dc_api.jwt"',
+      "invalid_request",
+    );
+  }
   const signingPolicy = resolveCs02JarSigningPolicy({
     client_id,
     jar_alg,
@@ -348,7 +360,7 @@ export async function buildVpRequestJWT(
 
   validateCs02JarGenerationInput({
     client_id,
-    response_uri: redirect_uri,
+    response_uri: cs07DcApi ? null : redirect_uri,
     presentation_definition,
     dcql_query,
     response_mode,
@@ -364,7 +376,7 @@ export async function buildVpRequestJWT(
       "invalid_request",
     );
   }
-  if (!state) {
+  if (!state && !cs07DcApi) {
     // State is REQUIRED for direct_post modes per OpenID4VP spec
     // Generate only if not provided to maintain backwards compatibility with tests
     state = generateNonce(16);
@@ -425,32 +437,31 @@ export async function buildVpRequestJWT(
     client_id: client_id,
 
     nonce: nonce,
-    state: state,
+    ...(cs07DcApi ? {} : { state }),
     // For redirect_uri scheme, client_metadata MUST be omitted (wallet discovers metadata)
     ...(isRedirectUriScheme ? {} : { client_metadata: clientMetadataForPayload }),
     // NOTE: Per OpenID4VP, wallets MUST ignore an iss claim in the authorization request.
     // To avoid confusion for implementers, we intentionally omit iss here.
-    aud: audience, // Use the audience parameter
+    ...(cs07DcApi ? {} : { aud: audience }),
   };
 
   // Add response_uri for all response modes that require it
-  if (
+  if (!cs07DcApi && (
     response_mode === "direct_post" ||
     response_mode === "direct_post.jwt" ||
     response_mode === "dc_api.jwt" ||
     response_mode === "dc_api"
-  ) {
+  )) {
     jwtPayload.response_uri = redirect_uri;
   }
 
-  
+  if (!cs07DcApi) {
     jwtPayload.aud = "https://self-issued.me/v2"; // Digital Credentials API audience
-  
+  }
 
   // Add required timestamp claims for Digital Credentials API
-  if (response_mode === "dc_api.jwt" || response_mode === "dc_api") {
-    jwtPayload.expected_origins = ["https://dss.aegean.gr"];
-    jwtPayload.state = state;
+  if (cs07DcApi) {
+    jwtPayload.expected_origins = [cs07Origin];
   }
 
   applyCs02JarTimestamps(jwtPayload, response_mode);
@@ -961,7 +972,6 @@ export async function decryptJWE(jweToken, privateKeyPEM, mode) {
       }
       throw new Error("Encrypted direct_post.jwt response has no JSON payload");
     } else if (mode === "dc_api.jwt") {
-      console.log("Decrypted JWE payload:", decryptedPayload.payload);
       // For HAIP dc_api.jwt, return the full decrypted payload
       // The calling code will handle extracting the VP token
       return decryptedPayload.payload;

@@ -231,10 +231,6 @@ describe("CS-02 production trust placeholders (Phase F)", () => {
     });
   });
 
-  it.skip("enforces configured x509 trust anchors when CS02_X509_TRUST_ANCHORS_PATH exists", () => {});
-  it.skip("rejects x509_san_dns when SAN DNS does not match the client_id host", () => {});
-  it.skip("enforces configured trusted verifier-attestation issuers", () => {});
-  it.skip("rejects verifier_attestation when VA-JWT is not bound to the JAR signing key", () => {});
 });
 
 describe("CS-02 DID trust policy (Phase A)", () => {

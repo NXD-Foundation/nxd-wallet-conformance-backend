@@ -12,7 +12,7 @@ import {
 } from "../../utils/mdocClaims.js";
 import { parseSdJwtClaims, selectSatisfiedSdJwtClaimSet, claimSatisfiesSdJwtConstraints } from "../../utils/sdJwtClaims.js";
 import { extractMdocDocType } from "./mdocDocType.js";
-import { evaluateCs02CredentialSets } from "../../../utils/cs02DcqlCore.js";
+import { evaluateCs02CredentialSets } from "../../utils/cs02DcqlCore.js";
 
 function safeSlog(slog, event, data) {
   if (typeof slog !== "function") return;

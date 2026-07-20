@@ -994,22 +994,6 @@ describe('Code Flow SD-JWT Routes', () => {
   });
 
   describe('GET /codeflow/authorize', () => {
-    it.skip('PAR-02 — should reject authorization request without request_uri when PAR-only is enforced', async () => {
-      // NOTE: Current mock implementation still allows non-PAR /authorize calls.
-      // This test documents desired PAR-only behavior and can be enabled once
-      // /authorize is hardened to require request_uri.
-      await request(app)
-        .get('/codeflow/authorize')
-        .query({
-          response_type: 'code',
-          issuer_state: 'par-only-issuer',
-          state: 'test-state',
-          client_id: 'test-client-id',
-          redirect_uri: 'openid4vp://'
-        })
-        .expect(400);
-    });
-
     it('should handle non-dynamic authorization successfully', async () => {
       const mockSession = {
         isDynamic: false,

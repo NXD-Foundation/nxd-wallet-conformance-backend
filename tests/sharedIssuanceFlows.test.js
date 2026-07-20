@@ -857,13 +857,6 @@ describe('Shared Issuance Flows', () => {
       }
     });
 
-    it.skip('NONCE-05 — should scope DPoP nonce per endpoint and reject cross-endpoint reuse', async () => {
-      // Current implementation enforces DPoP nonce only on the token endpoint.
-      // This test documents the desired behavior for cross-endpoint nonce scoping
-      // (e.g., /token_endpoint vs /credential) and can be enabled once DPoP nonce
-      // challenges are implemented consistently across multiple endpoints.
-    });
-
     //
     // D. “Glue” tests (PAR + DPoP interplay) / HAIP profile
     //
