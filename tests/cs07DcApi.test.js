@@ -11,7 +11,7 @@ import {
 } from "../utils/cs07DcApi.js";
 import { DEFAULT_DCQL_QUERY } from "../utils/routeUtils.js";
 import { createDcApiVerifierClient, DcApiClientError } from "../clients/dc-api/rp-client.js";
-import { validateCs07Config, resolveCs07Profile } from "../utils/cs07Config.js";
+import { validateCs07Config, resolveCs07Profile, mergeEnvRelyingParties } from "../utils/cs07Config.js";
 import { validateCs07CredentialPresentations } from "../utils/cs07ResponseValidation.js";
 
 describe("CS-07 Digital Credentials API request profile", () => {
@@ -57,6 +57,57 @@ describe("CS-07 Digital Credentials API request profile", () => {
       fetchImpl: async () => ({ ok: true, json: async () => ({}) }),
     });
     expect(client.isSupported()).to.equal(true);
+  });
+
+  it("keeps a reverse-proxy path prefix when calling the verifier", async () => {
+    const urls = [];
+    const client = createDcApiVerifierClient({
+      verifierBaseUrl: "https://dev.example/rfc-issuer",
+      secureContext: true,
+      navigatorImpl: {
+        credentials: {
+          get: async () => ({ protocol: "openid4vp-v1-signed", data: { response: "a.b.c.d.e" } }),
+        },
+      },
+      digitalCredential: { userAgentAllowsProtocol: () => true },
+      fetchImpl: async (url) => {
+        urls.push(String(url));
+        if (String(url).endsWith("/vp/dc-api/request")) {
+          return {
+            ok: true,
+            json: async () => ({
+              sessionId: "session-1",
+              request: { protocol: "openid4vp-v1-signed", data: { request: "a.b.c" } },
+            }),
+          };
+        }
+        return { ok: true, json: async () => ({ status: "success" }) };
+      },
+    });
+    const descriptor = await client.prepare({ profile: "pid-basic" });
+    await client.present(descriptor);
+    expect(urls[0]).to.equal("https://dev.example/rfc-issuer/vp/dc-api/request");
+    expect(urls[1]).to.equal("https://dev.example/rfc-issuer/vp/dc-api/response/session-1");
+  });
+
+  it("forwards an optional external sessionId to request generation", async () => {
+    let requestBody;
+    const client = createDcApiVerifierClient({
+      verifierBaseUrl: "https://verifier.example",
+      secureContext: true,
+      navigatorImpl: { credentials: { get: async () => ({ protocol: "openid4vp-v1-signed", data: { response: "a.b.c" } }) } },
+      digitalCredential: { userAgentAllowsProtocol: () => true },
+      fetchImpl: async (url, options) => {
+        if (String(url).endsWith("/vp/dc-api/request")) requestBody = JSON.parse(options.body);
+        return { ok: true, json: async () => ({
+          sessionId: "booking-12345",
+          request: { protocol: "openid4vp-v1-signed", data: { request: "a.b.c" } },
+        }) };
+      },
+    });
+
+    await client.prepare({ profile: "pid-basic", sessionId: "booking-12345" });
+    expect(requestBody).to.deep.equal({ profile: "pid-basic", sessionId: "booking-12345" });
   });
 
   it("prepares a descriptor and presents it through the user-activation API", async () => {
@@ -137,6 +188,49 @@ describe("CS-07 Digital Credentials API request profile", () => {
       profiles: { "pid-basic": { workflow: "unknown", dcql_query: DEFAULT_DCQL_QUERY } },
       relying_parties: {},
     }, { env: {} })).to.throw(/Unknown CS-07 workflow/);
+  });
+
+  it("merges relying-party origins from environment variables", () => {
+    const base = {
+      default_profile: "pid-basic",
+      profiles: {
+        "pid-basic": { workflow: "presentation", dcql_query: DEFAULT_DCQL_QUERY },
+        "qualified-signing": { workflow: "cs03-inline-signing", dcql_query: DEFAULT_DCQL_QUERY },
+      },
+      relying_parties: {},
+    };
+    const withDefaultProfile = validateCs07Config(mergeEnvRelyingParties(structuredClone(base), {
+      env: { DC_API_RP_ORIGINS: "https://rp.example, https://rp2.example" },
+    }), { env: {} });
+    expect(withDefaultProfile.relying_parties).to.deep.equal({
+      "https://rp.example": { profiles: ["pid-basic"] },
+      "https://rp2.example": { profiles: ["pid-basic"] },
+    });
+    expect(resolveCs07Profile(withDefaultProfile, {
+      profileId: "pid-basic",
+      origin: "https://rp2.example",
+    }).id).to.equal("pid-basic");
+
+    const withExplicitProfiles = validateCs07Config(mergeEnvRelyingParties(structuredClone(base), {
+      env: {
+        DC_API_RP_ORIGINS: "https://rp.example",
+        DC_API_RP_PROFILES: "qualified-signing",
+      },
+    }), { env: {} });
+    expect(withExplicitProfiles.relying_parties).to.deep.equal({
+      "https://rp.example": { profiles: ["qualified-signing"] },
+    });
+
+    expect(() => validateCs07Config(mergeEnvRelyingParties(structuredClone(base), {
+      env: { DC_API_RP_ORIGINS: "https://rp.example/path" },
+    }), { env: {} })).to.throw(/must not contain a path/);
+
+    expect(() => validateCs07Config(mergeEnvRelyingParties(structuredClone(base), {
+      env: {
+        DC_API_RP_ORIGINS: "https://rp.example",
+        DC_API_RP_PROFILES: "missing-profile",
+      },
+    }), { env: {} })).to.throw(/references unknown profile/);
   });
 
   it("rejects expired descriptors and classifies wallet protocol errors", async () => {

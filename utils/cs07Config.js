@@ -12,6 +12,27 @@ function assertObject(value, message) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(message);
 }
 
+function parseCsv(value) {
+  if (typeof value !== "string" || !value.trim()) return [];
+  return value.split(",").map((part) => part.trim()).filter(Boolean);
+}
+
+export function mergeEnvRelyingParties(config, { env = process.env } = {}) {
+  const origins = parseCsv(env.DC_API_RP_ORIGINS);
+  if (origins.length === 0) return config;
+
+  const profileIds = parseCsv(env.DC_API_RP_PROFILES);
+  const profiles = profileIds.length > 0 ? profileIds : [config.default_profile];
+
+  if (!config.relying_parties || typeof config.relying_parties !== "object" || Array.isArray(config.relying_parties)) {
+    config.relying_parties = {};
+  }
+  for (const origin of origins) {
+    config.relying_parties[origin] = { profiles: [...profiles] };
+  }
+  return config;
+}
+
 export function validateCs07Config(config, { env = process.env } = {}) {
   assertObject(config, "CS-07 configuration must be an object");
   assertObject(config.profiles, "CS-07 configuration must contain profiles");
@@ -62,6 +83,7 @@ export function loadCs07Config({ path = process.env.DC_API_CONFIG_PATH || DEFAUL
   } catch (error) {
     throw new Error(`Unable to load CS-07 configuration: ${error.message}`);
   }
+  mergeEnvRelyingParties(config, { env });
   return validateCs07Config(config, { env });
 }
 

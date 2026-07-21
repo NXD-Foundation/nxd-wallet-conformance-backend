@@ -71,6 +71,17 @@ function requestOrigin(req) {
   return resolveCs07VerifierOrigin({ serverURL: origin, env: process.env });
 }
 
+function resolveDcApiSessionId(value) {
+  if (value == null) return uuidv4();
+  if (typeof value !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value)) {
+    throw new Cs07DcApiResponseError(
+      "sessionId must be 1-128 characters using letters, digits, '.', '_', ':' or '-'.",
+      "invalid_request",
+    );
+  }
+  return value;
+}
+
 dcApiRouter.options("/vp/dc-api/:resource(*)", (req, res) => {
   try {
     const origin = requestOrigin(req);
@@ -106,7 +117,12 @@ dcApiRouter.get("/vp/dc-api/session/:sessionId", async (req, res) => {
 
 /** Create a CS-07 signed request descriptor for a browser verifier. */
 dcApiRouter.post("/vp/dc-api/request", enforceBodyLimit(MAX_REQUEST_BODY_BYTES), async (req, res) => {
-  const sessionId = uuidv4();
+  let sessionId;
+  try {
+    sessionId = resolveDcApiSessionId(req.body?.sessionId);
+  } catch {
+    sessionId = uuidv4();
+  }
   const slog = makeSessionLogger(sessionId);
   const requestId = logHttpRequest(slog, "POST", "/vp/dc-api/request", req.headers, { sessionId });
   let verifierOrigin = null;
@@ -115,9 +131,10 @@ dcApiRouter.post("/vp/dc-api/request", enforceBodyLimit(MAX_REQUEST_BODY_BYTES),
     verifierOrigin = requestOrigin(req);
     applyCors(res, verifierOrigin);
     const bodyKeys = Object.keys(req.body || {});
-    if (bodyKeys.some((key) => !["profile"].includes(key))) {
-      return res.status(400).json({ error: "invalid_request", error_description: "Only profile may be supplied" });
+    if (bodyKeys.some((key) => !["profile", "sessionId"].includes(key))) {
+      return res.status(400).json({ error: "invalid_request", error_description: "Only profile and sessionId may be supplied" });
     }
+    sessionId = resolveDcApiSessionId(req.body?.sessionId);
     const profile = resolveCs07Profile(CS07_CONFIG, {
       profileId: req.body?.profile,
       origin: verifierOrigin,
@@ -154,8 +171,11 @@ dcApiRouter.post("/vp/dc-api/request", enforceBodyLimit(MAX_REQUEST_BODY_BYTES),
     storedSession.encryption_key_kid = encryptionKey.kid;
     storedSession.encryption_key_alg = encryptionKey.alg;
     await storeVPSession(sessionId, storedSession);
-    const responseEndpoint = new URL(`/vp/dc-api/response/${sessionId}`, CONFIG.SERVER_URL).toString();
-    const statusEndpoint = new URL(`/vp/dc-api/session/${sessionId}`, CONFIG.SERVER_URL).toString();
+    // Join under SERVER_URL (may include a reverse-proxy prefix such as /rfc-issuer).
+    // new URL("/absolute", base) would replace that prefix and break deployments behind a path.
+    const serverBase = String(CONFIG.SERVER_URL || "").replace(/\/$/, "");
+    const responseEndpoint = `${serverBase}/vp/dc-api/response/${sessionId}`;
+    const statusEndpoint = `${serverBase}/vp/dc-api/session/${sessionId}`;
     const response = {
       ...result,
       expiresAt: storedSession?.expires_at,

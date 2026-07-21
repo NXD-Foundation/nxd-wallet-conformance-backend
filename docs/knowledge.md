@@ -87,6 +87,12 @@ the primary source for scope-based issuance.
 `authorization_details` for that credential when the Authorization Server
 metadata advertises `authorization_details_types_supported` including
 `openid_credential`.
+- After every successful Token Response, the wallet must inspect returned
+`authorization_details`: when an `openid_credential` entry contains
+`credential_identifiers`, subsequent Credential Requests use
+`credential_identifier` and omit `credential_configuration_id`; otherwise the
+wallet uses `credential_configuration_id`. This is response-driven and applies
+even when the wallet did not send `authorization_details` in the Token Request.
 - HAIP 1.0 draft 03 Section 4.5 adds the requirement to publish a credential
 type-to-`scope` mapping; it does not change the OpenID4VCI discovery URL or
 metadata content negotiation rules.
@@ -147,8 +153,9 @@ The browser flow must use
 `response_mode=dc_api.jwt`, configured `expected_origins`, and an audience
 of `origin:<verifier-origin>` for response proofs.
 - Profile and RP authorization are configured in `data/dc-api-config.json`
-(or `DC_API_CONFIG_PATH`); the checked-in file intentionally has no relying
-parties enabled and must be populated for a deployment.
+(or `DC_API_CONFIG_PATH`); ephemeral RP origins can be merged at startup via
+`DC_API_RP_ORIGINS` (and optional `DC_API_RP_PROFILES`). The checked-in file
+intentionally has no relying parties enabled and must be populated for a deployment.
 - DC API transport must remain a thin adapter over the CS-02 DCQL and
 credential-verification core. It must distinguish wallet protocol errors in
 fulfilled `DigitalCredential.data` values from browser promise rejection.

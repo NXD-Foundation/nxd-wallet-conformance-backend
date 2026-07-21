@@ -8,8 +8,11 @@ export class DcApiClientError extends Error {
   }
 }
 
+/** Join a path under verifierBaseUrl, preserving any reverse-proxy prefix. */
 function endpoint(base, path) {
-  return new URL(path, base).toString();
+  const root = typeof base === "string" ? base : base.href;
+  const normalizedBase = root.endsWith("/") ? root : `${root}/`;
+  return new URL(String(path).replace(/^\//, ""), normalizedBase).toString();
 }
 
 function classifyBrowserError(error) {
@@ -57,12 +60,15 @@ export function createDcApiVerifierClient({
     return body;
   }
 
-  async function prepare({ profile, signal } = {}) {
+  async function prepare({ profile, sessionId, signal } = {}) {
     if (!isSupported()) throw new DcApiClientError("Digital Credentials API is unavailable", "unsupported");
     const descriptor = await jsonRequest(endpoint(base, "/vp/dc-api/request"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(profile ? { profile } : {}),
+      body: JSON.stringify({
+        ...(profile ? { profile } : {}),
+        ...(sessionId ? { sessionId } : {}),
+      }),
       signal,
     });
     if (descriptor?.request?.protocol !== PROTOCOL || typeof descriptor?.request?.data?.request !== "string") {

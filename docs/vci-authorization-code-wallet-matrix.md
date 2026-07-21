@@ -104,7 +104,9 @@ To support the complete authorization-code family in this repo, the wallet unit 
 13. Redeem the resulting authorization code at `/token_endpoint` with `grant_type=authorization_code`.
 14. Send the matching `code_verifier`; otherwise PKCE fails.
 15. Capture `c_nonce` from the token response and use it in the proof JWT.
-16. Build the credential request with exactly one of `credential_configuration_id` or `credential_identifier`.
+16. Build the credential request with exactly one of `credential_configuration_id`
+    or `credential_identifier`; returned Token Response `credential_identifiers`
+    take precedence over the configuration ID.
 17. Use `proofs` rather than `proof`.
 18. Send exactly one proof type.
 19. For JWT-based credentials, send `proofs.jwt` signed with `ES256`.

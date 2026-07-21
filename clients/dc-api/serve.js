@@ -88,7 +88,8 @@ server.listen(port, host, () => {
   console.log("");
   console.log("Phone / ngrok:");
   console.log(`  ngrok http ${port}`);
-  console.log("Then add that HTTPS origin to data/dc-api-config.json → relying_parties");
-  console.log('  e.g. "https://abcd.ngrok-free.app": { "profiles": ["pid-basic"] }');
-  console.log("and restart the verifier. Paste the verifier ngrok URL into the demo page.");
+  console.log("Then authorize that HTTPS origin on the verifier, e.g.:");
+  console.log("  DC_API_RP_ORIGINS=https://abcd.ngrok-free.app npm run dev");
+  console.log("Optional: DC_API_RP_PROFILES=pid-basic (defaults to default_profile)");
+  console.log("Paste the verifier ngrok URL into the demo page.");
 });

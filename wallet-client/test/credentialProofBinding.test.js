@@ -61,6 +61,22 @@ describe("wallet-client credentialProofBinding (Phase 8)", () => {
     expect(payload.iss).to.equal(result.subjectKey.subjectDidJwk);
   });
 
+  it("uses credential_identifier instead of credential_configuration_id when selected", async () => {
+    const result = await buildCredentialProofRequest({
+      profile: WALLET_PROFILES.WEBUILD_CS01,
+      keyPath: undefined,
+      issuerMeta,
+      apiBase: "https://issuer.example.com",
+      configurationId: "PID",
+      credentialIdentifier: "PID_0000",
+      cNonce: "nonce-123",
+      credentialEndpoint: "https://issuer.example.com/credential",
+    });
+
+    expect(result.credentialRequest.credential_identifier).to.equal("PID_0000");
+    expect(result.credentialRequest).to.not.have.property("credential_configuration_id");
+  });
+
   it("describes proof and sender-constraining binding context", () => {
     const context = buildCredentialProofBindingContext({
       profile: WALLET_PROFILES.WEBUILD_CS01,

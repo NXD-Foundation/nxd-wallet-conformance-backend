@@ -8,6 +8,7 @@ import { expect } from "chai";
 import { WALLET_PROFILES, Cs01ProfileError, selectVciGrantRoute } from "../src/lib/profile.js";
 import {
   resolvePreAuthorizedCredentialSelection,
+  resolveCredentialRequestTargets,
   CredentialSelectionError,
 } from "../src/lib/scopeResolution.js";
 import { DpopRequiredError, createTokenRequestDpopBinding, createResourceRequestDpopProof } from "../src/lib/dpopBinding.js";
@@ -154,7 +155,7 @@ async function buildCs01PreAuthCredentialRequest({
 
 describe("wallet-client CS-01 pre-auth issuance (Phase 6)", () => {
   describe("success paths", () => {
-    it("issuer-initiated pre-auth offer routes through token (WUA + DPoP) to credential request", async () => {
+  it("issuer-initiated pre-auth offer routes through token (WUA + DPoP) to credential request", async () => {
       const route = selectVciGrantRoute(CS01, cs01PreAuthorizedOffer.grants);
       expect(route).to.equal("pre-authorized_code");
 
@@ -290,6 +291,39 @@ describe("wallet-client CS-01 pre-auth issuance (Phase 6)", () => {
       expect(parsed[0].credential_configuration_id).to.equal("UnscopedCredential");
     });
   });
+
+    it("uses a credential_identifier returned by the Token Response", async () => {
+      const tokenBody = {
+        ...cs01DpopTokenResponse,
+        authorization_details: [{
+          type: "openid_credential",
+          credential_configuration_id: "VerifiableIdCard",
+          credential_identifiers: ["VerifiableIdCard_0000"],
+        }],
+      };
+      const { dpopBinding } = await buildCs01PreAuthTokenRequest({
+        offerConfig: cs01PreAuthorizedOffer,
+        configurationId: "VerifiableIdCard",
+        tokenBody,
+      });
+      const target = resolveCredentialRequestTargets({
+        configurationId: "VerifiableIdCard",
+        tokenResponse: tokenBody,
+      })[0];
+      const proofBundle = await buildCredentialProofRequest({
+        profile: CS01,
+        keyPath: undefined,
+        issuerMeta: cs01IssuerMetadata,
+        apiBase: cs01IssuerMetadata.credential_issuer,
+        configurationId: target.credential_configuration_id,
+        credentialIdentifier: target.credential_identifier,
+        cNonce: tokenBody.c_nonce,
+        credentialEndpoint: cs01IssuerMetadata.credential_endpoint,
+      });
+      expect(proofBundle.credentialRequest.credential_identifier).to.equal("VerifiableIdCard_0000");
+      expect(proofBundle.credentialRequest).to.not.have.property("credential_configuration_id");
+      expect(dpopBinding.dpopJwt).to.be.a("string");
+    });
 
   describe("failure paths", () => {
     it("treats DPoP generation failure as fatal in CS-01 pre-auth credential requests", async () => {

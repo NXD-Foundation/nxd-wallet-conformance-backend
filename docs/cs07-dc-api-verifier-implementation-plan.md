@@ -83,13 +83,16 @@ no credentials. Store the immutable session origin and
 
 ### 2.3 Request endpoint contract
 
-`POST /vp/dc-api/request` accepts only a profile identifier:
+`POST /vp/dc-api/request` accepts a profile identifier and may accept an
+external session identifier:
 
 ```json
-{ "profile": "pid-basic" }
+{ "profile": "pid-basic", "sessionId": "rp-session-123" }
 ```
 
-The server generates the session ID, loads DCQL and workflow configuration,
+When `sessionId` is omitted, the server generates a UUID. Supplied session IDs
+are bounded to 128 safe path characters and are used by the response and status
+endpoints. The server then loads DCQL and workflow configuration,
 and returns:
 
 ```json

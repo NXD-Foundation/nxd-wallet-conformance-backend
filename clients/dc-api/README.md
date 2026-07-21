@@ -33,6 +33,18 @@ false.
 </script>
 ```
 
+The RP may provide its own correlation identifier when preparing a request:
+
+```js
+const prepared = await client.prepare({
+  profile: "pid-basic",
+  sessionId: "booking-12345"
+});
+```
+
+The verifier accepts 1–128 safe path characters (`A-Z`, `a-z`, digits, `.`,
+`_`, `:`, `-`). If omitted, it generates a UUID.
+
 ## Local phone demo
 
 A fake RP page lives at `demo/index.html`. Serve it with the zero-dependency
@@ -49,8 +61,13 @@ Then tunnel that port separately:
 ngrok http 4173
 ```
 
-1. Add the **RP** ngrok HTTPS origin to `data/dc-api-config.json` →
-   `relying_parties` (e.g. `"https://rp-xxxx.ngrok-free.app": { "profiles": ["pid-basic"] }`) and restart the verifier.
+1. Authorize the **RP** ngrok HTTPS origin on the verifier and restart it.
+   For local ngrok URLs, set `DC_API_RP_ORIGINS` (comma-separated) when starting
+   the verifier; optional `DC_API_RP_PROFILES` defaults to `pid-basic`:
+   ```bash
+   DC_API_RP_ORIGINS=https://rp-xxxx.ngrok-free.app npm run dev
+   ```
+   Stable origins can stay in `data/dc-api-config.json` → `relying_parties`.
 2. Open the RP ngrok URL on your phone (`/` redirects to the demo).
 3. Paste your **verifier** ngrok base URL into the form (or use
    `?verifier=https://…&profile=pid-basic`).

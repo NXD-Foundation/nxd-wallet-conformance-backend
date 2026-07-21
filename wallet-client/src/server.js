@@ -28,6 +28,7 @@ import {
   assertAuthorizationDetailsSupportForCredentialRequest,
   resolveCredentialScope,
   resolvePreAuthorizedCredentialSelection,
+  resolveCredentialRequestTargets,
   extractOfferedConfigurationIds,
 } from "./lib/scopeResolution.js";
 import {
@@ -1092,6 +1093,102 @@ async function httpPostFormWithAttestationChallengeRetry({
   return res;
 }
 
+async function issueCredentialTargets({
+  targets,
+  profile,
+  keyPath,
+  issuerMeta,
+  apiBase,
+  credentialEndpoint,
+  cNonce,
+  cNonceExpiresIn,
+  dpopBinding,
+  tokenBody,
+  accessToken,
+  pollTimeoutMs,
+  pollIntervalMs,
+  authorizationServerMeta,
+  metadata,
+}, logSessionId) {
+  const credentials = [];
+  const proofBindings = [];
+  for (const target of targets) {
+    const proofBundle = await buildCredentialProofRequest({
+      profile,
+      keyPath,
+      issuerMeta,
+      apiBase,
+      configurationId: target.credential_configuration_id,
+      credentialIdentifier: target.credential_identifier,
+      cNonce,
+      credentialEndpoint,
+    });
+    const credentialDpop = await createResourceRequestDpopProof({
+      binding: dpopBinding,
+      tokenBody,
+      accessToken,
+      htu: credentialEndpoint,
+      profile,
+      stage: "credential request",
+    });
+    const response = await fetch(credentialEndpoint, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...buildResourceRequestHeaders(accessToken, credentialDpop, tokenBody),
+      },
+      body: JSON.stringify(proofBundle.credentialRequest),
+    });
+    const text = await response.text().catch(() => "");
+    let body = null;
+    try { body = text ? JSON.parse(text) : null; } catch {}
+    if (!response.ok) {
+      throw new Error(`credential_error ${response.status}: ${JSON.stringify(body || { error: "invalid_response", error_description: text })}`);
+    }
+    if (response.status === 202) {
+      const deferredEndpoint = issuerMeta.credential_deferred_endpoint || `${apiBase}/credential_deferred`;
+      body = await pollDeferredCredentialIssuance({
+        transactionId: body?.transaction_id,
+        issuerIntervalSeconds: body?.interval,
+        pollTimeoutMs,
+        pollIntervalMs,
+        deferredEndpoint,
+        buildPollRequest: () => buildDeferredCredentialPollRequest({
+          profile,
+          dpopBinding,
+          tokenBody,
+          accessToken,
+          subjectKey: proofBundle.subjectKey,
+          deferredEndpoint,
+          transactionId: body?.transaction_id,
+        }),
+        httpPostJson,
+        logSessionId,
+        sleep,
+      });
+    }
+    await validateAndStoreCredential({
+      configurationId: target.credential_configuration_id,
+      credential: body,
+      issuerMeta,
+      apiBase,
+      keyBinding: toKeyBindingMaterial(proofBundle.subjectKey),
+      metadata: { ...metadata, c_nonce: cNonce, c_nonce_expires_in: cNonceExpiresIn },
+      authorizationServerMeta,
+    }, logSessionId);
+    credentials.push(body);
+    proofBindings.push(buildCredentialProofBindingContext({
+      profile,
+      subjectKey: proofBundle.subjectKey,
+      dpopBinding,
+      tokenBody,
+      accessToken,
+      keyAttestation: proofBundle.keyAttestation,
+    }));
+  }
+  return { credentials, proofBindings };
+}
+
 async function runPreAuthorizedIssuance({ profile = activeWalletProfile, walletClientId = activeWalletClientId, apiBase, issuerMeta, offerConfig = null, configurationId, preAuthorizedCode, txCodeConfig, authorizationServer, keyPath, pollTimeoutMs, pollIntervalMs, userPin }, logSessionId) {
   const slog = logSessionId ? makeSessionLogger(logSessionId) : (() => {});
   runGuardedSync(slog, "[preauth] profile violation", () =>
@@ -1314,6 +1411,12 @@ async function runPreAuthorizedIssuance({ profile = activeWalletProfile, walletC
     assertAccessTokenCnfMatchesWia(profile, accessToken, dpopBinding.publicJwk),
   );
   let c_nonce = tokenBody.c_nonce;
+  const credentialRequestTargets = runGuardedSync(
+    slog,
+    "[preauth] credential selector resolution failed",
+    () => resolveCredentialRequestTargets({ configurationId, tokenResponse: tokenBody }),
+    { configurationId },
+  );
   let c_nonce_expires_in = tokenBody.c_nonce_expires_in;
   const issuanceContext = {
     configurationId,
@@ -1324,6 +1427,7 @@ async function runPreAuthorizedIssuance({ profile = activeWalletProfile, walletC
       source: credentialSelection.source,
       offeredConfigurationIds: credentialSelection.offeredConfigurationIds,
       includeAuthorizationDetails: credentialSelection.includeAuthorizationDetails,
+      targets: credentialRequestTargets,
     },
     refreshToken: describeIssuanceRefreshTokenMetadata(tokenBody),
   };
@@ -1350,6 +1454,30 @@ async function runPreAuthorizedIssuance({ profile = activeWalletProfile, walletC
     throw error;
   }
 
+  if (credentialRequestTargets.length > 1) {
+    const credentialEndpoint = issuerMeta.credential_endpoint || `${apiBase}/credential`;
+    const multiple = await issueCredentialTargets({
+      targets: credentialRequestTargets,
+      profile,
+      keyPath,
+      issuerMeta,
+      apiBase,
+      credentialEndpoint,
+      cNonce: c_nonce,
+      cNonceExpiresIn: c_nonce_expires_in,
+      dpopBinding,
+      tokenBody,
+      accessToken,
+      pollTimeoutMs,
+      pollIntervalMs,
+      authorizationServerMeta: issuerMeta._authorizationServerMeta,
+      metadata: { configurationId, proofBinding: null },
+    }, logSessionId);
+    issuanceContext.proofBinding = multiple.proofBindings[0];
+    issuanceContext.credentialSelection.targets = credentialRequestTargets;
+    return { credential: multiple.credentials[0], credentials: multiple.credentials, issuanceContext };
+  }
+
   // Algorithm negotiation and Wallet Unit subject key proof (see credentialProofBinding.js)
   const credentialEndpoint = issuerMeta.credential_endpoint || `${apiBase}/credential`;
   const proofBundle = await runGuardedAsync(
@@ -1361,6 +1489,7 @@ async function runPreAuthorizedIssuance({ profile = activeWalletProfile, walletC
       issuerMeta,
       apiBase,
       configurationId,
+      credentialIdentifier: credentialRequestTargets[0].credential_identifier,
       cNonce: c_nonce,
       credentialEndpoint,
     }),
@@ -1911,6 +2040,16 @@ async function runAuthorizationCodeIssuance({ profile = activeWalletProfile, wal
     assertAccessTokenCnfMatchesWia(profile, accessToken, dpopBinding.publicJwk),
   );
   let c_nonce = tokenBody.c_nonce;
+  const credentialRequestTargets = runGuardedSync(
+    slog,
+    "[codeflow] credential selector resolution failed",
+    () => resolveCredentialRequestTargets({ configurationId, tokenResponse: tokenBody }),
+    { configurationId },
+  );
+  issuanceContext.credentialSelection = {
+    ...(issuanceContext.credentialSelection || {}),
+    targets: credentialRequestTargets,
+  };
   let c_nonce_expires_in = tokenBody.c_nonce_expires_in;
   console.log("[codeflow] got access_token=", accessToken ? "yes" : "no", "c_nonce=", c_nonce ? "yes" : "no"); try { slog("[codeflow] token received", { hasAccessToken: !!accessToken, hasCNonce: !!c_nonce }); } catch {}
   if (c_nonce) {
@@ -1935,6 +2074,33 @@ async function runAuthorizationCodeIssuance({ profile = activeWalletProfile, wal
     throw error;
   }
 
+  if (credentialRequestTargets.length > 1) {
+    const credentialEndpoint = issuerMeta.credential_endpoint || `${apiBase}/credential`;
+    const multiple = await issueCredentialTargets({
+      targets: credentialRequestTargets,
+      profile,
+      keyPath,
+      issuerMeta,
+      apiBase,
+      credentialEndpoint,
+      cNonce: c_nonce,
+      cNonceExpiresIn: c_nonce_expires_in,
+      dpopBinding,
+      tokenBody,
+      accessToken,
+      pollTimeoutMs,
+      pollIntervalMs,
+      authorizationServerMeta: issuerMeta._authorizationServerMeta,
+      metadata: { configurationId, scope: scopeResolution.scope, scopeSource: scopeResolution.source, proofBinding: null },
+    }, logSessionId);
+    issuanceContext.proofBinding = multiple.proofBindings[0];
+    issuanceContext.credentialSelection = {
+      ...(issuanceContext.credentialSelection || {}),
+      targets: credentialRequestTargets,
+    };
+    return { credential: multiple.credentials[0], credentials: multiple.credentials, issuanceContext };
+  }
+
   // Wallet Unit subject key proof for credential binding (see credentialProofBinding.js)
   const credentialEndpoint = issuerMeta.credential_endpoint || `${apiBase}/credential`;
   const proofBundle = await runGuardedAsync(
@@ -1946,6 +2112,7 @@ async function runAuthorizationCodeIssuance({ profile = activeWalletProfile, wal
       issuerMeta,
       apiBase,
       configurationId,
+      credentialIdentifier: credentialRequestTargets[0].credential_identifier,
       cNonce: c_nonce,
       credentialEndpoint,
     }),

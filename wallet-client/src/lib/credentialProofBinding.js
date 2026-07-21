@@ -169,6 +169,7 @@ export async function buildCredentialProofRequest({
   issuerMeta,
   apiBase,
   configurationId,
+  credentialIdentifier = null,
   cNonce,
   credentialEndpoint,
 }) {
@@ -210,7 +211,9 @@ export async function buildCredentialProofRequest({
     proofAlg,
     audience,
     credentialRequest: {
-      credential_configuration_id: configurationId,
+      ...(credentialIdentifier
+        ? { credential_identifier: credentialIdentifier }
+        : { credential_configuration_id: configurationId }),
       proofs: { jwt: [proofJwt] },
     },
   };

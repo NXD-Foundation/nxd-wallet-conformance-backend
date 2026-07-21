@@ -239,3 +239,38 @@ export function resolvePreAuthorizedCredentialSelection({
     metadataFormat: metadataConfig.format ?? null,
   };
 }
+
+/**
+ * Resolve the credential selector required by VCI 1.0 §8.2 from a Token Response.
+ * Returned credential identifiers take precedence over configuration IDs.
+ */
+export function resolveCredentialRequestTargets({ configurationId, tokenResponse }) {
+  const details = tokenResponse?.authorization_details;
+  if (details == null) {
+    return [{ credential_configuration_id: configurationId }];
+  }
+  if (!Array.isArray(details)) {
+    throw new CredentialSelectionError("Token Response authorization_details must be an array");
+  }
+
+  const matching = details.filter((entry) =>
+    entry?.type === "openid_credential" &&
+    (!entry.credential_configuration_id || entry.credential_configuration_id === configurationId),
+  );
+  const identifiers = matching.flatMap((entry) => {
+    if (entry.credential_identifiers == null) return [];
+    if (!Array.isArray(entry.credential_identifiers) || entry.credential_identifiers.length === 0 ||
+        entry.credential_identifiers.some((id) => typeof id !== "string" || id.trim() === "")) {
+      throw new CredentialSelectionError("Token Response credential_identifiers must be a non-empty string array");
+    }
+    return entry.credential_identifiers;
+  });
+
+  if (identifiers.length > 0) {
+    return identifiers.map((credential_identifier) => ({
+      credential_configuration_id: configurationId,
+      credential_identifier,
+    }));
+  }
+  return [{ credential_configuration_id: configurationId }];
+}

@@ -58,7 +58,9 @@ For a wallet unit to pass this flow end-to-end, it should implement these checks
 5. Call `/token_endpoint` with the pre-authorized code.
 6. Be able to send either bearer-style token requests or DPoP-bound token requests.
 7. Capture `c_nonce` from the token response and use it in the proof JWT.
-8. Build the credential request using `credential_configuration_id` or `credential_identifier`, but never both.
+8. Build the credential request using returned `credential_identifier` values
+   when Token Response authorization details contain them; otherwise use
+   `credential_configuration_id`, but never both.
 9. Use `proofs` and not legacy `proof`.
 10. Send exactly one proof type in the `proofs` object.
 11. For this case, send `proofs.jwt` as a string or non-empty array.

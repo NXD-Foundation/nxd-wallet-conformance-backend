@@ -9,6 +9,7 @@ import {
   extractOfferedConfigurationIds,
   resolveCredentialScope,
   resolvePreAuthorizedCredentialSelection,
+  resolveCredentialRequestTargets,
 } from "../src/lib/scopeResolution.js";
 import { WALLET_PROFILES } from "../src/lib/profile.js";
 
@@ -29,6 +30,38 @@ const issuerMeta = {
 };
 
 describe("wallet-client scopeResolution (Phase 5)", () => {
+  it("uses Token Response credential_identifiers for subsequent requests", () => {
+    expect(resolveCredentialRequestTargets({
+      configurationId: "PID",
+      tokenResponse: {
+        authorization_details: [{
+          type: "openid_credential",
+          credential_configuration_id: "PID",
+          credential_identifiers: ["PID_0000", "PID_0001"],
+        }],
+      },
+    })).to.deep.equal([
+      { credential_configuration_id: "PID", credential_identifier: "PID_0000" },
+      { credential_configuration_id: "PID", credential_identifier: "PID_0001" },
+    ]);
+  });
+
+  it("falls back to credential_configuration_id when identifiers are absent", () => {
+    expect(resolveCredentialRequestTargets({
+      configurationId: "PID",
+      tokenResponse: { authorization_details: [{ type: "openid_credential", credential_configuration_id: "PID" }] },
+    })).to.deep.equal([{ credential_configuration_id: "PID" }]);
+    expect(resolveCredentialRequestTargets({ configurationId: "PID", tokenResponse: {} }))
+      .to.deep.equal([{ credential_configuration_id: "PID" }]);
+  });
+
+  it("rejects malformed Token Response credential identifiers", () => {
+    expect(() => resolveCredentialRequestTargets({
+      configurationId: "PID",
+      tokenResponse: { authorization_details: [{ type: "openid_credential", credential_identifiers: [] }] },
+    })).to.throw(CredentialSelectionError, /non-empty string array/);
+  });
+
   it("reads scope from credential offer authorization_code grant", () => {
     expect(
       extractOfferGrantScope({

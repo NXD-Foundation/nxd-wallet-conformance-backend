@@ -7,7 +7,17 @@ not host the RP page or provide a browser script route.
 ## Configuration
 
 Set `DC_API_CONFIG_PATH` if the deployment does not use the default
-`data/dc-api-config.json`. Add the RP origin and the profiles it may request:
+`data/dc-api-config.json`. Add the RP origin and the profiles it may request
+in JSON, or for ephemeral origins (e.g. ngrok) set environment variables at
+verifier startup:
+
+```bash
+DC_API_RP_ORIGINS=https://rp.example,https://rp2.example npm run dev
+# optional; defaults to default_profile
+DC_API_RP_PROFILES=pid-basic
+```
+
+JSON example:
 
 ```json
 {
@@ -41,6 +51,10 @@ authorizes no RP origins.
 The RP sends `POST /vp/dc-api/request` with the selected profile identifier and
 the browser-generated `Origin` header. The response contains a signed request
 descriptor, a response endpoint, a status endpoint, and an expiry timestamp.
+The request may also include an optional caller-supplied `sessionId` (1–128
+characters using letters, digits, `.`, `_`, `:` or `-`). If omitted, the
+verifier generates a UUID. The chosen value is returned as `sessionId` and is
+used consistently by the response and status endpoints.
 The signed request uses `openid4vp-v1-signed`, `response_mode=dc_api.jwt`, and
 `expected_origins` bound to the RP origin.
 
