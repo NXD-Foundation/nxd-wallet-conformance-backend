@@ -84,25 +84,25 @@
     "classified_rows": 301,
     "unclassified_rows": 0,
     "dispositions": {
-      "implemented": 190,
+      "implemented": 192,
       "partial": 0,
       "structural-only": 38,
-      "inapplicable-cs02": 72,
+      "inapplicable-cs02": 70,
       "out-of-scope-datamodel": 1
     },
     "by_layer": {
       "MessageStructure": {
         "total": 222,
-        "implemented": 156,
+        "implemented": 157,
         "structural-only": 16,
-        "inapplicable-cs02": 49,
+        "inapplicable-cs02": 48,
         "out-of-scope-datamodel": 1
       },
       "SecurityMechanisms": {
         "total": 79,
-        "implemented": 34,
+        "implemented": 35,
         "structural-only": 22,
-        "inapplicable-cs02": 23
+        "inapplicable-cs02": 22
       }
     }
   }

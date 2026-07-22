@@ -243,8 +243,9 @@ describe('Direct Post JWT Fixes', () => {
       const verifierConfig = JSON.parse(fs.readFileSync('./data/verifier-config.json', 'utf-8'));
       const encryptionKey = verifierConfig.jwks.keys.find(k => k.use === 'enc');
 
-      // Create public key from private key using ES module crypto
-      const privateKeyObj = crypto.createPrivateKey(mockPrivateKey);
+      // Verifier response-encryption private key (not the issuer signing key)
+      const encPrivateKeyPem = fs.readFileSync('./x509EC/ec_private_pkcs8.key', 'utf-8');
+      const privateKeyObj = crypto.createPrivateKey(encPrivateKeyPem);
       const publicKeyObj = crypto.createPublicKey(privateKeyObj);
       const derivedJwk = publicKeyObj.export({ format: 'jwk' });
 

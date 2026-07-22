@@ -8,6 +8,7 @@ import {
   allowsLegacyBodyClientAssertion,
   createWalletUnitAttestationClientAuth,
   createWalletUnitCredentialKeyAttestation,
+  validateWalletUnitKeyAttestation,
   getWalletUnitAttestationLifecycleStateForTests,
   resetWalletUnitAttestationLifecycleForTests,
 } from "../src/lib/walletUnitAttestation.js";
@@ -117,6 +118,7 @@ describe("wallet-client walletUnitAttestation (Phase 7)", () => {
       credentialEndpoint: "https://issuer.example.com/credential",
       subjectPrivateJwk: proofKey.privateJwk,
       subjectPublicJwk: proofKey.publicJwk,
+      nonce: "issuer-c_nonce",
     });
 
     const header = decodeProtectedHeader(result.attestationJwt);
@@ -130,9 +132,39 @@ describe("wallet-client walletUnitAttestation (Phase 7)", () => {
     expect(payload).to.have.property("key_storage").that.deep.equals(["iso_18045_high"]);
     expect(payload).to.have.property("user_authentication").that.deep.equals(["iso_18045_high"]);
     expect(payload).to.have.property("certification");
+    expect(payload).to.have.property("nonce", "issuer-c_nonce");
     expect(payload).to.have.nested.property("key_storage_status.status.status_list.uri");
     expect(payload.key_storage_status.exp - Math.floor(Date.now() / 1000)).to.be.greaterThan(30 * 24 * 60 * 60);
     expect(payload.exp - payload.iat).to.be.lessThan(24 * 60 * 60);
+    expect(() => validateWalletUnitKeyAttestation({
+      attestationJwt: result.attestationJwt,
+      proofPublicJwk: proofKey.publicJwk,
+      expectedNonce: "issuer-c_nonce",
+    })).to.not.throw();
+  });
+
+  it("rejects a KA whose nonce or attested key is inconsistent", async () => {
+    const proofKey = await ensureOrCreateEcKeyPair(undefined, "ES256");
+    const result = await createWalletUnitCredentialKeyAttestation({
+      profile: CS01,
+      keyPath: undefined,
+      proofPublicJwk: proofKey.publicJwk,
+      credentialEndpoint: "https://issuer.example.com/credential",
+      subjectPrivateJwk: proofKey.privateJwk,
+      subjectPublicJwk: proofKey.publicJwk,
+      nonce: "issuer-c_nonce",
+    });
+    expect(() => validateWalletUnitKeyAttestation({
+      attestationJwt: result.attestationJwt,
+      proofPublicJwk: proofKey.publicJwk,
+      expectedNonce: "other-nonce",
+    })).to.throw(/nonce/);
+    const otherKey = await ensureOrCreateEcKeyPair(undefined, "ES256");
+    expect(() => validateWalletUnitKeyAttestation({
+      attestationJwt: result.attestationJwt,
+      proofPublicJwk: otherKey.publicJwk,
+      expectedNonce: "issuer-c_nonce",
+    })).to.throw(/attested_keys/);
   });
 
   it("tracks generated WIA and KA jti values for in-memory single-use lifecycle", async () => {

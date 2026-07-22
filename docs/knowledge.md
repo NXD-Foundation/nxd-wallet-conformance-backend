@@ -64,6 +64,24 @@ Sources: [CS-01](./core/cs-01-credential-issuance%20%281%29.md),
 [attestation options](./haip-etsi-wallet-attestation-options.md), and
 [pre-authorized-flow plan](./cs01-pre-authorized-flow-relaxation-plan.md).
 
+### CS-04 Key Attestation Interoperability
+
+- CS-04 remains the governing WE BUILD structure for WIA/KA issuance:
+`attested_keys`, `key_storage`, `user_authentication`, `certification`, and
+`key_storage_status` are retained, with short-lived KA tokens and proof
+binding to `attested_keys[0]`.
+- When an issuer supplies `c_nonce`, the KA carried in a JWT proof includes the
+same `nonce`; the proof JWT and KA nonce are checked together before dispatch.
+- The CS-04 `certification` example is currently tracked as an open
+interoperability clarification because OpenID4VCI 1.0 describes that field as
+a URL string while the CS-04 example uses an object. The implementation does
+not silently override CS-04 for a Keycloak-specific shape.
+- The KA JOSE type is `key-attestation+jwt`; the alternate spelling in the
+CS-04 example is treated as a documentation typo.
+
+Source: [CS-04 WUA lifecycle](./core/cs-04-wua-lifecycle.md) and
+[CS-04 interoperability issue](./issues/cs04-key-attestation-interoperability.md).
+
 ### Credential Issuer Metadata Discovery
 
 - OpenID4VCI 1.0 Section 12.2.2 defines Credential Issuer metadata discovery.

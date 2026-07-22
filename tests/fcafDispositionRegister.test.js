@@ -2,7 +2,7 @@ import { expect } from "chai";
 import fs from "fs";
 import { extractFcafSpecs, extractCategorizedSpecs, buildDispositionRegister, createDispositionTemplate, summarizeDispositionTemplate, summarizeDispositionByLayer } from "../scripts/fcafDispositionRegister.js";
 
-const overrides = JSON.parse(fs.readFileSync(new URL("../FCAFs/we-build-cs02-disposition-overrides.json", import.meta.url), "utf8"));
+const overrides = JSON.parse(fs.readFileSync(new URL("../docs/FCAFs/we-build-cs02-disposition-overrides.json", import.meta.url), "utf8"));
 
 describe("FCAF per-ID disposition tooling", () => {
   it("extracts catalogue table rows with stable scoped IDs", () => {
@@ -42,8 +42,8 @@ describe("FCAF per-ID disposition tooling", () => {
   it("keeps strict-profile exclusions explicit", () => {
     expect(Object.keys(overrides)).to.have.length(301);
     expect(Object.values(overrides).filter((entry) => entry.disposition === "structural-only")).to.have.length(38);
-    expect(Object.values(overrides).filter((entry) => entry.disposition === "inapplicable-cs02")).to.have.length(72);
-    expect(Object.values(overrides).filter((entry) => entry.disposition === "implemented")).to.have.length(190);
+    expect(Object.values(overrides).filter((entry) => entry.disposition === "inapplicable-cs02")).to.have.length(70);
+    expect(Object.values(overrides).filter((entry) => entry.disposition === "implemented")).to.have.length(192);
     expect(Object.values(overrides).filter((entry) => entry.disposition === "partial")).to.have.length(0);
   });
 

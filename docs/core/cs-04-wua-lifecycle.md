@@ -415,7 +415,7 @@ Where each element comes from:
 JOSE header:
 
 ```json
-{ "alg": "ES256", "typ": "keyattestation+jwt", "x5c": ["<wallet provider signing certificate chain>"] }
+{ "alg": "ES256", "typ": "key-attestation+jwt", "x5c": ["<wallet provider signing certificate chain>"] }
 ```
 
 Payload:
@@ -508,4 +508,3 @@ sequenceDiagram
 *Figure B.1: Key binding (issuance) and holder binding (presentation). The KA assures the issuer that the `cnf` key is hardware-held; the verifier later checks the KB-JWT against that same key in the credential, not against the WUA.*
 
 > Note: the two `cnf` uses are different. In the WIA, `cnf` is the DPoP key that binds the issuance session (section 7.3). In the issued credential, `cnf` is the holder key the credential is bound to (this annex).
-

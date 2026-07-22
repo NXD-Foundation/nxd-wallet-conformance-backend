@@ -3,11 +3,46 @@ import {
   CS03_SIGNING_CREDENTIAL_ID,
   buildCs03QesRequestPayload,
   processCs03PresentationResponse,
+  isCs03X509SigningSession,
   validateCs03ResponseUriAlignment,
   validateCs03QesResponse,
 } from "../utils/routeUtils.js";
 
 describe("CS-03 remote signing helpers", () => {
+  it("identifies only active CS-03 sessions requesting the CSC X.509 format", () => {
+    assert.equal(
+      isCs03X509SigningSession({
+        cs03_signing: true,
+        dcql_query: {
+          credentials: [{
+            id: CS03_SIGNING_CREDENTIAL_ID,
+            format: "https://cloudsignatureconsortium.org/2025/x509",
+          }],
+        },
+      }),
+      true,
+    );
+    assert.equal(
+      isCs03X509SigningSession({
+        cs03_signing: false,
+        dcql_query: {
+          credentials: [{
+            id: CS03_SIGNING_CREDENTIAL_ID,
+            format: "https://cloudsignatureconsortium.org/2025/x509",
+          }],
+        },
+      }),
+      false,
+    );
+    assert.equal(
+      isCs03X509SigningSession({
+        cs03_signing: true,
+        dcql_query: { credentials: [{ id: "pid", format: "dc+sd-jwt" }] },
+      }),
+      false,
+    );
+  });
+
   it("places responseURI inside signatureRequests for OOB mode", () => {
     const qesRequest = buildCs03QesRequestPayload(
       "https://verifier.example",

@@ -46,7 +46,10 @@ import didJwkRouter from "./didJwkRoutes.js";
 import { verifyMdlToken, validateMdlClaims } from "../../utils/mdlVerification.js";
 import base64url from "base64url";
 import { encode as encodeCbor } from 'cbor-x';
-import { processCs03PresentationResponse } from "../../utils/routeUtils.js";
+import {
+  isCs03X509SigningSession,
+  processCs03PresentationResponse,
+} from "../../utils/routeUtils.js";
 import {
   summarizeCs03ValidationForLog,
   validateCs03CredentialResponses,
@@ -517,6 +520,8 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
                          Array.isArray(vpSession.dcql_query.credentials) && 
                          vpSession.dcql_query.credentials.length > 0;
     
+    const isCs03X509 = isCs03X509SigningSession(vpSession);
+
     if (hasDcqlQuery && vpToken !== undefined) {
       let vpTokenToValidate = vpToken;
       
@@ -606,7 +611,7 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
         .map(c => c.id)
         .filter(id => typeof id === 'string' && id.length > 0);
       
-      if (expectedCredentialIds.length > 0) {
+      if (expectedCredentialIds.length > 0 && !isCs03X509) {
         try {
           vpTokenToValidate = validateCs02DcqlVpTokenResponse(
             vpTokenToValidate,
@@ -1190,7 +1195,7 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
             const hasDcqlQuery = vpSession.dcql_query && 
                                  Array.isArray(vpSession.dcql_query.credentials) && 
                                  vpSession.dcql_query.credentials.length > 0;
-            if (hasDcqlQuery) {
+            if (hasDcqlQuery && !isCs03X509SigningSession(vpSession)) {
               if (typeof vpToken !== 'object' || vpToken === null || Array.isArray(vpToken)) {
                 const specRef = SPEC_REFS.VP_RESPONSE_PARAMS;
                 const received = typeof vpToken === 'object' && Array.isArray(vpToken) 
@@ -1283,7 +1288,7 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
             const hasDcqlQuery = vpSession.dcql_query && 
                                  Array.isArray(vpSession.dcql_query.credentials) && 
                                  vpSession.dcql_query.credentials.length > 0;
-            if (hasDcqlQuery) {
+            if (hasDcqlQuery && !isCs03X509SigningSession(vpSession)) {
               if (typeof vpToken !== 'object' || vpToken === null || Array.isArray(vpToken)) {
                 const specRef = SPEC_REFS.VP_RESPONSE_PARAMS;
                 const received = typeof vpToken === 'object' && Array.isArray(vpToken) 
@@ -1514,7 +1519,7 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
             vpSession.dcql_query &&
             Array.isArray(vpSession.dcql_query.credentials) &&
             vpSession.dcql_query.credentials.length > 0;
-          if (hasDcqlQueryUnencrypted) {
+          if (hasDcqlQueryUnencrypted && !isCs03X509SigningSession(vpSession)) {
             try {
               vpToken = validateCs02DcqlVpTokenResponse(
                 vpToken,

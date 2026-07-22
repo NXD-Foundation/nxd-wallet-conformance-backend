@@ -202,13 +202,27 @@ export const DEFAULT_DCQL_QUERY = {
 
 /** CS-03 / CSC remote signing: DCQL credential id must match qesRequest.credential_ids */
 export const CS03_SIGNING_CREDENTIAL_ID = "signing-cert-01";
+export const CS03_X509_DCQL_FORMAT = "https://cloudsignatureconsortium.org/2025/x509";
+
+/**
+ * Returns true only for a persisted CS-03 signing session that requests the
+ * CSC X.509 credential format. CS-03 credential responses intentionally use
+ * object-valued entries, unlike ordinary DCQL string presentations.
+ */
+export function isCs03X509SigningSession(vpSession) {
+  return vpSession?.cs03_signing === true &&
+    Array.isArray(vpSession?.dcql_query?.credentials) &&
+    vpSession.dcql_query.credentials.some(
+      (credential) => credential?.format === CS03_X509_DCQL_FORMAT,
+    );
+}
 
 /** DCQL query for CSC X.509 (WE BUILD CS-03) */
 export const CS03_DCQL_QUERY = {
   credentials: [
     {
       id: CS03_SIGNING_CREDENTIAL_ID,
-      format: "https://cloudsignatureconsortium.org/2025/x509",
+      format: CS03_X509_DCQL_FORMAT,
       meta: {
         certificatePolicies: ["0.4.0.2042.1"],
       },

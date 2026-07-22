@@ -9,7 +9,7 @@
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { decodeJwt } from "jose";
+import { decodeJwt, decodeProtectedHeader } from "jose";
 import {
   ensureOrCreateEcKeyPair,
   generateDidJwkFromPrivateJwk,
@@ -37,6 +37,52 @@ export const ATTESTATION_SOURCES = Object.freeze({
 
 export const LOCAL_KEY_ATTESTATION_NOTE =
   "Wallet Unit Attestation is generated from local Wallet Provider fixture keys. Trust-framework-backed attestation is not yet implemented.";
+
+export function validateWalletUnitKeyAttestation({ attestationJwt, proofPublicJwk, expectedNonce = null }) {
+  if (typeof attestationJwt !== "string") {
+    throw new AttestationSourceError("KA must be a compact JWT");
+  }
+  let header;
+  let payload;
+  try {
+    header = decodeProtectedHeader(attestationJwt);
+    payload = decodeJwt(attestationJwt);
+  } catch (error) {
+    throw new AttestationSourceError(`KA JWT cannot be decoded: ${error?.message || error}`);
+  }
+  if (header?.typ !== "key-attestation+jwt") {
+    throw new AttestationSourceError("KA JOSE typ must be key-attestation+jwt");
+  }
+  if (!header?.alg || header.alg === "none" || !Array.isArray(header?.x5c) || header.x5c.length === 0) {
+    throw new AttestationSourceError("KA JOSE header requires alg and x5c");
+  }
+  if (!Number.isInteger(payload?.iat) || !Number.isInteger(payload?.exp) || payload.exp <= payload.iat) {
+    throw new AttestationSourceError("KA payload requires valid iat and exp");
+  }
+  if (!Array.isArray(payload?.attested_keys) || payload.attested_keys.length === 0) {
+    throw new AttestationSourceError("KA payload requires a non-empty attested_keys array");
+  }
+  for (const field of ["key_storage", "user_authentication"]) {
+    if (!Array.isArray(payload[field]) || payload[field].length === 0 || payload[field].some((value) => typeof value !== "string")) {
+      throw new AttestationSourceError(`KA payload requires ${field} as a non-empty string array`);
+    }
+  }
+  if (!Object.prototype.hasOwnProperty.call(payload, "certification")) {
+    throw new AttestationSourceError("KA payload requires certification");
+  }
+  if (!payload?.key_storage_status?.status || !Number.isInteger(payload?.key_storage_status?.exp)) {
+    throw new AttestationSourceError("KA payload requires key_storage_status with status and exp");
+  }
+  const attested = payload.attested_keys[0];
+  if (proofPublicJwk && (attested.kty !== proofPublicJwk.kty || attested.crv !== proofPublicJwk.crv ||
+      attested.x !== proofPublicJwk.x || attested.y !== proofPublicJwk.y)) {
+    throw new AttestationSourceError("KA attested_keys[0] does not match the proof signing key");
+  }
+  if (expectedNonce != null && payload.nonce !== expectedNonce) {
+    throw new AttestationSourceError("KA nonce does not match the issuer c_nonce");
+  }
+  return { header, payload };
+}
 
 export class AttestationSourceError extends Error {
   constructor(message) {
@@ -273,6 +319,7 @@ export async function createWalletUnitCredentialKeyAttestation({
   credentialEndpoint,
   subjectPrivateJwk = null,
   subjectPublicJwk = null,
+  nonce = null,
   alg = "ES256",
   ttlHours = 24,
 }) {
@@ -309,6 +356,7 @@ export async function createWalletUnitCredentialKeyAttestation({
     includeJwkHeader: !cs01,
     extraClaims: cs01
       ? {
+          ...(nonce ? { nonce } : {}),
           key_storage: ["iso_18045_high"],
           user_authentication: ["iso_18045_high"],
           certification: {

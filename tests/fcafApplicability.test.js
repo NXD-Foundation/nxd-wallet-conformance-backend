@@ -2,13 +2,13 @@ import { expect } from "chai";
 import fs from "fs";
 
 const register = JSON.parse(
-  fs.readFileSync(new URL("../FCAFs/we-build-fcaf-applicability.json", import.meta.url), "utf8"),
+  fs.readFileSync(new URL("../docs/FCAFs/we-build-fcaf-applicability.json", import.meta.url), "utf8"),
 );
 const inventory = JSON.parse(
-  fs.readFileSync(new URL("../FCAFs/we-build-fcaf-catalogue-inventory.json", import.meta.url), "utf8"),
+  fs.readFileSync(new URL("../docs/FCAFs/we-build-fcaf-catalogue-inventory.json", import.meta.url), "utf8"),
 );
 const dispositionOverrides = JSON.parse(
-  fs.readFileSync(new URL("../FCAFs/we-build-cs02-disposition-overrides.json", import.meta.url), "utf8"),
+  fs.readFileSync(new URL("../docs/FCAFs/we-build-cs02-disposition-overrides.json", import.meta.url), "utf8"),
 );
 
 const dispositions = new Set([

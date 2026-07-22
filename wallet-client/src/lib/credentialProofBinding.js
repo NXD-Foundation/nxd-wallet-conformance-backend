@@ -16,7 +16,10 @@ import {
   generateDidJwkFromPrivateJwk,
   ensureOrCreateEcKeyPair,
 } from "./crypto.js";
-import { createWalletUnitCredentialKeyAttestation } from "./walletUnitAttestation.js";
+import {
+  createWalletUnitCredentialKeyAttestation,
+  validateWalletUnitKeyAttestation,
+} from "./walletUnitAttestation.js";
 import { isWebuildCs01Profile } from "./profile.js";
 import {
   createResourceRequestDpopProof,
@@ -184,6 +187,7 @@ export async function buildCredentialProofRequest({
     credentialEndpoint,
     subjectPrivateJwk: subjectKey.privateJwk,
     subjectPublicJwk: subjectKey.publicJwk,
+    nonce: cNonce,
     alg: proofAlg,
   });
 
@@ -196,6 +200,12 @@ export async function buildCredentialProofRequest({
     typ: "openid4vci-proof+jwt",
     alg: proofAlg,
     key_attestation: keyAttestation.attestationJwt,
+  });
+
+  validateWalletUnitKeyAttestation({
+    attestationJwt: keyAttestation.attestationJwt,
+    proofPublicJwk: subjectKey.publicJwk,
+    expectedNonce: cNonce,
   });
 
   assertCs01CredentialProofRequirements(profile, {

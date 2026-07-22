@@ -36,7 +36,7 @@ Highest-priority gaps for CS-01:
 - PAR does not include `dpop_jkt`; CS-01 Section 7.3 requires `dpop_jkt` as the JWK Thumbprint of the WIA `cnf` key to bind the authorization code to the DPoP key.
 - Token DPoP is present, but the client does not explicitly verify `access_token.cnf.jkt == thumbprint(WIA.cnf.jwk)` for the WIA used in the same issuance session.
 - KA is locally generated and signed, not Wallet Provider-signed with `x5c`.
-- KA lacks `certification`, `key_storage`, `user_authentication`, and `key_storage_status` required by TS03/CS-04 when key attestation is required.
+- KA now carries the CS-04 structural claims `certification`, `key_storage`, `user_authentication`, and `key_storage_status`; it remains a locally generated prototype attestation rather than a Wallet Provider-issued production attestation.
 - The credential proof path only supports `jwt` proof with KA in the JOSE `key_attestation` header; this matches CS-01's Credential Endpoint path, but the KA content/signature is not conformant.
 - The wallet does not evaluate `key_attestations_required` metadata to ensure presented KA `key_storage` and `user_authentication` meet or exceed issuer requirements.
 - The current implementation still supports pre-authorized code flow, while CS-01 Section 7.1 says Authorization Code Flow is the only flow for credential issuance. Treat pre-authorized flow as outside CS-01 or disable it in CS-01 profile.
@@ -245,8 +245,9 @@ Gaps:
 
 - KA is locally signed, not Wallet Provider-signed.
 - KA JOSE header lacks `x5c`.
-- KA likely uses `typ: key-attestation+jwt`; TS03 examples use `keyattestation+jwt`.
-- KA lacks `certification`, `key_storage_status`, TS03 `key_storage`, and `user_authentication`.
+- KA uses the standards spelling `typ: key-attestation+jwt`. The previous CS-04 example spelling `keyattestation+jwt` has been corrected locally and is tracked for upstream clarification.
+- KA structural claims are now present and validated locally. The CS-04 object-shaped `certification` is intentionally retained; its interoperability with implementations expecting the OpenID4VCI string form is tracked separately.
+- KA nonce binding is now included when an issuer nonce is available, and the proof path validates the nonce and `attested_keys[0]` binding before sending the request.
 - No issuer metadata evaluation for `key_attestations_required` minimum `key_storage` and `user_authentication` levels.
 - No explicit local assertion that proof signing key equals `attested_keys[0]` for multi-key/batch cases.
 - Returned SD-JWT-VC validation was not fully re-audited in this pass.
@@ -364,9 +365,9 @@ So the gap analysis should not mark missing PAR challenge support as a CS-01/TS0
 | Credential Endpoint uses JWT proof | Present | Current proof path |
 | KA in `key_attestation` header when required | Partial | Header present, KA not conformant |
 | KA has Wallet Provider `x5c` | Missing | Current uses local signing |
-| KA includes `certification` | Missing | TS03/CS-04 gap |
-| KA includes `key_storage` and `user_authentication` | Missing | Needed for `key_attestations_required` |
-| KA includes `key_storage_status` | Missing | Revocation/status maintenance gap |
+| KA includes `certification` | Present (CS-04 shape) | Object-vs-string interoperability clarification remains open |
+| KA includes `key_storage` and `user_authentication` | Present | Local structural validation is covered by tests |
+| KA includes `key_storage_status` | Present | Local structural validation is covered; live status trust remains out of scope |
 | Proof signed by `attested_keys[0]` | Partial | Works in single-key path, needs assertion/tests |
 | Evaluate `key_attestations_required` metadata | Missing | CS-01 Section 7.5/7.7 gap |
 | Deferred credential polling | Partial | Present, binding/UI not fully audited |
