@@ -691,7 +691,7 @@ export const getCredentialType = (req) => {
   // Keep old QR/deep links usable while emitting the PID type recognized by
   // the reference EUDI Android wallet.
   if (requestedType === "urn:eudi:pid:lsp:1") {
-    return "urn:eudi:pid:1";
+    return "urn:eu.europa.ec.eudi:pid:1";
   }
 
   return requestedType;

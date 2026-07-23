@@ -68,7 +68,7 @@ function disclosureDigest(encodedDisclosure) {
 }
 
 describe("dcqlCredentialSelection", () => {
-  const pidDoctype = "eu.europa.ec.eudi.pid.1";
+  const pidDoctype = "urn:eu.europa.ec.eudi:pid:1";
 
   describe("presentationFormatFromDcqlQuery", () => {
     it("returns mso_mdoc for mso_mdoc", () => {

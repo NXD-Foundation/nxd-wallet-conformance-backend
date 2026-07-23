@@ -2269,7 +2269,7 @@ describe('OIDC4VCI V1.0 - Format-Specific Requirements', () => {
 
       const pidMdocConfig =
         response.body.credential_configurations_supported[
-          'urn:eudi:pid:1:mso_mdoc'
+          'urn:eu.europa.ec.eudi:pid:1:mso_mdoc'
         ];
 
       expect(pidMdocConfig).to.exist;
@@ -2279,8 +2279,8 @@ describe('OIDC4VCI V1.0 - Format-Specific Requirements', () => {
 
       pidMdocConfig.credential_metadata.claims.forEach((claim) => {
         expect(claim.path).to.be.an('array').with.length.of.at.least(1);
-        expect(claim.path[0]).to.equal('eu.europa.ec.eudi.pid.1');
-        expect(claim.path[0]).to.not.equal('urn:eudi:pid:1:mso_mdoc');
+        expect(claim.path[0]).to.equal('urn:eu.europa.ec.eudi:pid:1');
+        expect(claim.path[0]).to.not.equal('urn:eu.europa.ec.eudi:pid:1:mso_mdoc');
         if (claim.path.length === 1) {
           expect(claim.claims).to.be.an('array').and.not.empty;
         } else {
@@ -2296,12 +2296,12 @@ describe('OIDC4VCI V1.0 - Format-Specific Requirements', () => {
 
       const pidMdocConfig =
         response.body.credential_configurations_supported[
-          'urn:eudi:pid:1:mso_mdoc'
+          'urn:eu.europa.ec.eudi:pid:1:mso_mdoc'
         ];
 
       expect(pidMdocConfig).to.exist;
-      expect(pidMdocConfig.doctype).to.equal('eu.europa.ec.eudi.pid.1');
-      expect(pidMdocConfig.doctype).to.not.equal('urn:eudi:pid:1:mso_mdoc');
+      expect(pidMdocConfig.doctype).to.equal('urn:eu.europa.ec.eudi:pid:1');
+      expect(pidMdocConfig.doctype).to.not.equal('urn:eu.europa.ec.eudi:pid:1:mso_mdoc');
     });
 
     it('SHOULD support ISO 18013-5 mDL doctype', async () => {

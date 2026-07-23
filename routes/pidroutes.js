@@ -37,7 +37,7 @@ const pidRouter = express.Router();
 
 const serverURL = process.env.SERVER_URL || "http://localhost:3000";
 // The reference EUDI Android wallet recognises the SD-JWT PID by this type.
-const PID_CREDENTIAL_CONFIGURATION_ID = "urn:eudi:pid:1";
+const PID_CREDENTIAL_CONFIGURATION_ID = "urn:eu.europa.ec.eudi:pid:1";
 
 const privateKey = fs.readFileSync("./private-key.pem", "utf-8");
 const publicKeyPem = fs.readFileSync("./public-key.pem", "utf-8");

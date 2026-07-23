@@ -50,7 +50,7 @@
             "path": ["$.vct", "$.vc.vct"],
             "filter": {
               "type": "string",
-              "const": "urn:eudi:pid:1"
+              "const": "urn:eu.europa.ec.eudi:pid:1"
             },
             "purpose": "To request the Person Identification Data credential."
           }

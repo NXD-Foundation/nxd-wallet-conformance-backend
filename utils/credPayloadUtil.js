@@ -339,8 +339,8 @@ export const createFerryBoardingPassPayload = (
 
 // SD-JWT HELPERS
 
-const PID_MDOC_NAMESPACE = "eu.europa.ec.eudi.pid.1";
-const PID_MDOC_DOCTYPE = "eu.europa.ec.eudi.pid.1";
+const PID_MDOC_NAMESPACE = "urn:eu.europa.ec.eudi:pid:1";
+const PID_MDOC_DOCTYPE = "urn:eu.europa.ec.eudi:pid:1";
 const dateOnly = (date) => date.toISOString().slice(0, 10);
 
 // Canonical PID mock data using the PID Rulebook SD-JWT claim vocabulary.

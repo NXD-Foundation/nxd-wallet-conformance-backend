@@ -61,7 +61,7 @@ const manageSession = async (sessionId, sessionData) => {
     if (existingSession.credentialType === "urn:eudi:pid:lsp:1") {
       const migratedSession = {
         ...existingSession,
-        credentialType: "urn:eudi:pid:1",
+        credentialType: "urn:eu.europa.ec.eudi:pid:1",
       };
       await storePreAuthSession(sessionId, migratedSession);
       return migratedSession;

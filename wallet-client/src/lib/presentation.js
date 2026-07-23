@@ -1234,7 +1234,7 @@ export async function performPresentation(
         }
         // Otherwise, try to infer from known patterns
         else if (descriptorId.includes("pid") || descriptorId.includes("PID")) {
-          docType = "eu.europa.ec.eudi.pid.1";
+          docType = "urn:eu.europa.ec.eudi:pid:1";
         } else if (
           descriptorId.includes("mdl") ||
           descriptorId.includes("mDL")
