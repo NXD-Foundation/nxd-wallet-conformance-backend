@@ -339,74 +339,83 @@ export const createFerryBoardingPassPayload = (
 
 // SD-JWT HELPERS
 
-export const getPIDSDJWTData = (decodedHeaderSubjectDID) => {
-  const currentTimestamp = new Date().getTime();
-  const currentDate = new Date();
-  const expTimestamp = currentDate.setFullYear(currentDate.getFullYear() + 1);
+const PID_MDOC_NAMESPACE = "eu.europa.ec.eudi.pid.1";
+const PID_MDOC_DOCTYPE = "eu.europa.ec.eudi.pid.1";
+const dateOnly = (date) => date.toISOString().slice(0, 10);
+
+// Canonical PID mock data using the PID Rulebook SD-JWT claim vocabulary.
+export const getPIDSDJWTData = () => {
+  const issuanceDate = new Date();
+  const expiryDate = new Date(issuanceDate);
+  expiryDate.setFullYear(expiryDate.getFullYear() + 1);
   const claims = {
-    // id: decodedHeaderSubjectDID || uuidv4(),
     given_name: "Hanna",
     family_name: "Matkalainen",
-    birth_date: "01.07.2005",
-    age_over_18: true,
-    issuance_date: currentTimestamp,
-    expiry_date: expTimestamp, //expTimestamp.getTime(),
+    birthdate: "2005-07-01",
+    place_of_birth: { country: "FI", locality: "Turku" },
+    nationalities: ["FI"],
+    picture: face_data,
+    address: {
+      formatted: "Rietveld 1, 2312 JD Leiden",
+      country: "FI",
+      region: "Southwest Finland",
+      locality: "Turku",
+      postal_code: "20100",
+      street_address: "Rietveld 1",
+    },
+    birth_family_name: "Matkalainen",
+    birth_given_name: "Hanna",
+    sex: 2,
+    email: "hanna.matkalainen@example.com",
+    phone_number: "+358401234567",
+    date_of_issuance: dateOnly(issuanceDate),
+    date_of_expiry: dateOnly(expiryDate),
+    personal_administrative_number: "FI-LSP-00012345",
     issuing_authority: "UAegean Test Issuer",
-    issuing_country: "Finland",
+    issuing_country: "FI",
+    document_number: "LSP-A01234567",
+    issuing_jurisdiction: "FI",
+    trust_anchor: "https://issuer.example.com/trustanchors/pid/",
+    attestation_legal_category: "PID",
   };
-
-  const disclosureFrame = {
-    _sd: [
-      // "id",
-      "given_name",
-      "family_name",
-      "birth_date",
-      "age_over_18",
-      "expiry_date",
-      "issuance_date",
-      "issuing_authority",
-      "issuing_country",
-    ],
-  };
-
-  return { claims, disclosureFrame };
+  return { claims, disclosureFrame: { _sd: Object.keys(claims) } };
 };
 
 export const getPIDSDJWTDataMsoMdoc = (decodedHeaderSubjectDID) => {
-  const issuanceDate = new Date();
-  const expiryDate = new Date();
-  expiryDate.setFullYear(issuanceDate.getFullYear() + 1);
-  const pidMdocNamespace = "urn:eu.europa.ec.eudi:pid:1";
-
-  const claims = {
-    [pidMdocNamespace]: {
-      given_name: "Hanna",
-      family_name: "Matkalainen",
-      birth_date: "2005-07-01",
-      age_over_18: true,
-      issuance_date: issuanceDate.toISOString().split("T")[0],
-      expiry_date: expiryDate.toISOString().split("T")[0],
-      issuing_authority: "UAegean Test Issuer",
-      issuing_country: "FI",
-    },
+  const { claims: sdClaims } = getPIDSDJWTData(decodedHeaderSubjectDID);
+  const mdocClaims = {
+    family_name: sdClaims.family_name,
+    given_name: sdClaims.given_name,
+    birth_date: sdClaims.birthdate,
+    place_of_birth: sdClaims.place_of_birth,
+    nationality: sdClaims.nationalities,
+    portrait: Buffer.from(sdClaims.picture.split(",")[1], "base64"),
+    resident_address: sdClaims.address.formatted,
+    resident_country: sdClaims.address.country,
+    resident_state: sdClaims.address.region,
+    resident_city: sdClaims.address.locality,
+    resident_postal_code: sdClaims.address.postal_code,
+    resident_street: sdClaims.address.street_address,
+    personal_administrative_number: sdClaims.personal_administrative_number,
+    family_name_birth: sdClaims.birth_family_name,
+    given_name_birth: sdClaims.birth_given_name,
+    sex: sdClaims.sex,
+    email_address: sdClaims.email,
+    mobile_phone_number: sdClaims.phone_number,
+    expiry_date: sdClaims.date_of_expiry,
+    issuing_authority: sdClaims.issuing_authority,
+    issuing_country: sdClaims.issuing_country,
+    document_number: sdClaims.document_number,
+    issuing_jurisdiction: sdClaims.issuing_jurisdiction,
+    issuance_date: sdClaims.date_of_issuance,
+    trust_anchor: sdClaims.trust_anchor,
+    attestation_legal_category: sdClaims.attestation_legal_category,
   };
-
-  const disclosureFrame = {
-    [pidMdocNamespace]: {
-      _sd: [
-        "given_name",
-        "family_name",
-        "birth_date",
-        "age_over_18",
-        "expiry_date",
-        "issuance_date",
-        "issuing_authority",
-        "issuing_country",
-      ],
-    },
+  return {
+    claims: { [PID_MDOC_NAMESPACE]: mdocClaims },
+    disclosureFrame: { [PID_MDOC_NAMESPACE]: { _sd: Object.keys(mdocClaims) } },
+    doctype: PID_MDOC_DOCTYPE,
   };
-
-  return { claims, disclosureFrame };
 };
 
 export const getStudentIDSDJWTData = (credentialPayload, decodedHeaderSubjectDID) => {

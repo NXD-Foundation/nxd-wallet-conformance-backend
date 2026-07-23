@@ -10,6 +10,7 @@
 
 import jwt from "jsonwebtoken";
 import * as jose from "jose";
+import { derBase64ToPemCert } from "./cryptoUtils.js";
 
 /** Match sharedIssuanceFlows ERROR_MESSAGES.INVALID_PROOF_* strings for consistent error handling */
 const INVALID_PROOF = "No proof information found";
@@ -99,12 +100,43 @@ export function resolveKeyAttestationVerificationJwk(decodedComplete, issuerConf
 }
 
 /**
+ * Resolve the public verification key for a key-attestation JWT.
+ * Configured JWKS remains authoritative; x5c and jwk are transitional
+ * self-contained-key fallbacks for development/interoperability.
+ * @param {{ header?: object }} decodedComplete
+ * @param {object} issuerConfig
+ * @returns {Promise<import('jose').KeyLike>}
+ */
+export async function resolveKeyAttestationVerificationKey(decodedComplete, issuerConfig) {
+  const header = decodedComplete?.header;
+  const alg = header?.alg || "ES256";
+  const jwks = issuerConfig?.key_attestation_jwks;
+
+  if (jwks?.keys?.length) {
+    return jose.importJWK(resolveKeyAttestationVerificationJwk(decodedComplete, issuerConfig), alg);
+  }
+  if (Array.isArray(header?.x5c) && header.x5c.length > 0 && header.x5c[0]) {
+    return jose.importX509(derBase64ToPemCert(header.x5c[0]), alg);
+  }
+  if (header?.jwk) {
+    return jose.importJWK(header.jwk, alg);
+  }
+  throw new Error(
+    withSpecRef(
+      `${INVALID_PROOF_PUBLIC_KEY} Key attestation: configure issuer key_attestation_jwks or provide header.x5c/header.jwk for signature verification.`,
+      KEY_ATTESTATION_SPEC_REF,
+      HAIP_KEY_ATTESTATION_SPEC_REF
+    )
+  );
+}
+
+/**
  * Cryptographic verification of the key-attestation JWT (after trust policy allows proceeding).
  * @param {string} proofAttestationJwt
- * @param {object} verificationJwk - public JWK
+ * @param {object} verificationKey - public JWK or imported public key
  * @returns {Promise<object>} verified JWT payload
  */
-export async function verifyKeyAttestationJwtSignature(proofAttestationJwt, verificationJwk) {
+export async function verifyKeyAttestationJwtSignature(proofAttestationJwt, verificationKey) {
   const complete = jwt.decode(proofAttestationJwt, { complete: true });
   const alg = complete?.header?.alg;
   if (!alg) {
@@ -117,7 +149,9 @@ export async function verifyKeyAttestationJwtSignature(proofAttestationJwt, veri
     );
   }
   try {
-    const key = await jose.importJWK(verificationJwk, alg);
+    const key = verificationKey?.kty
+      ? await jose.importJWK(verificationKey, alg)
+      : verificationKey;
     const { payload } = await jose.jwtVerify(proofAttestationJwt, key, { algorithms: [alg] });
     return payload;
   } catch (err) {
@@ -234,8 +268,8 @@ export async function verifyKeyAttestationProofChain(
     );
   }
 
-  const verificationJwk = resolveKeyAttestationVerificationJwk(decodedComplete, issuerConfig);
-  const payload = await verifyKeyAttestationJwtSignature(proofAttestationJwt, verificationJwk);
+  const verificationKey = await resolveKeyAttestationVerificationKey(decodedComplete, issuerConfig);
+  const payload = await verifyKeyAttestationJwtSignature(proofAttestationJwt, verificationKey);
   const attestedKeys = validateAttestationClaimsAndExtractAttestedKeys(payload, specRef);
   const cnf = buildCredentialBindingCnfFromAttestedKeys(attestedKeys);
 

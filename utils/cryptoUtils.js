@@ -117,24 +117,26 @@ function appendCaCertsIfNeeded(certChain, caPemPaths = resolveVerifierCaPemPaths
   return certChain;
 }
 
-function loadVerifierP12() {
-  const p12Path = path.resolve(process.cwd(), "certs", "WE-BUILD-Verifier.p12");
-  const passphrase = process.env.WEBUILD_P12_PASSWORD || "webuild";
+export function loadVerifierP12({ p12Path, passphrase } = {}) {
+  const resolvedP12Path = p12Path
+    ? (path.isAbsolute(p12Path) ? p12Path : path.resolve(process.cwd(), p12Path))
+    : path.resolve(process.cwd(), "certs", "WE-BUILD-Verifier.p12");
+  const effectivePassphrase = passphrase || process.env.WEBUILD_P12_PASSWORD || "webuild";
 
-  if (!fs.existsSync(p12Path)) {
+  if (!fs.existsSync(resolvedP12Path)) {
     throw new Error(
-      `WE-BUILD Verifier P12 not found at ${p12Path}. Place the p12 file in ./certs/`
+      `WE-BUILD Verifier P12 not found at ${resolvedP12Path}. Place the p12 file in ./certs/`
     );
   }
 
   try {
-    const envWithPass = { ...process.env, WEBUILD_P12_PASS: passphrase };
+    const envWithPass = { ...process.env, WEBUILD_P12_PASS: effectivePassphrase };
     const certPem = execSync(
-      `openssl pkcs12 -in "${p12Path}" -nokeys -passin env:WEBUILD_P12_PASS`,
+      `openssl pkcs12 -in "${resolvedP12Path}" -nokeys -passin env:WEBUILD_P12_PASS`,
       { encoding: "utf8", maxBuffer: 64 * 1024, env: envWithPass }
     );
     const privateKeyPem = execSync(
-      `openssl pkcs12 -in "${p12Path}" -nodes -nocerts -passin env:WEBUILD_P12_PASS`,
+      `openssl pkcs12 -in "${resolvedP12Path}" -nodes -nocerts -passin env:WEBUILD_P12_PASS`,
       { encoding: "utf8", maxBuffer: 64 * 1024, env: envWithPass }
     );
     const certChain = appendCaCertsIfNeeded(extractCertificateChain(certPem));

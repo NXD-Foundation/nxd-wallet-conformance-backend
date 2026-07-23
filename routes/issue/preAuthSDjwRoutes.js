@@ -56,6 +56,17 @@ const manageSession = async (sessionId, sessionData) => {
       await storePreAuthSession(sessionId, sessionData);
       return sessionData; // Return the newly created session data
     }
+
+    // Migrate sessions created by older PID QR/deep links.
+    if (existingSession.credentialType === "urn:eudi:pid:lsp:1") {
+      const migratedSession = {
+        ...existingSession,
+        credentialType: "urn:eudi:pid:1",
+      };
+      await storePreAuthSession(sessionId, migratedSession);
+      return migratedSession;
+    }
+
     return existingSession;
   } catch (error) {
     console.error(`[preAuth][${sessionId}] Session management error`, {

@@ -1,9 +1,12 @@
 import { expect } from "chai";
 import * as jose from "jose";
+import fs from "fs";
+import path from "path";
 import {
   parseProofAttestationJwtFromCredentialProofs,
   isKeyAttestationTrustedByIssuer,
   resolveKeyAttestationVerificationJwk,
+  resolveKeyAttestationVerificationKey,
   verifyKeyAttestationJwtSignature,
   validateKeyAttestationHeaderForCredentialConfig,
   validateAttestationClaimsAndExtractAttestedKeys,
@@ -11,6 +14,7 @@ import {
   verifyKeyAttestationProofChain,
   KEY_ATTESTATION_JWT_TYP,
 } from "../utils/keyAttestationProof.js";
+import { pemToBase64Der } from "../utils/sdjwtUtils.js";
 
 describe("keyAttestationProof", () => {
   describe("parseProofAttestationJwtFromCredentialProofs", () => {
@@ -123,6 +127,33 @@ describe("keyAttestationProof", () => {
     });
   });
 
+  it("resolves a public key from the leaf certificate in header.x5c", async function () {
+    const certPath = path.join(process.cwd(), "x509EC", "client_certificate.crt");
+    if (!fs.existsSync(certPath)) this.skip();
+    const x5c = [pemToBase64Der(fs.readFileSync(certPath, "utf8"))];
+    const key = await resolveKeyAttestationVerificationKey(
+      { header: { alg: "ES256", x5c } },
+      {}
+    );
+    const jwk = await jose.exportJWK(key);
+    expect(jwk).to.include({ kty: "EC", crv: "P-256" });
+    expect(jwk).to.have.property("x");
+    expect(jwk).to.have.property("y");
+    expect(jwk).to.not.have.property("d");
+  });
+
+  it("rejects malformed header.x5c certificate material", async () => {
+    try {
+      await resolveKeyAttestationVerificationKey(
+        { header: { alg: "ES256", x5c: ["not-a-certificate"] } },
+        {}
+      );
+      expect.fail("expected malformed x5c to be rejected");
+    } catch (error) {
+      expect(error.message).to.match(/certificate|key|PEM|decoder|unsupported/i);
+    }
+  });
+
   describe("verifyKeyAttestationJwtSignature and verifyKeyAttestationProofChain", () => {
     async function makeSignedAttestationJwt({ includeAttestedKeys = true } = {}) {
       const attester = await jose.generateKeyPair("ES256");
@@ -179,6 +210,33 @@ describe("keyAttestationProof", () => {
       );
       expect(attestedKeys).to.have.length(1);
       expect(attestedKeys[0].x).to.equal(holderPub.x);
+      expect(cnf).to.deep.equal({ jwk: holderPub });
+    });
+
+    it("verifyKeyAttestationProofChain end-to-end with an x5c signer", async function () {
+      const certPath = path.join(process.cwd(), "x509EC", "client_certificate.crt");
+      const keyPath = path.join(process.cwd(), "x509EC", "ec_private_pkcs8.key");
+      if (!fs.existsSync(certPath) || !fs.existsSync(keyPath)) this.skip();
+
+      const x5c = [pemToBase64Der(fs.readFileSync(certPath, "utf8"))];
+      const attesterPrivateKey = await jose.importPKCS8(
+        fs.readFileSync(keyPath, "utf8"),
+        "ES256"
+      );
+      const holder = await jose.generateKeyPair("ES256");
+      const holderPub = await jose.exportJWK(holder.publicKey);
+      const jwt = await new jose.SignJWT({
+        nonce: "test-nonce-xyz",
+        attested_keys: [holderPub],
+      })
+        .setProtectedHeader({ alg: "ES256", typ: KEY_ATTESTATION_JWT_TYP, x5c })
+        .sign(attesterPrivateKey);
+
+      const { cnf } = await verifyKeyAttestationProofChain(
+        jwt,
+        { proof_types_supported: { attestation: { proof_signing_alg_values_supported: ["ES256"] } } },
+        {}
+      );
       expect(cnf).to.deep.equal({ jwk: holderPub });
     });
   });

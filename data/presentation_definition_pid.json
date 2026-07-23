@@ -23,16 +23,22 @@
             "path": ["$.family_name", "$.credentialSubject.family_name", "$.vc.credentialSubject.family_name"]
           },
           {
-            "path": ["$.birth_date", "$.credentialSubject.birth_date", "$.vc.credentialSubject.birth_date"]
+            "path": ["$.birthdate", "$.credentialSubject.birthdate", "$.vc.credentialSubject.birthdate"]
           },
           {
-            "path": ["$.age_over_18", "$.credentialSubject.age_over_18", "$.vc.credentialSubject.age_over_18"]
+            "path": ["$.nationalities", "$.credentialSubject.nationalities", "$.vc.credentialSubject.nationalities"]
           },
           {
-            "path": ["$.issuance_date", "$.credentialSubject.issuance_date", "$.vc.credentialSubject.issuance_date"]
+            "path": ["$.place_of_birth", "$.credentialSubject.place_of_birth", "$.vc.credentialSubject.place_of_birth"]
           },
           {
-            "path": ["$.expiry_date", "$.credentialSubject.expiry_date", "$.vc.credentialSubject.expiry_date"]
+            "path": ["$.picture", "$.credentialSubject.picture", "$.vc.credentialSubject.picture"]
+          },
+          {
+            "path": ["$.date_of_issuance", "$.credentialSubject.date_of_issuance", "$.vc.credentialSubject.date_of_issuance"]
+          },
+          {
+            "path": ["$.date_of_expiry", "$.credentialSubject.date_of_expiry", "$.vc.credentialSubject.date_of_expiry"]
           },
           {
             "path": ["$.issuing_authority", "$.credentialSubject.issuing_authority", "$.vc.credentialSubject.issuing_authority"]
@@ -44,9 +50,9 @@
             "path": ["$.vct", "$.vc.vct"],
             "filter": {
               "type": "string",
-              "const": "urn:eu.europa.ec.eudi:pid:1"
+              "const": "urn:eudi:pid:1"
             },
-            "purpose": "To request a credential of type urn:eu.europa.ec.eudi:pid:1 (Person Identification Data)."
+            "purpose": "To request the Person Identification Data credential."
           }
         ]
       }

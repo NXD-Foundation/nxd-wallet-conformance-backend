@@ -1,6 +1,7 @@
 import express from "express";
 import fs from "fs";
 import { pemToJWK } from "../utils/cryptoUtils.js";
+import { signCredentialIssuerMetadataFromConfiguredP12 } from "../utils/issuerMetadataSigning.js";
 import { PROXY_PATH } from "../utils/routeUtils.js";
 import { buildStrictCs02ClientMetadata } from "../utils/cs02TrustPolicy.js";
 const metadataRouter = express.Router();
@@ -60,6 +61,14 @@ const defaultSigningKid = issuerConfigValues.default_signing_kid || "aegean#auth
 
 const jwks = pemToJWK(publicKeyPem, "public");
 
+function acceptsSignedIssuerMetadata(req) {
+  const accept = req.get("accept") || "";
+  return accept
+    .split(",")
+    .map((entry) => entry.trim().toLowerCase().split(";", 1)[0])
+    .includes("application/jwt");
+}
+
 
 /**
  * Credential Issuer metadata
@@ -99,6 +108,19 @@ metadataRouter.get(
 
     if (issuerConfig.batch_credential_endpoint) {
       console.warn("Warning: batch_credential_endpoint is part of issuerConfig but removed from spec draft -14. Consider removing from data/issuer-config.json");
+    }
+
+    if (acceptsSignedIssuerMetadata(req)) {
+      try {
+        const signedMetadata = await signCredentialIssuerMetadataFromConfiguredP12(issuerConfig);
+        return res.type("application/jwt").send(signedMetadata);
+      } catch (error) {
+        console.error("Unable to produce signed Credential Issuer metadata:", error.message);
+        return res.status(503).json({
+          error: "temporarily_unavailable",
+          error_description: "Signed Credential Issuer metadata is unavailable",
+        });
+      }
     }
 
     res.type("application/json").send(issuerConfig);

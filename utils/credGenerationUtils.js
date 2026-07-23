@@ -272,50 +272,57 @@ function derToP1363(derSignature) {
 // Maps claims from existing payload to mso_mdoc format
 // This is a simplified mapper and needs to be extended for different VCTs
 function mapClaimsToMsoMdoc(claims, vct) {
-  const msoMdocClaims = { ...claims }; // Start by copying all claims
+  if (!(vct.includes("pid") || vct.startsWith("VerifiablePID"))) {
+    return { ...claims };
+  }
 
-  // mDL uses 'birth_date', SD-JWT might use 'birthdate'
+  const msoMdocClaims = { ...claims };
+  if (claims.picture && typeof claims.picture === "string") {
+    msoMdocClaims.portrait = Buffer.from(claims.picture.split(",")[1], "base64");
+    delete msoMdocClaims.picture;
+  }
   if (claims.birthdate) {
     msoMdocClaims.birth_date = claims.birthdate;
-    delete msoMdocClaims.birthdate; // remove original to avoid duplication
-  } else if (claims.birth_date) {
-    msoMdocClaims.birth_date = claims.birth_date;
+    delete msoMdocClaims.birthdate;
   }
-
-  // mDL 'issue_date' and 'expiry_date' for the document itself
-  if (claims.issuance_date) {
-    msoMdocClaims.issue_date = claims.issuance_date; // Map PID's issuance_date
-    delete msoMdocClaims.issuance_date;
-  } else if (claims.issue_date) {
-    msoMdocClaims.issue_date = claims.issue_date;
+  if (claims.nationalities) {
+    msoMdocClaims.nationality = claims.nationalities;
+    delete msoMdocClaims.nationalities;
   }
-
-  if (claims.expiry_date) {
-    msoMdocClaims.expiry_date = claims.expiry_date; // Map PID's expiry_date
+  if (claims.address) {
+    const address = claims.address;
+    msoMdocClaims.resident_address = address.formatted;
+    msoMdocClaims.resident_country = address.country;
+    msoMdocClaims.resident_state = address.region;
+    msoMdocClaims.resident_city = address.locality;
+    msoMdocClaims.resident_postal_code = address.postal_code;
+    msoMdocClaims.resident_street = address.street_address;
+    delete msoMdocClaims.address;
   }
-
-  // Placeholder for other claims and VCT specific mappings
-  // For example, for a driver's license (mDL docType):
-  // if (vct === 'some_driver_license_vct') {
-  //   msoMdocClaims.driving_privileges = claims.driving_privileges;
-  //   msoMdocClaims.portrait = claims.portrait; // Needs to be bytes
-  //   msoMdocClaims.document_number = claims.document_number;
-  //   msoMdocClaims.issuing_country = claims.issuing_country;
-  // }
-
-  if (
-    claims.unique_id &&
-    (vct === "VerifiablePIDSDJWT" ||
-      vct === "VerifiablePIDSDJWTAttestation" ||
-      vct === "VerifiablePIDSDJWTWUA" ||
-      vct === "urn:eu.europa.ec.eudi:pid:1")
-  ) {
-    msoMdocClaims.unique_identifier = claims.unique_id; // Example mapping for PID
-    delete msoMdocClaims.unique_id;
+  if (claims.birth_family_name) {
+    msoMdocClaims.family_name_birth = claims.birth_family_name;
+    delete msoMdocClaims.birth_family_name;
   }
-
-  // Add more specific mappings based on vct and mDL data element definitions
-  // console.log("Mapped mDL claims:", msoMdocClaims);
+  if (claims.birth_given_name) {
+    msoMdocClaims.given_name_birth = claims.birth_given_name;
+    delete msoMdocClaims.birth_given_name;
+  }
+  if (claims.email) {
+    msoMdocClaims.email_address = claims.email;
+    delete msoMdocClaims.email;
+  }
+  if (claims.phone_number) {
+    msoMdocClaims.mobile_phone_number = claims.phone_number;
+    delete msoMdocClaims.phone_number;
+  }
+  if (claims.date_of_issuance) {
+    msoMdocClaims.issuance_date = claims.date_of_issuance;
+    delete msoMdocClaims.date_of_issuance;
+  }
+  if (claims.date_of_expiry) {
+    msoMdocClaims.expiry_date = claims.date_of_expiry;
+    delete msoMdocClaims.date_of_expiry;
+  }
   return msoMdocClaims;
 }
 
@@ -534,6 +541,8 @@ export async function handleCredentialGenerationBasedOnFormat(
     case "VerifiablePIDSDJWTAttestation":
     case "VerifiablePIDSDJWTWUA":
     case "urn:eu.europa.ec.eudi:pid:1":
+    case "urn:eudi:pid:1":
+    case "urn:eudi:pid:lsp:1":
     case "test-cred-config": // For testing purposes
       credPayload = getPIDSDJWTData();
       break;
@@ -574,6 +583,7 @@ export async function handleCredentialGenerationBasedOnFormat(
       credPayload = createPCDAttestationPayload(issuerName);
       break;
     case "urn:eu.europa.ec.eudi:pid:1:mso_mdoc":
+    case "urn:eudi:pid:lsp:1:mso_mdoc":
       // TODO update this for mso_mdoc
       credPayload = getPIDSDJWTDataMsoMdoc();
       break;

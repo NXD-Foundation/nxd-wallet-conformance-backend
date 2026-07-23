@@ -686,7 +686,15 @@ export const getSessionId = (req) => {
  * @returns {string} Credential type
  */
 export const getCredentialType = (req) => {
-  return req.query.credentialType || req.query.type || DEFAULT_CREDENTIAL_TYPE;
+  const requestedType = req.query.credentialType || req.query.type || DEFAULT_CREDENTIAL_TYPE;
+
+  // Keep old QR/deep links usable while emitting the PID type recognized by
+  // the reference EUDI Android wallet.
+  if (requestedType === "urn:eudi:pid:lsp:1") {
+    return "urn:eudi:pid:1";
+  }
+
+  return requestedType;
 };
 
 /**

@@ -97,6 +97,18 @@ signed-metadata verification. Do not decode or use a JWT metadata payload
 without signature verification and an established trust policy for its
 signer. Supporting signed metadata is a separate security feature, not a
 parsing fallback.
+- The EUDI Android Demo wallet configures issuer trust with signed metadata
+  required. This deployment therefore returns `application/jwt` metadata when
+  the client advertises that media type. The JWT uses
+  `typ=openidvci-issuer-metadata+jwt`, includes the complete X.509 `x5c`
+  chain, and has `sub` equal to `credential_issuer` plus `iat`.
+- Signed metadata is produced with the same WE-BUILD verifier P12 and loading
+  policy as VP-request signing. Set `WEBUILD_P12_PASSWORD` when the P12 does
+  not use the existing `webuild` default and, when the file is not at
+  `certs/WE-BUILD-Verifier.p12`, set
+  `ISSUER_METADATA_SIGNING_P12_PATH`. The chain must be trusted by the wallet
+  as a Wallet Relying Party Access certificate; a successful verifier
+  registration alone is not sufficient evidence of that role.
 - OpenID4VCI does not require an OAuth Authorization Server metadata
 `scopes_supported` array to contain `openid` for credential issuance. Treat
 credential issuer `credential_configurations_supported[*].scope` values as

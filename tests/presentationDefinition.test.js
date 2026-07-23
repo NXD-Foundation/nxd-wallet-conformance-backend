@@ -45,7 +45,7 @@ describe('Presentation Definition (PE) structure - OID4VP v1.0', () => {
     assert.ok(allPaths.every(p => typeof p === 'string' && p.startsWith('$.')), 'All field paths must be JSONPath starting with $.');
 
     // Granular selectors: ensure specific claims are requested (data minimization)
-    const requiredClaims = ['given_name', 'family_name', 'birth_date', 'age_over_18'];
+    const requiredClaims = ['given_name', 'family_name', 'birthdate', 'nationalities', 'place_of_birth', 'picture'];
     for (const claim of requiredClaims) {
       const hasClaim = allPaths.some(p => p.endsWith(`.${claim}`) || p === `$.${claim}`);
       assert.ok(hasClaim, `PD must request granular claim: ${claim}`);
@@ -56,7 +56,7 @@ describe('Presentation Definition (PE) structure - OID4VP v1.0', () => {
 
     // Ensure vct filter is specific to EU PID
     const vctField = id0.constraints.fields.find(f => Array.isArray(f.path) && f.path.some(p => p === '$.vct' || p === '$.vc.vct'));
-    assert.ok(vctField && vctField.filter && vctField.filter.const === 'urn:eu.europa.ec.eudi:pid:1', 'vct filter must target EU PID');
+    assert.ok(vctField && vctField.filter && vctField.filter.const === 'urn:eudi:pid:1', 'vct filter must target the wallet-compatible PID');
   });
 
   it('Legacy SD-JWT PD should not be used for v1.0 (vc+sd-jwt present)', () => {
