@@ -48,8 +48,8 @@ Verifier -> Wallet (OpenID4VP / CS-02)
 | KB-JWT generation | Covered | Wallet generates KB-JWT with nonce, audience, `iat`, and `sd_hash`; verifier validates those claims. |
 | Verifier response mode validation | Covered | `validateCs02ResponseSubmission` rejects bare `vp_token` for `direct_post.jwt`, wrong-mode submissions, missing response, and missing state. |
 | DCQL response object validation | Covered | `validateCs02DcqlVpTokenResponse` rejects non-object tokens, unknown ids, missing required ids, wrong credential-set satisfaction, bad arrays, and multiple values unless `multiple=true`. |
-| `direct_post.jwt` outer JWT validation | Mostly covered | `verifyCs02OuterResponseJwt` validates signature when a verification key is resolvable and checks `iss`, `aud`, `iat`, `exp`, and `state`. |
-| JWE response header validation | Covered/partial | `validateCs02JweResponseHeader` checks `alg`, `enc`, and `kid` against metadata; allowed defaults still include broader compatibility algorithms. |
+| `direct_post.jwt` outer JWT validation | Mostly covered | `verifyCs02OuterResponseJwt` validates signature when a verification key is resolvable and checks `iss`, `aud`, `iat`, `exp`, and `state`. The remaining qualifier is intentional: configured verification-key/trust policy is still profile-dependent. |
+| JWE response header validation and decryption-key selection | Covered | `validateCs02JweResponseHeader` checks `alg`, `enc`, and `kid` against metadata, and the verifier decrypts with the advertised response-encryption private key rather than the verifier signing key. `tests/verifierEncryptionKeys.test.js` covers the positive path and wrong-key regression. |
 | Status-list validation | Placeholder covered | `validateCs02CredentialStatusList` decodes SD-JWT issuer payload and validates `status.status_list.idx` plus HTTPS absolute `uri`; missing status is allowed unless strict status validation is enabled. |
 | Trust policy | Placeholder covered | `utils/cs02TrustPolicy.js` centralizes x509, verifier-attestation, DID, metadata, issuer-trust, and status policy placeholders. |
 | Metadata filtering | Mostly covered/partial | `filterClientMetadataForCs02Enforcement` filters CS-02 request-time metadata, and `routes/metadataroutes.js` now publishes explicit strict `/client-metadata/cs02` and broad `/client-metadata` or `/client-metadata/cs03` views from the same deployment config. The remaining risk is route-by-route audit pressure so strict flows never accidentally consume the broad projection. |
@@ -119,7 +119,7 @@ Legend:
 | FCAF spec area | CS-02 relevance | Coverage | Notes |
 |---|---:|---|---|
 | direct_post response | Required | Yes | Verifier requires `vp_token` and `state` for direct_post. |
-| direct_post.jwt / encrypted response | Useful, profile-adjacent | Mostly yes | Verifier requires `response`, validates JWE header, decrypts JWE, and verifies signed response JWT claims/signature when key material is resolvable. |
+| direct_post.jwt / encrypted response | Useful, profile-adjacent | Yes for the implemented strict path | Verifier requires `response`, validates JWE headers, selects the metadata-advertised response-encryption key, decrypts the compact JWE, and verifies signed response JWT claims/signature when key material is resolvable. Broader trust-policy variants remain profile-dependent. |
 | `vp_token` DCQL object shape | Required with DCQL | Yes | Verifier rejects non-object, unknown ids, missing required ids, and invalid value cardinality. |
 | `transaction_data` reference in credential presentation | Optional/profile-specific | Partial | Some validation exists, but full FCAF error matrix is not covered. |
 | Wallet error response handling | Required robustness | Yes/partial | Verifier stores failed session state and returns wallet-reported protocol errors for covered response paths. |
@@ -143,7 +143,7 @@ Legend:
 | `verifier_attestation` | Recommended/allowed in CS-02 | Partial / intentional placeholder | JOSE header `jwt` is required in the wallet path, but issuer trust, `sub`, expiry, and signing-key binding are placeholders until trusted issuers are configured. |
 | `did:web` / `did:jwk` | Recommended by CS-02 | Yes | `did:jwk` enforces P-256/ES256 key material through the shared trust policy. `did:web` resolves over HTTPS, requires an exact `kid`, and rejects fallback to unrelated verification methods. |
 | `openid_federation`, `x509_hash`, `origin:` | Broader FCAF | Out of scope / partial | Not core CS-02; useful for broader FCAF but lower WE BUILD priority. |
-| Wallet metadata encryption | Useful | Partial | Request/response encryption exists, and the strict CS-02 metadata publication now distinguishes `direct_post` from `direct_post.jwt`. Remaining work is broader audit coverage so all route surfaces preserve the same distinction. |
+| Wallet metadata encryption | Useful | Mostly yes | Request/response encryption exists, strict metadata distinguishes `direct_post` from `direct_post.jwt`, and the direct-post path now uses the same selected response-encryption-key model as `dc_api.jwt`. Remaining work is broader route-surface audit coverage. |
 
 ### CredentialFormats (CF 029-049)
 

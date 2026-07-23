@@ -2,6 +2,9 @@
 
 Place the WE-BUILD verifier certificate material here for x509 and dc_api flows:
 
+Canonical key-role inventory: `../utils/keyMaterialPaths.js` and
+`../docs/knowledge.md`.
+
 - **WE-BUILD-Verifier.p12** - Verifier leaf certificate and private key (set `WEBUILD_P12_PASSWORD`)
 - **pidissuerca02_eu.pem** - PID Issuer CA 02 EU certificate used to extend JAR `x5c` for ES256 x509 flows
 

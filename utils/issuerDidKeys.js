@@ -1,9 +1,10 @@
 import fs from "fs";
 import { createPublicKey } from "crypto";
 import { pemToJWK } from "./cryptoUtils.js";
+import { KEY_MATERIAL_PATHS } from "./keyMaterialPaths.js";
 
-const DID_PRIVATE_PKCS8 = "./didjwks/did_private_pkcs8.key";
-const DID_PUBLIC_SPKI = "./didjwks/did_public.pem";
+const DID_PRIVATE_PKCS8 = KEY_MATERIAL_PATHS.didPrivateKeyPkcs8;
+const DID_PUBLIC_SPKI = KEY_MATERIAL_PATHS.didPublicKey;
 
 export function loadDidIssuerPems() {
   return {

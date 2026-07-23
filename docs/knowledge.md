@@ -270,6 +270,32 @@ status before relying on this plan.
 
 Source: [JAR x5c chain plan](./jar-x5c-certificate-chain-plan.md).
 
+### Key And Certificate Inventory
+
+The canonical development key paths are recorded in
+[`utils/keyMaterialPaths.js`](../utils/keyMaterialPaths.js). The key roles are
+deliberately separate:
+
+- `private-key.pem` and `public-key.pem` are the application/issuer signing
+  pair. `private-key-pkcs8.pem` is retained only for consumers that require
+  PKCS#8 input.
+- `didjwks/did_private_pkcs8.key` and `didjwks/did_public.pem` are the DID
+  signing pair used by DID-based verifier requests and DID documents.
+- `x509EC/ec_private_pkcs8.key` is the verifier response-encryption private
+  key. It must match the EC P-256 `use=enc` JWK in `data/verifier-config.json`
+  and `x509EC/client_certificate.crt`.
+- `certs/WE-BUILD-Verifier.p12` is the X.509 verifier/JAR and signed issuer
+  metadata signing material. `certs/pidissuerca02_eu.pem` is the CA used to
+  extend the JAR `x5c` chain.
+- Wallet-client credentials remain protocol-specific fixtures. DID, X.509,
+  EC, CS-03, X25519, wallet-provider, and device keys must not be merged
+  unless their protocol role and public-key identity are identical.
+
+Historical backup material is kept under `deprecated/` for this testing
+repository and must not be referenced by runtime code. The inventory tests
+enforce private/public/certificate alignment and prevent backup paths from
+re-entering active protocol directories.
+
 ## Documentation Map
 
 

@@ -225,7 +225,7 @@
     "disposition": "implemented",
     "we_build_rationale": "direct_post.jwt responses are submitted as compact encrypted JWT/JWE form responses.",
     "implementation_paths": ["wallet-client/src/lib/presentation.js", "routes/verify/verifierRoutes.js"],
-    "test_paths": ["tests/cs02SuccessfulFlowMatrix.test.js", "tests/cs02VerifierResponse.test.js"],
+    "test_paths": ["tests/cs02SuccessfulFlowMatrix.test.js", "tests/cs02VerifierResponse.test.js", "tests/verifierEncryptionKeys.test.js"],
     "remaining_gap": null
   },
   "MessageStructure.ProtocolMessages.140": {
@@ -312,7 +312,7 @@
     "disposition": "implemented",
     "we_build_rationale": "direct_post.jwt is handled as an encrypted compact response mode.",
     "implementation_paths": ["wallet-client/src/lib/presentation.js", "routes/verify/verifierRoutes.js"],
-    "test_paths": ["tests/cs02SuccessfulFlowMatrix.test.js"],
+    "test_paths": ["tests/cs02SuccessfulFlowMatrix.test.js", "tests/verifierEncryptionKeys.test.js"],
     "remaining_gap": null
   },
   "SecurityMechanisms.SessionEncryption.007": {

@@ -1,6 +1,7 @@
 import fs from "fs";
 import crypto from "crypto";
 import { selectCs02VerifierEncryptionJwk } from "./cs02TrustPolicy.js";
+import { KEY_MATERIAL_PATHS } from "./keyMaterialPaths.js";
 
 function publicJwkFromPrivate(privateKeyPem) {
   return crypto.createPublicKey(privateKeyPem).export({ format: "jwk" });
@@ -20,7 +21,7 @@ export function assertVerifierEncryptionKeyPair({ publicJwk, privateKeyPem } = {
 
 export function loadVerifierEncryptionKey({
   metadataPath = "./data/verifier-config.json",
-  privateKeyPath = "./x509EC/ec_private_pkcs8.key",
+  privateKeyPath = KEY_MATERIAL_PATHS.verifierEncryptionPrivateKey,
 } = {}) {
   const metadata = JSON.parse(fs.readFileSync(metadataPath, "utf8"));
   const publicJwk = selectCs02VerifierEncryptionJwk(metadata);
@@ -31,4 +32,3 @@ export function loadVerifierEncryptionKey({
     privateKeyPem,
   };
 }
-
