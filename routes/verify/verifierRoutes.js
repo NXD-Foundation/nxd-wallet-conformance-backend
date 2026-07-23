@@ -1148,8 +1148,15 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
             );
           }
 
-          // Decrypt the JWE - this may return JWT string (per spec) or payload object (wallet-specific)
-          const decrypted = await decryptJWE(jwtResponse, privateKey, "direct_post.jwt");
+          // Decrypt with the verifier response-encryption key advertised in
+          // client_metadata. `privateKey` is the verifier signing key and is
+          // deliberately different from the EC key used for direct_post.jwt.
+          const privateKeyForDecryption = loadVerifierEncryptionKey().privateKeyPem;
+          const decrypted = await decryptJWE(
+            jwtResponse,
+            privateKeyForDecryption,
+            "direct_post.jwt",
+          );
           await logDebug(sessionId, "JWE decryption completed", {
             decryptedType: typeof decrypted
           });
