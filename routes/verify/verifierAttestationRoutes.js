@@ -18,6 +18,7 @@ import {
   setSessionContext,
   clearSessionContext,
 } from "../../services/cacheServiceRedis.js";
+import { trustFrameworkSessionProps } from "../../utils/trustFrameworkPolicy.js";
 
 const vAttestationRouter = express.Router();
 
@@ -56,6 +57,7 @@ vAttestationRouter.get("/va/generateVPRequest", async (req, res) => {
 
     const result = await generateVPRequest({
       sessionId,
+      trustPolicy: trustFrameworkSessionProps(req.query).trustPolicy,
       responseMode,
       presentationDefinition,
       clientId: CONFIG.VERIFIER_ATTESTATION_CLIENT_ID,
@@ -90,6 +92,7 @@ vAttestationRouter.get("/va/generateVPRequestGet", async (req, res) => {
 
     const result = await generateVPRequest({
       sessionId,
+      trustPolicy: trustFrameworkSessionProps(req.query).trustPolicy,
       responseMode,
       presentationDefinition,
       clientId: CONFIG.VERIFIER_ATTESTATION_CLIENT_ID,
@@ -124,6 +127,7 @@ vAttestationRouter.get("/va/generateVPRequestDCQL", async (req, res) => {
 
     const result = await generateVPRequest({
       sessionId,
+      trustPolicy: trustFrameworkSessionProps(req.query).trustPolicy,
       responseMode,
       presentationDefinition: null,
       clientId: CONFIG.VERIFIER_ATTESTATION_CLIENT_ID,
@@ -159,6 +163,7 @@ vAttestationRouter.get("/va/generateVPRequestDCQLGET", async (req, res) => {
 
     const result = await generateVPRequest({
       sessionId,
+      trustPolicy: trustFrameworkSessionProps(req.query).trustPolicy,
       responseMode,
       presentationDefinition: null,
       clientId: CONFIG.VERIFIER_ATTESTATION_CLIENT_ID,
@@ -198,6 +203,7 @@ vAttestationRouter.get("/va/generateVPRequestTransaction", async (req, res) => {
 
     const result = await generateVPRequest({
       sessionId,
+      trustPolicy: trustFrameworkSessionProps(req.query).trustPolicy,
       responseMode,
       presentationDefinition: null,
       clientId: CONFIG.VERIFIER_ATTESTATION_CLIENT_ID,
@@ -342,4 +348,4 @@ vAttestationRouter
     }
   });
 
-export default vAttestationRouter; 
+export default vAttestationRouter;

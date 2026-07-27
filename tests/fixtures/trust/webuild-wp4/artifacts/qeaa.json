@@ -1,0 +1,75 @@
+{
+  "LoTE": {
+    "ListAndSchemeInformation": {
+      "LoTEVersionIdentifier": 1,
+      "LoTESequenceNumber": 1,
+      "LoTEType": "http://uri.etsi.org/19602/LoTEType/EUPubEAAProvidersList",
+      "SchemeOperatorName": [
+        {
+          "lang": "en",
+          "value": "WE BUILD Test TLP"
+        }
+      ],
+      "SchemeOperatorAddress": {
+        "SchemeOperatorPostalAddress": [
+          {
+            "lang": "en",
+            "StreetAddress": "Test",
+            "Country": "EU"
+          }
+        ],
+        "SchemeOperatorElectronicAddress": [
+          {
+            "lang": "en",
+            "uriValue": "https://example.test/trust"
+          }
+        ]
+      },
+      "SchemeName": [
+        {
+          "lang": "en",
+          "value": "WE BUILD Test List"
+        }
+      ],
+      "ListIssueDateTime": "2026-01-01T00:00:00Z",
+      "NextUpdate": "2027-01-01T00:00:00Z"
+    },
+    "TrustedEntitiesList": [
+      {
+        "TrustedEntityInformation": {
+          "TEName": [
+            {
+              "lang": "en",
+              "value": "Test QEAA Provider"
+            }
+          ]
+        },
+        "TrustedEntityServices": [
+          {
+            "ServiceInformation": {
+              "ServiceTypeIdentifier": "http://uri.etsi.org/TrstSvc/Svctype/CA/QC",
+              "ServiceName": [
+                {
+                  "lang": "en",
+                  "value": "Test service"
+                }
+              ],
+              "ServiceDigitalIdentity": {
+                "X509Certificates": [
+                  {
+                    "val": "MIIDZTCCAk2gAwIBAgIULnYaeGur4r+NKRtdFhQz5T5S8EIwDQYJKoZIhvcNAQELBQAwQjELMAkGA1UEBhMCRVUxFjAUBgNVBAoMDVdFIEJVSUxEIFRlc3QxGzAZBgNVBAMMElRlc3QgUUVBQSBQcm92aWRlcjAeFw0yNjA3MjcxMDUyNThaFw0zNjA3MjQxMDUyNThaMEIxCzAJBgNVBAYTAkVVMRYwFAYDVQQKDA1XRSBCVUlMRCBUZXN0MRswGQYDVQQDDBJUZXN0IFFFQUEgUHJvdmlkZXIwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCWERMEu9qRj8UwPT+5J4HcyXoav5SgEkZHaCNvvPkmdHBhU5FL7cMCO/dOooMPnRb6+MCG+qn24ebgLuC3v4XEAJ3kArFjbzqWhKFZGqCc/3PY0VMqBPEN721UBomxuwj8Wj5FudnzpdmrLyViLIlragI3Z8U6nuwoz5Ycqnbf0FHTotIldXPjcM9b17NGo0mdqIaZmwiJo5+LcSRk2Nod6ciKgZZAisyrL9Nlu0FwhKSuUbZ8nvGMbAYC8hwMejnbuMIzq7D1D7oRuOK4BtoBUmkz9WpzrCrKr3/B2eUIZcr2JjWL/po3v1bo4baKV4kCP3POaLZKTwwNEcO6UvvDAgMBAAGjUzBRMB0GA1UdDgQWBBTrqL78ixOvtpA2rcqSHu4s8T4CcjAfBgNVHSMEGDAWgBTrqL78ixOvtpA2rcqSHu4s8T4CcjAPBgNVHRMBAf8EBTADAQH/MA0GCSqGSIb3DQEBCwUAA4IBAQBSzTF+YXuDZjoOtwDOhopCklfQn5N+STrpY4nC2fzKYPj/iAurtPh5AEbdfZPcY11tq4lzoES2AaeOAEQ+oQndDW4BhetzprnNiX133hlzEj1evR91ctFUSpklrv43/6r/kTZSZ5cpDZJZ9NLTpy2JXA+nzwFMlbgkLgxenbpj+whqxKeFvxT6qUjJy8rWCsScNJb5po96eSZYquC3zcRn/97kmnNCgl2DHEEb5RQkomxcsuo8dnKXwoNmBbURcotoTMqw9cK6n/HW6QJc/uODqJFSQQ65Vo1lF5XaCZBBqk5Pv9aRJ6iPDkB2F8VNZRwklM0Z23LMHJDysl1oOled"
+                  }
+                ]
+              },
+              "ServiceStatus": "valid"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "signature": {
+    "protected": "eyJhbGciOiJSUzI1NiIsIng1YyI6WyJNSUlEWlRDQ0FrMmdBd0lCQWdJVUxuWWFlR3VyNHIrTktSdGRGaFF6NVQ1UzhFSXdEUVlKS29aSWh2Y05BUUVMQlFBd1FqRUxNQWtHQTFVRUJoTUNSVlV4RmpBVUJnTlZCQW9NRFZkRklFSlZTVXhFSUZSbGMzUXhHekFaQmdOVkJBTU1FbFJsYzNRZ1VVVkJRU0JRY205MmFXUmxjakFlRncweU5qQTNNamN4TURVeU5UaGFGdzB6TmpBM01qUXhNRFV5TlRoYU1FSXhDekFKQmdOVkJBWVRBa1ZWTVJZd0ZBWURWUVFLREExWFJTQkNWVWxNUkNCVVpYTjBNUnN3R1FZRFZRUUREQkpVWlhOMElGRkZRVUVnVUhKdmRtbGtaWEl3Z2dFaU1BMEdDU3FHU0liM0RRRUJBUVVBQTRJQkR3QXdnZ0VLQW9JQkFRQ1dFUk1FdTlxUmo4VXdQVCs1SjRIY3lYb2F2NVNnRWtaSGFDTnZ2UGttZEhCaFU1Rkw3Y01DTy9kT29vTVBuUmI2K01DRytxbjI0ZWJnTHVDM3Y0WEVBSjNrQXJGamJ6cVdoS0ZaR3FDYy8zUFkwVk1xQlBFTjcyMVVCb214dXdqOFdqNUZ1ZG56cGRtckx5VmlMSWxyYWdJM1o4VTZudXdvejVZY3FuYmYwRkhUb3RJbGRYUGpjTTliMTdOR28wbWRxSWFabXdpSm81K0xjU1JrMk5vZDZjaUtnWlpBaXN5ckw5Tmx1MEZ3aEtTdVViWjhudkdNYkFZQzhod01lam5idU1JenE3RDFEN29SdU9LNEJ0b0JVbWt6OVdwenJDcktyMy9CMmVVSVpjcjJKaldML3BvM3YxYm80YmFLVjRrQ1AzUE9hTFpLVHd3TkVjTzZVdnZEQWdNQkFBR2pVekJSTUIwR0ExVWREZ1FXQkJUcnFMNzhpeE92dHBBMnJjcVNIdTRzOFQ0Q2NqQWZCZ05WSFNNRUdEQVdnQlRycUw3OGl4T3Z0cEEycmNxU0h1NHM4VDRDY2pBUEJnTlZIUk1CQWY4RUJUQURBUUgvTUEwR0NTcUdTSWIzRFFFQkN3VUFBNElCQVFCU3pURitZWHVEWmpvT3R3RE9ob3BDa2xmUW41TitTVHJwWTRuQzJmektZUGovaUF1cnRQaDVBRWJkZlpQY1kxMXRxNGx6b0VTMkFhZU9BRVErb1FuZERXNEJoZXR6cHJuTmlYMTMzaGx6RWoxZXZSOTFjdEZVU3BrbHJ2NDMvNnIva1RaU1o1Y3BEWkpaOU5MVHB5MkpYQStuendGTWxiZ2tMZ3hlbmJwait3aHF4S2VGdnhUNnFVakp5OHJXQ3NTY05KYjVwbzk2ZVNaWXF1QzN6Y1JuLzk3a21uTkNnbDJESEVFYjVSUWtvbXhjc3VvOGRuS1h3b05tQmJVUmNvdG9UTXF3OWNLNm4vSFc2UUpjL3VPRHFKRlNRUTY1Vm8xbEY1WGFDWkJCcWs1UHY5YVJKNmlQRGtCMkY4Vk5aUndrbE0wWjIzTE1ISkR5c2wxb09sZWQiXSwiaWF0IjoxNzY3MjI1NjAwfQ",
+    "signature": "JSLXvJFM6Kv-ayH1PLpm_05ZmqYiqH3NqVGMDhw8EvDsbXggzb49RWJedR9bdJQB0KGwUgiSjbVtzPVVjDacLMx4xb0gZEC9SEXRsnxAjdJ-psilDMGc05IUFI2xYewwr0t5eKuZtpU-Q-vnf41lubBkXQyRgIXCy2G39xJbbU4-Mywk0Ijaaf4C7lf-vQcF4PZXhZphwOcm2IhECUVts1SCv0_fpGfAyCmbMx_vtEhrZf7C4O3S1C2Vxq-ViHgAjgKGuJ_9rkQpGRSLMMPubrVvyVVSY7GmneXkbP-GMLiL8cstsfiNiW4-uIdsVCQgUMg4RZXThRY-_0VuMmgUMg"
+  }
+}

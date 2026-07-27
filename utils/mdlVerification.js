@@ -1,5 +1,6 @@
 import { decode } from 'cbor-x';
 import base64url from 'base64url';
+import { extractMdocIssuerCertificate } from './mdocClaims.js';
 
 /**
  * Custom mDL verification using cbor-x decoder
@@ -180,7 +181,8 @@ export async function verifyMdlToken(vpTokenBase64, options = {}, documentType =
       docType: document.docType,
       version: deviceResponse.version,
       status: deviceResponse.status,
-      claims: claims
+      claims: claims,
+      issuerCertificate: extractMdocIssuerCertificate(tokenString),
     };
     
     // Add metadata if requested
@@ -294,4 +296,4 @@ export default {
   validateMdlClaims,
   getSessionTranscriptBytes,
   extractDeviceNonce,
-}; 
+};

@@ -30,6 +30,7 @@ import {
   clearSessionContext,
 } from "../../services/cacheServiceRedis.js";
 import { makeSessionLogger, logHttpRequest, logHttpResponse } from "../../utils/sessionLogger.js";
+import { trustFrameworkSessionProps } from "../../utils/trustFrameworkPolicy.js";
 
 const x509Router = express.Router();
 
@@ -142,6 +143,7 @@ x509Router.get("/generateVPRequest", async (req, res) => {
 
     const result = await generateVPRequest({
       sessionId,
+      trustPolicy: trustFrameworkSessionProps(req.query).trustPolicy,
       responseMode,
       jarAlg,
       presentationDefinition,
@@ -183,6 +185,7 @@ x509Router.get("/generateVPRequestGet", async (req, res) => {
 
     const result = await generateVPRequest({
       sessionId,
+      trustPolicy: trustFrameworkSessionProps(req.query).trustPolicy,
       responseMode,
       jarAlg,
       presentationDefinition,
@@ -225,6 +228,7 @@ x509Router.get("/generateVPRequestDCQL", async (req, res) => {
     const cs03 = resolveCs03VpOptions(req.query, sessionId, slog);
     const result = await generateVPRequest({
       sessionId,
+      trustPolicy: trustFrameworkSessionProps(req.query).trustPolicy,
       responseMode,
       jarAlg,
       presentationDefinition: null,
@@ -278,6 +282,7 @@ x509Router.get("/generateVPRequestDCQLGET", async (req, res) => {
     const cs03 = resolveCs03VpOptions(req.query, sessionId, slog);
     const result = await generateVPRequest({
       sessionId,
+      trustPolicy: trustFrameworkSessionProps(req.query).trustPolicy,
       responseMode,
       jarAlg,
       presentationDefinition: null,
@@ -353,6 +358,7 @@ x509Router.get("/generateVPRequestTransaction", async (req, res) => {
 
     const result = await generateVPRequest({
       sessionId,
+      trustPolicy: trustFrameworkSessionProps(req.query).trustPolicy,
       responseMode,
       jarAlg,
       presentationDefinition: null,

@@ -92,6 +92,12 @@ import {
   parseProofAttestationJwtFromCredentialProofs,
   verifyKeyAttestationProofChain,
 } from "../../utils/keyAttestationProof.js";
+import {
+  isTrustFrameworkSession,
+  checkWalletProviderTrust,
+  recordTrustDecision,
+  recordTrustFailure,
+} from "../../utils/trustFrameworkPolicy.js";
 
 const sharedRouter = express.Router();
 
@@ -970,7 +976,8 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
     } else if (grant_type === PRE_AUTHORIZED_GRANT_TYPE && preAuthorizedCode) {
       preAuthSessionForWua = await getPreAuthSession(preAuthorizedCode);
     }
-    const tokenRequiresWua = sessionRequiresWua(codeFlowSessionForWua || preAuthSessionForWua);
+    const tokenTrustSession = codeFlowSessionForWua || preAuthSessionForWua;
+    const tokenRequiresWua = sessionRequiresWua(tokenTrustSession) || isTrustFrameworkSession(tokenTrustSession);
 
     // Extract and validate Wallet Instance Attestation (WIA) if present (legacy body path)
     // Based on TS3 spec: https://github.com/eu-digital-identity-wallet/eudi-doc-standards-and-technical-specifications/blob/main/docs/technical-specifications/ts3-wallet-unit-attestation.md
@@ -1009,6 +1016,10 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
     });
     const isPreAuthorizedGrant = grant_type === PRE_AUTHORIZED_GRANT_TYPE;
     if (tokenRequiresWua && attestationResult.skip) {
+      if (isTrustFrameworkSession(tokenTrustSession)) {
+        const store = grant_type === PRE_AUTHORIZED_GRANT_TYPE ? storePreAuthSession : storeCodeFlowSession;
+        await recordTrustFailure({ session: tokenTrustSession, store, sessionKey: sessionId, sessionId, slog, operation: "verify-wia", error: "Wallet Instance Attestation missing" });
+      }
       if (slog) {
         try { slog("[TOKEN] WUA-required session but WIA headers missing"); } catch {}
       }
@@ -1018,6 +1029,10 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
       });
     }
     if (tokenRequiresWua && !attestationResult.ok) {
+      if (isTrustFrameworkSession(tokenTrustSession)) {
+        const store = grant_type === PRE_AUTHORIZED_GRANT_TYPE ? storePreAuthSession : storeCodeFlowSession;
+        await recordTrustFailure({ session: tokenTrustSession, store, sessionKey: sessionId, sessionId, slog, operation: "verify-wia", error: attestationResult.errorDescription });
+      }
       if (slog) {
         try {
           slog("[TOKEN] Required WIA rejected", {
@@ -1029,6 +1044,22 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
         error: attestationResult.oauthError || "invalid_client",
         error_description: attestationResult.errorDescription,
       });
+    }
+    if (isTrustFrameworkSession(tokenTrustSession) && attestationResult.ok) {
+      const trustDecision = await checkWalletProviderTrust({
+        session: tokenTrustSession,
+        payload: attestationResult.attestationPayload,
+        header: attestationResult.protectedHeader,
+        operation: "verify-wia",
+      });
+      const store = grant_type === PRE_AUTHORIZED_GRANT_TYPE ? storePreAuthSession : storeCodeFlowSession;
+      await recordTrustDecision({ session: tokenTrustSession, decision: trustDecision, store, sessionKey: sessionId, sessionId, slog });
+      if (!trustDecision.trusted) {
+        return res.status(401).json({
+          error: "invalid_client",
+          error_description: `Wallet Provider trust rejected: ${trustDecision.reasonCode}`,
+        });
+      }
     }
     if (tokenRequiresWua && attestationResult.ok && attestationResult.wiaWarnings?.length && slog) {
       for (const w of attestationResult.wiaWarnings) {
@@ -1468,9 +1499,14 @@ sharedRouter.post("/credential", async (req, res) => {
       issuerConfigForWua.credential_configurations_supported[effectiveConfigurationId];
     const credentialRequiresWua =
       isWuaRequiredCredentialId(effectiveConfigurationId) ||
-      credentialConfigRequiresKeyAttestation(credConfigForWua);
+      credentialConfigRequiresKeyAttestation(credConfigForWua) ||
+      isTrustFrameworkSession(sessionObject);
 
     if (credentialRequiresWua && !wuaJwt) {
+      if (isTrustFrameworkSession(sessionObject)) {
+        const store = flowType === "code" ? storeCodeFlowSession : storePreAuthSession;
+        await recordTrustFailure({ session: sessionObject, store, sessionKey, sessionId, slog, operation: "verify-ka", error: "Key Attestation missing" });
+      }
       if (slog) {
         try { slog("[CREDENTIAL] [ERROR] Key Attestation required but missing in proof JWT header"); } catch {}
       }
@@ -1494,6 +1530,20 @@ sharedRouter.post("/credential", async (req, res) => {
         if (slog) {
           try { slog("[CREDENTIAL] WUA validated successfully", { wuaIssuer: wuaValidationResult.payload?.iss, wuaExp: wuaValidationResult.payload?.exp, hasAttestedKeys: Array.isArray(wuaValidationResult.payload?.attested_keys) && wuaValidationResult.payload.attested_keys.length > 0 }); } catch {}
         }
+        if (isTrustFrameworkSession(sessionObject)) {
+          const trustDecision = await checkWalletProviderTrust({
+            session: sessionObject,
+            payload: wuaValidationResult.payload,
+            header: wuaValidationResult.header,
+            operation: "verify-ka",
+          });
+          const store = flowType === "code" ? storeCodeFlowSession : storePreAuthSession;
+          await recordTrustDecision({ session: sessionObject, decision: trustDecision, store, sessionKey, sessionId, slog });
+          if (!trustDecision.trusted) {
+            if (slog) try { slog("[CREDENTIAL] [ERROR] Wallet Provider trust rejected", { reasonCode: trustDecision.reasonCode }); } catch {}
+            return res.status(400).json({ error: "invalid_proof", error_description: `Wallet Provider trust rejected: ${trustDecision.reasonCode}` });
+          }
+        }
         if (wuaValidationResult.warnings?.length && slog) {
           for (const w of wuaValidationResult.warnings) {
             try { slog("[CREDENTIAL] [WARN] KA validation warning", { warning: w }); } catch {}
@@ -1501,6 +1551,10 @@ sharedRouter.post("/credential", async (req, res) => {
         }
       } else {
         if (credentialRequiresWua) {
+          if (isTrustFrameworkSession(sessionObject)) {
+            const store = flowType === "code" ? storeCodeFlowSession : storePreAuthSession;
+            await recordTrustFailure({ session: sessionObject, store, sessionKey, sessionId, slog, operation: "verify-ka", error: wuaValidationResult.error });
+          }
           if (slog) {
             try { slog("[CREDENTIAL] [ERROR] Required KA validation failed", { error: wuaValidationResult.error }); } catch {}
           }

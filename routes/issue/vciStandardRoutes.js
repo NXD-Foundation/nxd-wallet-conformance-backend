@@ -26,6 +26,7 @@ import {
   logError,
 } from "../../services/cacheServiceRedis.js";
 import { makeSessionLogger, logHttpRequest, logHttpResponse } from "../../utils/sessionLogger.js";
+import { trustFrameworkSessionProps } from "../../utils/trustFrameworkPolicy.js";
 
 const vciStandardRouter = express.Router();
 
@@ -85,7 +86,8 @@ vciStandardRouter.get("/vci/offer", async (req, res) => {
         "code",
         true, // isDynamic
         false, // isDeferred
-        internalSignatureType
+        internalSignatureType,
+        trustFrameworkSessionProps(req.query)
       );
       
       await storeCodeFlowSession(sessionId, sessionData);
@@ -124,6 +126,7 @@ vciStandardRouter.get("/vci/offer", async (req, res) => {
       const sessionData = createPreAuthSessionData({
         signatureType: internalSignatureType,
         txCodeRequired,
+        additionalProps: trustFrameworkSessionProps(req.query),
       });
 
       await storePreAuthSession(sessionId, sessionData);
@@ -235,5 +238,4 @@ vciStandardRouter.get("/credential-offer-no-code/:id", async (req, res) => {
 });
 
 export default vciStandardRouter;
-
 

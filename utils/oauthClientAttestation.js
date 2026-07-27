@@ -441,6 +441,7 @@ export async function validateOAuthClientAttestationFromRequest({
       skip: false,
       ok: true,
       attestationPayload,
+      protectedHeader,
       popPayload,
       wiaCnfJkt,
       wiaWarnings,

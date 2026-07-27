@@ -1,0 +1,95 @@
+{
+  "LoTE": {
+    "ListAndSchemeInformation": {
+      "LoTEVersionIdentifier": 1,
+      "LoTESequenceNumber": 1,
+      "LoTEType": "http://uri.etsi.org/19602/LoTLType/EUListOfTrustedLists",
+      "SchemeOperatorName": [
+        {
+          "lang": "en",
+          "value": "WE BUILD Test TLP"
+        }
+      ],
+      "SchemeOperatorAddress": {
+        "SchemeOperatorPostalAddress": [
+          {
+            "lang": "en",
+            "StreetAddress": "Test",
+            "Country": "EU"
+          }
+        ],
+        "SchemeOperatorElectronicAddress": [
+          {
+            "lang": "en",
+            "uriValue": "https://example.test/trust"
+          }
+        ]
+      },
+      "SchemeName": [
+        {
+          "lang": "en",
+          "value": "WE BUILD Test List"
+        }
+      ],
+      "ListIssueDateTime": "2026-01-01T00:00:00Z",
+      "NextUpdate": "2027-01-01T00:00:00Z",
+      "DistributionPoints": [
+        "http://127.0.0.1/list_of_trusted_lists.json"
+      ],
+      "PointersToOtherLoTE": [
+        {
+          "LoTELocation": "http://127.0.0.1/pid.json",
+          "ServiceDigitalIdentities": [
+            {
+              "X509Certificates": [
+                {
+                  "val": "MIIDYzCCAkugAwIBAgIUNwaQ0AxANtnI28+jemjQTXSMWH4wDQYJKoZIhvcNAQELBQAwQTELMAkGA1UEBhMCRVUxFjAUBgNVBAoMDVdFIEJVSUxEIFRlc3QxGjAYBgNVBAMMEVRlc3QgUElEIFByb3ZpZGVyMB4XDTI2MDcyNzEwNTI1OFoXDTM2MDcyNDEwNTI1OFowQTELMAkGA1UEBhMCRVUxFjAUBgNVBAoMDVdFIEJVSUxEIFRlc3QxGjAYBgNVBAMMEVRlc3QgUElEIFByb3ZpZGVyMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAnB0IEI/83sdrrQcPLOSCeSri1Eml7Cit8vvo5WRWTYATjzbyudSm0+qIGoRVRQDIhDRDVu9Uk+ycGAgR+6Z1ipn2dH/PLvnPvINRNYQEnXwl0QF7r7BpLem+DG72MJcpmJEyvc6WHfQy2X90Em8HLvG/9gw/rrz5ehvhIl8ZYEUMIcTK3BESkvUMOTT1w42wdLBYlJvvNMUf5hFo2h6YR3YlqsWgbZyg3BdXByObbzB+Z8dkztgTNTPiT0YD9P6CC3UtyDsenmvnrRsyViM5C1x6gzWjAVLDhqy+IVw+aZ96qboDstFjlKXsSdNEdQLfhLU1x6sg9DnQVFG+GBvWvQIDAQABo1MwUTAdBgNVHQ4EFgQURGcaef56b8cXFUJbussIUXKwNnEwHwYDVR0jBBgwFoAURGcaef56b8cXFUJbussIUXKwNnEwDwYDVR0TAQH/BAUwAwEB/zANBgkqhkiG9w0BAQsFAAOCAQEAB2R2Ds9WgJI7yBp7SmTTk7vcw2Wpnfwrm26mejIHerfNNnBirL9JQPIZSCJjwJyN+q7N1LJaMwfWH9kL8hmhlN02UBYkMiWEXPEFUYTuqJuW7uAFs1FkCNXJXhGI5WNiq16T6fw9AAb9gX20Rlvdc9BQWHunxUoGlQjKrcxCrnFkYUpuRHa8zl+C3XtBWUJyvbJOF0sJaHTGaSN+zSW8k0+w3pT7CJS3nQ030T9Bk2GjQ4YfOeBk4wpi0GWOR1SsSDkoNO4LsIrgL8cB81xgGtGp52tzob01u0+pvxI5t9TVXzJPaYo9b8vWjZUJFUFsLjcWbDMyhLXvrYFdFDVASw=="
+                }
+              ]
+            }
+          ],
+          "LoTEQualifiers": [
+            {
+              "LoTEType": "http://uri.etsi.org/19602/LoTEType/EUPIDProvidersList",
+              "SchemeOperatorName": [
+                {
+                  "lang": "en",
+                  "value": "Test PID"
+                }
+              ],
+              "MimeType": "application/json"
+            }
+          ]
+        },
+        {
+          "LoTELocation": "http://127.0.0.1/qeaa.xml",
+          "ServiceDigitalIdentities": [
+            {
+              "X509Certificates": [
+                {
+                  "val": "MIIDZTCCAk2gAwIBAgIULnYaeGur4r+NKRtdFhQz5T5S8EIwDQYJKoZIhvcNAQELBQAwQjELMAkGA1UEBhMCRVUxFjAUBgNVBAoMDVdFIEJVSUxEIFRlc3QxGzAZBgNVBAMMElRlc3QgUUVBQSBQcm92aWRlcjAeFw0yNjA3MjcxMDUyNThaFw0zNjA3MjQxMDUyNThaMEIxCzAJBgNVBAYTAkVVMRYwFAYDVQQKDA1XRSBCVUlMRCBUZXN0MRswGQYDVQQDDBJUZXN0IFFFQUEgUHJvdmlkZXIwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCWERMEu9qRj8UwPT+5J4HcyXoav5SgEkZHaCNvvPkmdHBhU5FL7cMCO/dOooMPnRb6+MCG+qn24ebgLuC3v4XEAJ3kArFjbzqWhKFZGqCc/3PY0VMqBPEN721UBomxuwj8Wj5FudnzpdmrLyViLIlragI3Z8U6nuwoz5Ycqnbf0FHTotIldXPjcM9b17NGo0mdqIaZmwiJo5+LcSRk2Nod6ciKgZZAisyrL9Nlu0FwhKSuUbZ8nvGMbAYC8hwMejnbuMIzq7D1D7oRuOK4BtoBUmkz9WpzrCrKr3/B2eUIZcr2JjWL/po3v1bo4baKV4kCP3POaLZKTwwNEcO6UvvDAgMBAAGjUzBRMB0GA1UdDgQWBBTrqL78ixOvtpA2rcqSHu4s8T4CcjAfBgNVHSMEGDAWgBTrqL78ixOvtpA2rcqSHu4s8T4CcjAPBgNVHRMBAf8EBTADAQH/MA0GCSqGSIb3DQEBCwUAA4IBAQBSzTF+YXuDZjoOtwDOhopCklfQn5N+STrpY4nC2fzKYPj/iAurtPh5AEbdfZPcY11tq4lzoES2AaeOAEQ+oQndDW4BhetzprnNiX133hlzEj1evR91ctFUSpklrv43/6r/kTZSZ5cpDZJZ9NLTpy2JXA+nzwFMlbgkLgxenbpj+whqxKeFvxT6qUjJy8rWCsScNJb5po96eSZYquC3zcRn/97kmnNCgl2DHEEb5RQkomxcsuo8dnKXwoNmBbURcotoTMqw9cK6n/HW6QJc/uODqJFSQQ65Vo1lF5XaCZBBqk5Pv9aRJ6iPDkB2F8VNZRwklM0Z23LMHJDysl1oOled"
+                }
+              ]
+            }
+          ],
+          "LoTEQualifiers": [
+            {
+              "LoTEType": "http://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUgeneric",
+              "SchemeOperatorName": [
+                {
+                  "lang": "en",
+                  "value": "Test QEAA"
+                }
+              ],
+              "MimeType": "application/xml"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "signature": {
+    "protected": "eyJhbGciOiJSUzI1NiIsIng1YyI6WyJNSUlEYVRDQ0FsR2dBd0lCQWdJVUlLZHdFV2hLN3pqbDl5TDc0RkxMaHpXU0lLOHdEUVlKS29aSWh2Y05BUUVMQlFBd1JERUxNQWtHQTFVRUJoTUNSVlV4RmpBVUJnTlZCQW9NRFZkRklFSlZTVXhFSUZSbGMzUXhIVEFiQmdOVkJBTU1GRmRRTkNCVVpYTjBJRXh2VkV3Z1UybG5ibVZ5TUI0WERUSTJNRGN5TnpFd05USTFPRm9YRFRNMk1EY3lOREV3TlRJMU9Gb3dSREVMTUFrR0ExVUVCaE1DUlZVeEZqQVVCZ05WQkFvTURWZEZJRUpWU1V4RUlGUmxjM1F4SFRBYkJnTlZCQU1NRkZkUU5DQlVaWE4wSUV4dlZFd2dVMmxuYm1WeU1JSUJJakFOQmdrcWhraUc5dzBCQVFFRkFBT0NBUThBTUlJQkNnS0NBUUVBbTg1eWtsVUlCd0VobEs4aEovMDFISlNKME5vbHFvMWljMXNkcFJVYTdGTlZhVU9saUIyMEtjd1Nwb2pqQWlCY3N2a1VzMko5ZDhDSWljR29GVXIxZmZpKzdsY2NUSEZYN3kvRXowZStFR2ZtN1FrTlZ5SXNsOUVnTWd0TXpWdW0zZ0dGZ2NoeWdUTHl3dDU3MVh3SkxLbHhhS28xaGdCdXBrV1NzRnBkSzk2VUF0Zk45WklIdUMzdGt6aFJSa0xkR3RScDJObnZ6Y0ZSTUh0UnBFeWxRYnFaTTc1VkFpN3dac0ZsOEhJbzV4MGczRWdXdHpyNTJ2ZVdidFRSck84eHAxaUZ6YVNtbTVleTl2K2J0T0l0VjRaNE5wMitNalJsTFJ2emQrblFOWktyVHpvTXgwRmZ5akU5MjV5cGcvV1lteWw1VDJoTjR3b2YyNWR6WmxzZDV3SURBUUFCbzFNd1VUQWRCZ05WSFE0RUZnUVVRNmxSRmdlTmMwSndtVU84R1F4ZG9wYXZoSTh3SHdZRFZSMGpCQmd3Rm9BVVE2bFJGZ2VOYzBKd21VTzhHUXhkb3BhdmhJOHdEd1lEVlIwVEFRSC9CQVV3QXdFQi96QU5CZ2txaGtpRzl3MEJBUXNGQUFPQ0FRRUFVRW9TYlJrOE5ubDV2aGNzWjJHRnJGOXVrbWlLaTJOS3k2dkNDbUZOakJ2RGl5UXMrOGdwYVBjb05Zbkdoc25YMXlNczRPZEhJQ2ZTaVF3UHNCdmIraTMxeS9GRmFBMDV6QTJiMWg4bW1haVVXYkdHWTJkZS8xZzdHejF5TkMvT3FNdCtqUU54ZGlWd3FRdGlQNFhnSEt4OFEvRm81dTk3cGtiaFU1WnBKNWxZREVKS2txU0UwRkphWk5SVTBweE91SXdRTzdEL29DS1pneWVBdy9iTGFDckt0ck96QlB5TklYYzl3ZkxKT2ZXVVphWmhaeTNwcEtKMWovM1JxR2tBcytoRUQ5eXdnMVQyWWNxQk80ZEZRbFpVN1E4QTRjcGpSTXFVZHdEVnduemxLOHhIQ3FiMEMybk95QmhjNmJPT012c1BxcGROakYyNm5RUWVZc0hqMUE9PSJdLCJpYXQiOjE3NjcyMjU2MDB9",
+    "signature": "W-QZnl0rzGvnLxhdQFCi5cL1hbFIQ6zwVQIFsdL2UJhfCE2_S81zFseJY8aTqV7Edj330dbcB0fbvXBPClfYXzU-qHm_K7qRT4zPIIVvpl7Mx040MljHV24onADtMa0tdaJSTwCV1CmlsG1_i4xIZBDA0EgzkQ9etmjJFTpABKyecHvedB0Fn0Ox97Bopwi5OnkotUGdrjX49g2ZOrJsMP_kxQTIVr36QJ44K2c4LTcBY6DAhWqlRt2enNDuY4qwJiqAzTw855Untczyc0SGmIByXF9pwrJkQIMDl_7nSqpEWFgP-HbJn35F3rs5mml9IBYRH9GMXx8zBiMUoVTB_w"
+  }
+}

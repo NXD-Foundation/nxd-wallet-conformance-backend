@@ -55,6 +55,7 @@ import {
   validateCs03CredentialResponses,
 } from "../../utils/cs03Validation.js";
 import { validateSdJwtKeyBindingMatchesCredential } from "../../utils/sdJwtKeyBinding.js";
+import { checkVerifierCredentialTrust, isTrustFrameworkSession } from "../../utils/trustFrameworkPolicy.js";
 import { validateTs12PaymentPresentationResponse } from "../../utils/ts12Validation.js";
 import {
   Cs02VerifierResponseError,
@@ -157,7 +158,7 @@ async function failVpSessionAndRespond(res, sessionId, vpSession, errorCode, err
 async function runCs02SdJwtVpTokenChecks(sessionId, vpSession, vpTokenObject, cs02ResponseOptions) {
   if (!cs02ResponseOptions.strict || !vpSession.dcql_query) return;
   try {
-    await validateCs02SdJwtEntriesInVpToken(
+    const trustDecisions = await validateCs02SdJwtEntriesInVpToken(
       vpTokenObject,
       vpSession.dcql_query,
       {
@@ -165,11 +166,23 @@ async function runCs02SdJwtVpTokenChecks(sessionId, vpSession, vpTokenObject, cs
         clientId: vpSession.client_id,
         transactionData: vpSession.transaction_data,
         computeSdHash: computeSdHashFromPresentedToken,
+        session: vpSession,
       },
       cs02ResponseOptions,
     );
+    if (trustDecisions?.length) {
+      vpSession.trustDecisions = trustDecisions;
+      await storeVPSession(sessionId, vpSession);
+    }
   } catch (error) {
     if (error instanceof Cs02VerifierResponseError) {
+      if (error.trustDecision) {
+        vpSession.trustDecision = {
+          ...error.trustDecision,
+          evaluatedAt: new Date().toISOString(),
+        };
+        await storeVPSession(sessionId, vpSession).catch(() => {});
+      }
       await logError(sessionId, "CS-02 SD-JWT presentation validation failed", {
         error: error.message,
         errorCode: error.errorCode,
@@ -772,6 +785,28 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
             error: `mDL verification failed. Received: ${mdocResult.error}, expected: valid mDL token`,
             details: mdocResult.details 
           });
+        }
+
+        if (isTrustFrameworkSession(vpSession)) {
+          const trustDecision = await checkVerifierCredentialTrust({
+            session: vpSession,
+            certificatePem: mdocResult.issuerCertificate?.certificatePem,
+            format: "mso_mdoc",
+            doctype: mdocResult.docType,
+            operation: "verify-credential",
+          });
+          vpSession.trustDecision = {
+            ...trustDecision,
+            evaluatedAt: new Date().toISOString(),
+          };
+          await logInfo(sessionId, "mDL issuer trust decision evaluated", vpSession.trustDecision);
+          if (!trustDecision?.trusted) {
+            vpSession.status = "failed";
+            vpSession.error = "invalid_credential";
+            vpSession.error_description = `Credential issuer trust rejected: ${trustDecision?.reasonCode || "TRUST_EVALUATION_INDETERMINATE"}`;
+            await storeVPSession(sessionId, vpSession);
+            return res.status(400).json({ error: vpSession.error, error_description: vpSession.error_description });
+          }
         }
         
         await logInfo(sessionId, "mDL verification successful", {

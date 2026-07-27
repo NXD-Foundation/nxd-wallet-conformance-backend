@@ -252,8 +252,45 @@ Section 3.6 and Section 4.2.
 attestation status fields, but incomplete status-list detail is currently
 warning-only.
 - Trust-list enforcement is intentionally out of scope today. Header-carried
-`x5c` or `jwk` material can be used as a transitional interoperability
-fallback when no trusted JWKS is configured.
+  `x5c` or `jwk` material can be used as a transitional interoperability
+  fallback when no trusted JWKS is configured.
+- The Phase 0/1 WE BUILD trust-list consumer now exists under `trust/`, with
+  the pilot profile in `data/trust/webuild-wp4-pilot.json`, synthetic signed
+  JSON/XML fixtures, and the focused command `npm run test:trust`. It is not
+  wired into issuer or verifier enforcement yet; the live profile deliberately
+  has no bootstrap LoTL signer anchor until WP4 publishes authoritative
+  material.
+- WE BUILD’s published JAdES JSON is signed over WP4 canonical JSON: object
+  keys are recursively sorted, JSON is compact, and non-ASCII characters are
+  escaped. The verifier must reproduce those exact bytes after removing the
+  `signature` member; ordinary `JSON.stringify` insertion order is not
+  sufficient for live WP4 documents.
+- Phase 2 adds the strict resolver contract, all eight WP4 role mappings, a
+  loopback HTTP adapter, and CLI parity over injected authenticated snapshots.
+  Existing issuer, verifier, and wallet flows still do not enforce these
+  decisions. Future session-level opt-in uses
+  `trustPolicy: { mode: "webuild", profile: "webuild-wp4-pilot" }`.
+- Phase 3 now accepts `trustFramework=true` on issuance offer/session creation,
+  verifier request generation, and the wallet test session. It persists that
+  normalized policy and makes opted-in WIA/KA issuance fail closed unless the
+  Wallet Provider certificate and identity resolve through the WP4 trust
+  resolver. Each result, including missing or invalid attestation, is persisted
+  as `trustDecision` and written to the session log; sessions without the flag
+  retain compatibility behavior. Verifier credential trust remains Phase 4
+  work.
+- Phase 4 is in progress with a shared verifier trust adapter. It consumes
+  only cryptographically verified SD-JWT issuer evidence, maps credential
+  context (`vct`/`doctype`) to explicit WP4 provider roles, and composes trust
+  results with the existing signature, key-binding, DCQL, and status checks.
+  Both shared and legacy mdoc paths extract the COSE issuer-authentication
+  `x5chain` leaf for trust evaluation.
+  Enforcement is activated only by the session policy created with
+  `trustFramework=true` at VP request generation. Non-opted-in sessions retain
+  compatibility behavior. mdoc issuer-certificate extraction and WRPAC/WRPRC
+  evaluation are split: mdoc issuer certificates and WRPAC evaluation are now
+  implemented for opted-in sessions. WRPRC is supported when deployment
+  configuration supplies the distinct certificate through
+  `TRUST_WRPRC_CERT_PATH`; otherwise no WRPRC decision is attempted.
 - Production/conformance hardening still needs trusted Wallet Provider material
 and complete status-list validation; keep any self-contained-key fallback
 development-only when that work lands.

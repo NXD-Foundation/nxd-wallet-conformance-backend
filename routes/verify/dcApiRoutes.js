@@ -26,6 +26,7 @@ import { getVPSession, storeVPSession } from "../../services/cacheServiceRedis.j
 import { loadCs07Config, resolveCs07Profile } from "../../utils/cs07Config.js";
 import { validateCs07CredentialPresentations } from "../../utils/cs07ResponseValidation.js";
 import { loadVerifierEncryptionKey } from "../../utils/verifierEncryptionKeys.js";
+import { trustFrameworkSessionProps } from "../../utils/trustFrameworkPolicy.js";
 
 const dcApiRouter = express.Router();
 // Load and validate once at startup. Profile mappings and DCQL are immutable
@@ -147,6 +148,7 @@ dcApiRouter.post("/vp/dc-api/request", enforceBodyLimit(MAX_REQUEST_BODY_BYTES),
       : null;
     const result = await generateVPRequest({
       sessionId,
+      trustPolicy: trustFrameworkSessionProps(req.query).trustPolicy,
       responseMode: "dc_api.jwt",
       jarAlg: "ES256",
       presentationDefinition: null,
@@ -325,6 +327,12 @@ dcApiRouter.post("/vp/dc-api/response/:sessionId", enforceBodyLimit(MAX_RESPONSE
         session.status = "failed";
         session.error = error.errorCode;
         session.error_description = error.message;
+        if (error.trustDecision) {
+          session.trustDecision = {
+            ...error.trustDecision,
+            evaluatedAt: new Date().toISOString(),
+          };
+        }
         await storeVPSession(sessionId, session);
         return res.status(400).json({ error: error.errorCode, error_description: error.message });
       }
@@ -334,6 +342,9 @@ dcApiRouter.post("/vp/dc-api/response/:sessionId", enforceBodyLimit(MAX_RESPONSE
     session.status = "success";
     session.verified_credential_ids = validationResult.verifiedCredentialIds;
     session.verification = validationResult.verification;
+    if (validationResult.trustDecisions?.length) {
+      session.trustDecisions = validationResult.trustDecisions;
+    }
     // Keep only a non-sensitive receipt. The decrypted VP token is not
     // persisted in Redis and can be retrieved only by the verifier process.
     session.dc_api_response = { parsed: true };

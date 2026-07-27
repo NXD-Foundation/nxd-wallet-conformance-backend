@@ -21,6 +21,7 @@ import {
   clearSessionContext,
 } from "../../services/cacheServiceRedis.js";
 import { makeSessionLogger, logHttpRequest, logHttpResponse } from "../../utils/sessionLogger.js";
+import { trustFrameworkSessionProps } from "../../utils/trustFrameworkPolicy.js";
 
 const ts12PaymentRouter = express.Router();
 
@@ -67,12 +68,14 @@ async function handleTs12PaymentRequest(req, res) {
     requestId = logHttpRequest(slog, req.method, "/ts12/payment/request", req.headers, {
       ...paymentInput,
       sessionId,
+      trustPolicy: trustFrameworkSessionProps(req.query).trustPolicy,
       responseMode,
       requestUriMethod,
     });
 
     const result = await generateVPRequest({
       sessionId,
+      trustPolicy: trustFrameworkSessionProps(req.query).trustPolicy,
       responseMode,
       presentationDefinition: null,
       clientId: CONFIG.CLIENT_ID,

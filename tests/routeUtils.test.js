@@ -3,6 +3,7 @@ import {
   createCredentialOfferConfig,
   createCredentialOfferResponse,
   createPreAuthSessionData,
+  createCodeFlowSession,
   generateNumericTxCode,
   DEFAULT_MDL_DCQL_QUERY,
 } from '../utils/routeUtils.js';
@@ -116,6 +117,15 @@ describe('Route Utils', () => {
       const session = createPreAuthSessionData({ txCodeRequired: true });
       expect(session.txCodeRequired).to.equal(true);
       expect(session.expectedTxCode).to.match(/^\d{4}$/);
+    });
+
+    it('persists the explicit trust framework policy on issuance sessions', () => {
+      const preAuth = createPreAuthSessionData({ trustFramework: true });
+      const code = createCodeFlowSession('did:jwk', 'code', false, false, null, {
+        trustPolicy: { mode: 'webuild', profile: 'webuild-wp4-pilot' },
+      });
+      expect(preAuth.trustPolicy).to.deep.equal({ mode: 'webuild', profile: 'webuild-wp4-pilot' });
+      expect(code.trustPolicy).to.deep.equal({ mode: 'webuild', profile: 'webuild-wp4-pilot' });
     });
   });
 

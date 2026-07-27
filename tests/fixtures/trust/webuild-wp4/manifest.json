@@ -1,0 +1,15 @@
+{
+  "profile": {
+    "lotlSignerFingerprint": "43c83dd63a31eae86466f9d6661d1c26d5533bfb447587b076eedec5128127e6",
+    "pidSignerFingerprint": "32b6a225048d50b523ea6b8fb3447e7e80edf003a35d49a6f20791480e6aa7bd",
+    "qeaaSignerFingerprint": "a2dad2a1299bfe1d3bdedb90b1543800d359d4319de8af66899181d9b26b7377"
+  },
+  "artifacts": [
+    "list_of_trusted_lists.json",
+    "list_of_trusted_lists.xml",
+    "pid.json",
+    "pid.xml",
+    "qeaa.json",
+    "qeaa.xml"
+  ]
+}

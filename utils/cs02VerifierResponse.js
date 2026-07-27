@@ -26,6 +26,7 @@ import {
   claimSatisfiesMdocConstraints,
   extractMdocClaimsByNamespace,
   selectSatisfiedMdocClaimSet,
+  extractMdocIssuerCertificate,
 } from "./mdocClaims.js";
 import {
   getSdJwtPathValue,
@@ -33,6 +34,7 @@ import {
   selectSatisfiedSdJwtClaimSet,
 } from "./sdJwtClaims.js";
 import { isSupportedCs02ClaimPathSegment, validateSupportedCs02ClaimPath, evaluateCs02CredentialSets } from "./cs02DcqlCore.js";
+import { checkVerifierCredentialTrust, isTrustFrameworkSession } from "./trustFrameworkPolicy.js";
 
 export { resolveVerifierCs02Options, isVerifierCs02StrictMode } from "./cs02VerifierRequest.js";
 
@@ -967,6 +969,25 @@ export async function validateCs02SdJwtPresentation({
   const issuerPayload = issuerAuthenticity.issuerPayload;
   const trustPolicyOptions = options.trustPolicyOptions || resolveCs02TrustPolicyOptions(options.env);
   const issuerTrust = await validateCs02IssuerTrust(issuerPayload?.iss, trustPolicyOptions);
+  let credentialTrust = null;
+  if (isTrustFrameworkSession(options.session)) {
+    credentialTrust = await checkVerifierCredentialTrust({
+      session: options.session,
+      payload: issuerPayload,
+      header: issuerAuthenticity.header,
+      format: credQuery?.format || "dc+sd-jwt",
+      vct: issuerPayload?.vct,
+      operation: "verify-credential",
+    });
+    if (!credentialTrust?.trusted) {
+      const trustError = new Cs02VerifierResponseError(
+        `Credential issuer trust rejected: ${credentialTrust?.reasonCode || "TRUST_EVALUATION_INDETERMINATE"}`,
+        "invalid_credential",
+      );
+      trustError.trustDecision = credentialTrust;
+      throw trustError;
+    }
+  }
   let credentialStatus;
   try {
     credentialStatus = await validateCs02CredentialStatusList(sdJwt, {
@@ -985,6 +1006,7 @@ export async function validateCs02SdJwtPresentation({
     ...verified,
     issuerAuthenticity,
     issuerTrust,
+    credentialTrust,
     credentialStatus,
   };
 }
@@ -995,7 +1017,9 @@ export async function validateCs02SdJwtEntriesInVpToken(
   context,
   options = { strict: true },
 ) {
-  if (!options.strict || !isPlainObject(vpTokenObject)) return;
+  if (!options.strict || !isPlainObject(vpTokenObject)) return [];
+
+  const decisions = [];
 
   for (const credQuery of dcqlQuery?.credentials || []) {
     const value = vpTokenObject[credQuery.id];
@@ -1004,17 +1028,36 @@ export async function validateCs02SdJwtEntriesInVpToken(
     const presentations = Array.isArray(value) ? value : [value];
     if (String(credQuery?.format || "") === MDOC_FORMAT) {
       for (const presentation of presentations) {
-        validateCs02MdocPresentation({
+        const mdocResult = validateCs02MdocPresentation({
           presentation,
           credQuery,
         });
+        let credentialTrust = null;
+        if (isTrustFrameworkSession(context.session)) {
+          credentialTrust = await checkVerifierCredentialTrust({
+            session: context.session,
+            certificatePem: mdocResult?.issuerCertificate?.certificatePem,
+            format: MDOC_FORMAT,
+            doctype: credQuery?.meta?.doctype_value,
+            operation: "verify-credential",
+          });
+          if (!credentialTrust?.trusted) {
+            const trustError = new Cs02VerifierResponseError(
+              `Credential issuer trust rejected: ${credentialTrust?.reasonCode || "TRUST_EVALUATION_INDETERMINATE"}`,
+              "invalid_credential",
+            );
+            trustError.trustDecision = credentialTrust;
+            throw trustError;
+          }
+        }
+        decisions.push({ id: credQuery.id, format: MDOC_FORMAT, trust: credentialTrust });
       }
       continue;
     }
 
     if (!SD_JWT_FORMATS.has(String(credQuery?.format || ""))) continue;
     for (const presentation of presentations) {
-      await validateCs02SdJwtPresentation({
+      const result = await validateCs02SdJwtPresentation({
         sdJwt: presentation,
         sessionNonce: context.sessionNonce,
         clientId: context.clientId,
@@ -1032,10 +1075,13 @@ export async function validateCs02SdJwtEntriesInVpToken(
           trustPolicyOptions: context.trustPolicyOptions,
           env: context.env,
           log: context.log,
+          session: context.session,
         },
       });
+      decisions.push({ id: credQuery.id, format: credQuery.format, trust: result.credentialTrust || null });
     }
   }
+  return decisions;
 }
 
 export function validateCs02MdocPresentation({ presentation, credQuery } = {}) {
@@ -1116,7 +1162,11 @@ export function validateCs02MdocPresentation({ presentation, credQuery } = {}) {
     }
   }
 
-  return { ok: true, doctype: actualDocType };
+  return {
+    ok: true,
+    doctype: actualDocType,
+    issuerCertificate: extractMdocIssuerCertificate(presentation),
+  };
 }
 
 export { validateCs02IssuerTrust } from "./cs02TrustPolicy.js";

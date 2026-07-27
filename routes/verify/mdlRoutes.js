@@ -17,6 +17,7 @@ import {
   setSessionContext,
   clearSessionContext,
 } from "../../services/cacheServiceRedis.js";
+import { trustFrameworkSessionProps } from "../../utils/trustFrameworkPolicy.js";
 
 const mdlRouter = express.Router();
 
@@ -84,6 +85,7 @@ mdlRouter.get("/generateVPRequest", async (req, res) => {
 
     const result = await generateVPRequest({
       sessionId,
+      trustPolicy: trustFrameworkSessionProps(req.query).trustPolicy,
       responseMode,
       // presentationDefinition: presentationDefinitionMdl,
 
@@ -124,10 +126,12 @@ mdlRouter.get("/generateVPRequestDCQL", async (req, res) => {
       endpoint: "/generateVPRequestDCQL",
       responseMode,
       sessionId,
+      trustPolicy: trustFrameworkSessionProps(req.query).trustPolicy,
     });
 
     const result = await generateVPRequest({
       sessionId,
+      trustPolicy: trustFrameworkSessionProps(req.query).trustPolicy,
       responseMode,
       clientId: CONFIG.CLIENT_ID,
       clientMetadata,

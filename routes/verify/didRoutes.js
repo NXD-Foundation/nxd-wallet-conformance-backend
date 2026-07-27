@@ -20,6 +20,7 @@ import {
   clearSessionContext,
 } from "../../services/cacheServiceRedis.js";
 import { makeSessionLogger, logHttpRequest, logHttpResponse } from "../../utils/sessionLogger.js";
+import { trustFrameworkSessionProps } from "../../utils/trustFrameworkPolicy.js";
 
 const didRouter = express.Router();
 
@@ -60,6 +61,7 @@ didRouter.get("/generateVPRequest", async (req, res) => {
 
     const result = await generateVPRequest({
       sessionId,
+      trustPolicy: trustFrameworkSessionProps(req.query).trustPolicy,
       responseMode,
       presentationDefinition,
       clientId: client_id,
@@ -101,6 +103,7 @@ didRouter.get("/generateVPRequestGET", async (req, res) => {
 
     const result = await generateVPRequest({
       sessionId,
+      trustPolicy: trustFrameworkSessionProps(req.query).trustPolicy,
       responseMode,
       presentationDefinition:null,
       clientId: client_id,
@@ -143,6 +146,7 @@ didRouter.get("/generateVPRequestDCQL", async (req, res) => {
 
     const result = await generateVPRequest({
       sessionId,
+      trustPolicy: trustFrameworkSessionProps(req.query).trustPolicy,
       responseMode,
       presentationDefinition: null,
       clientId: client_id,
@@ -189,6 +193,7 @@ didRouter.get("/generateVPRequestTransaction", async (req, res) => {
 
     const result = await generateVPRequest({
       sessionId,
+      trustPolicy: trustFrameworkSessionProps(req.query).trustPolicy,
       responseMode,
       presentationDefinition,
       clientId: client_id,
@@ -318,4 +323,4 @@ didRouter
     }
   });
 
-export default didRouter; 
+export default didRouter;

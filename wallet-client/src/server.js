@@ -44,6 +44,7 @@ import {
   createLegacyBodyClientAssertionJwt,
   allowsLegacyBodyClientAssertion,
 } from "./lib/walletUnitAttestation.js";
+import { trustFrameworkSessionProps } from "../../utils/trustFrameworkPolicy.js";
 import {
   buildCredentialProofRequest,
   buildCredentialProofBindingContext,
@@ -304,7 +305,7 @@ app.get("/session-status/:sessionId", async (req, res) => {
 //   - If authorization_code grant → run /issue-codeflow flow
 // - Updates Redis status to "ok" on success, "failed" on error
 app.post("/session", async (req, res) => {
-  const { deepLink, sessionId, pin } = req.body || {};
+  const { deepLink, sessionId, pin, trustFramework } = req.body || {};
   if (!deepLink || !sessionId) {
     return res.status(400).json({ error: "invalid_request", error_description: "deepLink and sessionId are required" });
   }
@@ -320,7 +321,7 @@ app.post("/session", async (req, res) => {
 
   const sessionLog = makeSessionLogger(sessionId);
 
-  await setStatus("pending");
+  await setStatus("pending", trustFrameworkSessionProps({ trustFramework }));
 
   return runWithLogContext(sessionId, async () => {
     try {

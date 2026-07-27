@@ -1,0 +1,44 @@
+{
+  "id": "webuild-wp4-pilot",
+  "description": "WE BUILD WP4 pilot trust profile; replace synthetic anchors before live use",
+  "lotl": {
+    "jsonUrl": "https://webuild-consortium.github.io/wp4-trust-group/list_of_trusted_lists.json",
+    "xmlUrl": "https://webuild-consortium.github.io/wp4-trust-group/list_of_trusted_lists.xml"
+  },
+  "formats": {
+    "preferred": "json",
+    "fallback": "xml"
+  },
+  "bootstrap": {
+    "loTLSignerFingerprints": []
+  },
+  "algorithms": {
+    "jades": ["RS256", "ES256"],
+    "xades": ["rsa-sha256"]
+  },
+  "acceptedStatuses": [
+    "http://uri.etsi.org/19602/PubEAAProvidersList/SvcStatus/notified",
+    "http://uri.etsi.org/19602/EAAProvidersList/SvcStatus/notified",
+    "http://uri.etsi.org/19602/QEAAProvidersList/SvcStatus/granted",
+    "valid",
+    "notified"
+  ],
+  "freshness": {
+    "clockSkewSeconds": 60,
+    "maxStaleSeconds": 0
+  },
+  "network": {
+    "timeoutMs": 10000,
+    "maxBytes": 2000000
+  },
+  "listTypes": {
+    "pid-provider": { "referenceUri": "http://uri.etsi.org/19602/LoTEType/EUPIDProvidersList", "profile": "ts119602-annex-d" },
+    "wallet-provider": { "referenceUri": "http://uri.etsi.org/19602/LoTEType/EUWalletProvidersList", "profile": "ts119602-annex-e" },
+    "wrpac-provider": { "referenceUri": "http://uri.etsi.org/19602/LoTEType/EUWRPACProvidersList", "profile": "ts119602-annex-f" },
+    "wrprc-provider": { "referenceUri": "http://uri.etsi.org/19602/LoTEType/EUWRPRCProvidersList", "profile": "ts119602-annex-g" },
+    "pub-eaa-provider": { "referenceUri": "http://uri.etsi.org/19602/LoTEType/EUPubEAAProvidersList", "profile": "ts119602-annex-h" },
+    "eaa-provider": { "referenceUri": "http://uri.etsi.org/19602/LoTEType/EUPubEAAProvidersList", "profile": "ts119602-annex-h" },
+    "qeaa-provider": { "referenceUri": "http://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUgeneric", "profile": "ts119612-national-tsl" },
+    "ebwoid-provider": { "referenceUri": "http://uri.etsi.org/19602/LoTEType/EURegistrarsAndRegistersList", "profile": "ts119602-annex-i" }
+  }
+}

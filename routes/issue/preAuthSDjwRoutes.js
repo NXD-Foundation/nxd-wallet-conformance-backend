@@ -42,6 +42,7 @@ import {
   isValidCredentialPayload,
   sendErrorResponse,
 } from "../../utils/routeUtils.js";
+import { trustFrameworkSessionProps } from "../../utils/trustFrameworkPolicy.js";
 
 const router = express.Router();
 
@@ -67,6 +68,11 @@ const manageSession = async (sessionId, sessionData) => {
       return migratedSession;
     }
 
+    if (sessionData.trustPolicy && !existingSession.trustPolicy) {
+      const upgradedSession = { ...existingSession, trustPolicy: sessionData.trustPolicy };
+      await storePreAuthSession(sessionId, upgradedSession);
+      return upgradedSession;
+    }
     return existingSession;
   } catch (error) {
     console.error(`[preAuth][${sessionId}] Session management error`, {
@@ -98,6 +104,7 @@ router.get("/offer-tx-code", async (req, res) => {
       signatureType,
       credentialType,
       txCodeRequired: true,
+      additionalProps: trustFrameworkSessionProps(req.query),
     });
     const storedSession = await manageSession(sessionId, sessionData);
 
@@ -151,7 +158,7 @@ router.get("/offer-no-code", async (req, res) => {
     const credentialType = getCredentialType(req);
     const signatureType = getSignatureType(req);
 
-    const sessionData = createPreAuthSessionData({ signatureType, credentialType });
+    const sessionData = createPreAuthSessionData({ signatureType, credentialType, additionalProps: trustFrameworkSessionProps(req.query) });
     await manageSession(sessionId, sessionData);
 
     const credentialOffer = createPreAuthCredentialOfferUri(
@@ -185,7 +192,7 @@ router.post("/offer-no-code", async (req, res) => {
 
     const sessionData = createPreAuthSessionData({
       credentialType,
-      additionalProps: { credentialPayload },
+      additionalProps: { credentialPayload, ...trustFrameworkSessionProps(req.body) },
     });
     await manageSession(sessionId, sessionData);
 
@@ -243,7 +250,7 @@ router.get("/cs01-offer", async (req, res) => {
 
     const credentialType = getCredentialType(req);
     const signatureType = getSignatureType(req);
-    const sessionData = createPreAuthSessionData({ signatureType, credentialType });
+    const sessionData = createPreAuthSessionData({ signatureType, credentialType, additionalProps: trustFrameworkSessionProps(req.query) });
     await manageSession(sessionId, sessionData);
 
     const credentialOffer = createPreAuthCredentialOfferUri(
@@ -273,6 +280,7 @@ router.get("/cs01-offer-tx-code", async (req, res) => {
       signatureType,
       credentialType,
       txCodeRequired: true,
+      additionalProps: trustFrameworkSessionProps(req.query),
     });
     const storedSession = await manageSession(sessionId, sessionData);
 
@@ -316,7 +324,7 @@ router.get("/haip-offer-tx-code", async (req, res) => {
 
     const credentialType = getCredentialType(req);
 
-    const sessionData = createPreAuthSessionData({ isHaip: true, txCodeRequired: true });
+    const sessionData = createPreAuthSessionData({ isHaip: true, txCodeRequired: true, additionalProps: trustFrameworkSessionProps(req.query) });
     const storedSession = await manageSession(sessionId, sessionData);
 
     const credentialOffer = createPreAuthCredentialOfferUri(

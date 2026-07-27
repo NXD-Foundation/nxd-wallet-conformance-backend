@@ -1,4 +1,5 @@
 import { decode } from "cbor-x";
+import { certificateFingerprint, derToPem } from "../trust/crypto.js";
 import { selectSatisfiedCs02ClaimSet } from "./cs02DcqlCore.js";
 
 function normalizeNameSpaces(nameSpaces) {
@@ -63,6 +64,24 @@ export function extractMdocClaimsByNamespace(mdocInput, { fallbackDocType = null
   return {
     docType: document.docType || fallbackDocType || null,
     claimsByNamespace,
+  };
+}
+
+export function extractMdocIssuerCertificate(mdocInput) {
+  const decoded = decodeMdocInput(mdocInput);
+  const document = normalizeMdocDocument(decoded);
+  const issuerAuth = document.issuerSigned?.issuerAuth;
+  const coseSign1 = issuerAuth?.value || issuerAuth;
+  if (!Array.isArray(coseSign1) || coseSign1.length < 2) return null;
+
+  const headers = coseSign1[1];
+  const x5chain = headers instanceof Map ? headers.get(33) || headers.get("33") : headers?.[33] || headers?.["33"];
+  const leaf = Array.isArray(x5chain) ? x5chain[0] : null;
+  if (!(Buffer.isBuffer(leaf) || leaf instanceof Uint8Array)) return null;
+  const certificatePem = derToPem(leaf);
+  return {
+    certificatePem,
+    certificateFingerprint: certificateFingerprint(certificatePem),
   };
 }
 

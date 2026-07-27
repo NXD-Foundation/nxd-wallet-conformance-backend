@@ -6,6 +6,9 @@
   "type": "module",
   "scripts": {
     "test": "mocha tests/**/*.js",
+    "test:trust": "mocha tests/trustProfile.test.js tests/trustCrypto.test.js tests/trustFetch.test.js tests/trustParsers.test.js tests/trustLoader.integration.test.js --exit",
+    "test:trust:live": "RUN_LIVE_TRUST_TESTS=1 mocha tests/trustLoader.live.integration.test.js --exit",
+    "test:trust:phase2": "mocha tests/trustResolver.test.js --exit",
     "test:cs02": "mocha tests/cs02TrustPolicy.test.js tests/cs02StatusList.test.js tests/cs02VerifierResponse.test.js tests/cs02SuccessfulFlowMatrix.test.js tests/cs02Encoding.test.js tests/fcafApplicability.test.js tests/fcafDispositionRegister.test.js --exit",
     "test:fcaf-register": "mocha tests/fcafApplicability.test.js tests/fcafDispositionRegister.test.js --exit",
     "test:cs02-flow": "mocha tests/cs02SuccessfulFlowMatrix.test.js --exit",
@@ -19,6 +22,7 @@
   "dependencies": {
     "@animo-id/mdoc": "^0.5.2",
     "@auth0/mdl": "^2.2.0",
+    "@xmldom/xmldom": "^0.8.10",
     "@cef-ebsi/key-did-resolver": "^2.0.5",
     "@ceramicnetwork/key-did-resolver": "^0.2.2",
     "@digitalbazaar/did-method-key": "^5.2.0",
@@ -56,6 +60,8 @@
     "qr-image": "^3.2.0",
     "redis": "^4.7.0",
     "uuid": "^9.0.1",
+    "xml-crypto": "^6.1.2",
+    "xpath": "^0.0.33",
     "waltid-sd-jwt": "^1.2311200231.0",
     "zlib": "^1.0.5"
   },

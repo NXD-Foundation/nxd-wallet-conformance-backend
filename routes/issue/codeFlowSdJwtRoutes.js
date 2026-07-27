@@ -80,6 +80,7 @@ import {
   issuanceRequestRequiresWua,
   extractRequestedCredentialConfigurationIds,
 } from "../../utils/wuaEnforcementPolicy.js";
+import { trustFrameworkSessionProps } from "../../utils/trustFrameworkPolicy.js";
 
 const codeFlowRouterSDJWT = express.Router();
 
@@ -91,6 +92,10 @@ async function manageSession(uuid, sessionData) {
   const existingSession = await getCodeFlowSession(uuid);
   if (!existingSession) {
     await storeCodeFlowSession(uuid, sessionData);
+  } else if (sessionData.trustPolicy && !existingSession.trustPolicy) {
+    const upgraded = { ...existingSession, trustPolicy: sessionData.trustPolicy };
+    await storeCodeFlowSession(uuid, upgraded);
+    return upgraded;
   }
   return existingSession;
 }
@@ -458,7 +463,7 @@ codeFlowRouterSDJWT.get(["/offer-code-sd-jwt"], async (req, res) => {
     const credentialType = getCredentialType(req);
     const client_id_scheme = getClientIdScheme(req);
 
-    const sessionData = createCodeFlowSession(client_id_scheme, "code", false, false, signatureType);
+    const sessionData = createCodeFlowSession(client_id_scheme, "code", false, false, signatureType, trustFrameworkSessionProps(req.query));
     await manageSession(sessionId, sessionData);
 
     // Allow caller to control wallet invocation scheme (openid-credential-offer:// by default, haip:// if requested)
@@ -493,7 +498,7 @@ codeFlowRouterSDJWT.get(["/offer-code-sd-jwt-dynamic"], async (req, res) => {
     const credentialType = getCredentialType(req);
     const client_id_scheme = getClientIdScheme(req);
 
-    const sessionData = createCodeFlowSession(client_id_scheme, "code", true);
+    const sessionData = createCodeFlowSession(client_id_scheme, "code", true, false, null, trustFrameworkSessionProps(req.query));
     await manageSession(sessionId, sessionData);
 
     const invocationScheme =
@@ -527,7 +532,7 @@ codeFlowRouterSDJWT.get(["/offer-code-defered"], async (req, res) => {
     const credentialType = getCredentialType(req);
     const client_id_scheme = getClientIdScheme(req);
 
-    const sessionData = createCodeFlowSession(client_id_scheme, "code", false, true);
+    const sessionData = createCodeFlowSession(client_id_scheme, "code", false, true, null, trustFrameworkSessionProps(req.query));
     await manageSession(sessionId, sessionData);
 
     const invocationScheme =

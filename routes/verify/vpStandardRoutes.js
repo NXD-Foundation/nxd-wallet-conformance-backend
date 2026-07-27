@@ -26,6 +26,7 @@ import {
 } from "../../services/cacheServiceRedis.js";
 import { makeSessionLogger, logHttpRequest, logHttpResponse } from "../../utils/sessionLogger.js";
 import { isVerifierCs02StrictMode } from "../../utils/cs02VerifierRequest.js";
+import { trustFrameworkSessionProps } from "../../utils/trustFrameworkPolicy.js";
 
 const vpStandardRouter = express.Router();
 
@@ -169,6 +170,7 @@ vpStandardRouter.get("/vp/request", async (req, res) => {
     // Generate VP request
     const result = await generateVPRequest({
       sessionId,
+      trustPolicy: trustFrameworkSessionProps(req.query).trustPolicy,
       responseMode,
       presentationDefinition,
       clientId,
@@ -538,4 +540,3 @@ vpStandardRouter
   });
 
 export default vpStandardRouter;
-

@@ -10,6 +10,7 @@ import {
   validateCs02KeyBindingJwtClaims,
   validateCs02MdocPresentation,
   validateCs02ResponseSubmission,
+  validateCs02SdJwtEntriesInVpToken,
   validateCs02SdJwtIssuerAuthenticity,
   validateCs02SdJwtPresentation,
   verifyCs02OuterResponseJwt,
@@ -833,6 +834,29 @@ describe("CS-02 verifier response validation (Phase 4)", () => {
         },
       });
       expect(result).to.include({ ok: true, doctype: "test" });
+    });
+
+    it("enforces mdoc trust from context.session only for opted-in sessions", async () => {
+      const vpToken = { "mdoc-id": buildMdocB64ForTests("test") };
+      const dcqlQuery = [{ id: "mdoc-id", format: "mso_mdoc", meta: { doctype_value: "test" } }];
+      await validateCs02SdJwtEntriesInVpToken(
+        vpToken,
+        { credentials: dcqlQuery },
+        { session: { nonce: "n", trustPolicy: { mode: "webuild", profile: "webuild-wp4-pilot" } } },
+        { strict: true },
+      ).then(
+        () => expect.fail("Expected opted-in mdoc trust validation to reject missing issuer certificate evidence"),
+        (error) => expect(error).to.be.instanceOf(Cs02VerifierResponseError),
+      );
+
+      const decisions = await validateCs02SdJwtEntriesInVpToken(
+        vpToken,
+        { credentials: dcqlQuery },
+        { session: { nonce: "n" } },
+        { strict: true },
+      );
+      expect(decisions).to.have.length(1);
+      expect(decisions[0].trust).to.equal(null);
     });
 
     it("rejects wrong mso_mdoc doctype when requested by DCQL", () => {

@@ -21,6 +21,7 @@ import {
   clearSessionContext,
 } from "../../services/cacheServiceRedis.js";
 import { makeSessionLogger, logHttpRequest, logHttpResponse } from "../../utils/sessionLogger.js";
+import { trustFrameworkSessionProps } from "../../utils/trustFrameworkPolicy.js";
 
 const didJwkRouter = express.Router();
 
@@ -63,6 +64,7 @@ didJwkRouter.get("/generateVPRequest", async (req, res) => {
 
     const result = await generateVPRequest({
       sessionId,
+      trustPolicy: trustFrameworkSessionProps(req.query).trustPolicy,
       responseMode,
       presentationDefinition: null,
       clientId: client_id,
@@ -105,6 +107,7 @@ didJwkRouter.get("/generateVPRequestGET", async (req, res) => {
 
     const result = await generateVPRequest({
       sessionId,
+      trustPolicy: trustFrameworkSessionProps(req.query).trustPolicy,
       responseMode,
       presentationDefinition: null,
       clientId: client_id,
@@ -147,6 +150,7 @@ didJwkRouter.get("/generateVPRequestDCQL", async (req, res) => {
 
     const result = await generateVPRequest({
       sessionId,
+      trustPolicy: trustFrameworkSessionProps(req.query).trustPolicy,
       responseMode,
       presentationDefinition: null,
       clientId: client_id,
@@ -189,6 +193,7 @@ didJwkRouter.get("/generateVPRequestDCQLGET", async (req, res) => {
 
     const result = await generateVPRequest({
       sessionId,
+      trustPolicy: trustFrameworkSessionProps(req.query).trustPolicy,
       responseMode,
       presentationDefinition: null,
       clientId: client_id,
@@ -235,6 +240,7 @@ didJwkRouter.get("/generateVPRequestTransaction", async (req, res) => {
 
     const result = await generateVPRequest({
       sessionId,
+      trustPolicy: trustFrameworkSessionProps(req.query).trustPolicy,
       responseMode,
       presentationDefinition: null,
       clientId: client_id,

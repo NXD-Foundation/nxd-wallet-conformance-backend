@@ -3,7 +3,9 @@ import { v4 as uuidv4 } from "uuid";
 import qr from "qr-image";
 import imageDataURI from "image-data-uri";
 import { streamToBuffer } from "@jorgeferrero/stream-to-buffer";
-import { generateNonce, buildVpRequestJWT, derBase64ToPemCert } from "./cryptoUtils.js";
+import { generateNonce, buildVpRequestJWT, derBase64ToPemCert, loadVerifierP12 } from "./cryptoUtils.js";
+import { certificateFromX5c } from "../trust/crypto.js";
+import { checkAccessCertificateTrust, isTrustFrameworkSession, loadConfiguredAccessCertificate } from "./trustFrameworkPolicy.js";
 import {
   filterClientMetadataForCs02,
   createOpenId4VpRequestUrl,
@@ -102,6 +104,7 @@ export function createPreAuthSessionData({
   txCodeRequired = false,
   credentialType = null,
   additionalProps = {},
+  trustFramework = false,
 } = {}) {
   const requestedCredentialConfigurationIds = credentialType ? [credentialType] : [];
   const requiresWua = issuanceRequestRequiresWua({ credential_configuration_id: credentialType });
@@ -110,6 +113,7 @@ export function createPreAuthSessionData({
     ...(requestedCredentialConfigurationIds.length ? { requestedCredentialConfigurationIds } : {}),
     ...(credentialType ? { credentialConfigurationId: credentialType } : {}),
     ...(requiresWua ? { requiresWua: true } : {}),
+    ...(trustFramework === true ? { trustPolicy: { mode: "webuild", profile: "webuild-wp4-pilot" } } : {}),
   });
   if (txCodeRequired) {
     session.txCodeRequired = true;
@@ -764,7 +768,7 @@ export const createSessionWithPayload = (credentialPayload, isHaip = true) => {
  * @param {string} signatureType - Signature type
  * @returns {Object} Code flow session object
  */
-export const createCodeFlowSession = (client_id_scheme, flowType, isDynamic = false, isDeferred = false, signatureType = null) => {
+export const createCodeFlowSession = (client_id_scheme, flowType, isDynamic = false, isDeferred = false, signatureType = null, additionalProps = {}) => {
   const session = {
     walletSession: null,
     requests: null,
@@ -772,6 +776,7 @@ export const createCodeFlowSession = (client_id_scheme, flowType, isDynamic = fa
     status: "pending",
     client_id_scheme: client_id_scheme,
     flowType: flowType,
+    ...additionalProps,
   };
 
   if (isDynamic) session.isDynamic = true;
@@ -1157,6 +1162,7 @@ export async function generateVPRequest(params) {
     cs07DcApi = false,
     cs07VerifierOrigin = null,
     cs07ProfileId = null,
+    trustPolicy = null,
   } = params;
   const cs02StrictMode = isVerifierCs02StrictMode();
   let effectivePresentationDefinition = presentationDefinition;
@@ -1204,6 +1210,42 @@ export async function generateVPRequest(params) {
     jar_alg: jarAlg || CONFIG.DEFAULT_JAR_ALG,
     client_id: clientId,
   };
+  if (trustPolicy) {
+    sessionData.trustPolicy = trustPolicy;
+  }
+
+  if (isTrustFrameworkSession(sessionData) && String(clientId || "").startsWith("x509_san_")) {
+    const verifierP12 = loadVerifierP12();
+    const accessCertificatePem = certificateFromX5c(verifierP12.certChain);
+    const accessDecision = await checkAccessCertificateTrust({
+      session: sessionData,
+      certificatePem: accessCertificatePem,
+      entityId: clientId,
+      role: "wrpac-provider",
+      operation: "verify-access-certificate",
+    });
+    sessionData.accessCertificateTrust = accessDecision;
+    if (!accessDecision?.trusted) {
+      await storeVPSessionData(sessionId, sessionData);
+      throw new Error(`Verifier access certificate trust rejected: ${accessDecision?.reasonCode || "TRUST_EVALUATION_INDETERMINATE"}`);
+    }
+
+    const registrationCertificatePem = await loadConfiguredAccessCertificate("wrprc-provider");
+    if (registrationCertificatePem) {
+      const registrationDecision = await checkAccessCertificateTrust({
+        session: sessionData,
+        certificatePem: registrationCertificatePem,
+        entityId: clientId,
+        role: "wrprc-provider",
+        operation: "verify-registration-certificate",
+      });
+      sessionData.registrationCertificateTrust = registrationDecision;
+      if (!registrationDecision?.trusted) {
+        await storeVPSessionData(sessionId, sessionData);
+        throw new Error(`Verifier registration certificate trust rejected: ${registrationDecision?.reasonCode || "TRUST_EVALUATION_INDETERMINATE"}`);
+      }
+    }
+  }
   if (cs07DcApi) {
     sessionData.transport_profile = "cs07-dc-api";
     sessionData.profile_id = cs07ProfileId;
@@ -1950,7 +1992,7 @@ export const validateWUA = async (wuaJwt, sessionId = null, issuerMetadata = nul
       }
     }
 
-    return { valid: true, payload: decoded.payload, warnings };
+    return { valid: true, payload: decoded.payload, header: decoded.header, warnings };
   } catch (error) {
     const errorMsg = `WUA validation error: ${error.message}`;
     if (sessionId) {

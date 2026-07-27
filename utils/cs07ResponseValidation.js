@@ -8,7 +8,7 @@ import {
  * This keeps the DC API transport layer independent of SD-JWT versus mdoc.
  */
 export async function validateCs07CredentialPresentations({ vpToken, session, options = {} } = {}) {
-  await validateCs02SdJwtEntriesInVpToken(
+  const trustDecisions = await validateCs02SdJwtEntriesInVpToken(
     vpToken,
     session?.dcql_query,
     {
@@ -25,6 +25,7 @@ export async function validateCs07CredentialPresentations({ vpToken, session, op
       trustPolicyOptions: options.trustPolicyOptions,
       env: options.env,
       log: options.log,
+      session,
     },
     options.cs02 || resolveCs02ResponseOptions(),
   );
@@ -34,5 +35,6 @@ export async function validateCs07CredentialPresentations({ vpToken, session, op
   return {
     verifiedCredentialIds,
     verification: "dcql_and_credential_binding_validated",
+    ...(trustDecisions.some((entry) => entry.trust) ? { trustDecisions } : {}),
   };
 }
