@@ -470,6 +470,13 @@ mismatched, withdrawn, stale, or revoked provider are rejected with an
 explainable session decision, while existing CS-02/CS-07 structural checks and
 non-opted-in compatibility flows remain unchanged.
 
+For roles that intentionally share an ETSI LoTE type (currently PuB-EAA and
+non-qualified EAA), a consumer must not select the first pointer returned by
+the LoTL. The loader fails closed when multiple same-type pointers exist unless
+the profile specifies the exact authenticated pointer with `pointerUrl`. A
+future profile may replace that exact selector with authenticated publisher
+scope/anchor rules once WP4 publishes the authoritative distinction.
+
 #### Verification-context alignment plan
 
 The current shared verifier APIs carry request/session-derived values in a
@@ -477,6 +484,11 @@ The current shared verifier APIs carry request/session-derived values in a
 Phase 4 exposed an ambiguity where a caller supplied `context.session`, while
 an mdoc branch read `options.session`. The immediate defect is fixed by using
 `context.session`; the following migration keeps that distinction explicit.
+
+Implementation status: the shared CS-02 entry point now normalizes a
+verification context from the session and no longer forwards it through
+`options`. CS-07 and direct-post callers supply the VP session once; the
+remaining steps migrate the lower-level direct-call compatibility fields.
 
 1. Define one `VerificationContext` shape for session, nonce, client/audience,
   transaction data, credential/key material, logging, and transport-derived

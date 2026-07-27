@@ -12,10 +12,7 @@ export async function validateCs07CredentialPresentations({ vpToken, session, op
     vpToken,
     session?.dcql_query,
     {
-      sessionNonce: session?.nonce,
-      clientId: session?.client_id,
-      expectedAudience: session?.expected_audience,
-      transactionData: session?.transaction_data,
+      session,
       computeSdHash: options.computeSdHash,
       issuerVerificationKey: options.issuerVerificationKey,
       issuerVerificationJwk: options.issuerVerificationJwk,
@@ -25,7 +22,6 @@ export async function validateCs07CredentialPresentations({ vpToken, session, op
       trustPolicyOptions: options.trustPolicyOptions,
       env: options.env,
       log: options.log,
-      session,
     },
     options.cs02 || resolveCs02ResponseOptions(),
   );

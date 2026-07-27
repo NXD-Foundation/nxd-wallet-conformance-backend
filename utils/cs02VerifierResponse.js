@@ -64,6 +64,12 @@ export class Cs02VerifierResponseError extends Error {
   }
 }
 
+function assertNoSessionInValidationOptions(options) {
+  if (options && Object.prototype.hasOwnProperty.call(options, "session")) {
+    throw new TypeError("Validation options must not contain session; use context.session");
+  }
+}
+
 export function validateCs02EncryptedAuthorizationResponse(payload, session) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     throw new Cs02VerifierResponseError(
@@ -780,17 +786,18 @@ function validateIssuerCredentialClaims({
   }
 }
 
-async function resolveIssuerVerificationKey({ header, payload, options }) {
-  if (options?.issuerVerificationKey) return options.issuerVerificationKey;
-  if (options?.issuerVerificationJwk) return importJWK(options.issuerVerificationJwk, header.alg);
-  if (typeof options?.resolveIssuerVerificationKey === "function") {
-    const key = await options.resolveIssuerVerificationKey({ header, payload });
+async function resolveIssuerVerificationKey({ header, payload, context = {}, options = {} }) {
+  const source = { ...options, ...context };
+  if (source.issuerVerificationKey) return source.issuerVerificationKey;
+  if (source.issuerVerificationJwk) return importJWK(source.issuerVerificationJwk, header.alg);
+  if (typeof source.resolveIssuerVerificationKey === "function") {
+    const key = await source.resolveIssuerVerificationKey({ header, payload });
     if (!key) return null;
     if (key.type === "public" || key.type === "private" || key.constructor?.name?.includes("Key")) return key;
     return importJWK(key, header.alg);
   }
-  if (Array.isArray(options?.issuerJwks?.keys)) {
-    const jwk = options.issuerJwks.keys.find((candidate) => {
+  if (Array.isArray(source.issuerJwks?.keys)) {
+    const jwk = source.issuerJwks.keys.find((candidate) => {
       if (header.kid && candidate.kid && candidate.kid !== header.kid) return false;
       if (candidate.use && candidate.use !== "sig") return false;
       if (candidate.alg && candidate.alg !== header.alg) return false;
@@ -826,6 +833,7 @@ async function resolveIssuerVerificationKey({ header, payload, options }) {
 export async function validateCs02SdJwtIssuerAuthenticity({
   sdJwt,
   credQuery,
+  context = {},
   options = { strict: true },
 } = {}) {
   if (!options.strict) return { ok: true, skipped: true };
@@ -843,7 +851,7 @@ export async function validateCs02SdJwtIssuerAuthenticity({
   }
 
   const issuerPayload = decodeJwt(issuerJwt);
-  const verificationKey = await resolveIssuerVerificationKey({ header, payload: issuerPayload, options });
+  const verificationKey = await resolveIssuerVerificationKey({ header, payload: issuerPayload, context, options });
   let issuerSignature = {
     verified: false,
     enforced: false,
@@ -914,8 +922,10 @@ export async function validateCs02SdJwtPresentation({
   transactionData,
   computeSdHash,
   credQuery,
+  context = {},
   options = { strict: true },
 }) {
+  assertNoSessionInValidationOptions(options);
   if (!options.strict || typeof sdJwt !== "string" || sdJwt.length === 0) {
     return { ok: true };
   }
@@ -923,6 +933,7 @@ export async function validateCs02SdJwtPresentation({
   const issuerAuthenticity = await validateCs02SdJwtIssuerAuthenticity({
     sdJwt,
     credQuery,
+    context,
     options,
   });
 
@@ -967,12 +978,12 @@ export async function validateCs02SdJwtPresentation({
   }
 
   const issuerPayload = issuerAuthenticity.issuerPayload;
-  const trustPolicyOptions = options.trustPolicyOptions || resolveCs02TrustPolicyOptions(options.env);
+  const trustPolicyOptions = context.trustPolicyOptions || options.trustPolicyOptions || resolveCs02TrustPolicyOptions(context.env || options.env);
   const issuerTrust = await validateCs02IssuerTrust(issuerPayload?.iss, trustPolicyOptions);
   let credentialTrust = null;
-  if (isTrustFrameworkSession(options.session)) {
+  if (isTrustFrameworkSession(context.session)) {
     credentialTrust = await checkVerifierCredentialTrust({
-      session: options.session,
+      session: context.session,
       payload: issuerPayload,
       header: issuerAuthenticity.header,
       format: credQuery?.format || "dc+sd-jwt",
@@ -991,9 +1002,9 @@ export async function validateCs02SdJwtPresentation({
   let credentialStatus;
   try {
     credentialStatus = await validateCs02CredentialStatusList(sdJwt, {
-      env: options.env,
+      env: context.env || options.env,
       trustPolicyOptions,
-      log: options.log,
+      log: context.log || options.log,
     });
   } catch (error) {
     if (error instanceof Cs02StatusListError) {
@@ -1011,13 +1022,27 @@ export async function validateCs02SdJwtPresentation({
   };
 }
 
+export function createCs02VerificationContext(input = {}) {
+  const session = input.session || null;
+  return {
+    ...input,
+    session,
+    sessionNonce: input.sessionNonce ?? session?.nonce,
+    clientId: input.clientId ?? session?.client_id,
+    expectedAudience: input.expectedAudience ?? session?.expected_audience ?? session?.client_id,
+    transactionData: input.transactionData ?? session?.transaction_data,
+  };
+}
+
 export async function validateCs02SdJwtEntriesInVpToken(
   vpTokenObject,
   dcqlQuery,
   context,
   options = { strict: true },
 ) {
+  assertNoSessionInValidationOptions(options);
   if (!options.strict || !isPlainObject(vpTokenObject)) return [];
+  const verificationContext = createCs02VerificationContext(context);
 
   const decisions = [];
 
@@ -1033,9 +1058,9 @@ export async function validateCs02SdJwtEntriesInVpToken(
           credQuery,
         });
         let credentialTrust = null;
-        if (isTrustFrameworkSession(context.session)) {
+        if (isTrustFrameworkSession(verificationContext.session)) {
           credentialTrust = await checkVerifierCredentialTrust({
-            session: context.session,
+            session: verificationContext.session,
             certificatePem: mdocResult?.issuerCertificate?.certificatePem,
             format: MDOC_FORMAT,
             doctype: credQuery?.meta?.doctype_value,
@@ -1059,24 +1084,14 @@ export async function validateCs02SdJwtEntriesInVpToken(
     for (const presentation of presentations) {
       const result = await validateCs02SdJwtPresentation({
         sdJwt: presentation,
-        sessionNonce: context.sessionNonce,
-        clientId: context.clientId,
-        expectedAudience: context.expectedAudience,
-        transactionData: context.transactionData,
-        computeSdHash: context.computeSdHash,
+        sessionNonce: verificationContext.sessionNonce,
+        clientId: verificationContext.clientId,
+        expectedAudience: verificationContext.expectedAudience,
+        transactionData: verificationContext.transactionData,
+        computeSdHash: verificationContext.computeSdHash,
         credQuery,
-        options: {
-          ...options,
-          resolveIssuerVerificationKey: context.resolveIssuerVerificationKey,
-          issuerVerificationKey: context.issuerVerificationKey,
-          issuerVerificationJwk: context.issuerVerificationJwk,
-          issuerJwks: context.issuerJwks,
-          rejectUnsolicitedDisclosures: context.rejectUnsolicitedDisclosures,
-          trustPolicyOptions: context.trustPolicyOptions,
-          env: context.env,
-          log: context.log,
-          session: context.session,
-        },
+        context: verificationContext,
+        options,
       });
       decisions.push({ id: credQuery.id, format: credQuery.format, trust: result.credentialTrust || null });
     }

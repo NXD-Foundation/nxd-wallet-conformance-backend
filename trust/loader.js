@@ -53,9 +53,30 @@ async function loadByFormat({ profile, format, fetchImpl, clock, listType = null
   return parsed;
 }
 
-function pointerForType(pointers, typeProfile, format) {
+export function pointerForType(pointers, typeProfile, format) {
   const matches = pointers.filter((pointer) => pointer.listTypeUri === typeProfile.referenceUri);
-  return matches.find((pointer) => pointer.mimeType.includes(format)) || matches[0] || null;
+  const formatMatches = matches.filter((pointer) => pointer.mimeType.includes(format));
+  const candidates = formatMatches.length ? formatMatches : matches;
+  if (!candidates.length) return null;
+
+  if (typeProfile.pointerUrl) {
+    const selected = candidates.filter((pointer) => pointer.url === typeProfile.pointerUrl);
+    if (selected.length === 1) return selected[0];
+    throw new TrustListError(
+      "Configured trust-list pointer URL is missing or ambiguous",
+      TRUST_REASON_CODES.POINTER_NOT_FOUND,
+      { referenceUri: typeProfile.referenceUri, pointerUrl: typeProfile.pointerUrl },
+    );
+  }
+
+  if (candidates.length > 1) {
+    throw new TrustListError(
+      "Multiple trust-list pointers match this role; configure pointerUrl to disambiguate",
+      TRUST_REASON_CODES.LIST_PROFILE_INVALID,
+      { referenceUri: typeProfile.referenceUri, candidates: candidates.map((pointer) => pointer.url) },
+    );
+  }
+  return candidates[0];
 }
 
 export async function loadTrustSnapshot({ profile, fetchImpl = globalThis.fetch, clock = () => new Date(), format = profile.formats.preferred, listTypes = Object.keys(profile.listTypes) } = {}) {

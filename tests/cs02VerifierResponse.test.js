@@ -857,6 +857,16 @@ describe("CS-02 verifier response validation (Phase 4)", () => {
       );
       expect(decisions).to.have.length(1);
       expect(decisions[0].trust).to.equal(null);
+
+      await validateCs02SdJwtEntriesInVpToken(
+        vpToken,
+        { credentials: dcqlQuery },
+        { session: { nonce: "n" } },
+        { strict: true, session: { trustPolicy: { mode: "webuild", profile: "webuild-wp4-pilot" } } },
+      ).then(
+        () => expect.fail("Expected deprecated options.session to be rejected"),
+        (error) => expect(error.message).to.match(/context\.session/),
+      );
     });
 
     it("rejects wrong mso_mdoc doctype when requested by DCQL", () => {

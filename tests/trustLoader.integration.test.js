@@ -2,7 +2,7 @@ import { expect } from "chai";
 import fs from "node:fs/promises";
 import http from "node:http";
 import { loadTrustProfile } from "../trust/profile.js";
-import { loadTrustSnapshot } from "../trust/loader.js";
+import { loadTrustSnapshot, pointerForType } from "../trust/loader.js";
 import { evaluateTrust } from "../trust/evaluate.js";
 import { certificateFingerprint } from "../trust/crypto.js";
 
@@ -68,5 +68,16 @@ describe("Phase 1 local trust-chain integration", () => {
     const snapshot = await loadTrustSnapshot({ profile, fetchImpl: fetchLocal, clock: () => new Date("2026-07-27T00:00:00Z") });
     const result = evaluateTrust({ snapshot, role: "pid-provider", presentedIdentity: { entityId: "Test PID Provider", certificateFingerprint: "00".repeat(32) } });
     expect(result).to.include({ trusted: false, reasonCode: "ANCHOR_MISMATCH" });
+  });
+
+  it("fails closed on same-type pointers until the profile selects one", () => {
+    const pointers = [
+      { url: "https://ec.example/eaa.json", mimeType: "application/json", listTypeUri: "urn:eaa" },
+      { url: "https://member-state.example/eaa.json", mimeType: "application/json", listTypeUri: "urn:eaa" },
+    ];
+    expect(() => pointerForType(pointers, { referenceUri: "urn:eaa" }, "json"))
+      .to.throw(/Multiple trust-list pointers/);
+    expect(pointerForType(pointers, { referenceUri: "urn:eaa", pointerUrl: "https://ec.example/eaa.json" }, "json"))
+      .to.equal(pointers[0]);
   });
 });
