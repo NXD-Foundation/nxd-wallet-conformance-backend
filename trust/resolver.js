@@ -1,6 +1,8 @@
 import { evaluateTrust } from "./evaluate.js";
 import { listTypeProfile } from "./profile.js";
 import { TRUST_REASON_CODES, TrustListError } from "./errors.js";
+import { checkCertificateRevocation } from "./revocation.js";
+import { evaluateRegistrarScope } from "./scope.js";
 
 const ROLES = new Set([
   "pid-provider", "wallet-provider", "wrpac-provider", "wrprc-provider",
@@ -60,7 +62,7 @@ function assertSnapshotFresh(snapshot, evaluationTime, allowStaleSnapshot) {
   if (stale) throw new TrustListError("Authenticated trust snapshot is stale", TRUST_REASON_CODES.LIST_STALE, { nextUpdate: stale.scheme.nextUpdate });
 }
 
-export function createTrustResolver({ profile, snapshot = null, snapshotProvider = null, clock = () => new Date() } = {}) {
+export function createTrustResolver({ profile, snapshot = null, snapshotProvider = null, scopeProvider = null, clock = () => new Date() } = {}) {
   if (!profile) throw new TypeError("Trust resolver requires a profile");
   if (!snapshot && typeof snapshotProvider !== "function") throw new TypeError("Trust resolver requires a snapshot or snapshotProvider");
 
@@ -81,15 +83,30 @@ export function createTrustResolver({ profile, snapshot = null, snapshotProvider
         if (policy.requireRevocation && !list?.revocation) {
           return outputError(currentSnapshot, request, new TrustListError("Required revocation evidence is unavailable", TRUST_REASON_CODES.REVOCATION_UNKNOWN));
         }
+        const suppliedScope = request.credentialContext?.scopeEvidence
+          || (scopeProvider ? await scopeProvider({ profile, snapshot: currentSnapshot, request }) : null);
+        const credentialContext = {
+          ...(request.credentialContext || {}),
+          scopeEvidence: evaluateRegistrarScope({ evidence: suppliedScope, credentialContext: request.credentialContext, operation: request.operation }),
+        };
         const result = evaluateTrust({
           snapshot: currentSnapshot,
           role: request.role,
           operation: request.operation,
           presentedIdentity: request.presentedIdentity,
-          credentialContext: request.credentialContext || {},
+          credentialContext,
           evaluationTime,
           acceptedStatuses: policy.acceptedStatuses,
         });
+        if (result.trusted && request.presentedIdentity.certificateChain?.length) {
+          const chain = request.presentedIdentity.certificateChain;
+          const issuerPem = chain[1] || null;
+          const revocation = await checkCertificateRevocation({
+            certificatePem: chain[0], issuerPem, evaluationTime,
+            network: { timeoutMs: profile.network.timeoutMs, maxBytes: profile.network.maxBytes, allowInsecureHttp: profile.network.allowInsecureHttp === true },
+          });
+          result.evidence.revocation = revocation;
+        }
         return {
           ...result,
           reasonCode: result.trusted ? TRUST_REASON_CODES.TRUSTED : result.reasonCode,

@@ -44,6 +44,10 @@ retention (30 minutes and one hour respectively) are unchanged. Log correlation
 is async-scoped with `AsyncLocalStorage`, so concurrent requests cannot assign
 one session's console output to another session.
 
+This repository is a test framework: `/logs` intentionally exposes captured
+protocol diagnostics for interoperability analysis. It is not a production-safe
+public logging interface and must not be exposed with real credentials or tokens.
+
 The logging-context migration is complete: issuer, verifier, and wallet-client
 entry points use the shared async context, and the former process-global
 `setSessionContext`/`clearSessionContext` API has been removed. Flat session
@@ -274,15 +278,13 @@ Section 3.6 and Section 4.2.
 - Current WUA-required issuance rejects missing or expired core WIA and key
 attestation status fields, but incomplete status-list detail is currently
 warning-only.
-- Trust-list enforcement is intentionally out of scope today. Header-carried
-  `x5c` or `jwk` material can be used as a transitional interoperability
-  fallback when no trusted JWKS is configured.
 - The Phase 0/1 WE BUILD trust-list consumer now exists under `trust/`, with
   the pilot profile in `data/trust/webuild-wp4-pilot.json`, synthetic signed
-  JSON/XML fixtures, and the focused command `npm run test:trust`. It is not
-  wired into issuer or verifier enforcement yet; the live profile deliberately
-  has no bootstrap LoTL signer anchor until WP4 publishes authoritative
-  material.
+  JSON/XML fixtures, and the focused command `npm run test:trust`. Opted-in
+  issuance and verification flows enforce it; sessions without
+  `trustFramework=true` retain compatibility behavior. The live profile pins
+  the current WP4 signer as documented pilot TOFU material; embedded-`x5c`
+  bootstrap is available only through an explicit test-only override.
 - WE BUILD’s published JAdES JSON is signed over WP4 canonical JSON: object
   keys are recursively sorted, JSON is compact, and non-ASCII characters are
   escaped. The verifier must reproduce those exact bytes after removing the
@@ -301,7 +303,7 @@ warning-only.
   as `trustDecision` and written to the session log; sessions without the flag
   retain compatibility behavior. Verifier credential trust remains Phase 4
   work.
-- Phase 4 is in progress with a shared verifier trust adapter. It consumes
+- Phase 4 uses a shared verifier trust adapter. It consumes
   only cryptographically verified SD-JWT issuer evidence, maps credential
   context (`vct`/`doctype`) to explicit WP4 provider roles, and composes trust
   results with the existing signature, key-binding, DCQL, and status checks.
@@ -314,6 +316,18 @@ warning-only.
   implemented for opted-in sessions. WRPRC is supported when deployment
   configuration supplies the distinct certificate through
   `TRUST_WRPRC_CERT_PATH`; otherwise no WRPRC decision is attempted.
+- Listed certificates are accepted as an exact service leaf or as a CA anchor
+  for a presented chain. Validity, chain signatures, CA constraints, and
+  digital-signature key usage are checked. If a certificate advertises CRL
+  distribution points, invalid, stale, unavailable, or revoking CRLs fail an
+  opted-in decision; certificates without endpoints are recorded as
+  `not-advertised`.
+- Registrars are generic: registration data may describe approved attestation
+  types, while LoTEs publish provider anchors and status. NXD's current EAA
+  LoTE has provider services and anchors but no registrar reference or
+  `vct`/`doctype` scope. Trusted registrar scope evidence is enforced when
+  available; absent evidence is temporarily allowed as `scope-unverified` and
+  must be revisited before production hardening.
 - Production/conformance hardening still needs trusted Wallet Provider material
 and complete status-list validation; keep any self-contained-key fallback
 development-only when that work lands.

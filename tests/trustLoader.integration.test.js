@@ -40,6 +40,7 @@ describe("Phase 1 local trust-chain integration", () => {
     profile.lotl.jsonUrl = `${baseUrl}/list_of_trusted_lists.json`;
     profile.lotl.xmlUrl = `${baseUrl}/list_of_trusted_lists.xml`;
     profile.network.allowInsecureHttp = true;
+    profile.network.allowPrivateAddresses = true;
   });
 
   after(async () => new Promise((resolve) => server.close(resolve)));

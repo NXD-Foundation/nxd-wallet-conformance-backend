@@ -1,5 +1,5 @@
 import { decodeJwt, decodeProtectedHeader } from "jose";
-import { certificateFingerprint, certificateFromX5c } from "../trust/crypto.js";
+import { certificateFingerprint, certificateFromX5c, certificatesFromX5c } from "../trust/crypto.js";
 import { createTrustResolver } from "../trust/resolver.js";
 import { loadTrustProfile } from "../trust/profile.js";
 import { loadTrustSnapshot } from "../trust/loader.js";
@@ -52,6 +52,11 @@ async function runtimeTrustResolver() {
     if (process.env.TRUST_LOTL_SIGNER_FINGERPRINTS) {
       profile.bootstrap.loTLSignerFingerprints = process.env.TRUST_LOTL_SIGNER_FINGERPRINTS.split(",").map((value) => value.trim()).filter(Boolean);
     }
+    if (process.env.TRUST_ALLOW_EMBEDDED_LOTL_X5C === "true") {
+      profile.bootstrap.loTLSignerFingerprints = [];
+      profile.network.allowEmbeddedX5cBootstrapForTests = true;
+      console.warn("[TRUST] UNSAFE test-only LoTL bootstrap enabled: trusting embedded x5c");
+    }
     return createTrustResolver({
       profile,
       snapshotProvider: ({ profile: selectedProfile, request }) => loadTrustSnapshot({ profile: selectedProfile, listTypes: [request.role] }),
@@ -84,6 +89,7 @@ export async function checkWalletProviderTrust({ session, attestationJwt = null,
         issuer: resolvedPayload.iss || null,
         entityId: resolvedPayload.iss || null,
         certificateFingerprint: certificateFingerprint(certPem),
+        certificateChain: certificatesFromX5c(resolvedHeader.x5c),
       },
       credentialContext: { attestationType: operation },
       policy: { requireRevocation: false },
@@ -129,6 +135,7 @@ export async function checkVerifierCredentialTrust({
   }
   try {
     const certificate = certificatePem || (header?.x5c?.length ? certificateFromX5c(header.x5c) : null);
+    const certificateChain = header?.x5c?.length ? certificatesFromX5c(header.x5c) : certificate ? [certificate] : [];
     let certificateSubject = null;
     if (certificate) {
       try {
@@ -166,6 +173,7 @@ export async function checkVerifierCredentialTrust({
         issuer,
         entityId: issuer,
         certificateFingerprint: certificateFingerprint(certificate),
+        certificateChain,
       },
       credentialContext: {
         format,
@@ -218,6 +226,7 @@ export async function checkAccessCertificateTrust({
       presentedIdentity: {
         entityId,
         certificateFingerprint: certificateFingerprint(certificatePem),
+        certificateChain: [certificatePem],
       },
       credentialContext: { certificateType: role },
       policy: { requireRevocation: false },

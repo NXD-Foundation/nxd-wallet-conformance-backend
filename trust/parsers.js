@@ -63,11 +63,13 @@ export function parseJsonDocument(unsigned, { listType = null } = {}) {
       const serviceInfo = service.ServiceInformation || service;
       const identity = serviceInfo.ServiceDigitalIdentity || {};
       const certificates = fingerprintValues(identity);
+      const certificatePems = certValues(identity).map((value) => derToPem(Buffer.from(value, "base64")));
       return {
         name: firstMultilang(serviceInfo.ServiceName),
         type: serviceInfo.ServiceTypeIdentifier || null,
         status: serviceInfo.ServiceStatus || null,
         certificates,
+        certificatePems,
       };
     });
     return { id: entityId, name: entityId, services };
@@ -122,6 +124,7 @@ export function parseXmlDocument(document, { listType = null } = {}) {
           return null;
         }
       }).filter(Boolean),
+      certificatePems: nodesAt(service, "X509Certificate").map((node) => derToPem(Buffer.from(node.textContent.trim(), "base64"))),
     }],
   }));
   return { format: "xml", listType, scheme, pointers, entities, raw: root.toString() };

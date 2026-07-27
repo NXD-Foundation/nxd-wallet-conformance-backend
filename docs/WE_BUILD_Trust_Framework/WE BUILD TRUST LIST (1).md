@@ -253,6 +253,12 @@ No implementation phase is complete until WP4 supplies:
 - rollover and emergency-revocation procedure; and
 - an authoritative way to obtain the next bootstrap trust anchor.
 
+For the pilot, the current published JAdES signer SHA-256 fingerprint is a
+documented trust-on-first-use seed. It is pinned in the pilot profile and must
+be replaced or augmented with current/next rollover pins. The embedded `x5c`
+is document metadata, not an independent trust anchor; the only exception is
+an explicitly enabled, high-severity test-only override.
+
 
 
 ### 5.2 Freshness, cache and availability
@@ -263,6 +269,10 @@ source is unreachable. A cached authenticated snapshot may support a
 diagnostic or explicitly permitted offline mode, but stale data must be
 visible in the result and never silently treated as current.
 
+The test framework deliberately re-fetches authenticated LoTL/TL/CRL material
+for each decision and retains decision evidence only for the session-log TTL;
+it does not maintain a snapshot cache or historical store.
+
 ### 5.3 Status, certificate and revocation rules
 
 The resolver must use only entries whose effective service/entity status is
@@ -272,6 +282,12 @@ certificate revocation (CRL/OCSP or the applicable ETSI mechanism) are
 separate checks from list signature validation. Credential, WIA and KA
 revocation/status-list checks remain separate protocol checks, but their result
 must be combinable into one evidence record.
+
+This implementation checks CRL distribution points when advertised and fails
+closed for revoked, invalid, stale, or unavailable CRLs. OCSP is deferred.
+Registrar registration data may supply approved credential types; when absent,
+provider trust is allowed with explicit `scope-unverified` evidence pending a
+future scope-enforcement review.
 
 ## 6. Delivery phases
 

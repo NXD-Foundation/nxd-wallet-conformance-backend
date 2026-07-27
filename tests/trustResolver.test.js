@@ -55,6 +55,25 @@ describe("Phase 2 explicit trust resolver", () => {
     expect(revocation).to.include({ trusted: false, state: "indeterminate", reasonCode: "REVOCATION_UNKNOWN" });
   });
 
+  it("rejects supplied registrar scope evidence that does not authorize the credential", async () => {
+    const resolver = createTrustResolver({ profile, snapshot });
+    const result = await resolver.resolve({
+      framework: profile.id,
+      role: "pid-provider",
+      operation: "verify-credential",
+      presentedIdentity: { entityId: "entity-pid-provider" },
+      credentialContext: { vct: "urn:test:pid", scopeEvidence: { verified: true, credentialTypes: ["urn:test:other"] } },
+    });
+    expect(result).to.include({ trusted: false, reasonCode: "CREDENTIAL_SCOPE_INVALID" });
+  });
+
+  it("records unverified scope without rejecting a currently trusted provider", async () => {
+    const resolver = createTrustResolver({ profile, snapshot });
+    const result = await resolver.resolve({ framework: profile.id, role: "pid-provider", operation: "verify-credential", presentedIdentity: { entityId: "entity-pid-provider" }, credentialContext: { vct: "urn:test:pid" } });
+    expect(result).to.include({ trusted: true, reasonCode: "TRUSTED" });
+    expect(result.evidence.scope).to.deep.include({ status: "unverified" });
+  });
+
   it("rejects an injected stale snapshot unless explicitly allowed", async () => {
     const staleSnapshot = structuredClone(snapshot);
     staleSnapshot.lists["pid-provider"].scheme.nextUpdate = "2020-01-01T00:00:00Z";

@@ -31,6 +31,7 @@ async function loadOne({ document, profile, format, allowedFingerprints, listTyp
     verified = await verifyJadesJson(JSON.parse(document.bytes.toString("utf8")), {
       allowedFingerprints,
       algorithms: profile.algorithms.jades,
+      allowEmbeddedCertificate: isLoTL && profile.network.allowEmbeddedX5cBootstrapForTests === true,
     });
   } else {
     verified = verifyXadesXml(document.bytes, { allowedFingerprints });
@@ -44,7 +45,7 @@ async function loadOne({ document, profile, format, allowedFingerprints, listTyp
 
 async function loadByFormat({ profile, format, fetchImpl, clock, listType = null, isLoTL = false, allowedFingerprints }) {
   const url = isLoTL ? formatUrl(profile, format) : null;
-  const document = await fetchDocument(url, { fetchImpl, timeoutMs: profile.network.timeoutMs, maxBytes: profile.network.maxBytes, allowInsecureHttp: profile.network.allowInsecureHttp === true });
+  const document = await fetchDocument(url, { fetchImpl, timeoutMs: profile.network.timeoutMs, maxBytes: profile.network.maxBytes, allowInsecureHttp: profile.network.allowInsecureHttp === true, allowedHosts: profile.network.allowedHosts || null, allowPrivateAddresses: profile.network.allowPrivateAddresses === true });
   if ((format === "json") !== isJson(document)) {
     throw new TrustListError(`Expected ${format} document but received another format`, TRUST_REASON_CODES.LIST_PROFILE_INVALID);
   }
@@ -109,7 +110,7 @@ export async function loadTrustSnapshot({ profile, fetchImpl = globalThis.fetch,
       if (value.includes("BEGIN CERTIFICATE")) return certificateFingerprint(value);
       return certificateFingerprint(derToPem(Buffer.from(value, "base64")));
     });
-    const source = await fetchDocument(pointer.url, { fetchImpl, timeoutMs: profile.network.timeoutMs, maxBytes: profile.network.maxBytes, allowInsecureHttp: profile.network.allowInsecureHttp === true });
+    const source = await fetchDocument(pointer.url, { fetchImpl, timeoutMs: profile.network.timeoutMs, maxBytes: profile.network.maxBytes, allowInsecureHttp: profile.network.allowInsecureHttp === true, allowedHosts: profile.network.allowedHosts || null, allowPrivateAddresses: profile.network.allowPrivateAddresses === true });
     const selectedFormat = isJson(source) ? "json" : "xml";
     try {
       const parsed = await loadOne({ document: source, profile, format: selectedFormat, allowedFingerprints: allowed.length ? allowed : typeProfile.signerFingerprints, listType });

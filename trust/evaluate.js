@@ -1,4 +1,4 @@
-import { certificateFingerprint } from "./crypto.js";
+import { certificateFingerprint, validateCertificatePath } from "./crypto.js";
 import { listTypeProfile } from "./profile.js";
 import { TRUST_REASON_CODES } from "./errors.js";
 
@@ -7,8 +7,10 @@ function identityMatches(entity, presentedIdentity) {
   const values = [presentedIdentity.entityId, presentedIdentity.issuer, presentedIdentity.name].filter(Boolean);
   if (values.includes(entity.id) || values.includes(entity.name)) return true;
   if (presentedIdentity.certificateFingerprint) {
+    const chainFingerprints = (presentedIdentity.certificateChain || []).map((certificatePem) => certificateFingerprint(certificatePem));
     return entity.services?.some((service) =>
-      service.certificates?.includes(presentedIdentity.certificateFingerprint),
+      service.certificates?.includes(presentedIdentity.certificateFingerprint)
+      || service.certificates?.some((fingerprint) => chainFingerprints.includes(fingerprint)),
     ) || false;
   }
   return false;
@@ -21,7 +23,7 @@ function result(snapshot, trusted, reasonCode, extra = {}) {
     reasonCode,
     evidence: {
       profileId: snapshot.profileId,
-      lotl: { url: snapshot.lotl.source.url, format: snapshot.lotl.format, sequence: snapshot.lotl.scheme.sequence, signerFingerprint: snapshot.lotl.signer.fingerprint },
+      lotl: { url: snapshot.lotl.source.url, format: snapshot.lotl.format, sequence: snapshot.lotl.scheme.sequence, signerFingerprint: snapshot.lotl.signer.fingerprint, bootstrapMode: snapshot.lotl.signer.bootstrapMode || "pinned" },
       ...extra,
     },
   };
@@ -36,12 +38,25 @@ export function evaluateTrust({ snapshot, role, operation = null, presentedIdent
   if (!entity) return result(snapshot, false, TRUST_REASON_CODES.ENTITY_NOT_LISTED, { role, operation, credentialContext });
   const service = entity.services.find((candidate) => {
     if (credentialContext.serviceType && candidate.type !== credentialContext.serviceType) return false;
-    if (fingerprint && !candidate.certificates.some((cert) => cert === fingerprint || cert === presentedIdentity.certificateFingerprint)) return false;
+    const chainFingerprints = (presentedIdentity.certificateChain || []).map((certificatePem) => certificateFingerprint(certificatePem));
+    if (fingerprint && !candidate.certificates.some((cert) => cert === fingerprint || cert === presentedIdentity.certificateFingerprint || chainFingerprints.includes(cert))) return false;
     return true;
   });
   if (!service) return result(snapshot, false, fingerprint ? TRUST_REASON_CODES.ANCHOR_MISMATCH : TRUST_REASON_CODES.IDENTITY_MISMATCH, { role, entity: entity.id, operation, credentialContext });
   if (service.status && !acceptedStatuses.includes(service.status)) {
     return result(snapshot, false, TRUST_REASON_CODES.ENTITY_STATUS_INVALID, { role, entity: entity.id, service: service.type, status: service.status, operation, credentialContext });
   }
-  return result(snapshot, true, "TRUSTED", { role, entity: entity.id, service: service.type, status: service.status || "implicitly-valid", operation, credentialContext, evaluationTime: new Date(evaluationTime).toISOString() });
+  let certificatePath = null;
+  if (presentedIdentity.certificateChain?.length && service.certificatePems?.length) {
+    certificatePath = validateCertificatePath({
+      certificateChain: presentedIdentity.certificateChain,
+      anchorCertificates: service.certificatePems,
+      evaluationTime,
+    });
+  }
+  const scope = credentialContext.scopeEvidence;
+  if (scope?.trusted === false) {
+    return result(snapshot, false, TRUST_REASON_CODES.CREDENTIAL_SCOPE_INVALID, { role, entity: entity.id, service: service.type, operation, credentialContext, scope });
+  }
+  return result(snapshot, true, "TRUSTED", { role, entity: entity.id, service: service.type, status: service.status || "implicitly-valid", operation, credentialContext, certificatePath, scope: scope || { status: "unverified" }, evaluationTime: new Date(evaluationTime).toISOString() });
 }

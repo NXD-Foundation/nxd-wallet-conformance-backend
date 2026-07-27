@@ -3,6 +3,7 @@ import { compactVerify } from "jose";
 import { DOMParser } from "@xmldom/xmldom";
 import xmlCrypto from "xml-crypto";
 import xpathModule from "xpath";
+import { KeyUsageFlags, KeyUsagesExtension, X509Certificate as PeculiarX509Certificate } from "@peculiar/x509";
 import { TRUST_REASON_CODES, TrustListError } from "./errors.js";
 
 const { SignedXml } = xmlCrypto;
@@ -46,6 +47,67 @@ export function certificateFromX5c(x5c) {
   return derToPem(Buffer.from(x5c[0], "base64"));
 }
 
+export function certificatesFromX5c(x5c) {
+  if (!Array.isArray(x5c) || !x5c.length || x5c.some((value) => typeof value !== "string")) {
+    throw new TrustListError("Signed document does not contain an X.509 certificate chain", TRUST_REASON_CODES.LIST_SIGNATURE_INVALID);
+  }
+  return x5c.map((value) => derToPem(Buffer.from(value, "base64")));
+}
+
+function certificateAt(certPem, evaluationTime) {
+  const certificate = new X509Certificate(certPem);
+  const time = new Date(evaluationTime).getTime();
+  if (time < Date.parse(certificate.validFrom) || time > Date.parse(certificate.validTo)) {
+    throw new TrustListError("Certificate is outside its validity period", TRUST_REASON_CODES.CERTIFICATE_PATH_INVALID, {
+      fingerprint: certificateFingerprint(certPem), validFrom: certificate.validFrom, validTo: certificate.validTo,
+    });
+  }
+  return certificate;
+}
+
+export function hasDigitalSignatureKeyUsage(certPem) {
+  const certificate = new PeculiarX509Certificate(new X509Certificate(certPem).raw);
+  const keyUsage = certificate.getExtension(KeyUsagesExtension);
+  return !!keyUsage && (keyUsage.usages & KeyUsageFlags.digitalSignature) === KeyUsageFlags.digitalSignature;
+}
+
+/**
+ * Validates the compact path forms used by this project: an exact service leaf,
+ * or an x5c chain terminating at a service CA certificate.  The trusted list
+ * remains the source of anchors; an x5c chain never introduces an anchor.
+ */
+export function validateCertificatePath({ certificateChain, anchorCertificates = [], evaluationTime = new Date(), requireDigitalSignature = true } = {}) {
+  const chain = (certificateChain || []).map((pem) => ({ pem, cert: certificateAt(pem, evaluationTime) }));
+  const anchors = (anchorCertificates || []).map((pem) => ({ pem, cert: certificateAt(pem, evaluationTime) }));
+  if (!chain.length || !anchors.length) {
+    throw new TrustListError("A presented certificate chain and listed trust anchor are required", TRUST_REASON_CODES.CERTIFICATE_PATH_INVALID);
+  }
+  const leaf = chain[0];
+  if (requireDigitalSignature && !hasDigitalSignatureKeyUsage(leaf.pem)) {
+    throw new TrustListError("Presented certificate is not permitted for digital signatures", TRUST_REASON_CODES.CERTIFICATE_PATH_INVALID);
+  }
+  const candidates = [...chain.slice(1), ...anchors];
+  let current = leaf;
+  const seen = new Set([certificateFingerprint(current.pem)]);
+  for (;;) {
+    const exactAnchor = anchors.find((anchor) => certificateFingerprint(anchor.pem) === certificateFingerprint(current.pem));
+    if (exactAnchor) {
+      return { leafPem: leaf.pem, chain: chain.map((entry) => entry.pem), anchorPem: exactAnchor.pem, anchorFingerprint: certificateFingerprint(exactAnchor.pem) };
+    }
+    const issuer = candidates.find((candidate) => {
+      const fingerprint = certificateFingerprint(candidate.pem);
+      return !seen.has(fingerprint) && current.cert.checkIssued(candidate.cert) && current.cert.verify(candidate.cert.publicKey);
+    });
+    if (!issuer || !issuer.cert.ca) {
+      throw new TrustListError("Presented certificate chain does not terminate at a listed CA anchor", TRUST_REASON_CODES.CERTIFICATE_PATH_INVALID, {
+        leafFingerprint: certificateFingerprint(leaf.pem),
+      });
+    }
+    seen.add(certificateFingerprint(issuer.pem));
+    current = issuer;
+  }
+}
+
 export function assertCertificateAllowed(certPem, allowedFingerprints, reasonCode = TRUST_REASON_CODES.BOOTSTRAP_UNTRUSTED) {
   const fingerprint = certificateFingerprint(certPem);
   if (!allowedFingerprints?.map((x) => x.toLowerCase()).includes(fingerprint)) {
@@ -54,7 +116,7 @@ export function assertCertificateAllowed(certPem, allowedFingerprints, reasonCod
   return fingerprint;
 }
 
-export async function verifyJadesJson(document, { allowedFingerprints = [], algorithms = ["RS256", "ES256"] } = {}) {
+export async function verifyJadesJson(document, { allowedFingerprints = [], algorithms = ["RS256", "ES256"], allowEmbeddedCertificate = false } = {}) {
   const signature = document?.signature;
   if (!signature?.protected || !signature?.signature) {
     throw new TrustListError("JAdES signature is missing or malformed", TRUST_REASON_CODES.LIST_SIGNATURE_INVALID);
@@ -66,7 +128,11 @@ export async function verifyJadesJson(document, { allowedFingerprints = [], algo
     throw new TrustListError(`JAdES protected header is invalid: ${error.message}`, TRUST_REASON_CODES.LIST_SIGNATURE_INVALID);
   }
   const certPem = certificateFromX5c(header.x5c);
-  const fingerprint = assertCertificateAllowed(certPem, allowedFingerprints);
+  const fingerprint = allowedFingerprints.length
+    ? assertCertificateAllowed(certPem, allowedFingerprints)
+    : allowEmbeddedCertificate
+      ? certificateFingerprint(certPem)
+      : assertCertificateAllowed(certPem, allowedFingerprints);
   if (!algorithms.includes(header.alg)) {
     throw new TrustListError(`JAdES algorithm is not allowed: ${header.alg}`, TRUST_REASON_CODES.LIST_SIGNATURE_INVALID);
   }
@@ -79,7 +145,7 @@ export async function verifyJadesJson(document, { allowedFingerprints = [], algo
   } catch (error) {
     throw new TrustListError(`JAdES signature verification failed: ${error.message}`, TRUST_REASON_CODES.LIST_SIGNATURE_INVALID);
   }
-  return { unsigned, signer: { certPem, fingerprint, algorithm: header.alg } };
+  return { unsigned, signer: { certPem, fingerprint, algorithm: header.alg, bootstrapMode: allowEmbeddedCertificate && !allowedFingerprints.length ? "unsafe-embedded-x5c" : "pinned" } };
 }
 
 function firstText(node, localName) {

@@ -6,4 +6,6 @@ export * from "./parsers.js";
 export * from "./loader.js";
 export * from "./evaluate.js";
 export * from "./resolver.js";
+export * from "./revocation.js";
+export * from "./scope.js";
 export * from "./http.js";

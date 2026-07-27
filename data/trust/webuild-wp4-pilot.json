@@ -1,6 +1,6 @@
 {
   "id": "webuild-wp4-pilot",
-  "description": "WE BUILD WP4 pilot trust profile; replace synthetic anchors before live use",
+  "description": "WE BUILD WP4 pilot trust profile; current LoTL signer is pilot TOFU material and must be rolled over through configured pins",
   "lotl": {
     "jsonUrl": "https://webuild-consortium.github.io/wp4-trust-group/list_of_trusted_lists.json",
     "xmlUrl": "https://webuild-consortium.github.io/wp4-trust-group/list_of_trusted_lists.xml"
@@ -10,7 +10,7 @@
     "fallback": "xml"
   },
   "bootstrap": {
-    "loTLSignerFingerprints": []
+    "loTLSignerFingerprints": ["339753d8aed9b99febc13cc15c87e1e892e391a0dffb1bd3ac820d73219e38e1"]
   },
   "algorithms": {
     "jades": ["RS256", "ES256"],
@@ -29,7 +29,8 @@
   },
   "network": {
     "timeoutMs": 10000,
-    "maxBytes": 2000000
+    "maxBytes": 2000000,
+    "allowEmbeddedX5cBootstrapForTests": false
   },
   "listTypes": {
     "pid-provider": { "referenceUri": "http://uri.etsi.org/19602/LoTEType/EUPIDProvidersList", "profile": "ts119602-annex-d" },

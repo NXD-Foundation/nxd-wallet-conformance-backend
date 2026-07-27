@@ -1,6 +1,7 @@
 import { expect } from "chai";
 import fs from "node:fs/promises";
-import { verifyJadesJson, verifyXadesXml, certificateFingerprint, stableJsonStringify } from "../trust/crypto.js";
+import { verifyJadesJson, verifyXadesXml, certificateFingerprint, stableJsonStringify, validateCertificatePath } from "../trust/crypto.js";
+import { normalizeCrlTime } from "../trust/revocation.js";
 
 const artifact = "tests/fixtures/trust/webuild-wp4/artifacts";
 const keyDir = "tests/fixtures/trust/webuild-wp4/keys";
@@ -34,6 +35,22 @@ describe("Phase 1 signed trust-list validation", () => {
     } catch (error) {
       expect(error.reasonCode).to.equal("BOOTSTRAP_UNTRUSTED");
     }
+  });
+
+  it("permits embedded bootstrap only when explicitly enabled for tests", async () => {
+    const verified = await verifyJadesJson(lotl, { allowEmbeddedCertificate: true });
+    expect(verified.signer.bootstrapMode).to.equal("unsafe-embedded-x5c");
+  });
+
+  it("accepts a listed service leaf only during its validity period", async () => {
+    const accepted = validateCertificatePath({ certificateChain: [lotlCert], anchorCertificates: [lotlCert], evaluationTime: "2027-01-01T00:00:00Z", requireDigitalSignature: false });
+    expect(accepted.anchorFingerprint).to.equal(certificateFingerprint(lotlCert));
+    expect(() => validateCertificatePath({ certificateChain: [lotlCert], anchorCertificates: [lotlCert], evaluationTime: "2040-01-01T00:00:00Z", requireDigitalSignature: false }))
+      .to.throw(/validity period/);
+  });
+
+  it("normalizes numeric CRL timestamps before evidence serialization", () => {
+    expect(normalizeCrlTime(1_767_000_000_000).toISOString()).to.equal("2025-12-29T09:20:00.000Z");
   });
 
   it("verifies an enveloped XML signature", async () => {
