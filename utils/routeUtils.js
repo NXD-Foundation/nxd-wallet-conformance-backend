@@ -25,15 +25,15 @@ import {
   logWarn,
   logError,
   logDebug,
-  setSessionContext,
-  clearSessionContext,
 } from "../services/cacheServiceRedis.js";
+import { clearSessionLogContext, enterSessionLogContext } from "./sessionLogContext.js";
 import { createHash, createPublicKey } from "crypto";
 import base64url from "base64url";
 import jwt from "jsonwebtoken";
 import path from "path";
 import * as jose from "jose";
 import { issuanceRequestRequiresWua } from "./wuaEnforcementPolicy.js";
+import { createIssuanceContext, createVerificationContext } from "./sessionContext.js";
 
 const WUA_SPEC_REF =
   "TS3 Wallet Unit Attestation";
@@ -119,7 +119,11 @@ export function createPreAuthSessionData({
     session.txCodeRequired = true;
     session.expectedTxCode = generateNumericTxCode();
   }
-  return session;
+  return createIssuanceContext({
+    flow: "pre-auth",
+    status: session.status,
+    trustPolicy: session.trustPolicy,
+  }).withIssuanceSession(session).toSession(session);
 }
 
 export const URL_SCHEMES = {
@@ -620,7 +624,7 @@ export const bindSessionLoggingContext = (req, res, sessionId) => {
 
     if (!res.locals.sessionLoggingCleanupBound) {
       const cleanup = () => {
-        clearSessionContext();
+        clearSessionLogContext();
         res.off("finish", cleanup);
         res.off("close", cleanup);
         res.locals.sessionLoggingCleanupBound = false;
@@ -632,7 +636,10 @@ export const bindSessionLoggingContext = (req, res, sessionId) => {
     }
   }
 
-  setSessionContext(sessionId);
+  enterSessionLogContext({
+    sessionId,
+    domain: req?.sessionLoggingDomain || "verification",
+  });
   return sessionId;
 };
 
@@ -743,7 +750,11 @@ export const createBaseSession = (flowType = "pre-auth", isHaip = false, signatu
     session.signatureType = signatureType;
   }
 
-  return session;
+  return createIssuanceContext({
+    flow: flowType,
+    status: session.status,
+    trustPolicy: session.trustPolicy,
+  }).withIssuanceSession(session).toSession(session);
 };
 
 /**
@@ -783,7 +794,12 @@ export const createCodeFlowSession = (client_id_scheme, flowType, isDynamic = fa
   if (isDeferred) session.isDeferred = true;
   if (signatureType) session.signatureType = signatureType;
 
-  return session;
+  return createIssuanceContext({
+    flow: flowType,
+    status: session.status,
+    clientId: client_id_scheme,
+    trustPolicy: session.trustPolicy,
+  }).withIssuanceSession(session).toSession(session);
 };
 
 // ============================================================================
@@ -1529,12 +1545,22 @@ export async function storeVPSessionData(sessionId, sessionData) {
       responseMode: sessionData.response_mode
     });
     
-    await storeVPSession(sessionId, {
+    const legacySession = {
       uuid: sessionId,
       status: CONFIG.SESSION_STATUS.PENDING,
       claims: null,
       ...sessionData,
-    });
+    };
+    await storeVPSession(sessionId, createVerificationContext({
+      id: sessionId,
+      flow: legacySession.transport_profile || legacySession.response_mode || "openid4vp",
+      status: legacySession.status,
+      nonce: legacySession.nonce,
+      clientId: legacySession.client_id,
+      audience: legacySession.expected_audience ?? legacySession.client_id,
+      transactionData: legacySession.transaction_data,
+      trustPolicy: legacySession.trustPolicy,
+    }).withVpSession(legacySession).toSession(legacySession));
     
     await logInfo(sessionId, "VP session data stored successfully");
   } catch (error) {

@@ -45,6 +45,7 @@ import {
   allowsLegacyBodyClientAssertion,
 } from "./lib/walletUnitAttestation.js";
 import { trustFrameworkSessionProps } from "../../utils/trustFrameworkPolicy.js";
+import { createWalletContext } from "../../utils/sessionContext.js";
 import {
   buildCredentialProofRequest,
   buildCredentialProofBindingContext,
@@ -314,7 +315,19 @@ app.post("/session", async (req, res) => {
   const ttlInSeconds = parseInt(process.env.WALLET_TEST_SESSION_TTL || "86400");
 
   async function setStatus(status, extra) {
-    const payload = { sessionId, status, ...(extra || {}), updatedAt: new Date().toISOString() };
+    let previous = null;
+    try {
+      const stored = await walletRedisClient.get(key);
+      previous = stored ? JSON.parse(stored) : null;
+    } catch {}
+    const legacySession = { sessionId, status, ...(extra || {}), updatedAt: new Date().toISOString() };
+    const payload = createWalletContext({
+      sessionContext: previous?.sessionContext,
+      id: sessionId,
+      flow: isOpenId4VpDeepLink(deepLink) ? "presentation" : "issuance",
+      status,
+      trustPolicy: legacySession.trustPolicy ?? previous?.trustPolicy,
+    }).withWalletSession(legacySession).toSession(legacySession);
     try { await walletRedisClient.setEx(key, ttlInSeconds, JSON.stringify(payload)); } catch (e) { await logError(sessionId, "[session-flow] Redis set error", e); }
     return payload;
   }

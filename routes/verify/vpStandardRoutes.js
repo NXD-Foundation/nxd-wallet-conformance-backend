@@ -21,8 +21,6 @@ import {
   logWarn,
   logError,
   logDebug,
-  setSessionContext,
-  clearSessionContext,
 } from "../../services/cacheServiceRedis.js";
 import { makeSessionLogger, logHttpRequest, logHttpResponse } from "../../utils/sessionLogger.js";
 import { isVerifierCs02StrictMode } from "../../utils/cs02VerifierRequest.js";
@@ -34,10 +32,7 @@ const vpStandardRouter = express.Router();
 vpStandardRouter.use((req, res, next) => {
   const sessionId = req.query.session_id || req.params.sessionId || req.params.id;
   if (sessionId) {
-    setSessionContext(sessionId);
-    res.on("finish", () => {
-      clearSessionContext();
-    });
+    bindSessionLoggingContext(req, res, sessionId);
   }
   next();
 });

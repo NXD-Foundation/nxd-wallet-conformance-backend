@@ -1,6 +1,8 @@
-import { AsyncLocalStorage } from "node:async_hooks";
+import {
+  getSessionLogContext,
+  runWithSessionLogContext,
+} from "../../../utils/sessionLogContext.js";
 
-const asyncLogContext = new AsyncLocalStorage();
 const sessionOperationCounters = new Map();
 const originalConsole = {
   log: console.log.bind(console),
@@ -56,7 +58,7 @@ function normalizeArgs(args) {
   };
 }
 
-function buildLogEntry(level, args, sessionId) {
+function buildLogEntry(level, args, sessionId, context = {}) {
   const { message, data } = normalizeArgs(args);
   const entry = {
     level,
@@ -73,6 +75,9 @@ function buildLogEntry(level, args, sessionId) {
   if (typeof data !== "undefined") {
     entry.data = data;
   }
+  if (context.domain) entry.domain = context.domain;
+  if (context.flow) entry.flow = context.flow;
+  if (context.operationId) entry.operationId = context.operationId;
 
   return entry;
 }
@@ -81,9 +86,9 @@ function mirrorConsole(level, args) {
   if (mirroringInProgress) return;
   mirroringInProgress = true;
   try {
-    const context = asyncLogContext.getStore() || {};
+    const context = getSessionLogContext() || {};
     const sessionId = context.sessionId;
-    const entry = buildLogEntry(level, args, sessionId);
+    const entry = buildLogEntry(level, args, sessionId, context);
 
     if (appendGlobalLogSink) {
       Promise.resolve(appendGlobalLogSink(entry)).catch(() => {});
@@ -121,7 +126,7 @@ export function registerLogSinks({ appendSessionLog, appendGlobalLog } = {}) {
 
 export function runWithLogContext(sessionId, fn) {
   if (!sessionId) return fn();
-  return asyncLogContext.run({ sessionId }, fn);
+  return runWithSessionLogContext({ sessionId, domain: "wallet" }, fn);
 }
 
 export function makeSessionLogger(sessionId) {

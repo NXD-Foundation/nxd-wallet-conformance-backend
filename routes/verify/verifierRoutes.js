@@ -33,8 +33,6 @@ import {
   logWarn,
   logError,
   logDebug,
-  setSessionContext,
-  clearSessionContext,
   consumeVPSessionKeyBindingJti
 } from "../../services/cacheServiceRedis.js";
 import { makeSessionLogger, logHttpRequest, logHttpResponse } from "../../utils/sessionLogger.js";
@@ -49,6 +47,7 @@ import { encode as encodeCbor } from 'cbor-x';
 import {
   isCs03X509SigningSession,
   processCs03PresentationResponse,
+  bindSessionLoggingContext,
 } from "../../utils/routeUtils.js";
 import {
   summarizeCs03ValidationForLog,
@@ -229,11 +228,7 @@ const verifierRouter = express.Router();
 verifierRouter.use((req, res, next) => {
   const sessionId = req.query.sessionId || req.params.sessionId || req.params.id;
   if (sessionId) {
-    setSessionContext(sessionId);
-    // Clear context when response finishes
-    res.on('finish', () => {
-      clearSessionContext();
-    });
+    bindSessionLoggingContext(req, res, sessionId);
   }
   next();
 });

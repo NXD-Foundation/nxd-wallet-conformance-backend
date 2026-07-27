@@ -35,6 +35,7 @@ import {
 } from "./sdJwtClaims.js";
 import { isSupportedCs02ClaimPathSegment, validateSupportedCs02ClaimPath, evaluateCs02CredentialSets } from "./cs02DcqlCore.js";
 import { checkVerifierCredentialTrust, isTrustFrameworkSession } from "./trustFrameworkPolicy.js";
+import { sessionContextFor } from "./sessionContext.js";
 
 export { resolveVerifierCs02Options, isVerifierCs02StrictMode } from "./cs02VerifierRequest.js";
 
@@ -1022,15 +1023,16 @@ export async function validateCs02SdJwtPresentation({
   };
 }
 
-export function createCs02VerificationContext(input = {}) {
+export function createVerificationContext(input = {}) {
   const session = input.session || null;
+  const request = sessionContextFor(session)?.request || {};
   return {
     ...input,
     session,
-    sessionNonce: input.sessionNonce ?? session?.nonce,
-    clientId: input.clientId ?? session?.client_id,
-    expectedAudience: input.expectedAudience ?? session?.expected_audience ?? session?.client_id,
-    transactionData: input.transactionData ?? session?.transaction_data,
+    sessionNonce: input.sessionNonce ?? request.nonce ?? session?.nonce,
+    clientId: input.clientId ?? request.clientId ?? session?.client_id,
+    expectedAudience: input.expectedAudience ?? request.audience ?? session?.expected_audience ?? session?.client_id,
+    transactionData: input.transactionData ?? request.transactionData ?? session?.transaction_data,
   };
 }
 
@@ -1042,7 +1044,7 @@ export async function validateCs02SdJwtEntriesInVpToken(
 ) {
   assertNoSessionInValidationOptions(options);
   if (!options.strict || !isPlainObject(vpTokenObject)) return [];
-  const verificationContext = createCs02VerificationContext(context);
+  const verificationContext = createVerificationContext(context);
 
   const decisions = [];
 

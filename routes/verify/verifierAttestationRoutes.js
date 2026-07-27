@@ -9,14 +9,13 @@ import {
   processVPRequest,
   createTransactionData,
   createErrorResponse,
+  bindSessionLoggingContext,
 } from "../../utils/routeUtils.js";
 import {
   logInfo,
   logWarn,
   logError,
   logDebug,
-  setSessionContext,
-  clearSessionContext,
 } from "../../services/cacheServiceRedis.js";
 import { trustFrameworkSessionProps } from "../../utils/trustFrameworkPolicy.js";
 
@@ -27,11 +26,7 @@ const vAttestationRouter = express.Router();
 vAttestationRouter.use((req, res, next) => {
   const sessionId = req.query.sessionId || req.params.sessionId || req.params.id;
   if (sessionId) {
-    setSessionContext(sessionId);
-    // Clear context when response finishes
-    res.on('finish', () => {
-      clearSessionContext();
-    });
+    bindSessionLoggingContext(req, res, sessionId);
   }
   next();
 });

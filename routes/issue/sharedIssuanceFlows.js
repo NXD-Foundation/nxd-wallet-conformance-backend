@@ -37,8 +37,6 @@ import {
   logError,
   logInfo,
   logWarn,
-  setSessionContext,
-  clearSessionContext,
 } from "../../services/cacheServiceRedis.js";
 import { makeSessionLogger, logHttpRequest, logHttpResponse } from "../../utils/sessionLogger.js";
 
@@ -63,6 +61,7 @@ import {
   extractWIAFromTokenRequest,
   extractWUAFromCredentialRequest,
   proofKeyMatchesWUAAttestedKeys,
+  bindSessionLoggingContext,
 } from "../../utils/routeUtils.js";
 import {
   decryptCredentialRequestJwe,
@@ -951,9 +950,8 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
     // Create session logger if we have a sessionId
     if (sessionId) {
       slog = makeSessionLogger(sessionId);
-      setSessionContext(sessionId);
-      res.on("finish", () => clearSessionContext());
-      res.on("close", () => clearSessionContext());
+      req.sessionLoggingDomain = "issuance";
+      bindSessionLoggingContext(req, res, sessionId);
       
       // Log HTTP request
       const logParams = { ...req.body };
@@ -1463,9 +1461,8 @@ sharedRouter.post("/credential", async (req, res) => {
     // Create session logger if we have a sessionId
     if (sessionId) {
       slog = makeSessionLogger(sessionId);
-      setSessionContext(sessionId);
-      res.on('finish', () => clearSessionContext());
-      res.on('close', () => clearSessionContext());
+      req.sessionLoggingDomain = "issuance";
+      bindSessionLoggingContext(req, res, sessionId);
       
       // Log HTTP request
       const logBody = { ...requestBody };
@@ -2043,9 +2040,8 @@ sharedRouter.post("/credential_deferred", async (req, res) => {
 
     sessionId = deferredLookup.sessionKey;
     const flowType = deferredLookup.flowType;
-    setSessionContext(sessionId);
-    res.on("finish", () => clearSessionContext());
-    res.on("close", () => clearSessionContext());
+    req.sessionLoggingDomain = "issuance";
+    bindSessionLoggingContext(req, res, sessionId);
     slog = makeSessionLogger(sessionId);
 
     const sessionObject = flowType === "pre-auth"
@@ -2252,14 +2248,8 @@ sharedRouter.post("/notification", async (req, res) => {
 
     // Set session context for console interception to capture all logs
     if (sessionId) {
-      setSessionContext(sessionId);
-      // Clear context when response finishes
-      res.on('finish', () => {
-        clearSessionContext();
-      });
-      res.on('close', () => {
-        clearSessionContext();
-      });
+      req.sessionLoggingDomain = "issuance";
+      bindSessionLoggingContext(req, res, sessionId);
     }
 
       // Log the notification event

@@ -1,4 +1,5 @@
 import { storeSessionLog } from "../services/cacheServiceRedis.js";
+import { getSessionLogContext, runWithSessionLogContext } from "./sessionLogContext.js";
 
 // Operation context tracking for better log organization (per session)
 const sessionOperationCounters = new Map();
@@ -15,7 +16,9 @@ const sessionOperationCounters = new Map();
  * slog("[ISSUANCE] [START] Pre-authorized flow", { configurationId: "..." });
  * slog("[HTTP] [REQUEST] POST token", { url: "...", body: {...} });
  */
-export function makeSessionLogger(sessionId) {
+export function makeSessionLogger(sessionOrContext) {
+  const suppliedContext = typeof sessionOrContext === "string" ? { sessionId: sessionOrContext } : sessionOrContext;
+  const sessionId = suppliedContext?.sessionId || suppliedContext?.id || suppliedContext?.correlation?.sessionId;
   if (!sessionId) {
     return function sessionLog(...args) {
       try { console.log(...args); } catch {}
@@ -78,13 +81,19 @@ export function makeSessionLogger(sessionId) {
       }
       
       // Include step in metadata
-      const metadata = data || {};
+      const metadata = { ...(data || {}) };
       metadata.step = counter;
+      const context = getSessionLogContext() || suppliedContext?.correlation || suppliedContext;
+      if (context?.domain) metadata.domain = context.domain;
+      if (context?.flow) metadata.flow = context.flow;
+      if (context?.operationId) metadata.operationId = context.operationId;
       
       storeSessionLog(sessionId, level, message, metadata).catch(() => {});
     } catch {}
   };
 }
+
+export { runWithSessionLogContext, getSessionLogContext } from "./sessionLogContext.js";
 
 /**
  * Helper to log HTTP requests with full details

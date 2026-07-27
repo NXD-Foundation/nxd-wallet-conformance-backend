@@ -5,6 +5,7 @@ import { loadTrustProfile } from "../trust/profile.js";
 import { loadTrustSnapshot } from "../trust/loader.js";
 import { X509Certificate } from "node:crypto";
 import fs from "node:fs/promises";
+import { sessionTrustPolicy } from "./sessionContext.js";
 
 const WEBUILD_PROFILE = "webuild-wp4-pilot";
 let testResolver = null;
@@ -20,7 +21,8 @@ export function trustFrameworkSessionProps(input = {}) {
 }
 
 export function isTrustFrameworkSession(session) {
-  return session?.trustPolicy?.mode === "webuild" && typeof session?.trustPolicy?.profile === "string";
+  const trustPolicy = sessionTrustPolicy(session);
+  return trustPolicy?.mode === "webuild" && typeof trustPolicy?.profile === "string";
 }
 
 export function resolveVerifierCredentialContext({ format, vct = null, doctype = null } = {}) {
@@ -60,6 +62,7 @@ async function runtimeTrustResolver() {
 
 export async function checkWalletProviderTrust({ session, attestationJwt = null, payload = null, header = null, operation = "verify-wia" }) {
   if (!isTrustFrameworkSession(session)) return null;
+  const trustPolicy = sessionTrustPolicy(session);
   try {
     const resolvedPayload = payload || (attestationJwt ? decodeJwt(attestationJwt) : null);
     const resolvedHeader = header || (attestationJwt ? decodeProtectedHeader(attestationJwt) : null);
@@ -68,13 +71,13 @@ export async function checkWalletProviderTrust({ session, attestationJwt = null,
         trusted: false,
         state: "not_trusted",
         reasonCode: "ANCHOR_MISMATCH",
-        evidence: { role: "wallet-provider", operation, issuer: resolvedPayload?.iss || null, trustPolicy: session.trustPolicy },
+        evidence: { role: "wallet-provider", operation, issuer: resolvedPayload?.iss || null, trustPolicy },
       };
     }
     const certPem = certificateFromX5c(resolvedHeader.x5c);
     const resolver = await runtimeTrustResolver();
     return resolver.resolve({
-      framework: session.trustPolicy.profile,
+      framework: trustPolicy.profile,
       role: "wallet-provider",
       operation,
       presentedIdentity: {
@@ -90,7 +93,7 @@ export async function checkWalletProviderTrust({ session, attestationJwt = null,
       trusted: false,
       state: "indeterminate",
       reasonCode: "TRUST_EVALUATION_INDETERMINATE",
-      evidence: { role: "wallet-provider", operation, trustPolicy: session.trustPolicy, error: error.message },
+      evidence: { role: "wallet-provider", operation, trustPolicy, error: error.message },
     };
   }
 }
@@ -106,6 +109,7 @@ export async function checkVerifierCredentialTrust({
   operation = "verify-credential",
 } = {}) {
   if (!isTrustFrameworkSession(session)) return null;
+  const trustPolicy = sessionTrustPolicy(session);
   const context = resolveVerifierCredentialContext({ format, vct, doctype });
   if (!context.role) {
     return {
@@ -118,7 +122,7 @@ export async function checkVerifierCredentialTrust({
         format,
         vct,
         doctype,
-        trustPolicy: session.trustPolicy,
+        trustPolicy,
         error: "No WP4 provider role mapping exists for this credential context",
       },
     };
@@ -149,13 +153,13 @@ export async function checkVerifierCredentialTrust({
           doctype,
           issuer: issuer || null,
           hasX5c: !!certificate,
-          trustPolicy: session.trustPolicy,
+          trustPolicy,
         },
       };
     }
     const resolver = await runtimeTrustResolver();
     return resolver.resolve({
-      framework: session.trustPolicy.profile,
+      framework: trustPolicy.profile,
       role: context.role,
       operation,
       presentedIdentity: {
@@ -181,7 +185,7 @@ export async function checkVerifierCredentialTrust({
         format,
         vct,
         doctype,
-        trustPolicy: session.trustPolicy,
+        trustPolicy,
         error: error.message,
       },
     };
@@ -196,18 +200,19 @@ export async function checkAccessCertificateTrust({
   operation = "verify-access-certificate",
 } = {}) {
   if (!isTrustFrameworkSession(session)) return null;
+  const trustPolicy = sessionTrustPolicy(session);
   if (!certificatePem) {
     return {
       trusted: false,
       state: "not_trusted",
       reasonCode: "ANCHOR_MISMATCH",
-      evidence: { role, operation, entityId, trustPolicy: session.trustPolicy, error: "Access certificate is missing" },
+      evidence: { role, operation, entityId, trustPolicy, error: "Access certificate is missing" },
     };
   }
   try {
     const resolver = await runtimeTrustResolver();
     return resolver.resolve({
-      framework: session.trustPolicy.profile,
+      framework: trustPolicy.profile,
       role,
       operation,
       presentedIdentity: {
@@ -222,7 +227,7 @@ export async function checkAccessCertificateTrust({
       trusted: false,
       state: "indeterminate",
       reasonCode: "TRUST_EVALUATION_INDETERMINATE",
-      evidence: { role, operation, entityId, trustPolicy: session.trustPolicy, error: error.message },
+      evidence: { role, operation, entityId, trustPolicy, error: error.message },
     };
   }
 }

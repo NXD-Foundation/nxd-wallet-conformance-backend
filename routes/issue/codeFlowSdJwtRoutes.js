@@ -84,6 +84,11 @@ import { trustFrameworkSessionProps } from "../../utils/trustFrameworkPolicy.js"
 
 const codeFlowRouterSDJWT = express.Router();
 
+codeFlowRouterSDJWT.use((req, res, next) => {
+  req.sessionLoggingDomain = "issuance";
+  next();
+});
+
 // Load private key
 const PRIVATE_KEY = fs.readFileSync("./private-key.pem", "utf-8");
 

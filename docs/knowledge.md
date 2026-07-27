@@ -27,6 +27,29 @@ issuance storage. The public protocol shape is mostly configured through
 `data/issuer-config.json`, `data/verifier-config.json`, and
 `data/oauth-config.json`.
 
+### Session And Log Context
+
+Sessions remain Redis-only and retain their existing service-specific keys and
+TTLs: pre-authorized issuance, authorization-code issuance, VP, and wallet
+test sessions are separate lifecycles with distinct session IDs. Every newly
+stored session also contains a versioned `sessionContext` envelope. It is the
+canonical location for lifecycle, nonce/client/audience/transaction bindings,
+trust policy and decisions, and correlation metadata; legacy flat fields stay
+present while routes are migrated.
+
+Session logs remain separate append-only Redis records, not mutable arrays in
+the session object. Issuer/verifier logs use `session-logs:<sessionId>` and the
+wallet uses `wallet:logs:<sessionId>`; existing `/logs` APIs and their current
+retention (30 minutes and one hour respectively) are unchanged. Log correlation
+is async-scoped with `AsyncLocalStorage`, so concurrent requests cannot assign
+one session's console output to another session.
+
+The logging-context migration is complete: issuer, verifier, and wallet-client
+entry points use the shared async context, and the former process-global
+`setSessionContext`/`clearSessionContext` API has been removed. Flat session
+fields remain intentionally as protocol compatibility fields; the versioned
+`sessionContext` is the canonical internal representation.
+
 ## Authority And Reading Order
 
 When documents disagree, use this order of authority:

@@ -16,10 +16,6 @@ import {
   encodeTs12TransactionData,
   parseTs12PaymentRequestInput,
 } from "../../utils/ts12PaymentUtils.js";
-import {
-  setSessionContext,
-  clearSessionContext,
-} from "../../services/cacheServiceRedis.js";
 import { makeSessionLogger, logHttpRequest, logHttpResponse } from "../../utils/sessionLogger.js";
 import { trustFrameworkSessionProps } from "../../utils/trustFrameworkPolicy.js";
 
@@ -28,10 +24,7 @@ const ts12PaymentRouter = express.Router();
 ts12PaymentRouter.use((req, res, next) => {
   const sessionId = req.query.session_id || req.params.sessionId || req.params.id;
   if (sessionId) {
-    setSessionContext(sessionId);
-    res.on("finish", () => {
-      clearSessionContext();
-    });
+    bindSessionLoggingContext(req, res, sessionId);
   }
   next();
 });

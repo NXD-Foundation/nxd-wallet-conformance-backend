@@ -46,6 +46,11 @@ import { trustFrameworkSessionProps } from "../../utils/trustFrameworkPolicy.js"
 
 const router = express.Router();
 
+router.use((req, res, next) => {
+  req.sessionLoggingDomain = "issuance";
+  next();
+});
+
 // Initialize cryptographic keys
 const { privateKey, publicKeyPem } = loadCryptographicKeys();
 

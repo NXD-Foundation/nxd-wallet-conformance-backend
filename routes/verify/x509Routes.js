@@ -16,6 +16,7 @@ import {
   encodeCs03TransactionData,
   validateCs03QesResponse,
   validateCs03ResponseUriAlignment,
+  bindSessionLoggingContext,
 } from "../../utils/routeUtils.js";
 import {
   summarizeCs03ValidationForLog,
@@ -26,8 +27,6 @@ import {
   logWarn,
   logError,
   logDebug,
-  setSessionContext,
-  clearSessionContext,
 } from "../../services/cacheServiceRedis.js";
 import { makeSessionLogger, logHttpRequest, logHttpResponse } from "../../utils/sessionLogger.js";
 import { trustFrameworkSessionProps } from "../../utils/trustFrameworkPolicy.js";
@@ -111,11 +110,7 @@ function resolveCs03VpOptions(query, sessionId, slog = null) {
 x509Router.use((req, res, next) => {
   const sessionId = req.query.sessionId || req.params.sessionId || req.params.id;
   if (sessionId) {
-    setSessionContext(sessionId);
-    // Clear context when response finishes
-    res.on('finish', () => {
-      clearSessionContext();
-    });
+    bindSessionLoggingContext(req, res, sessionId);
   }
   next();
 });

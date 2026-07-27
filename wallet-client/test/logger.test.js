@@ -42,6 +42,7 @@ describe("wallet logger", () => {
     assert.equal(globalEntries.length, 2);
     assert.equal(sessionEntries[0].sessionId, "session-1");
     assert.equal(sessionEntries[0].entry.level, "error");
+    assert.equal(sessionEntries[0].entry.domain, "wallet");
     assert.match(sessionEntries[0].entry.message, /\[test\] failure/);
     assert.equal(sessionEntries[0].entry.step, 0);
     assert.equal(sessionEntries[1].entry.level, "info");

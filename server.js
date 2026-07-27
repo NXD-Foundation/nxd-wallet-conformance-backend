@@ -24,9 +24,8 @@ import vAttestationRouter from "./routes/verify/verifierAttestationRoutes.js";
 import bodyParser from "body-parser"; // Body parser middleware
 import {
   enableConsoleInterception,
-  setSessionContext,
-  clearSessionContext,
 } from "./services/cacheServiceRedis.js";
+import { enterSessionLogContext, clearSessionLogContext } from "./utils/sessionLogContext.js";
 
 import * as OpenApiValidator from "express-openapi-validator";
 
@@ -70,10 +69,13 @@ app.use((req, res, next) => {
     req.sessionLoggingId = sessionId;
     res.locals = res.locals || {};
     res.locals.sessionLoggingId = sessionId;
-    setSessionContext(sessionId);
+    const domain = /^(\/vci|\/codeflow|\/issue|\/token|\/credential)/.test(req.path)
+      ? "issuance"
+      : "verification";
+    enterSessionLogContext({ sessionId, domain });
     if (!res.locals.sessionLoggingCleanupBound) {
       const cleanup = () => {
-        clearSessionContext();
+        clearSessionLogContext();
         res.off("finish", cleanup);
         res.off("close", cleanup);
         res.locals.sessionLoggingCleanupBound = false;

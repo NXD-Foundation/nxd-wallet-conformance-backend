@@ -30,6 +30,11 @@ import { trustFrameworkSessionProps } from "../../utils/trustFrameworkPolicy.js"
 
 const vciStandardRouter = express.Router();
 
+vciStandardRouter.use((req, res, next) => {
+  req.sessionLoggingDomain = "issuance";
+  next();
+});
+
 /**
  * Standardized VCI Offer Endpoint
  * 
@@ -238,4 +243,3 @@ vciStandardRouter.get("/credential-offer-no-code/:id", async (req, res) => {
 });
 
 export default vciStandardRouter;
-

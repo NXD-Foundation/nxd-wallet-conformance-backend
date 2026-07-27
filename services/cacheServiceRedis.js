@@ -1,5 +1,7 @@
 import redis from "redis";
 import { selectCs02VerifierEncryptionJwk } from "../utils/cs02TrustPolicy.js";
+import { getSessionLogContext } from "../utils/sessionLogContext.js";
+import { withCanonicalSessionContext } from "../utils/sessionContext.js";
 
 //
 const VCI_CODE_FLOW_TIMEOUT = process.env.VCI_CODE_FLOW_TIMEOUT || 180;
@@ -67,7 +69,7 @@ export async function storePreAuthSession(sessionKey, sessionValue) {
     
     const key = `pre-auth-sessions:${sessionKey}`;
     const ttlInSeconds = VCI_PRE_AUTH_TIMEOUT; // env, default: 3 minutes
-    await client.setEx(key, ttlInSeconds, JSON.stringify(sessionValue)); // Set with expiration
+    await client.setEx(key, ttlInSeconds, JSON.stringify(withCanonicalSessionContext(sessionKey, sessionValue, "issuance", "pre-auth"))); // Set with expiration
   } catch (err) {
     console.error("Error storing session:", err);
     throw err; // Re-throw the error so calling code knows about the failure
@@ -124,7 +126,7 @@ export async function storeCodeFlowSession(sessionKey, sessionValue) {
     }
     const key = `code-flow-sessions:${sessionKey}`;
     const ttlInSeconds = VCI_CODE_FLOW_TIMEOUT; // env, default: 3 minutes
-    await client.setEx(key, ttlInSeconds, JSON.stringify(sessionValue)); // Set with expiration
+    await client.setEx(key, ttlInSeconds, JSON.stringify(withCanonicalSessionContext(sessionKey, sessionValue, "issuance", "code"))); // Set with expiration
     console.log(`Session stored under key: ${key}`);
   } catch (err) {
     console.error("Error storing session:", err);
@@ -266,7 +268,11 @@ export async function storeVPSession(sessionKey, sessionValue) {
   try {
     const key = `vp-sessions:${sessionKey}`;
     const ttlInSeconds = Number(VP_TIMEOUT) || 180;
-    const value = withVPSessionLifecycle(sessionValue, Math.floor(Date.now() / 1000), ttlInSeconds);
+    const value = withVPSessionLifecycle(
+      withCanonicalSessionContext(sessionKey, sessionValue, "verification"),
+      Math.floor(Date.now() / 1000),
+      ttlInSeconds,
+    );
     await client.setEx(key, ttlInSeconds, JSON.stringify(value)); // Set with expiration
     console.log(`VP Session stored under key: ${key}`);
   } catch (err) {
@@ -557,23 +563,11 @@ const originalConsole = {
   debug: console.debug
 };
 
-// Session context storage for console interception
-let currentSessionId = null;
-
-// Function to set session context for console interception
-export function setSessionContext(sessionId) {
-  currentSessionId = sessionId;
-}
-
-// Function to clear session context
-export function clearSessionContext() {
-  currentSessionId = null;
-}
-
 // Function to enable console log interception
 export function enableConsoleInterception() {
   console.log = (...args) => {
     originalConsole.log(...args);
+    const currentSessionId = getSessionLogContext()?.sessionId;
     if (currentSessionId) {
       const message = args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : String(arg)).join(' ');
       storeSessionLog(currentSessionId, 'info', message).catch(err => 
@@ -584,6 +578,7 @@ export function enableConsoleInterception() {
 
   console.warn = (...args) => {
     originalConsole.warn(...args);
+    const currentSessionId = getSessionLogContext()?.sessionId;
     if (currentSessionId) {
       const message = args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : String(arg)).join(' ');
       storeSessionLog(currentSessionId, 'warn', message).catch(err => 
@@ -594,6 +589,7 @@ export function enableConsoleInterception() {
 
   console.error = (...args) => {
     originalConsole.error(...args);
+    const currentSessionId = getSessionLogContext()?.sessionId;
     if (currentSessionId) {
       const message = args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : String(arg)).join(' ');
       storeSessionLog(currentSessionId, 'error', message).catch(err => 
@@ -604,6 +600,7 @@ export function enableConsoleInterception() {
 
   console.info = (...args) => {
     originalConsole.info(...args);
+    const currentSessionId = getSessionLogContext()?.sessionId;
     if (currentSessionId) {
       const message = args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : String(arg)).join(' ');
       storeSessionLog(currentSessionId, 'info', message).catch(err => 
@@ -614,6 +611,7 @@ export function enableConsoleInterception() {
 
   console.debug = (...args) => {
     originalConsole.debug(...args);
+    const currentSessionId = getSessionLogContext()?.sessionId;
     if (currentSessionId) {
       const message = args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : String(arg)).join(' ');
       storeSessionLog(currentSessionId, 'debug', message).catch(err => 
