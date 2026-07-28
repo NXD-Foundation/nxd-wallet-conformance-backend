@@ -488,10 +488,13 @@ non-opted-in compatibility flows remain unchanged.
 
 For roles that intentionally share an ETSI LoTE type (currently PuB-EAA and
 non-qualified EAA), a consumer must not select the first pointer returned by
-the LoTL. The loader fails closed when multiple same-type pointers exist unless
-the profile specifies the exact authenticated pointer with `pointerUrl`. A
-future profile may replace that exact selector with authenticated publisher
-scope/anchor rules once WP4 publishes the authoritative distinction.
+the LoTL. The pilot loader authenticates and evaluates every compatible LoTL
+pointer independently. A presented certificate is trusted only when it matches
+an eligible, fresh entry in at least one authenticated referenced list;
+unavailable or invalid unrelated lists are retained as diagnostic evidence and
+cannot mask that match. If no referenced list can be authenticated, the result
+is indeterminate and fails closed. `pointerUrl` remains available for a profile
+that deliberately needs to restrict evaluation to one authenticated publisher.
 
 #### Verification-context alignment plan
 

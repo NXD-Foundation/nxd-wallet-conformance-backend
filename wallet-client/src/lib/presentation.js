@@ -58,6 +58,7 @@ import {
   resolveCs02KbJwtAudience,
 } from "./cs02DcqlValidation.js";
 import { makeSessionLogger } from "./logger.js";
+import { enforceVerifierPresentationTrust } from "./trustFramework.js";
 
 function parseOpenId4VpDeepLink(deepLink, { cs02Options, log } = {}) {
   console.log("[present] Parsing deep link:", deepLink);
@@ -233,29 +234,29 @@ async function verifyAuthorizationRequestJwt(requestJwt, { expectedClientId }) {
   const verificationAttempts = [];
 
   if (Array.isArray(header?.x5c) && header.x5c.length > 0) {
-    verificationAttempts.push(async () => {
+    verificationAttempts.push({ x5cSignatureVerified: true, verify: async () => {
       const pem = `-----BEGIN CERTIFICATE-----\n${header.x5c[0].match(/.{1,64}/g).join("\n")}\n-----END CERTIFICATE-----\n`;
       const certKey = await importX509(pem, header.alg || "ES256");
       return jwtVerify(requestJwt, certKey, { clockTolerance: 300 });
-    });
+    }});
   }
 
   for (const metadata of metadataCandidates) {
     if (metadata?.jwks?.keys?.length) {
-      verificationAttempts.push(async () => jwtVerify(requestJwt, createLocalJWKSet(metadata.jwks), { clockTolerance: 300 }));
+      verificationAttempts.push({ x5cSignatureVerified: false, verify: async () => jwtVerify(requestJwt, createLocalJWKSet(metadata.jwks), { clockTolerance: 300 }) });
     }
     if (metadata?.jwks_uri) {
-      verificationAttempts.push(async () => {
+      verificationAttempts.push({ x5cSignatureVerified: false, verify: async () => {
         const jwks = await fetchJson(metadata.jwks_uri, "jwks_uri");
         return jwtVerify(requestJwt, createLocalJWKSet(jwks), { clockTolerance: 300 });
-      });
+      }});
     }
     if (Array.isArray(metadata?.x5c) && metadata.x5c.length > 0) {
-      verificationAttempts.push(async () => {
+      verificationAttempts.push({ x5cSignatureVerified: false, verify: async () => {
         const pem = `-----BEGIN CERTIFICATE-----\n${metadata.x5c[0].match(/.{1,64}/g).join("\n")}\n-----END CERTIFICATE-----\n`;
         const certKey = await importX509(pem, header.alg || "ES256");
         return jwtVerify(requestJwt, certKey, { clockTolerance: 300 });
-      });
+      }});
     }
   }
 
@@ -264,7 +265,7 @@ async function verifyAuthorizationRequestJwt(requestJwt, { expectedClientId }) {
     (payload?.client_id && String(payload.client_id).startsWith("did:") && String(payload.client_id)) ||
     (expectedClientId && String(expectedClientId).startsWith("did:") && String(expectedClientId));
   if (didCandidate) {
-    verificationAttempts.push(async () => verifyJwtWithDid(requestJwt, header, didCandidate));
+    verificationAttempts.push({ x5cSignatureVerified: false, verify: async () => verifyJwtWithDid(requestJwt, header, didCandidate) });
   }
 
   if (verificationAttempts.length === 0) {
@@ -274,10 +275,11 @@ async function verifyAuthorizationRequestJwt(requestJwt, { expectedClientId }) {
   let lastError = null;
   for (const attempt of verificationAttempts) {
     try {
-      const verified = await attempt();
+      const verified = await attempt.verify();
       return {
         header: verified.protectedHeader || header,
         payload: verified.payload,
+        x5cSignatureVerified: attempt.x5cSignatureVerified,
       };
     } catch (error) {
       lastError = error;
@@ -739,6 +741,7 @@ export async function performPresentation(
     let requestJwt;
     let header;
     let payload;
+    let x5cSignatureVerified = false;
     let effectiveClientMetadata = null;
     if (cs02Options.strict) {
       const requestWalletNonce = method === "post"
@@ -758,6 +761,7 @@ export async function performPresentation(
         options: cs02Options,
         log: slog,
       }));
+      x5cSignatureVerified = clientId?.startsWith("x509_san_dns:") || clientId?.startsWith("verifier_attestation:");
       try {
         slog("[PRESENTATION] CS-02 JAR validated", {
           alg: header?.alg,
@@ -768,10 +772,17 @@ export async function performPresentation(
       } catch {}
     } else {
       requestJwt = await fetchAuthorizationRequestJwt(requestUri, method);
-      ({ header, payload } = await verifyAuthorizationRequestJwt(requestJwt, {
+      ({ header, payload, x5cSignatureVerified } = await verifyAuthorizationRequestJwt(requestJwt, {
         expectedClientId: clientId,
       }));
     }
+
+    await enforceVerifierPresentationTrust({
+      sessionId: logSessionId,
+      requestHeader: header,
+      requestPayload: payload,
+      trustEvidenceBound: x5cSignatureVerified,
+    });
 
     let responseMode = payload.response_mode || "direct_post";
     const responseUri = payload.response_uri; // our routes embed this

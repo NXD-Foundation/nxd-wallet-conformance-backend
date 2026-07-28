@@ -52,8 +52,9 @@ describe("Phase 1 local trust-chain integration", () => {
   it("loads JSON LoTL, follows JSON PID and XML QEAA pointers, and evaluates PID trust", async () => {
     const snapshot = await loadTrustSnapshot({ profile, fetchImpl: fetchLocal, clock: () => new Date("2026-07-27T00:00:00Z") });
     expect(snapshot.format).to.equal("json");
-    expect(snapshot.lists["pid-provider"].format).to.equal("json");
-    expect(snapshot.lists["qeaa-provider"].format).to.equal("xml");
+    expect(snapshot.lists["pid-provider"]).to.have.length(1);
+    expect(snapshot.lists["pid-provider"][0].format).to.equal("json");
+    expect(snapshot.lists["qeaa-provider"][0].format).to.equal("xml");
     const result = evaluateTrust({ snapshot, role: "pid-provider", presentedIdentity: { entityId: "Test PID Provider", certificatePem: pidCert } });
     expect(result).to.include({ trusted: true, state: "trusted", reasonCode: "TRUSTED" });
     expect(result.evidence.lotl.signerFingerprint).to.be.a("string");
@@ -62,7 +63,7 @@ describe("Phase 1 local trust-chain integration", () => {
   it("uses the XML LoTL path when explicitly requested", async () => {
     const snapshot = await loadTrustSnapshot({ profile, format: "xml", fetchImpl: fetchLocal, clock: () => new Date("2026-07-27T00:00:00Z") });
     expect(snapshot.format).to.equal("xml");
-    expect(snapshot.lists["pid-provider"].format).to.equal("xml");
+    expect(snapshot.lists["pid-provider"][0].format).to.equal("xml");
   });
 
   it("rejects a listed entity with a mismatched certificate", async () => {

@@ -322,12 +322,41 @@ warning-only.
   distribution points, invalid, stale, unavailable, or revoking CRLs fail an
   opted-in decision; certificates without endpoints are recorded as
   `not-advertised`.
+- A trust role can have multiple compatible pointers in the WE BUILD LoTL. The
+  resolver authenticates, validates, and freshness-checks each pointer
+  independently, then trusts a provider only if its identity/certificate
+  matches at least one eligible list. Invalid or unavailable unrelated lists
+  are included as diagnostic evidence; if no list for the role authenticates,
+  the opted-in result is indeterminate and fails closed. A profile may set
+  `pointerUrl` to deliberately restrict a role to one LoTL publisher.
 - Registrars are generic: registration data may describe approved attestation
   types, while LoTEs publish provider anchors and status. NXD's current EAA
   LoTE has provider services and anchors but no registrar reference or
   `vct`/`doctype` scope. Trusted registrar scope evidence is enforced when
   available; absent evidence is temporarily allowed as `scope-unverified` and
   must be revisited before production hardening.
+- Wallet-side trust enforcement follows the same session opt-in model. With
+  `trustFramework=true`, the wallet checks the credential issuer's role-specific
+  LoTE anchor before storing an SD-JWT/JWT credential. A trust-enabled JWT VC
+  must have its signature verified by the same presented `x5c` certificate
+  used as LoTE evidence; JWKS/DID verification alone cannot bind an unrelated
+  certificate. Compatibility-mode decode-only JWT VC fallback is never trust
+  evidence. Conventional JWT VC
+  `vc.type`/`credential_type` is carried into registrar scope evaluation. The
+  wallet checks an X.509
+  verifier's WRPAC plus WRPRC before disclosing a presentation. The WRPRC is
+  read from `verifier_info.registration_cert` first, then from the configured
+  TS5 Registrar URL (`WALLET_TRUST_REGISTRAR_URL`) using the WRPAC entity ID.
+  DID verifier identities remain outside this pilot enforcement path and are
+  logged as not applicable. Credential type-to-provider-role entries in
+  `wallet-client/data/trust-role-map.json` are routing hints, not an
+  authorization registry: when a VCT/doctype is not mapped, the wallet tries
+  the issuer-provider LoTE roles and accepts a trusted listed issuer. Likewise,
+  an authenticated WRPRC with no declared credential/claim scope is accepted.
+  Both cases persist and session-log `TRUST_SCOPE_NOT_DECLARED`; an explicit
+  registrar scope remains enforced. This is intentional for the pilot test
+  infrastructure and must be replaced by signed TL/registrar scope before a
+  production trust decision.
 - Production/conformance hardening still needs trusted Wallet Provider material
 and complete status-list validation; keep any self-contained-key fallback
 development-only when that work lands.

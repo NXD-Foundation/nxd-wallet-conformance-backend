@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import { loadTrustProfile } from "../trust/profile.js";
 import { createTrustResolver } from "../trust/resolver.js";
 import { createTrustResolverServer } from "../trust/http.js";
+import { evaluateTrust } from "../trust/evaluate.js";
 
 const execFileAsync = promisify(execFile);
 const roles = ["pid-provider", "wallet-provider", "wrpac-provider", "wrprc-provider", "pub-eaa-provider", "eaa-provider", "qeaa-provider", "ebwoid-provider"];
@@ -55,6 +56,60 @@ describe("Phase 2 explicit trust resolver", () => {
     expect(revocation).to.include({ trusted: false, state: "indeterminate", reasonCode: "REVOCATION_UNKNOWN" });
   });
 
+  it("trusts a certificate found in any authenticated same-role LoTE and retains unrelated failures", () => {
+    const multiSnapshot = structuredClone(snapshot);
+    const first = multiSnapshot.lists["pub-eaa-provider"];
+    first.entities = [{ id: "other-provider", name: "other-provider", services: [{ type: "other", status: "valid", certificates: [] }] }];
+    const second = structuredClone(first);
+    second.source.url = "https://example.test/nxd-pub-eaa.json";
+    second.entities = [{ id: "nxd-provider", name: "nxd-provider", services: [{ type: "eaa", status: "valid", certificates: [] }] }];
+    multiSnapshot.lists["pub-eaa-provider"] = [first, second];
+    multiSnapshot.listFailures = {
+      "pub-eaa-provider": [{ url: "https://example.test/broken.xml", reasonCode: "REFERENCED_LIST_SIGNATURE_INVALID", message: "XML signature is missing" }],
+    };
+    const result = evaluateTrust({
+      snapshot: multiSnapshot,
+      role: "pub-eaa-provider",
+      presentedIdentity: { entityId: "nxd-provider" },
+    });
+    expect(result).to.include({ trusted: true, reasonCode: "TRUSTED" });
+    expect(result.evidence.list.url).to.equal("https://example.test/nxd-pub-eaa.json");
+    expect(result.evidence.pointerFailures).to.have.length(1);
+  });
+
+  it("requires revocation evidence from the same LoTE that authorizes the identity", async () => {
+    const multiSnapshot = structuredClone(snapshot);
+    const unrelated = multiSnapshot.lists["pub-eaa-provider"];
+    unrelated.revocation = { source: "unrelated-list" };
+    unrelated.entities = [{ id: "other-provider", name: "other-provider", services: [{ type: "other", status: "valid", certificates: [] }] }];
+    const authorizing = structuredClone(unrelated);
+    authorizing.source.url = "https://example.test/nxd-pub-eaa.json";
+    delete authorizing.revocation;
+    authorizing.entities = [{ id: "nxd-provider", name: "nxd-provider", services: [{ type: "eaa", status: "valid", certificates: [] }] }];
+    multiSnapshot.lists["pub-eaa-provider"] = [unrelated, authorizing];
+    const resolver = createTrustResolver({ profile, snapshot: multiSnapshot });
+    const result = await resolver.resolve({
+      framework: profile.id,
+      role: "pub-eaa-provider",
+      operation: "resolve-provider",
+      presentedIdentity: { entityId: "nxd-provider" },
+      policy: { requireRevocation: true },
+    });
+    expect(result).to.include({ trusted: false, state: "indeterminate", reasonCode: "REVOCATION_UNKNOWN" });
+    expect(result.evidence.details.url).to.equal("https://example.test/nxd-pub-eaa.json");
+  });
+
+  it("returns indeterminate when every same-role LoTE failed authentication", () => {
+    const failedSnapshot = structuredClone(snapshot);
+    failedSnapshot.lists["pub-eaa-provider"] = [];
+    failedSnapshot.listFailures = {
+      "pub-eaa-provider": [{ url: "https://example.test/broken.xml", reasonCode: "REFERENCED_LIST_SIGNATURE_INVALID", message: "XML signature is missing" }],
+    };
+    const result = evaluateTrust({ snapshot: failedSnapshot, role: "pub-eaa-provider", presentedIdentity: { entityId: "nxd-provider" } });
+    expect(result).to.include({ trusted: false, state: "indeterminate", reasonCode: "TRUST_EVALUATION_INDETERMINATE" });
+    expect(result.evidence.pointerFailures).to.have.length(1);
+  });
+
   it("rejects supplied registrar scope evidence that does not authorize the credential", async () => {
     const resolver = createTrustResolver({ profile, snapshot });
     const result = await resolver.resolve({
@@ -82,6 +137,25 @@ describe("Phase 2 explicit trust resolver", () => {
     expect(rejected).to.include({ trusted: false, state: "not_trusted", reasonCode: "LIST_STALE" });
     const allowed = await resolver.resolve({ framework: profile.id, role: "pid-provider", operation: "resolve", presentedIdentity: { entityId: "entity-pid-provider" }, policy: { allowStaleSnapshot: true } });
     expect(allowed).to.include({ trusted: true, reasonCode: "TRUSTED" });
+  });
+
+  it("ignores a stale same-role sibling when a fresh LoTE authorizes the identity", async () => {
+    const multiSnapshot = structuredClone(snapshot);
+    const stale = multiSnapshot.lists["pub-eaa-provider"];
+    stale.scheme.nextUpdate = "2020-01-01T00:00:00Z";
+    stale.entities = [{ id: "stale-provider", name: "stale-provider", services: [{ type: "eaa", status: "valid", certificates: [] }] }];
+    const fresh = structuredClone(stale);
+    fresh.source.url = "https://example.test/nxd-pub-eaa.json";
+    fresh.scheme.nextUpdate = "2027-01-01T00:00:00Z";
+    fresh.entities = [{ id: "nxd-provider", name: "nxd-provider", services: [{ type: "eaa", status: "valid", certificates: [] }] }];
+    multiSnapshot.lists["pub-eaa-provider"] = [stale, fresh];
+    const resolver = createTrustResolver({ profile, snapshot: multiSnapshot, clock: () => new Date("2026-07-27T00:00:00Z") });
+    const result = await resolver.resolve({ framework: profile.id, role: "pub-eaa-provider", operation: "resolve-provider", presentedIdentity: { entityId: "nxd-provider" } });
+    expect(result).to.include({ trusted: true, reasonCode: "TRUSTED" });
+    expect(result.evidence.list.url).to.equal("https://example.test/nxd-pub-eaa.json");
+    expect(result.evidence.pointerFailures.some((failure) => (
+      failure.url === stale.source.url && failure.reasonCode === "LIST_STALE"
+    ))).to.equal(true);
   });
 
   it("rejects an unsupported framework without throwing", async () => {

@@ -57,9 +57,42 @@ function outputError(snapshot, request, error) {
 function assertSnapshotFresh(snapshot, evaluationTime, allowStaleSnapshot) {
   if (allowStaleSnapshot) return;
   const now = new Date(evaluationTime).getTime();
-  const documents = [snapshot.lotl, ...Object.values(snapshot.lists || {})];
-  const stale = documents.find((document) => document?.scheme?.nextUpdate && now > Date.parse(document.scheme.nextUpdate));
+  const stale = snapshot.lotl?.scheme?.nextUpdate && now > Date.parse(snapshot.lotl.scheme.nextUpdate)
+    ? snapshot.lotl
+    : null;
   if (stale) throw new TrustListError("Authenticated trust snapshot is stale", TRUST_REASON_CODES.LIST_STALE, { nextUpdate: stale.scheme.nextUpdate });
+}
+
+function freshSnapshotForRole(snapshot, role, evaluationTime, allowStaleSnapshot) {
+  if (allowStaleSnapshot) return snapshot;
+  const configured = snapshot.lists?.[role];
+  const lists = Array.isArray(configured) ? configured : configured ? [configured] : [];
+  const now = evaluationTime.getTime();
+  const stale = lists.filter((list) => list?.scheme?.nextUpdate && now > Date.parse(list.scheme.nextUpdate));
+  if (!stale.length) return snapshot;
+  const fresh = lists.filter((list) => !stale.includes(list));
+  if (!fresh.length) {
+    throw new TrustListError("No authenticated referenced trust list is fresh", TRUST_REASON_CODES.LIST_STALE, {
+      nextUpdate: stale[0].scheme.nextUpdate,
+      url: stale[0].source?.url || null,
+    });
+  }
+  return {
+    ...snapshot,
+    lists: { ...snapshot.lists, [role]: fresh },
+    listFailures: {
+      ...(snapshot.listFailures || {}),
+      [role]: [
+        ...(snapshot.listFailures?.[role] || []),
+        ...stale.map((list) => ({
+          url: list.source?.url || null,
+          reasonCode: TRUST_REASON_CODES.LIST_STALE,
+          message: "Referenced trust list is stale",
+          nextUpdate: list.scheme.nextUpdate,
+        })),
+      ],
+    },
+  };
 }
 
 export function createTrustResolver({ profile, snapshot = null, snapshotProvider = null, scopeProvider = null, clock = () => new Date() } = {}) {
@@ -79,18 +112,17 @@ export function createTrustResolver({ profile, snapshot = null, snapshotProvider
         const evaluationTime = request.evaluationTime ? new Date(request.evaluationTime) : clock();
         if (!Number.isFinite(evaluationTime.getTime())) throw new TrustListError("evaluationTime must be a valid date", TRUST_REASON_CODES.INVALID_REQUEST);
         assertSnapshotFresh(currentSnapshot, evaluationTime, policy.allowStaleSnapshot);
-        const list = currentSnapshot.lists?.[request.role];
-        if (policy.requireRevocation && !list?.revocation) {
-          return outputError(currentSnapshot, request, new TrustListError("Required revocation evidence is unavailable", TRUST_REASON_CODES.REVOCATION_UNKNOWN));
-        }
+        const evaluationSnapshot = freshSnapshotForRole(currentSnapshot, request.role, evaluationTime, policy.allowStaleSnapshot);
+        const configuredLists = evaluationSnapshot.lists?.[request.role];
+        const lists = Array.isArray(configuredLists) ? configuredLists : configuredLists ? [configuredLists] : [];
         const suppliedScope = request.credentialContext?.scopeEvidence
-          || (scopeProvider ? await scopeProvider({ profile, snapshot: currentSnapshot, request }) : null);
+          || (scopeProvider ? await scopeProvider({ profile, snapshot: evaluationSnapshot, request }) : null);
         const credentialContext = {
           ...(request.credentialContext || {}),
           scopeEvidence: evaluateRegistrarScope({ evidence: suppliedScope, credentialContext: request.credentialContext, operation: request.operation }),
         };
         const result = evaluateTrust({
-          snapshot: currentSnapshot,
+          snapshot: evaluationSnapshot,
           role: request.role,
           operation: request.operation,
           presentedIdentity: request.presentedIdentity,
@@ -98,6 +130,17 @@ export function createTrustResolver({ profile, snapshot = null, snapshotProvider
           evaluationTime,
           acceptedStatuses: policy.acceptedStatuses,
         });
+        if (result.trusted && policy.requireRevocation) {
+          const selectedUrl = result.evidence.list?.url;
+          const selectedList = lists.find((list) => list?.source?.url === selectedUrl);
+          if (!selectedList?.revocation) {
+            return outputError(evaluationSnapshot, request, new TrustListError(
+              "Required revocation evidence is unavailable for the LoTE that authorized this identity",
+              TRUST_REASON_CODES.REVOCATION_UNKNOWN,
+              { url: selectedUrl || null },
+            ));
+          }
+        }
         if (result.trusted && request.presentedIdentity.certificateChain?.length) {
           const chain = request.presentedIdentity.certificateChain;
           const issuerPem = chain[1] || null;

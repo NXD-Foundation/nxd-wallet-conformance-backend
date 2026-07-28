@@ -54,7 +54,7 @@ async function loadByFormat({ profile, format, fetchImpl, clock, listType = null
   return parsed;
 }
 
-export function pointerForType(pointers, typeProfile, format) {
+export function pointersForType(pointers, typeProfile, format) {
   const matches = pointers.filter((pointer) => pointer.listTypeUri === typeProfile.referenceUri);
   const formatMatches = matches.filter((pointer) => pointer.mimeType.includes(format));
   const candidates = formatMatches.length ? formatMatches : matches;
@@ -62,7 +62,7 @@ export function pointerForType(pointers, typeProfile, format) {
 
   if (typeProfile.pointerUrl) {
     const selected = candidates.filter((pointer) => pointer.url === typeProfile.pointerUrl);
-    if (selected.length === 1) return selected[0];
+    if (selected.length === 1) return selected;
     throw new TrustListError(
       "Configured trust-list pointer URL is missing or ambiguous",
       TRUST_REASON_CODES.POINTER_NOT_FOUND,
@@ -70,9 +70,18 @@ export function pointerForType(pointers, typeProfile, format) {
     );
   }
 
+  return candidates;
+}
+
+// Compatibility helper for callers that intentionally require exactly one
+// pointer. Trust resolution itself must use pointersForType() so every LoTL
+// publisher can be evaluated independently.
+export function pointerForType(pointers, typeProfile, format) {
+  const candidates = pointersForType(pointers, typeProfile, format);
+  if (!candidates) return null;
   if (candidates.length > 1) {
     throw new TrustListError(
-      "Multiple trust-list pointers match this role; configure pointerUrl to disambiguate",
+      "Multiple trust-list pointers match this role; use pointersForType to evaluate all authenticated candidates",
       TRUST_REASON_CODES.LIST_PROFILE_INVALID,
       { referenceUri: typeProfile.referenceUri, candidates: candidates.map((pointer) => pointer.url) },
     );
@@ -102,28 +111,31 @@ export async function loadTrustSnapshot({ profile, fetchImpl = globalThis.fetch,
   }
   if (!lotl) throw firstError;
   const lists = {};
+  const listFailures = {};
   for (const listType of listTypes) {
     const typeProfile = listTypeProfile(profile, listType);
-    const pointer = pointerForType(lotl.pointers, typeProfile, lotl.format);
-    if (!pointer) continue;
-    const allowed = pointer.anchorCertificates.map((value) => {
-      if (value.includes("BEGIN CERTIFICATE")) return certificateFingerprint(value);
-      return certificateFingerprint(derToPem(Buffer.from(value, "base64")));
-    });
-    const source = await fetchDocument(pointer.url, { fetchImpl, timeoutMs: profile.network.timeoutMs, maxBytes: profile.network.maxBytes, allowInsecureHttp: profile.network.allowInsecureHttp === true, allowedHosts: profile.network.allowedHosts || null, allowPrivateAddresses: profile.network.allowPrivateAddresses === true });
-    const selectedFormat = isJson(source) ? "json" : "xml";
-    try {
-      const parsed = await loadOne({ document: source, profile, format: selectedFormat, allowedFingerprints: allowed.length ? allowed : typeProfile.signerFingerprints, listType });
-      freshness(parsed, clock(), profile);
-      lists[listType] = parsed;
-    } catch (error) {
-      if (error instanceof TrustListError) {
-        error.reasonCode = error.reasonCode === TRUST_REASON_CODES.LIST_SIGNATURE_INVALID
+    const pointers = pointersForType(lotl.pointers, typeProfile, lotl.format);
+    if (!pointers) continue;
+    lists[listType] = [];
+    listFailures[listType] = [];
+    for (const pointer of pointers) {
+      try {
+        const allowed = pointer.anchorCertificates.map((value) => {
+          if (value.includes("BEGIN CERTIFICATE")) return certificateFingerprint(value);
+          return certificateFingerprint(derToPem(Buffer.from(value, "base64")));
+        });
+        const source = await fetchDocument(pointer.url, { fetchImpl, timeoutMs: profile.network.timeoutMs, maxBytes: profile.network.maxBytes, allowInsecureHttp: profile.network.allowInsecureHttp === true, allowedHosts: profile.network.allowedHosts || null, allowPrivateAddresses: profile.network.allowPrivateAddresses === true });
+        const selectedFormat = isJson(source) ? "json" : "xml";
+        const parsed = await loadOne({ document: source, profile, format: selectedFormat, allowedFingerprints: allowed.length ? allowed : typeProfile.signerFingerprints, listType });
+        freshness(parsed, clock(), profile);
+        lists[listType].push(parsed);
+      } catch (error) {
+        const reasonCode = error instanceof TrustListError && error.reasonCode === TRUST_REASON_CODES.LIST_SIGNATURE_INVALID
           ? TRUST_REASON_CODES.REFERENCED_LIST_SIGNATURE_INVALID
-          : error.reasonCode;
+          : error.reasonCode || TRUST_REASON_CODES.REFERENCED_LIST_UNAVAILABLE;
+        listFailures[listType].push({ url: pointer.url, reasonCode, message: error.message });
       }
-      throw error;
     }
   }
-  return { profile, profileId: profile.id, format: lotl.format, lotl, lists, loadedAt: clock().toISOString() };
+  return { profile, profileId: profile.id, format: lotl.format, lotl, lists, listFailures, loadedAt: clock().toISOString() };
 }

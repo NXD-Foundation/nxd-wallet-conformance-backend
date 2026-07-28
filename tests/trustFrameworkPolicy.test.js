@@ -97,6 +97,25 @@ describe("Phase 3 Wallet Provider trust policy", () => {
     expect(resolve.firstCall.args[0].presentedIdentity.certificateFingerprint).to.match(/^[a-f0-9]{64}$/);
   });
 
+  it("accepts an explicit wallet credential role and forwards registration scope evidence", async () => {
+    const resolve = sinon.stub().resolves({ trusted: true, state: "trusted", reasonCode: "TRUSTED", evidence: {} });
+    setTrustResolverForTests({ resolve });
+    const certificatePem = await fs.readFile("tests/fixtures/trust/webuild-wp4/keys/pid.crt", "utf8");
+    await checkVerifierCredentialTrust({
+      session: { trustPolicy: { mode: "webuild", profile: "webuild-wp4-pilot" } },
+      payload: { iss: "issuer.example" },
+      certificatePem,
+      certificateChain: [certificatePem],
+      role: "pub-eaa-provider",
+      format: "mso_mdoc",
+      doctype: "eu.europa.ec.av.1",
+      scopeEvidence: { verified: true, credentialTypes: ["eu.europa.ec.av.1"] },
+    });
+    expect(resolve.firstCall.args[0].role).to.equal("pub-eaa-provider");
+    expect(resolve.firstCall.args[0].credentialContext.scopeEvidence).to.deep.equal({ verified: true, credentialTypes: ["eu.europa.ec.av.1"] });
+    expect(resolve.firstCall.args[0].presentedIdentity.certificateChain).to.have.length(1);
+  });
+
   it("resolves an opted-in verifier access certificate as WRPAC", async () => {
     const resolve = sinon.stub().resolves({ trusted: true, state: "trusted", reasonCode: "TRUSTED", evidence: {} });
     setTrustResolverForTests({ resolve });
@@ -109,6 +128,19 @@ describe("Phase 3 Wallet Provider trust policy", () => {
     expect(result.trusted).to.equal(true);
     expect(resolve.firstCall.args[0].role).to.equal("wrpac-provider");
     expect(resolve.firstCall.args[0].presentedIdentity.entityId).to.equal("x509_san_dns:verifier.example");
+  });
+
+  it("passes an access-certificate chain to the resolver for CA-anchor matching", async () => {
+    const resolve = sinon.stub().resolves({ trusted: true, state: "trusted", reasonCode: "TRUSTED", evidence: {} });
+    setTrustResolverForTests({ resolve });
+    const leaf = await fs.readFile("tests/fixtures/trust/webuild-wp4/keys/pid.crt", "utf8");
+    const anchor = await fs.readFile("tests/fixtures/trust/webuild-wp4/keys/lotl.crt", "utf8");
+    await checkAccessCertificateTrust({
+      session: { trustPolicy: { mode: "webuild", profile: "webuild-wp4-pilot" } },
+      certificatePem: leaf,
+      certificateChain: [leaf, anchor],
+    });
+    expect(resolve.firstCall.args[0].presentedIdentity.certificateChain).to.deep.equal([leaf, anchor]);
   });
 
   it("loads the optional WRPRC certificate only when configured", async () => {

@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "credentialTypes": {
+    "urn:eu.europa.ec.eudi:pid:1": "pid-provider",
+    "urn:eudi:pid:lsp:1": "pid-provider",
+    "eu.europa.ec.av.1": "pub-eaa-provider"
+  }
+}

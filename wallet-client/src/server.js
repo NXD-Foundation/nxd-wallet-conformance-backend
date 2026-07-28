@@ -44,8 +44,9 @@ import {
   createLegacyBodyClientAssertionJwt,
   allowsLegacyBodyClientAssertion,
 } from "./lib/walletUnitAttestation.js";
-import { trustFrameworkSessionProps } from "../../utils/trustFrameworkPolicy.js";
+import { normalizeTrustFrameworkFlag, trustFrameworkSessionProps } from "../../utils/trustFrameworkPolicy.js";
 import { createWalletContext } from "../../utils/sessionContext.js";
+import { credentialTypeFromJwtVcPayload, enforceIssuedCredentialTrust, resolveIssuerScopeEvidence } from "./lib/trustFramework.js";
 import {
   buildCredentialProofRequest,
   buildCredentialProofBindingContext,
@@ -86,6 +87,31 @@ installProcessLogHandlers();
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+export function isDirectWalletTrustEnabled(trustFramework) {
+  return normalizeTrustFrameworkFlag(trustFramework);
+}
+
+async function ensureDirectWalletTrustSession({ sessionId, trustFramework, flow }) {
+  if (!isDirectWalletTrustEnabled(trustFramework)) return;
+  if (!sessionId) {
+    const error = new Error("trustFramework=true requires sessionId so wallet trust decisions can be persisted");
+    error.errorCode = "invalid_request";
+    throw error;
+  }
+  const key = `wallet:test-session:${sessionId}`;
+  const raw = await walletRedisClient.get(key);
+  const existing = raw ? JSON.parse(raw) : { sessionId, status: "pending" };
+  const policy = trustFrameworkSessionProps({ trustFramework: true }).trustPolicy;
+  const next = createWalletContext({
+    sessionContext: existing.sessionContext,
+    id: sessionId,
+    flow,
+    status: existing.status || "pending",
+    trustPolicy: policy,
+  }).withWalletSession({ ...existing, trustPolicy: policy }).toSession({ ...existing, trustPolicy: policy });
+  await walletRedisClient.setEx(key, Number(process.env.WALLET_TEST_SESSION_TTL || 86400), JSON.stringify(next));
+}
+
 function logFlowError(slog, label, error, extra = {}) {
   try {
     console.error(label, error?.message || error);
@@ -121,6 +147,7 @@ async function runGuardedAsync(slog, label, fn, extra = {}) {
 app.post("/issue", async (req, res) => {
   return runWithLogContext(req.body.sessionId, async () => {
     try {
+      await ensureDirectWalletTrustSession({ sessionId: req.body.sessionId, trustFramework: req.body.trustFramework, flow: "issuance" });
       const issuerBase = (req.body.issuer || "http://localhost:3000").replace(/\/$/, "");
       const deepLink = req.body.offer || (await getOfferDeepLink(issuerBase, req.body.fetchOfferPath, req.body.credential));
       await logInfo(req.body.sessionId, "[/issue] deepLink:", deepLink || "<none>");
@@ -471,6 +498,7 @@ app.post("/session", async (req, res) => {
 app.post("/present", async (req, res) => {
   return runWithLogContext(req.body.sessionId, async () => {
     try {
+      await ensureDirectWalletTrustSession({ sessionId: req.body.sessionId, trustFramework: req.body.trustFramework, flow: "presentation" });
       const verifierBase = (req.body.verifier || "http://localhost:3000").replace(/\/$/, "");
       const deepLink = req.body.deepLink || (req.body.fetchPath ? await resolveDeepLinkFromEndpoint(verifierBase, req.body.fetchPath) : undefined);
       if (!deepLink) return res.status(400).json({ error: "invalid_request", error_description: "Missing deepLink or fetchPath" });
@@ -493,6 +521,7 @@ app.post("/present", async (req, res) => {
 app.post("/issue-codeflow", async (req, res) => {
   return runWithLogContext(req.body.sessionId, async () => {
     try {
+      await ensureDirectWalletTrustSession({ sessionId: req.body.sessionId, trustFramework: req.body.trustFramework, flow: "issuance" });
       const issuerBaseInput = (req.body.issuer || "http://localhost:3000").replace(/\/$/, "");
       const deepLink = req.body.offer || (await getOfferDeepLink(issuerBaseInput, req.body.fetchOfferPath, req.body.credential));
       await logInfo(req.body.sessionId, "[/issue-codeflow] deepLink:", deepLink || "<none>");
@@ -650,7 +679,7 @@ function pickConfigurationId(offer, requestedId) {
   return ids.length > 0 ? ids[0] : undefined;
 }
 
-async function discoverIssuerMetadata(credentialIssuerBase, logSessionId) {
+export async function discoverIssuerMetadata(credentialIssuerBase, logSessionId, fetchImpl = fetch) {
   const slog = logSessionId ? makeSessionLogger(logSessionId) : (() => {});
   const base = credentialIssuerBase.replace(/\/$/, "");
   // RFC: if credential_issuer contains a path, well-known URI keeps path suffix
@@ -672,14 +701,33 @@ async function discoverIssuerMetadata(credentialIssuerBase, logSessionId) {
   let meta = null; let lastErr = null;
   console.log("[issuer-meta] trying candidates:", candidates); try { slog("[issuer-meta] candidates", { candidates }); } catch {}
   for (const url of candidates) {
-    try {
-      const res = await fetch(url, {
-        headers: { Accept: "application/json" },
-      });
-      console.log("[issuer-meta]", url, "->", res.status); try { slog("[issuer-meta] fetch", { url, status: res.status }); } catch {}
-      if (res.ok) { meta = await res.json(); console.log("[issuer-meta] selected:", url); break; }
-      lastErr = res.status;
-    } catch (e) { lastErr = e.message || String(e); }
+    for (const accept of ["application/jwt, application/json", "application/json"]) {
+      try {
+        const res = await fetchImpl(url, { headers: { Accept: accept } });
+        console.log("[issuer-meta]", url, "->", res.status); try { slog("[issuer-meta] fetch", { url, status: res.status, accept }); } catch {}
+        if (res.ok) {
+          const contentType = String(res.headers.get("content-type") || "").toLowerCase();
+          if (contentType.includes("application/jwt")) {
+            const token = await res.text();
+            const header = decodeProtectedHeader(token);
+            if (!Array.isArray(header?.x5c) || header.x5c.length === 0) {
+              throw new Error("signed issuer metadata is missing x5c");
+            }
+            const verified = await jwtVerify(token, await importX509(base64DerToPem(header.x5c[0]), header.alg || "ES256"));
+            if (verified.payload?.sub !== credentialIssuerBase) {
+              throw new Error("signed issuer metadata sub does not match credential issuer");
+            }
+            meta = { ...verified.payload, _signedMetadata: true, _metadataX5c: header.x5c };
+          } else {
+            meta = await res.json();
+          }
+          console.log("[issuer-meta] selected:", url); break;
+        }
+        lastErr = res.status;
+      } catch (e) { lastErr = e.message || String(e); }
+      if (meta) break;
+    }
+    if (meta) break;
   }
   if (!meta) throw new Error(`Issuer metadata fetch error ${lastErr}`);
   // Normalize property names that can differ across specs/implementations
@@ -2308,12 +2356,25 @@ async function validateAndStoreCredential({ configurationId, credential, issuerM
       if (!detectedFormat || detectedFormat === "kb+jwt") detectedFormat = "dc+sd-jwt";
       console.log("[validate] detected SD-JWT format (contains '~')"); 
       try { slog("[validate] validating SD-JWT", { detectedFormat }); } catch {}
-      await validateSdJwt({ sdJwt: token, issuerMeta, configurationId, expectedCNonce: metadata?.c_nonce, authorizationServerMeta: authorizationServerMeta || issuerMeta._authorizationServerMeta }, logSessionId);
+      const verified = await validateSdJwt({ sdJwt: token, issuerMeta, configurationId, expectedCNonce: metadata?.c_nonce, authorizationServerMeta: authorizationServerMeta || issuerMeta._authorizationServerMeta }, logSessionId);
+      const scopeEvidence = await resolveIssuerScopeEvidence({ sessionId: logSessionId, issuerMetadata: issuerMeta });
+      await enforceIssuedCredentialTrust({ sessionId: logSessionId, payload: verified.payload, header: verified.header, format: detectedFormat, vct: verified.payload?.vct, doctype: detectedDoctype, scopeEvidence, trustEvidenceBound: verified.x5cSignatureVerified });
     } else if (typeof token === 'string' && token.split('.').length >= 3) {
       if (!detectedFormat) detectedFormat = "jwt_vc_json";
       console.log("[validate] detected JWT VC format (3+ parts)"); 
       try { slog("[validate] validating JWT VC", { detectedFormat }); } catch {}
-      await validateJwtVc({ jwtVc: token, issuerMeta, apiBase, configurationId, publicJwk: keyBinding?.publicJwk }, logSessionId);
+      const verified = await validateJwtVc({ jwtVc: token, issuerMeta, apiBase, configurationId, publicJwk: keyBinding?.publicJwk }, logSessionId);
+      const scopeEvidence = await resolveIssuerScopeEvidence({ sessionId: logSessionId, issuerMetadata: issuerMeta });
+      await enforceIssuedCredentialTrust({
+        sessionId: logSessionId,
+        payload: verified.payload,
+        header: verified.header,
+        format: detectedFormat,
+        vct: credentialTypeFromJwtVcPayload(verified.payload),
+        doctype: detectedDoctype,
+        scopeEvidence,
+        trustEvidenceBound: verified.x5cSignatureVerified,
+      });
     } else if (typeof token === 'string') {
       if (!detectedFormat) detectedFormat = "mso_mdoc";
       // Potential mdoc base64url
@@ -2355,7 +2416,10 @@ async function validateAndStoreCredential({ configurationId, credential, issuerM
           `mdoc_doctype_mismatch: issuer metadata doctype ${credentialConfig.doctype} does not match credential docType ${detectedDoctype}`,
         );
       }
-      // Placeholder for cryptographic verification using trust anchors
+      // The mdoc parser currently validates structure but does not expose a
+      // cryptographically verified issuer x5chain. Opted-in trust sessions
+      // must fail closed rather than store a structurally valid but untrusted credential.
+      await enforceIssuedCredentialTrust({ sessionId: logSessionId, payload: null, header: null, format: detectedFormat, vct: credentialConfig.vct || null, doctype: detectedDoctype });
       if (process.env.WALLET_MDL_STRICT === 'true') {
         try { slog("[validate] mdoc crypto verification not implemented"); } catch {}
         throw new Error("mdoc_crypto_verification_not_implemented: provide trust anchors and crypto verifier");
@@ -2455,6 +2519,7 @@ async function validateSdJwt({ sdJwt, issuerMeta, configurationId, expectedCNonc
   let hdr = {};
   try { hdr = decodeProtectedHeader(jws); } catch {}
   let signatureVerified = false;
+  let x5cSignatureVerified = false;
   // DID-based signature verification (did:web, did:jwk)
   if ((hdr.kid && hdr.kid.startsWith('did:')) || (decoded.jwt.payload?.iss && String(decoded.jwt.payload.iss).startsWith('did:'))) {
     try {
@@ -2467,14 +2532,16 @@ async function validateSdJwt({ sdJwt, issuerMeta, configurationId, expectedCNonc
       console.warn("[sd-jwt] DID-based verification failed:", e?.message || e); try { slog("[sd-jwt] DID verification failed", { error: e?.message || String(e) }); } catch {}
     }
   }
-  // If x5c present, try x509 cert verification (only if not already verified)
-  if (!signatureVerified && Array.isArray(hdr.x5c) && hdr.x5c.length > 0) {
+  // Verify presented x5c even after DID verification: trust-enabled storage
+  // may use this exact certificate as the LoTE identity evidence.
+  if (Array.isArray(hdr.x5c) && hdr.x5c.length > 0) {
     const pem = base64DerToPem(hdr.x5c[0]);
     try {
       const certKey = await importX509(pem, hdr.alg || 'ES256');
       await jwtVerify(jws, certKey, { clockTolerance: 300 });
       console.log("[sd-jwt] JWS signature verified via x5c certificate"); try { slog("[sd-jwt] x5c signature verified"); } catch {}
       signatureVerified = true;
+      x5cSignatureVerified = true;
     } catch (e) {
       console.warn("[sd-jwt] x5c certificate verification failed:", e?.message || e); try { slog("[sd-jwt] x5c verification failed", { error: e?.message || String(e) }); } catch {}
     }
@@ -2655,6 +2722,7 @@ async function validateSdJwt({ sdJwt, issuerMeta, configurationId, expectedCNonc
     configurationId,
     formatHint: "sd-jwt"
   });
+  return { payload: decoded.jwt.payload, header: hdr, x5cSignatureVerified };
 }
 
 async function validateJwtVc({ jwtVc, issuerMeta, apiBase, configurationId, publicJwk }, logSessionId) {
@@ -2662,6 +2730,8 @@ async function validateJwtVc({ jwtVc, issuerMeta, apiBase, configurationId, publ
   console.log("[jwt-vc] start validation; configurationId=", configurationId);
   try { slog("[jwt-vc] start validation", { configurationId }); } catch {}
   let hdr = {};
+  let signatureVerified = false;
+  let x5cSignatureVerified = false;
   let payloadFromDid, payloadFromX5c;
   try {
     hdr = decodeProtectedHeader(jwtVc);
@@ -2676,6 +2746,7 @@ async function validateJwtVc({ jwtVc, issuerMeta, apiBase, configurationId, publ
         const verified = await verifyJwsWithDid(jwtVc, hdr, didIssuer);
         payloadFromDid = verified?.payload;
         if (payloadFromDid) {
+          signatureVerified = true;
           console.log("[jwt-vc] signature verified via DID");
           try { slog("[jwt-vc] DID signature verified"); } catch {}
         }
@@ -2693,6 +2764,8 @@ async function validateJwtVc({ jwtVc, issuerMeta, apiBase, configurationId, publ
         try { slog("[jwt-vc] x5c signature verified"); } catch {}
         // Use payload from verified path
         payloadFromX5c = verified.payload;
+        signatureVerified = true;
+        x5cSignatureVerified = true;
       } catch (e) {
         console.warn("[jwt-vc] x5c certificate verification failed:", e?.message || e);
         try { slog("[jwt-vc] x5c verification failed", { error: e?.message || String(e) }); } catch {}
@@ -2721,6 +2794,7 @@ async function validateJwtVc({ jwtVc, issuerMeta, apiBase, configurationId, publ
         try {
           const verified = await jwtVerify(jwtVc, JWKS, { clockTolerance: 300 });
           payload = verified.payload;
+          signatureVerified = true;
           console.log("[jwt-vc] signature verified");
           try { slog("[jwt-vc] JWS signature verified"); } catch {}
         } catch (e) {
@@ -2739,6 +2813,7 @@ async function validateJwtVc({ jwtVc, issuerMeta, apiBase, configurationId, publ
                 const key = await importJWK(jwk, hdr2.alg || 'ES256');
                 const verified = await jwtVerify(jwtVc, key, { clockTolerance: 300 });
                 payload = verified.payload;
+                signatureVerified = true;
                 console.log(`[jwt-vc] Verified with key[${idx}]`);
                 try { slog(`[jwt-vc] verified with key ${idx}`); } catch {}
                 break;
@@ -2786,6 +2861,7 @@ async function validateJwtVc({ jwtVc, issuerMeta, apiBase, configurationId, publ
     console.error("[jwt-vc] holder binding mismatch. walletJwk.x=", publicJwk?.x, "presentedJwk.x=", presentedJwk?.x);
     throw new Error("holder_binding_mismatch");
   }
+  return { payload, header: hdr, signatureVerified, x5cSignatureVerified };
 }
 
 function checkClaimsAgainstConfig({ tokenClaims, issuerMeta, configurationId, formatHint }) {

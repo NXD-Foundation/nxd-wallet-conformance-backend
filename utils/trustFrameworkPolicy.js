@@ -5,9 +5,12 @@ import { loadTrustProfile } from "../trust/profile.js";
 import { loadTrustSnapshot } from "../trust/loader.js";
 import { X509Certificate } from "node:crypto";
 import fs from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { sessionTrustPolicy } from "./sessionContext.js";
 
 const WEBUILD_PROFILE = "webuild-wp4-pilot";
+const DEFAULT_TRUST_PROFILE_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../data/trust/webuild-wp4-pilot.json");
 let testResolver = null;
 let runtimeResolverPromise = null;
 
@@ -48,7 +51,7 @@ export function clearTrustResolverForTests() {
 async function runtimeTrustResolver() {
   if (testResolver) return testResolver;
   runtimeResolverPromise ||= (async () => {
-    const profile = await loadTrustProfile(process.env.TRUST_PROFILE_PATH || "data/trust/webuild-wp4-pilot.json");
+    const profile = await loadTrustProfile(process.env.TRUST_PROFILE_PATH || DEFAULT_TRUST_PROFILE_PATH);
     if (process.env.TRUST_LOTL_SIGNER_FINGERPRINTS) {
       profile.bootstrap.loTLSignerFingerprints = process.env.TRUST_LOTL_SIGNER_FINGERPRINTS.split(",").map((value) => value.trim()).filter(Boolean);
     }
@@ -109,14 +112,19 @@ export async function checkVerifierCredentialTrust({
   payload,
   header = null,
   certificatePem = null,
+  certificateChain = null,
   format = "dc+sd-jwt",
   vct = null,
   doctype = null,
+  role = null,
+  scopeEvidence = null,
   operation = "verify-credential",
 } = {}) {
   if (!isTrustFrameworkSession(session)) return null;
   const trustPolicy = sessionTrustPolicy(session);
-  const context = resolveVerifierCredentialContext({ format, vct, doctype });
+  const context = role
+    ? { role, credentialType: vct || doctype || "unknown" }
+    : resolveVerifierCredentialContext({ format, vct, doctype });
   if (!context.role) {
     return {
       trusted: false,
@@ -135,7 +143,7 @@ export async function checkVerifierCredentialTrust({
   }
   try {
     const certificate = certificatePem || (header?.x5c?.length ? certificateFromX5c(header.x5c) : null);
-    const certificateChain = header?.x5c?.length ? certificatesFromX5c(header.x5c) : certificate ? [certificate] : [];
+    const resolvedCertificateChain = certificateChain || (header?.x5c?.length ? certificatesFromX5c(header.x5c) : certificate ? [certificate] : []);
     let certificateSubject = null;
     if (certificate) {
       try {
@@ -173,12 +181,13 @@ export async function checkVerifierCredentialTrust({
         issuer,
         entityId: issuer,
         certificateFingerprint: certificateFingerprint(certificate),
-        certificateChain,
+        certificateChain: resolvedCertificateChain,
       },
       credentialContext: {
         format,
         vct,
         doctype,
+        scopeEvidence,
       },
       policy: { requireRevocation: false },
     });
@@ -203,6 +212,7 @@ export async function checkVerifierCredentialTrust({
 export async function checkAccessCertificateTrust({
   session,
   certificatePem,
+  certificateChain = null,
   entityId = null,
   role = "wrpac-provider",
   operation = "verify-access-certificate",
@@ -226,7 +236,7 @@ export async function checkAccessCertificateTrust({
       presentedIdentity: {
         entityId,
         certificateFingerprint: certificateFingerprint(certificatePem),
-        certificateChain: [certificatePem],
+        certificateChain: certificateChain?.length ? certificateChain : [certificatePem],
       },
       credentialContext: { certificateType: role },
       policy: { requireRevocation: false },

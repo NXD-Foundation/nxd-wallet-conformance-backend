@@ -1,0 +1,51 @@
+{
+  "legal_name": "University of the Aegean",
+  "trade_name": "UAegean WE BUILD Verifier",
+  "member_state": "GR",
+  "information_uri": "https://www.aegean.gr/",
+  "service_description": "WE BUILD pilot credential verification",
+  "public_sector_body": true,
+  "intended_uses": [
+    {
+      "purpose": "PID presentation (dc+sd-jwt)",
+      "credential_types": ["urn:eu.europa.ec.eudi:pid:1"],
+      "requested_claims": ["family_name"],
+      "privacy_policy_uri": "https://www.aegean.gr"
+    },
+    {
+      "purpose": "PID presentation (mso_mdoc)",
+      "credential_types": ["urn:eu.europa.ec.eudi:pid:1"],
+      "requested_claims": ["family_name", "given_name", "age_over_18"],
+      "privacy_policy_uri": "https://www.aegean.gr"
+    },
+    {
+      "purpose": "Age over 18 verification (mso_mdoc)",
+      "credential_types": ["eu.europa.ec.av.1"],
+      "requested_claims": ["age_over_18"],
+      "privacy_policy_uri": "https://www.aegean.gr"
+    },
+    {
+      "purpose": "TS12 payment SCA attestation",
+      "credential_types": ["urn:eudi:sca:payment:1"],
+      "requested_claims": ["vct", "sub", "iban", "bic", "currency"],
+      "privacy_policy_uri": "https://www.aegean.gr"
+    },
+    {
+      "purpose": "CS-03 remote qualified electronic signature (CSC X.509)",
+      "credential_types": ["https://cloudsignatureconsortium.org/2025/x509"],
+      "requested_claims": [],
+      "privacy_policy_uri": "https://www.aegean.gr"
+    }
+  ],
+
+  "existing_verifier_certificate": {
+    "role_requested": "WRPAC for RP instance",
+    "sha256_fingerprint": "f018ef7810a68e2a325f6190e78f6c2a09f2b1ec54b37f667822d6cb88ee7109",
+    "subject": "CN=WE-BUILD Verifier, serialNumber=234234234, O=WE-Build, C=EU",
+    "issuer": "CN=PID Issuer CA 02, O=EUDI Wallet Reference Implementation, C=EU",
+    "x5c": [
+      "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"
+    ]
+  }
+}

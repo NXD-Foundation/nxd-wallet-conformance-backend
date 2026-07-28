@@ -1,0 +1,157 @@
+{
+  "country": "GR",
+  "legalPerson": {
+    "legalName": [
+      "University of the Aegean"
+    ]
+  },
+  "name": "UAegean WE BUILD Verifier",
+  "isPSB": true,
+  "isIntermediary": false,
+  "entitlements": [
+    "https://uri.etsi.org/19475/Entitlement/Service_Provider"
+  ],
+  "srvDescription": [
+    [
+      {
+        "lang": "en",
+        "content": "University of the Aegean WE BUILD pilot credential-verification service."
+      }
+    ]
+  ],
+  "supportURI": [
+    "https://www.aegean.gr/"
+  ],
+  "supervisoryAuthority": {
+    "name": "Hellenic Data Protection Authority",
+    "country": "GR",
+    "formURI": [
+      "https://www.dpa.gr/"
+    ]
+  },
+  "intendedUse": [
+    {
+      "intendedUseIdentifier": "urn:webuild:uaegean:rp:pid-sd-jwt:identity-verification",
+      "createdAt": "2026-07-28",
+      "purpose": [
+        {
+          "lang": "en",
+          "content": "Identity verification in the WE BUILD pilot using a Person Identification Data credential in SD-JWT VC format."
+        }
+      ],
+      "privacyPolicy": {
+        "type": "Privacy Statement",
+        "policyURI": "https://www.aegean.gr/"
+      },
+      "credentials": [
+        {
+          "format": "dc+sd-jwt",
+          "meta": "{\"vct_values\":[\"urn:eu.europa.ec.eudi:pid:1\"]}",
+          "claims": [
+            {
+              "path": "[\"family_name\"]"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "intendedUseIdentifier": "urn:webuild:uaegean:rp:pid-mdoc:identity-verification",
+      "createdAt": "2026-07-28",
+      "purpose": [
+        {
+          "lang": "en",
+          "content": "Identity verification in the WE BUILD pilot using a Person Identification Data credential in mdoc format."
+        }
+      ],
+      "privacyPolicy": {
+        "type": "Privacy Statement",
+        "policyURI": "https://www.aegean.gr/"
+      },
+      "credentials": [
+        {
+          "format": "mso_mdoc",
+          "meta": "{\"doctype_value\":\"urn:eu.europa.ec.eudi:pid:1\"}",
+          "claims": [
+            {
+              "path": "[\"urn:eu.europa.ec.eudi:pid:1\",\"family_name\"]"
+            },
+            {
+              "path": "[\"urn:eu.europa.ec.eudi:pid:1\",\"given_name\"]"
+            },
+            {
+              "path": "[\"urn:eu.europa.ec.eudi:pid:1\",\"age_over_18\"]"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "intendedUseIdentifier": "urn:webuild:uaegean:rp:age-verification-mdoc",
+      "createdAt": "2026-07-28",
+      "purpose": [
+        {
+          "lang": "en",
+          "content": "Age-over-18 verification in the WE BUILD pilot."
+        }
+      ],
+      "privacyPolicy": {
+        "type": "Privacy Statement",
+        "policyURI": "https://www.aegean.gr/"
+      },
+      "credentials": [
+        {
+          "format": "mso_mdoc",
+          "meta": "{\"doctype_value\":\"eu.europa.ec.av.1\"}",
+          "claims": [
+            {
+              "path": "[\"eu.europa.ec.av.1\",\"age_over_18\"]"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "intendedUseIdentifier": "urn:webuild:uaegean:rp:ts12-payment-sca",
+      "createdAt": "2026-07-28",
+      "purpose": [
+        {
+          "lang": "en",
+          "content": "Strong customer authentication for a WE BUILD TS-12 pilot payment transaction."
+        }
+      ],
+      "privacyPolicy": {
+        "type": "Privacy Statement",
+        "policyURI": "https://www.aegean.gr/"
+      },
+      "credentials": [
+        {
+          "format": "dc+sd-jwt",
+          "meta": "{\"vct_values\":[\"urn:eudi:sca:payment:1\"]}",
+          "claims": [
+            {
+              "path": "[\"vct\"]"
+            },
+            {
+              "path": "[\"sub\"]"
+            },
+            {
+              "path": "[\"iban\"]"
+            },
+            {
+              "path": "[\"bic\"]"
+            },
+            {
+              "path": "[\"currency\"]"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "verificationCertificate": {
+    "sha256Fingerprint": "f018ef7810a68e2a325f6190e78f6c2a09f2b1ec54b37f667822d6cb88ee7109",
+    "certificateChainSubmission": "verifier-rp-registration-request.json",
+    "requestedRole": "WRPAC for RP instance"
+  }
+}

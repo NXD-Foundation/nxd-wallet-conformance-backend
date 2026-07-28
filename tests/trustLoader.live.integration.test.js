@@ -20,10 +20,12 @@ describeLive("Live WE BUILD LoTL NXD integration", () => {
       profile,
       listTypes: ["eaa-provider"],
     });
-    const eaa = snapshot.lists["eaa-provider"];
+    const eaa = snapshot.lists["eaa-provider"].find((candidate) => (
+      candidate.source.url === "https://trustlist.nxd.foundation/trust-lists/nxd-eaa-providers-lote.json"
+    ));
 
     expect(snapshot.format).to.equal("json");
-    expect(eaa.source.url).to.equal("https://trustlist.nxd.foundation/trust-lists/nxd-eaa-providers-lote.json");
+    expect(eaa).to.exist;
     expect(eaa.format).to.equal("json");
     expect(eaa.scheme.type).to.equal(profile.listTypes["eaa-provider"].referenceUri);
     expect(eaa.entities).to.not.be.empty;
