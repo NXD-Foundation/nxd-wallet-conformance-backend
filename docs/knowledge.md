@@ -3,9 +3,10 @@
 ## Purpose
 
 This is the implementation-oriented entry point for the project. It maps the
-normative requirements in [RFC001](./core/RFC001.md),
+profile-specific requirements in [RFC001](./core/RFC001.md),
 [RFC002](./core/RFC002.md), and [RFC004](./core/RFC004.md) to the current
-issuer, verifier, wallet client, configuration, and automated tests.
+issuer, verifier, wallet client, configuration, and automated tests. The
+APTITUDE RFCs are deltas/profiles, not replacements for their base standards.
 
 It is not a claim that every requirement is implemented. For interoperability
 or conformance decisions, read the linked specification first, then confirm
@@ -38,16 +39,42 @@ request helpers mounted under `/mdl`. Redis-backed state in
 presentation, deferred-issuance, and logging sessions. Tests may run without
 Redis when `NODE_ENV=test` or `ALLOW_NO_REDIS=true`.
 
-## Authority And Local Sources
+### Test-service Docker signing material
 
-Use the following authority order when sources disagree:
+This repository is used as an interoperability **test service**. Its Docker
+image deliberately includes the local `private-key.pem`, `public-key.pem`,
+`x509EC/`, and `certs/` signing material through `Dockerfile`'s `COPY . .`.
+Those paths must therefore remain absent from `.dockerignore`, so a locally
+built image can be pushed and deployed without separately copying test keys to
+the server. `docker-compose.yml` may also mount the same files read-only for
+local development. This is an intentional test-only convenience and must not
+be copied into a production issuer image or registry workflow.
 
-1. The relevant published standard and its errata.
-2. The APTITUDE profile in `docs/core/`.
-3. Current configuration, implementation, and automated tests, which define
-   what this deployment actually does.
-4. This page and focused project documents, which are navigation and design
-   aids rather than normative sources.
+## Authority And Profile Boundaries
+
+For every flow, first identify its base specification (for example OpenID4VCI,
+OpenID4VP, OAuth, HAIP, SD-JWT VC, or ISO mdoc). That base specification and
+its errata define the protocol by default. An APTITUDE RFC defines only the
+requirements, constraints, or extensions it explicitly states for the
+APTITUDE profile; it does not silently redefine, duplicate, or replace the
+base specification.
+
+Use the following interpretation order:
+
+1. Apply the relevant base standard and its errata.
+2. Apply an APTITUDE RFC requirement only where that RFC explicitly adds a
+   constraint, selects an option, or states a profile-specific extension.
+3. Where an explicit APTITUDE requirement conflicts with an optional or
+   variable base-specification choice, the APTITUDE requirement governs the
+   selected profile. Otherwise, retain the base-specification rule.
+4. Current configuration, implementation, and automated tests describe what
+   this deployment does; they do not create a normative APTITUDE requirement.
+5. This page and focused project documents are navigation and design aids,
+   not normative sources.
+
+Do not infer an APTITUDE requirement from a route, test fixture, historical
+compatibility path, or metadata value. Likewise, do not omit a base-spec
+requirement merely because it is not repeated in an APTITUDE RFC.
 
 The local reference inventory is maintained in
 [references/README.md](./references/README.md). It contains the OpenID4VCI,
@@ -56,17 +83,28 @@ The valid ETSI PDF copies are present alongside earlier firewall-response
 captures; the inventory identifies both. ISO 18013 material is referenced but
 not mirrored as full text.
 
-| Core profile | Local supporting material | Main implementation area |
+## FCAF Alignment
+
+The Aptitude branch’s FCAF assessment is recorded in
+[FCAFs/aptitude-fcaf-alignment-status.md](./FCAFs/aptitude-fcaf-alignment-status.md)
+with its machine-readable companion
+[FCAFs/aptitude-fcaf-applicability.json](./FCAFs/aptitude-fcaf-applicability.json).
+It intentionally does not inherit main’s per-ID CS-02 coverage counts until
+the supporting implementation and tests are ported and revalidated.
+
+| APTITUDE profile delta | Base specifications that remain authoritative | Main implementation area |
 | --- | --- | --- |
 | [RFC001 issuance](./core/RFC001.md) | [OpenID4VCI](./references/openid/openid-4-verifiable-credential-issuance-1_0.html), [HAIP](./references/openid/openid4vc-high-assurance-interoperability-profile-1_0.html), [ARF](./references/eu/arf-v1.0.0.pdf) | `routes/issue/`, issuer metadata, wallet issuance libraries |
 | [RFC002 presentation](./core/RFC002.md) | [OpenID4VP](./references/openid/openid-4-verifiable-presentations-1_0.html), [HAIP](./references/openid/openid4vc-high-assurance-interoperability-profile-1_0.html), [ARF](./references/eu/arf-v1.0.0.pdf) | `routes/verify/`, VP crypto/helpers, wallet presentation libraries |
 | [RFC004 status and revocation](./core/RFC004.md) | [APTITUDE trust](./references/aptitude/deliverable-2.1-trust.html), [OAuth Status List draft](./references/ietf/draft-ietf-oauth-status-list.html), [RFC 5280](./references/ietf/rfc5280.txt), [RFC 6960](./references/ietf/rfc6960.txt) | WIA/WUA status hooks and credential status references; no CRL/OCSP/TSL provider routes |
 
-## RFC001: Credential Issuance
+## RFC001: Credential Issuance Profile
 
-RFC001 is the project’s issuance profile. The standard shared endpoint
-implementation is `routes/issue/sharedIssuanceFlows.js`; legacy and scenario
-specific offer routes are kept alongside it for interoperability coverage.
+RFC001 adds APTITUDE issuance-profile requirements to OpenID4VCI and its
+selected base specifications. Read OpenID4VCI/HAIP/ARF first for behavior not
+explicitly profiled by RFC001. The standard shared endpoint implementation is
+`routes/issue/sharedIssuanceFlows.js`; legacy and scenario-specific offer
+routes are kept alongside it for interoperability coverage.
 
 | RFC001 concern | Implementation mapping | Verification |
 | --- | --- | --- |
@@ -78,7 +116,7 @@ specific offer routes are kept alongside it for interoperability coverage.
 | DPoP sender constraint | DPoP-bound token creation in `utils/tokenUtils.js`; resource proof verification in `validateDpopProofForResourceRequest` | issuance-flow tests and wallet `credentialNotification.js` |
 | Credential proof and holder binding | `validateCredentialRequest`, `validateProofJWT`, and `verifyProofJWT`; wallet proof construction in `wallet-client/src/lib/credentialRequestProofs.js` | `tests/credGenerationUtilsProofBinding.test.js`, `tests/proofJwtResolver.test.js` |
 | WIA at PAR/token | `validateWIA` in `utils/routeUtils.js`; OAuth client-attestation and PoP validation in `utils/oauthClientAttestation.js` | `tests/oauthClientAttestation.test.js`, `tests/wuaValidation.test.js` |
-| WUA/key attestation at credential request | `validateWUA` and `utils/keyAttestationProof.js`; proof supports `proofs.jwt` and `proofs.attestation` paths | `tests/keyAttestationProof.test.js`, `tests/wuaValidation.test.js` |
+| WUA/key attestation at credential request | `validateWUA` and `utils/keyAttestationProof.js`; proof supports `proofs.jwt` and `proofs.attestation` paths. An attestation proof must verify before issuance; decoded, unverified `attested_keys` are never used as credential holder binding. When metadata advertises `proof_types_supported.jwt.key_attestations_required`, the JWT proof must carry a valid protected-header `key_attestation` and its signing key must match the primary attested key. | `tests/keyAttestationProof.test.js`, `tests/wuaValidation.test.js`, `tests/sharedIssuanceFlows.test.js` |
 | Immediate and deferred credentials | `POST /credential`, `POST /credential_deferred`, `resolveDeferredIssuanceContext` | `tests/sharedIssuanceFlows.test.js` |
 | Nonce and notification | `POST /nonce`, `POST /notification`; wallet client notification helper | shared issuance tests and `wallet-client/src/lib/credentialNotification.js` |
 | Credential response encryption | `utils/credentialResponseEncryption.js`; issuer metadata and wallet `credentialResponseEncryption.js` | `tests/credentialResponseEncryption.test.js` |
@@ -118,11 +156,13 @@ interoperable discovery surface.
   encryption; request validation and JWE creation enforce the advertised
   parameters. Confirm the selected key-management algorithm with the wallet.
 
-## RFC002: Credential Presentation
+## RFC002: Credential Presentation Profile
 
-RFC002 is mapped to the verifier request/response stack. The preferred shared
-entry point is `GET /vp/request`; the repository also retains DID, DID JWK,
-X.509, verifier-attestation, mdoc, and pilot-specific route families for
+RFC002 adds APTITUDE presentation-profile requirements to OpenID4VP and its
+selected base specifications. Read OpenID4VP/HAIP/ARF and applicable ISO
+material first for behavior not explicitly profiled by RFC002. The preferred
+shared entry point is `GET /vp/request`; the repository also retains DID, DID
+JWK, X.509, verifier-attestation, mdoc, and pilot-specific route families for
 interoperability scenarios.
 
 | RFC002 concern | Implementation mapping | Verification |
@@ -165,12 +205,15 @@ interoperability scenarios.
   KB-JWT, so its response path uses mdoc validation and state correlation
   instead of applying SD-JWT nonce rules.
 
-## RFC004: Status, Revocation, And Trust
+## RFC004: Status, Revocation, And Trust Profile
 
-RFC004 describes Wallet-side consumption of CRL, OCSP, and Token Status List
-(TSL) information, plus provider interfaces. This repository is primarily an
-issuer/verifier/wallet interoperability service, not a Provider of WRPAC or
-WRPRC. Its implementation status is therefore intentionally partial.
+RFC004 adds APTITUDE profile material for Wallet-side consumption of CRL,
+OCSP, and Token Status List (TSL) information and provider interfaces. RFC
+5280, RFC 6960, and the applicable Status List specification remain
+authoritative for rules not explicitly profiled by RFC004. This repository is
+primarily an issuer/verifier/wallet interoperability service, not a Provider
+of WRPAC or WRPRC. Its implementation status is therefore intentionally
+partial.
 
 | RFC004 requirement area | Current mapping | Status |
 | --- | --- | --- |
@@ -191,7 +234,7 @@ the RFC004 interfaces where the service assumes a provider role.
 | Control | Code location | Notes |
 | --- | --- | --- |
 | OAuth client attestation | `utils/oauthClientAttestation.js` | Enforces JWT type, asymmetric algorithms, `cnf` hygiene, PoP audience and freshness; trust depends on configured JWKS |
-| WIA and WUA | `utils/routeUtils.js` | Validates format/signature/bindings and exposes trust-policy gates |
+| WIA and WUA | `utils/routeUtils.js` | Validates format/signature/bindings and exposes trust-policy gates; compatibility mode may log rather than reject unavailable WUA/key-attestation verification material |
 | DPoP | `utils/tokenUtils.js`, `sharedIssuanceFlows.js` | Binds tokens and resource requests to an EC JWK thumbprint |
 | PKCE | `codeFlowSdJwtRoutes.js`, `sharedIssuanceFlows.js` | S256 is required for the authorization-code path |
 | Credential proof | `sharedIssuanceFlows.js`, `utils/proofJwtResolver.js` | Resolves proof verification keys and validates holder proof constraints |
@@ -232,6 +275,10 @@ the RFC004 interfaces where the service assumes a provider role.
   protocol support claim, endpoint, security policy, or source location.
 - Mark a requirement as partial or not implemented when enforcement is absent;
   do not infer conformance from metadata advertisement or a helper function.
+- When documenting an APTITUDE RFC requirement, identify the base
+  specification it profiles and state only the explicit APTITUDE delta. Keep
+  base-specification requirements out of the APTITUDE profile unless the RFC
+  changes or selects them.
 - Link focused design notes and test matrices from here when they become the
   primary explanation for a non-obvious decision.
 - Keep `docs/core/` and `docs/references/` as the local specification base;

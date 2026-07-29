@@ -233,7 +233,7 @@ describe('OIDC4VCI V1.0 - Metadata Discovery Compliance', () => {
 
       const protectedHeader = jose.decodeProtectedHeader(response.text);
       expect(protectedHeader).to.have.property('alg', 'ES256');
-      expect(protectedHeader).to.have.property('typ', 'openid-credential-issuer-metadata+jwt');
+      expect(protectedHeader).to.have.property('typ', 'openidvci-issuer-metadata+jwt');
       expect(protectedHeader).to.have.property('x5c').that.is.an('array').with.length.greaterThan(0);
 
       const verifyKey = await jose.importX509(x5cToPem(protectedHeader.x5c[0]), 'ES256');

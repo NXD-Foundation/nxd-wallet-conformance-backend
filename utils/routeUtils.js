@@ -2940,7 +2940,8 @@ export const extractWIAFromTokenRequest = (reqBody, reqHeaders) => {
  * and the proof signature MUST verify under WUA `attested_keys[0]`.
  *
  * Triggered when:
- * - `proof_types_supported.jwt.key_attestation_required === true`, or
+ * - `proof_types_supported.jwt.key_attestations_required` is present, or
+ * - legacy `proof_types_supported.jwt.key_attestation_required === true`, or
  * - ETSI RFC001 PID profile: `vct` is the EUDI PID and `format` is `vc+sd-jwt`, `vc+jwt`, or `x509_attr`.
  *
  * @param {object} credConfig - entry from `credential_configurations_supported`
@@ -2948,7 +2949,9 @@ export const extractWIAFromTokenRequest = (reqBody, reqHeaders) => {
  */
 export function credentialConfigRequiresJwtProofKeyAttestation(credConfig) {
   if (!credConfig || typeof credConfig !== "object") return false;
-  if (credConfig.proof_types_supported?.jwt?.key_attestation_required === true) return true;
+  const jwtProofType = credConfig.proof_types_supported?.jwt;
+  if (jwtProofType?.key_attestation_required === true) return true;
+  if (Object.hasOwn(jwtProofType ?? {}, "key_attestations_required")) return true;
   const vct = credConfig.vct;
   if (vct !== "urn:eu.europa.ec.eudi:pid:1") return false;
   const fmt = credConfig.format;

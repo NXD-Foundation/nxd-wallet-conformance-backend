@@ -10,7 +10,7 @@ import {
   credentialConfigRequiresJwtProofKeyAttestation,
 } from "../utils/routeUtils.js";
 
-async function buildMinimalWua({ privateKey, publicJwk, attestedKeys }) {
+async function buildMinimalWua({ privateKey, publicJwk, attestedKeys, claims = {} }) {
   const key = await jose.importJWK(await jose.exportJWK(privateKey), "ES256");
   return new jose.SignJWT({
     iss: "https://wallet.example",
@@ -24,6 +24,7 @@ async function buildMinimalWua({ privateKey, publicJwk, attestedKeys }) {
     },
     attested_keys: attestedKeys,
     status: { status_list: { uri: "https://example.com/status", idx: 0 } },
+    ...claims,
   })
     .setProtectedHeader({ alg: "ES256", typ: "key-attestation+jwt", jwk: publicJwk })
     .sign(key);
@@ -61,6 +62,17 @@ describe("WUA validation (routeUtils)", () => {
           format: "dc+sd-jwt",
           proof_types_supported: {
             jwt: { proof_signing_alg_values_supported: ["ES256"], key_attestation_required: true },
+          },
+        })
+      ).to.equal(true);
+    });
+
+    it("is true when metadata advertises key_attestations_required", () => {
+      expect(
+        credentialConfigRequiresJwtProofKeyAttestation({
+          format: "dc+sd-jwt",
+          proof_types_supported: {
+            jwt: { proof_signing_alg_values_supported: ["ES256"], key_attestations_required: {} },
           },
         })
       ).to.equal(true);
@@ -116,6 +128,34 @@ describe("WUA validation (routeUtils)", () => {
     const result = await validateWUA(jwt, null, {});
     expect(result.valid).to.equal(true);
     expect(result.payload?.iss).to.equal("https://wallet.example");
+  });
+
+  it("validateWUA rejects a WUA without iss", async () => {
+    const { privateKey, publicKey } = await jose.generateKeyPair("ES256");
+    const pubJwk = await jose.exportJWK(publicKey);
+    const compact = await buildMinimalWua({
+      privateKey,
+      publicJwk: pubJwk,
+      attestedKeys: [pubJwk],
+      claims: { iss: undefined },
+    });
+    const result = await validateWUA(compact, null, {});
+    expect(result.valid).to.equal(false);
+    expect(result.error).to.match(/missing iss/i);
+  });
+
+  it("validateWUA rejects a WUA without eudi_wallet_info", async () => {
+    const { privateKey, publicKey } = await jose.generateKeyPair("ES256");
+    const pubJwk = await jose.exportJWK(publicKey);
+    const compact = await buildMinimalWua({
+      privateKey,
+      publicJwk: pubJwk,
+      attestedKeys: [pubJwk],
+      claims: { eudi_wallet_info: undefined },
+    });
+    const result = await validateWUA(compact, null, {});
+    expect(result.valid).to.equal(false);
+    expect(result.error).to.match(/eudi_wallet_info/i);
   });
 
   it("verifyWuaJwtSignature uses wallet_unit_attestation_jwks when kid matches", async () => {

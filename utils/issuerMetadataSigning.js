@@ -1,8 +1,8 @@
 import * as jose from "jose";
 import { loadAptitudeIssuerSigningMaterial } from "./aptitudeIssuerSigningMaterial.js";
 
-/** RFC001 / aptitude tests use this typ (see metadataDiscovery.test.js). */
-export const SIGNED_ISSUER_METADATA_TYP = "openid-credential-issuer-metadata+jwt";
+/** OpenID4VCI 1.0 §12.2.3: signed Credential Issuer metadata JWT type. */
+export const SIGNED_ISSUER_METADATA_TYP = "openidvci-issuer-metadata+jwt";
 
 function requireEs256Material({ privateKeyPkcs8, certChain }) {
   if (typeof privateKeyPkcs8 !== "string" || !privateKeyPkcs8.includes("PRIVATE KEY")) {

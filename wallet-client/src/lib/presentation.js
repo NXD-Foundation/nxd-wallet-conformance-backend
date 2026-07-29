@@ -1100,6 +1100,13 @@ export function storedRawMatchesDcqlEntry(entry, configurationId, rawToken, want
   return false;
 }
 
+/** An empty credential_sets array is not an all-optional exception. */
+export function dcqlCredentialSetsAreAllOptional(credentialSets) {
+  return Array.isArray(credentialSets) &&
+    credentialSets.length > 0 &&
+    credentialSets.every((credentialSet) => credentialSet?.required === false);
+}
+
 /**
  * @returns {Promise<{ configurationId: string, stored: object, rawToken: string, pickedEntry: object } | null>}
  */
@@ -1572,9 +1579,9 @@ export async function performPresentation(
         extractCredentialString,
         slog,
       });
-      const hasOnlyOptionalCredentialSets =
-        Array.isArray(dcqlQuery?.credential_sets) &&
-        dcqlQuery.credential_sets.every((credentialSet) => credentialSet?.required === false);
+      const hasOnlyOptionalCredentialSets = dcqlCredentialSetsAreAllOptional(
+        dcqlQuery?.credential_sets,
+      );
       if (selections.length === 0 && !hasOnlyOptionalCredentialSets) {
         throw new Error(
           "DCQL query could not be satisfied: no wallet credentials match the requested credential queries",

@@ -114,6 +114,7 @@ async function dedupeAttestedKeysToCnfList(attestedKeys) {
   }
   return out;
 }
+
 const DPOP_MAX_IAT_SKEW_SECONDS = 300; // 5 minutes clock skew window
 const DPOP_MAX_FUTURE_IAT_SKEW_SECONDS = 60; // allow small future skew
 
@@ -1771,7 +1772,6 @@ sharedRouter.post("/credential", async (req, res) => {
   let sessionId = null;
   let slog = null;
   let requestId = null;
-  const enforceEtsiIssuance = isEtsiIssuanceProfileEnforced();
   
   try {
     const requestBody = await parseCredentialEndpointBody(req);
@@ -1957,20 +1957,30 @@ sharedRouter.post("/credential", async (req, res) => {
 
         // Mode (3): attestation proof — verify key-attestation JWT and bind credential to attested_keys (no holder PoP JWT).
         if (isAttestationProof) {
-          const { cnf, attestedKeys } = await verifyKeyAttestationProofChain(
-            requestBody.proofAttestationJwt,
-            credConfigForProof,
-            issuerConfigForProof,
-            SPEC_REFS.VCI_PROOF
-          );
-          requestBody._credentialBindingCnf = cnf;
-          requestBody._attestedKeys = attestedKeys;
-          requestBody._credentialBindingCnfList = await dedupeAttestedKeysToCnfList(attestedKeys);
-          if (sessionId) {
-            await logInfo(sessionId, "Key attestation proof validated", {
-              effectiveConfigurationId,
-              attestedKeysCount: attestedKeys.length,
-            }).catch(() => {});
+          try {
+            const { cnf, attestedKeys } = await verifyKeyAttestationProofChain(
+              requestBody.proofAttestationJwt,
+              credConfigForProof,
+              issuerConfigForProof,
+              SPEC_REFS.VCI_PROOF
+            );
+            requestBody._credentialBindingCnf = cnf;
+            requestBody._attestedKeys = attestedKeys;
+            requestBody._credentialBindingCnfList = await dedupeAttestedKeysToCnfList(attestedKeys);
+            if (sessionId) {
+              await logInfo(sessionId, "Key attestation proof validated", {
+                effectiveConfigurationId,
+                attestedKeysCount: attestedKeys.length,
+              }).catch(() => {});
+            }
+          } catch (error) {
+            if (sessionId) {
+              await logWarn(sessionId, "Key-attestation proof validation failed; rejecting credential request", {
+                effectiveConfigurationId,
+                error: error?.message || String(error),
+              }).catch(() => {});
+            }
+            throw error;
           }
         } else {
           // Mode (1) baseline: JWT proof — verify holder PoP ("I control this key right now") for cnf binding.
@@ -1983,16 +1993,6 @@ sharedRouter.post("/credential", async (req, res) => {
 
           let publicKeyForProof;
           if (jwtProofRequiresKeyAttestation) {
-            const relaxDeviceBoundEtsiViolation = (errorMessage, check) => {
-              if (enforceEtsiIssuance) {
-                throw new Error(errorMessage);
-              }
-              logSoftEtsiIssuanceViolation(slog, "[CREDENTIAL]", errorMessage, {
-                check,
-                fallback: "proof_jwt_holder_binding",
-                credential_configuration_id: effectiveConfigurationId,
-              });
-            };
             const wuaCompact = headerForVerification.key_attestation;
             publicKeyForProof = await resolveProofJwtPublicJwk(headerForVerification, {
               sessionId,
@@ -2007,28 +2007,24 @@ sharedRouter.post("/credential", async (req, res) => {
               req,
             );
             if (typeof wuaCompact !== "string" || !wuaCompact.trim()) {
-              relaxDeviceBoundEtsiViolation(
-                `${ERROR_MESSAGES.INVALID_PROOF}: proofs.jwt MUST include protected-header parameter 'key_attestation' (Wallet Unit Attestation) for this credential configuration (RFC001 §7.5.1). See ${SPEC_REFS.VCI_PROOF}`,
-                "key_attestation_presence",
+              throw new Error(
+                `${ERROR_MESSAGES.INVALID_PROOF}: proofs.jwt MUST include protected-header parameter 'key_attestation' (Wallet Unit Attestation) for this credential configuration (RFC001 §7.5.1). See ${SPEC_REFS.VCI_PROOF}`
               );
             } else {
               const wuaStrict = await validateWUA(wuaCompact, sessionId, issuerConfigForProof);
               if (!wuaStrict.valid) {
-                relaxDeviceBoundEtsiViolation(
-                  `${ERROR_MESSAGES.INVALID_PROOF}: Wallet Unit Attestation in key_attestation could not be validated. ${wuaStrict.error || ""}`.trim(),
-                  "key_attestation_validation",
+                throw new Error(
+                  `${ERROR_MESSAGES.INVALID_PROOF}: Wallet Unit Attestation in key_attestation could not be validated. ${wuaStrict.error || ""}`.trim()
                 );
               } else {
                 const attested = wuaStrict.payload?.attested_keys;
                 if (!Array.isArray(attested) || !attested[0] || typeof attested[0] !== "object") {
-                  relaxDeviceBoundEtsiViolation(
-                    `${ERROR_MESSAGES.INVALID_PROOF}: WUA attested_keys[0] is required for device-bound issuance (RFC001 §7.5.1). See ${SPEC_REFS.VCI_PROOF}`,
-                    "attested_keys_primary",
+                  throw new Error(
+                    `${ERROR_MESSAGES.INVALID_PROOF}: WUA attested_keys[0] is required for device-bound issuance (RFC001 §7.5.1). See ${SPEC_REFS.VCI_PROOF}`
                   );
                 } else if (!proofKeyMatchesWUAAttestedKeys(publicKeyForProof, wuaStrict.payload)) {
-                  relaxDeviceBoundEtsiViolation(
-                    `${ERROR_MESSAGES.INVALID_PROOF}: proof signing key MUST match WUA attested_keys[0] (RFC001 §7.5.1). See ${SPEC_REFS.VCI_PROOF}`,
-                    "proof_key_matches_attested_keys_0",
+                  throw new Error(
+                    `${ERROR_MESSAGES.INVALID_PROOF}: proof signing key MUST match WUA attested_keys[0] (RFC001 §7.5.1). See ${SPEC_REFS.VCI_PROOF}`
                   );
                 } else {
                   requestBody._credentialBindingCnfList = await dedupeAttestedKeysToCnfList(attested);

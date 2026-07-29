@@ -163,7 +163,13 @@ describe('Shared Issuance Flows', () => {
     globalSandbox.stub(fs, 'readFileSync')
       .withArgs(sinon.match(/issuer-config\.json/)).returns(JSON.stringify({
         credential_configurations_supported: {
-          'test-cred-config': { format: 'dc+sd-jwt', proof_types_supported: { jwt: { proof_signing_alg_values_supported: ['ES256'] } } },
+          'test-cred-config': {
+            format: 'dc+sd-jwt',
+            proof_types_supported: {
+              jwt: { proof_signing_alg_values_supported: ['ES256'] },
+              attestation: { proof_signing_alg_values_supported: ['ES256'] },
+            },
+          },
           'rfc001-device-bound-test': {
             format: 'vc+sd-jwt',
             vct: 'urn:eu.europa.ec.eudi:pid:1',
@@ -2021,7 +2027,7 @@ describe('Shared Issuance Flows', () => {
       expect(res.body.error_description).to.match(/key_attestation/i);
     });
 
-    it('P1-1 relaxed — continues device-bound issuance without key_attestation when ENFORCE_ETSI_ISSUANCE_PROFILE=false', async function () {
+    it('rejects device-bound issuance without key_attestation even when ENFORCE_ETSI_ISSUANCE_PROFILE=false', async function () {
       if (!cacheServiceRedis.client?.isReady) {
         this.skip();
       }
@@ -2050,9 +2056,43 @@ describe('Shared Issuance Flows', () => {
           proofs: { jwt: [proof] },
         });
 
-      expect(res.status).to.equal(200);
-      expect(res.body).to.have.property('credentials');
-      expect(res.body.credentials).to.be.an('array').that.is.not.empty;
+      expect(res.status).to.equal(400);
+      expect(res.body).to.have.property('error', 'invalid_proof');
+      expect(res.body.error_description).to.match(/key_attestation/i);
+    });
+
+    it('rejects an unverifiable attestation proof even when ENFORCE_ETSI_ISSUANCE_PROFILE=false', async function () {
+      if (!cacheServiceRedis.client?.isReady) {
+        this.skip();
+      }
+      process.env.ENFORCE_ETSI_ISSUANCE_PROFILE = 'false';
+      const sessionKey = 'soft-attestation-proof-' + uuidv4();
+      const accessToken = 'test-access-token-soft-attestation-' + uuidv4();
+      const nonce = cryptoUtils.generateNonce();
+      await cacheServiceRedis.storeNonce(nonce, 300);
+      await cacheServiceRedis.storePreAuthSession(sessionKey, {
+        status: 'success',
+        isDeferred: false,
+        accessToken,
+        c_nonce: nonce,
+      });
+      const proof = jwt.sign(
+        { nonce, iss: 'did:wallet:test', attested_keys: [testKeys.publicKeyJwk] },
+        testKeys.privateKeyPem,
+        { algorithm: 'ES256', header: { typ: 'key-attestation+jwt' } }
+      );
+
+      const res = await request(app)
+        .post('/credential')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({
+          credential_configuration_id: 'test-cred-config',
+          proofs: { attestation: [proof] },
+        });
+
+      expect(res.status).to.equal(400);
+      expect(res.body).to.have.property('error', 'invalid_proof');
+      expect(res.body.error_description).to.match(/key attestation|attestation/i);
     });
 
     it('P1-1b — MUST return invalid_proof when proof signature does not verify with WUA attested_keys[0]', async function () {

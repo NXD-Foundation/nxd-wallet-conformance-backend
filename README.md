@@ -103,6 +103,14 @@ node server.js
 
 The service will start on `http://localhost:3000` by default.
 
+### Docker runtime keys
+
+The Docker image intentionally excludes private keys and certificates. Before
+running `docker compose up --build`, ensure the repository checkout contains
+`private-key.pem`, `public-key.pem`, `x509EC/`, and `certs/`; Compose mounts
+them read-only at runtime. This includes the EUDI issuer P12 and PID Issuer CA
+used for signed metadata and X.509 credential issuance.
+
 4. **Optional: Set custom server URL** (for HTTPS or tunneling):
 ```bash
 SERVER_URL="https://your-public-url.example.com" node server.js
@@ -1014,5 +1022,4 @@ This makes `wallet-client` a **comprehensive test wallet** that exercises all is
 - **RFC 7636**: [Proof Key for Code Exchange (PKCE)](https://www.rfc-editor.org/rfc/rfc7636.html)
 - **EUDI Wallet ARF**: [Architecture and Reference Framework](https://github.com/eu-digital-identity-wallet/eudi-doc-architecture-and-reference-framework/releases)
 - **ISO/IEC 18013-5:2021**: [Mobile driving licence (mDL)](https://www.iso.org/standard/69084.html)
-
 

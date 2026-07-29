@@ -32,6 +32,46 @@ describe("dcqlCore", () => {
     expect(Array.from(evaluation.allowedIds).sort()).to.deep.equal(["a", "b"]);
   });
 
+  it("allows an unsatisfied query when every credential_set is optional", () => {
+    const evaluation = evaluateCredentialSets(
+      {
+        credentials: [{ id: "a" }, { id: "b" }],
+        credential_sets: [
+          { required: false, options: [["a"], ["b"]] },
+        ],
+      },
+      {},
+    );
+    expect(evaluation.satisfied).to.equal(true);
+    expect(Array.from(evaluation.allowedIds).sort()).to.deep.equal(["a", "b"]);
+  });
+
+  it("treats an empty credential_sets array like omitted credential_sets", () => {
+    const evaluation = evaluateCredentialSets(
+      {
+        credentials: [{ id: "a" }],
+        credential_sets: [],
+      },
+      {},
+    );
+    expect(evaluation.satisfied).to.equal(true);
+    expect(Array.from(evaluation.allowedIds)).to.deep.equal(["a"]);
+    expect(evaluation.requiredSets).to.deep.equal([]);
+  });
+
+  it("reports unknown credential-set option ids without treating them as known credentials", () => {
+    const evaluation = evaluateCredentialSets(
+      {
+        credentials: [{ id: "a" }],
+        credential_sets: [{ required: true, options: [["missing"]] }],
+      },
+      { a: true },
+    );
+    expect(evaluation.satisfied).to.equal(false);
+    expect(evaluation.unknownOptionIds).to.deep.equal(["missing"]);
+    expect(Array.from(evaluation.knownIds)).to.deep.equal(["a"]);
+  });
+
   it("selects the first satisfied claim_set", () => {
     const credQuery = {
       claims: [

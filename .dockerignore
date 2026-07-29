@@ -7,13 +7,9 @@ npm-debug.log
 .git
 .worktrees
 
-# Deprecated key backups and root issuer key material
+# Deprecated key backups
 deprecated
 /x509
-/x509EC
-/private-key.pem
-/private-key-pkcs8.pem
-/public-key.pem
 **/*.backup.*
 
 # Runtime-mounted wallet keys (not baked into image)
@@ -29,7 +25,6 @@ reports
 .github
 openapi
 certbot
-certs
 Insomnia_*.yaml
 hoviTestCases.yml
 aptitude-vci.yml

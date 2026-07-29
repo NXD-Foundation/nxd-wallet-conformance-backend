@@ -6,6 +6,7 @@ import {
   filterSdJwtDisclosuresForDcqlClaims,
   normalizeDcqlClaimsToSegmentLists,
   appendDcqlVpToken,
+  dcqlCredentialSetsAreAllOptional,
 } from "../src/lib/presentation.js";
 
 function b64urlJson(obj) {
@@ -31,6 +32,24 @@ function minimalSdJwtWithVct(vct) {
 }
 
 describe("DCQL vp_token helpers (P1-W-8)", () => {
+  describe("dcqlCredentialSetsAreAllOptional", () => {
+    it("does not treat omitted or empty credential_sets as optional", () => {
+      assert.strictEqual(dcqlCredentialSetsAreAllOptional(undefined), false);
+      assert.strictEqual(dcqlCredentialSetsAreAllOptional([]), false);
+    });
+
+    it("returns true only when a non-empty array contains exclusively optional sets", () => {
+      assert.strictEqual(
+        dcqlCredentialSetsAreAllOptional([{ required: false }]),
+        true,
+      );
+      assert.strictEqual(
+        dcqlCredentialSetsAreAllOptional([{ required: false }, { required: true }]),
+        false,
+      );
+    });
+  });
+
   describe("appendDcqlVpToken", () => {
     it("builds the OpenID4VP DCQL object shape with arrays per query id", () => {
       const vpToken = {};
