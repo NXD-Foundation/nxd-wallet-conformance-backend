@@ -30,15 +30,15 @@ describe('Multi-credential pre-auth offer routes', () => {
     app.use('/', multiCredentialModule.default);
   });
 
-  const studentPayload = {
-    family_name: 'Doe',
-    given_name: 'Jane',
-    student_id: 'S-123',
+  const hotelPayload = {
+    booking_reference: 'OTA-MS62DP17-VQPSKP',
+    hotel_id: '9213',
+    hotel_name: 'Test Hotel Rhodes',
+    arrival_date: '2026-07-31',
+    departure_date: '2026-08-04',
+    booking_platform: 'SEDIT-X OTA Booking Portal',
   };
-  const loyaltyPayload = {
-    card_number: 'LC-999',
-    tier: 'gold',
-  };
+  const airlinePnrPayload = { pnr: 'Q7X2LM' };
 
   it('POST /offer-no-code-batch stores offered ids and returns deep link without type query', async function () {
     if (!cacheServiceRedis.client?.isReady) {
@@ -52,12 +52,12 @@ describe('Multi-credential pre-auth offer routes', () => {
       .send({
         credentials: [
           {
-            credential_configuration_id: 'VerifiableStudentIDSDJWT',
-            payload: studentPayload,
+            credential_configuration_id: 'booking_reference_credential',
+            payload: hotelPayload,
           },
           {
-            credential_configuration_id: 'LoyaltyCard',
-            payload: loyaltyPayload,
+            credential_configuration_id: 'airline_pnr_credential',
+            payload: airlinePnrPayload,
           },
         ],
       })
@@ -67,21 +67,21 @@ describe('Multi-credential pre-auth offer routes', () => {
     expect(response.body).to.have.property('deepLink');
     expect(response.body.sessionId).to.equal(sessionId);
     expect(response.body.offeredConfigurationIds).to.deep.equal([
-      'VerifiableStudentIDSDJWT',
-      'LoyaltyCard',
+      'booking_reference_credential',
+      'airline_pnr_credential',
     ]);
     expect(response.body.deepLink).to.include('credential-offer-no-code-batch');
     expect(response.body.deepLink).to.not.include('type=');
 
     const stored = await cacheServiceRedis.getPreAuthSession(sessionId);
     expect(stored.offeredConfigurationIds).to.deep.equal([
-      'VerifiableStudentIDSDJWT',
-      'LoyaltyCard',
+      'booking_reference_credential',
+      'airline_pnr_credential',
     ]);
-    expect(stored.credentialPayloads['VerifiableStudentIDSDJWT']).to.deep.equal(
-      studentPayload,
+    expect(stored.credentialPayloads.booking_reference_credential).to.deep.equal(
+      hotelPayload,
     );
-    expect(stored.credentialPayloads.LoyaltyCard).to.deep.equal(loyaltyPayload);
+    expect(stored.credentialPayloads.airline_pnr_credential).to.deep.equal(airlinePnrPayload);
   });
 
   it('GET /credential-offer-no-code-batch/:id resolves dynamic ids from session', async function () {
@@ -93,10 +93,10 @@ describe('Multi-credential pre-auth offer routes', () => {
     await cacheServiceRedis.storePreAuthSession(sessionId, {
       status: 'pending',
       flowType: 'pre-auth',
-      offeredConfigurationIds: ['VerifiableStudentIDSDJWT', 'LoyaltyCard'],
+      offeredConfigurationIds: ['booking_reference_credential', 'airline_pnr_credential'],
       credentialPayloads: {
-        VerifiableStudentIDSDJWT: studentPayload,
-        LoyaltyCard: loyaltyPayload,
+        booking_reference_credential: hotelPayload,
+        airline_pnr_credential: airlinePnrPayload,
       },
       issuedConfigurationIds: [],
     });
@@ -106,8 +106,8 @@ describe('Multi-credential pre-auth offer routes', () => {
       .expect(200);
 
     expect(response.body.credential_configuration_ids).to.deep.equal([
-      'VerifiableStudentIDSDJWT',
-      'LoyaltyCard',
+      'booking_reference_credential',
+      'airline_pnr_credential',
     ]);
     expect(
       response.body.grants['urn:ietf:params:oauth:grant-type:pre-authorized_code'],
@@ -116,7 +116,7 @@ describe('Multi-credential pre-auth offer routes', () => {
       response.body.grants['urn:ietf:params:oauth:grant-type:pre-authorized_code'],
     ).to.have.property(
       'scope',
-      'VerifiableStudentIDSDJWT LoyaltyCard',
+      'booking_reference_credential airline_pnr_credential',
     );
   });
 
@@ -146,8 +146,8 @@ describe('Multi-credential pre-auth offer routes', () => {
       .send({
         credentials: [
           {
-            credential_configuration_id: 'VerifiableStudentIDSDJWT',
-            payload: studentPayload,
+            credential_configuration_id: 'booking_reference_credential',
+            payload: hotelPayload,
           },
         ],
       })
@@ -159,8 +159,8 @@ describe('Multi-credential pre-auth offer routes', () => {
       .send({
         credentials: [
           {
-            credential_configuration_id: 'LoyaltyCard',
-            payload: loyaltyPayload,
+            credential_configuration_id: 'airline_pnr_credential',
+            payload: airlinePnrPayload,
           },
         ],
       })
@@ -179,8 +179,8 @@ describe('Multi-credential pre-auth offer routes', () => {
     const body = {
       credentials: [
         {
-          credential_configuration_id: 'VerifiableStudentIDSDJWT',
-          payload: studentPayload,
+          credential_configuration_id: 'booking_reference_credential',
+          payload: hotelPayload,
         },
       ],
     };
@@ -199,7 +199,7 @@ describe('Multi-credential pre-auth offer routes', () => {
 
     const stored = await cacheServiceRedis.getPreAuthSession(sessionId);
     expect(stored.offeredConfigurationIds).to.deep.equal([
-      'VerifiableStudentIDSDJWT',
+      'booking_reference_credential',
     ]);
   });
 });

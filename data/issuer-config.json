@@ -3565,6 +3565,53 @@
         }
       }
     },
+    "airline_pnr_credential": {
+      "scope": "airline_pnr_credential",
+      "cryptographic_binding_methods_supported": [
+        "jwk"
+      ],
+      "credential_metadata": {
+        "display": [
+          {
+            "name": "Airline PNR",
+            "locale": "en-GB",
+            "description": "SD-JWT credential containing an airline Passenger Name Record locator."
+          }
+        ],
+        "claims": [
+          {
+            "path": [
+              "pnr"
+            ],
+            "display": [
+              {
+                "name": "PNR",
+                "locale": "en-GB"
+              }
+            ]
+          }
+        ]
+      },
+      "credential_signing_alg_values_supported": [
+        "ES256"
+      ],
+      "format": "dc+sd-jwt",
+      "vct": "airline_pnr_credential",
+      "proof_types_supported": {
+        "jwt": {
+          "proof_signing_alg_values_supported": [
+            "ES256"
+          ],
+          "key_attestations_required": {}
+        },
+        "attestation": {
+          "proof_signing_alg_values_supported": [
+            "ES256"
+          ],
+          "key_attestations_required": {}
+        }
+      }
+    },
     "room_key_credential": {
       "scope": "room_key_credential",
       "cryptographic_binding_methods_supported": [

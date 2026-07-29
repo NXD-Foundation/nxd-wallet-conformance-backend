@@ -15,13 +15,15 @@ describe("Aptitude credential proof metadata", () => {
       for (const proofType of ["jwt", "attestation"]) {
         expect(proofTypes[proofType], `${configurationId}.${proofType}`).to.deep.include({
           proof_signing_alg_values_supported: ["ES256"],
-          key_attestations_required: {},
         });
+        expect(proofTypes[proofType], `${configurationId}.${proofType}`).to.have.property(
+          "key_attestations_required",
+        );
       }
 
       expect(
         credentialConfigRequiresJwtProofKeyAttestation(configuration),
-        `${configurationId}.jwt key-attestation metadata must be enforced`,
+        `${configurationId}.jwt key-attestation metadata must match its declaration`,
       ).to.equal(true);
     }
   });

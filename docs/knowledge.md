@@ -140,6 +140,51 @@ interoperable discovery surface.
 | `GET /.well-known/openid-credential-issuer` | Credential issuer metadata |
 | `GET /.well-known/oauth-authorization-server` | Authorization server metadata |
 
+### Local hotel + airline PNR multi-credential offer
+
+For a localhost interoperability test, create a by-reference offer with the
+following request. The response's `deepLink` is the URI to open in the wallet;
+the wallet then sends consecutive standard `POST /credential` requests, one
+for the hotel credential and one for the airline PNR credential.
+
+```bash
+curl -X POST http://localhost:3000/offer-no-code-batch \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "credentials": [
+      {
+        "credential_configuration_id": "booking_reference_credential",
+        "payload": {
+          "booking_reference": "OTA-MS62DP17-VQPSKP",
+          "hotel_id": "9213",
+          "hotel_name": "Test Hotel Rhodes",
+          "arrival_date": "2026-07-31",
+          "departure_date": "2026-08-04",
+          "booking_platform": "SEDIT-X OTA Booking Portal"
+        }
+      },
+      {
+        "credential_configuration_id": "airline_pnr_credential",
+        "payload": { "pnr": "Q7X2LM" }
+      }
+    ]
+  }'
+```
+
+`airline_pnr_credential` is intentionally minimal: its only selectively
+disclosable claim is the customer-facing PNR/record locator. It does not use
+the separate Amadeus Flight Order ID or expose itinerary/passenger data.
+
+### EUDI Reference Wallet proof-metadata compatibility
+
+The deployed EUDI Reference Wallet requires every advertised JWT proof type,
+including `airline_pnr_credential`, to contain
+`key_attestations_required: {}`. Keep that explicit empty object even though it
+does not impose a key-storage or user-authentication constraint. Its presence
+causes the wallet to use the key-attested JWT proof path, so the issuer must
+continue to validate that proof as it does for the hotel credential. Removing
+the field made this wallet version reject issuer metadata during parsing.
+
 ### RFC001 Boundaries
 
 - The code implements both RFC001 grant variants, but a route being available

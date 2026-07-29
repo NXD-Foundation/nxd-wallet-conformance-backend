@@ -46,6 +46,10 @@ describe("signed Credential Issuer metadata", () => {
       .expect(200);
     expect(response.headers["content-type"]).to.include("application/json");
     expect(response.body.credential_issuer).to.be.a("string");
+    expect(
+      response.body.credential_configurations_supported.airline_pnr_credential
+        .proof_types_supported.jwt,
+    ).to.have.property("key_attestations_required").that.deep.equals({});
   });
 
   it("returns signed JWT when client requests application/jwt", async () => {
@@ -67,5 +71,9 @@ describe("signed Credential Issuer metadata", () => {
       typ: SIGNED_ISSUER_METADATA_TYP,
     });
     expect(payload.issuer_info.registration_certificate).to.equal(material.certChain[0]);
+    expect(
+      payload.credential_configurations_supported.airline_pnr_credential
+        .proof_types_supported.jwt,
+    ).to.have.property("key_attestations_required").that.deep.equals({});
   });
 });

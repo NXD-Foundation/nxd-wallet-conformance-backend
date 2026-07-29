@@ -170,8 +170,8 @@ describe('Shared Issuance Flows', () => {
               attestation: { proof_signing_alg_values_supported: ['ES256'] },
             },
           },
-          'multi-cred-a': { format: 'dc+sd-jwt', vct: 'multi-cred-a', proof_types_supported: { jwt: { proof_signing_alg_values_supported: ['ES256'] } } },
-          'multi-cred-b': { format: 'dc+sd-jwt', vct: 'multi-cred-b', proof_types_supported: { jwt: { proof_signing_alg_values_supported: ['ES256'] } } },
+          booking_reference_credential: { format: 'dc+sd-jwt', vct: 'booking_reference_credential', proof_types_supported: { jwt: { proof_signing_alg_values_supported: ['ES256'] } } },
+          airline_pnr_credential: { format: 'dc+sd-jwt', vct: 'airline_pnr_credential', proof_types_supported: { jwt: { proof_signing_alg_values_supported: ['ES256'] } } },
           'rfc001-device-bound-test': {
             format: 'vc+sd-jwt',
             vct: 'urn:eu.europa.ec.eudi:pid:1',
@@ -3558,10 +3558,10 @@ describe('Shared Issuance Flows', () => {
       await cacheServiceRedis.storePreAuthSession(preAuthCode, {
         status: 'pending',
         flowType: 'pre-auth',
-        offeredConfigurationIds: ['multi-cred-a', 'multi-cred-b'],
+        offeredConfigurationIds: ['booking_reference_credential', 'airline_pnr_credential'],
         credentialPayloads: {
-          'multi-cred-a': { marker: 'payload-a' },
-          'multi-cred-b': { marker: 'payload-b' },
+          booking_reference_credential: { booking_reference: 'HOTEL-REF-01' },
+          airline_pnr_credential: { pnr: 'Q7X2LM' },
         },
         issuedConfigurationIds: [],
       });
@@ -3580,14 +3580,14 @@ describe('Shared Issuance Flows', () => {
 
       expect(response.body.authorization_details).to.be.an('array').with.length(2);
       expect(response.body.authorization_details.map((e) => e.credential_configuration_id)).to.deep.equal([
-        'multi-cred-a',
-        'multi-cred-b',
+        'booking_reference_credential',
+        'airline_pnr_credential',
       ]);
 
       const updated = await cacheServiceRedis.getPreAuthSession(preAuthCode);
       expect(updated.tokenAuthorizations[response.body.access_token].authorizedConfigurationIds).to.deep.equal([
-        'multi-cred-a',
-        'multi-cred-b',
+        'booking_reference_credential',
+        'airline_pnr_credential',
       ]);
     });
 
@@ -3600,10 +3600,10 @@ describe('Shared Issuance Flows', () => {
       await cacheServiceRedis.storePreAuthSession(preAuthCode, {
         status: 'pending',
         flowType: 'pre-auth',
-        offeredConfigurationIds: ['multi-cred-a', 'multi-cred-b'],
+        offeredConfigurationIds: ['booking_reference_credential', 'airline_pnr_credential'],
         credentialPayloads: {
-          'multi-cred-a': { marker: 'payload-a' },
-          'multi-cred-b': { marker: 'payload-b' },
+          booking_reference_credential: { booking_reference: 'HOTEL-REF-01' },
+          airline_pnr_credential: { pnr: 'Q7X2LM' },
         },
       });
 
@@ -3622,18 +3622,18 @@ describe('Shared Issuance Flows', () => {
 
       const first = await exchange([{
         type: 'openid_credential',
-        credential_configuration_id: 'multi-cred-a',
+        credential_configuration_id: 'booking_reference_credential',
       }]);
       const second = await exchange([{
         type: 'openid_credential',
-        credential_configuration_id: 'multi-cred-b',
+        credential_configuration_id: 'airline_pnr_credential',
       }]);
 
       const updated = await cacheServiceRedis.getPreAuthSession(preAuthCode);
       expect(updated.tokenAuthorizations[first.body.access_token].authorizedConfigurationIds)
-        .to.deep.equal(['multi-cred-a']);
+        .to.deep.equal(['booking_reference_credential']);
       expect(updated.tokenAuthorizations[second.body.access_token].authorizedConfigurationIds)
-        .to.deep.equal(['multi-cred-b']);
+        .to.deep.equal(['airline_pnr_credential']);
       expect(updated.authorizedConfigurationIds).to.equal(undefined);
     });
 
@@ -3646,8 +3646,8 @@ describe('Shared Issuance Flows', () => {
       await cacheServiceRedis.storePreAuthSession(preAuthCode, {
         status: 'pending',
         flowType: 'pre-auth',
-        offeredConfigurationIds: ['multi-cred-a'],
-        credentialPayloads: { 'multi-cred-a': { marker: 'payload-a' } },
+        offeredConfigurationIds: ['booking_reference_credential'],
+        credentialPayloads: { booking_reference_credential: { booking_reference: 'HOTEL-REF-01' } },
         issuedConfigurationIds: [],
       });
 
@@ -3663,7 +3663,7 @@ describe('Shared Issuance Flows', () => {
           authorization_details: [
             {
               type: 'openid_credential',
-              credential_configuration_id: 'multi-cred-b',
+              credential_configuration_id: 'airline_pnr_credential',
             },
           ],
         })
@@ -3685,11 +3685,11 @@ describe('Shared Issuance Flows', () => {
         status: 'pending',
         flowType: 'pre-auth',
         accessToken,
-        offeredConfigurationIds: ['multi-cred-a', 'multi-cred-b'],
-        authorizedConfigurationIds: ['multi-cred-a', 'multi-cred-b'],
+        offeredConfigurationIds: ['booking_reference_credential', 'airline_pnr_credential'],
+        authorizedConfigurationIds: ['booking_reference_credential', 'airline_pnr_credential'],
         credentialPayloads: {
-          'multi-cred-a': { marker: 'payload-a' },
-          'multi-cred-b': { marker: 'payload-b' },
+          booking_reference_credential: { booking_reference: 'HOTEL-REF-01' },
+          airline_pnr_credential: { pnr: 'Q7X2LM' },
         },
         issuedConfigurationIds: [],
       });
@@ -3711,18 +3711,18 @@ describe('Shared Issuance Flows', () => {
           });
       };
 
-      const first = await makeCredentialRequest('multi-cred-a');
+      const first = await makeCredentialRequest('booking_reference_credential');
       expect(first.status).to.equal(200);
       expect(first.body.credentials).to.be.an('array').with.length(1);
 
-      const second = await makeCredentialRequest('multi-cred-b');
+      const second = await makeCredentialRequest('airline_pnr_credential');
       expect(second.status).to.equal(200);
       expect(second.body.credentials).to.be.an('array').with.length(1);
 
       const updated = await cacheServiceRedis.getPreAuthSession(sessionKey);
       expect(updated.issuedConfigurationIds).to.deep.equal([
-        'multi-cred-a',
-        'multi-cred-b',
+        'booking_reference_credential',
+        'airline_pnr_credential',
       ]);
       expect(updated.status).to.equal('success');
     });
@@ -3741,11 +3741,11 @@ describe('Shared Issuance Flows', () => {
         status: 'pending',
         flowType: 'pre-auth',
         accessToken,
-        offeredConfigurationIds: ['multi-cred-a', 'multi-cred-b'],
-        authorizedConfigurationIds: ['multi-cred-a'],
+        offeredConfigurationIds: ['booking_reference_credential', 'airline_pnr_credential'],
+        authorizedConfigurationIds: ['booking_reference_credential'],
         credentialPayloads: {
-          'multi-cred-a': { marker: 'payload-a' },
-          'multi-cred-b': { marker: 'payload-b' },
+          booking_reference_credential: { booking_reference: 'HOTEL-REF-01' },
+          airline_pnr_credential: { pnr: 'Q7X2LM' },
         },
         issuedConfigurationIds: [],
       });
@@ -3760,7 +3760,7 @@ describe('Shared Issuance Flows', () => {
         .post('/credential')
         .set('Authorization', `Bearer ${accessToken}`)
         .send({
-          credential_configuration_id: 'multi-cred-b',
+          credential_configuration_id: 'airline_pnr_credential',
           proofs: { jwt: [proofJwt] },
         })
         .expect(400);

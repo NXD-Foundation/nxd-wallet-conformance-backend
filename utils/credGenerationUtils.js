@@ -46,6 +46,8 @@ import {
   getLoyaltyCardSDJWTDataWithPayload,
   getBookingReferenceSDJWTData,
   getBookingReferenceSDJWTDataWithPayload,
+  getAirlinePnrSDJWTData,
+  getAirlinePnrSDJWTDataWithPayload,
   getRoomKeySDJWTData,
   getRoomKeySDJWTDataWithPayload,
 } from "../utils/credPayloadUtil.js";
@@ -649,19 +651,10 @@ export async function handleCredentialGenerationBasedOnFormat(
           )
         : getBookingReferenceSDJWTData();
       break;
-    case "multi-cred-a":
-    case "multi-cred-b":
-      credPayload = sessionObject?.credentialPayload
-        ? {
-            claims: { ...sessionObject.credentialPayload },
-            disclosureFrame: Object.fromEntries(
-              Object.keys(sessionObject.credentialPayload).map((key) => [
-                key,
-                true,
-              ]),
-            ),
-          }
-        : getPIDSDJWTData();
+    case "airline_pnr_credential":
+      credPayload = sessionObject
+        ? getAirlinePnrSDJWTDataWithPayload(sessionObject.credentialPayload)
+        : getAirlinePnrSDJWTData();
       break;
     case "room_key_credential":
       console.log("!!!!!!!!!!room_key_credential!!!!!!");
@@ -1514,19 +1507,10 @@ export async function handleCredentialGenerationBasedOnFormatDeferred(
           )
         : getBookingReferenceSDJWTData();
       break;
-    case "multi-cred-a":
-    case "multi-cred-b":
-      credPayload = sessionObject?.credentialPayload
-        ? {
-            claims: { ...sessionObject.credentialPayload },
-            disclosureFrame: Object.fromEntries(
-              Object.keys(sessionObject.credentialPayload).map((key) => [
-                key,
-                true,
-              ]),
-            ),
-          }
-        : getPIDSDJWTData();
+    case "airline_pnr_credential":
+      credPayload = sessionObject
+        ? getAirlinePnrSDJWTDataWithPayload(sessionObject.credentialPayload)
+        : getAirlinePnrSDJWTData();
       break;
     case "room_key_credential":
       credPayload = sessionObject

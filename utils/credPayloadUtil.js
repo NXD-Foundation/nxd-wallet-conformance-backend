@@ -1183,6 +1183,27 @@ export const getBookingReferenceSDJWTDataWithPayload = (
   return { claims, disclosureFrame };
 };
 
+const DEFAULT_AIRLINE_PNR_CLAIMS = {
+  pnr: "Q7X2LM",
+};
+
+export const getAirlinePnrSDJWTData = () => {
+  return getAirlinePnrSDJWTDataWithPayload(null);
+};
+
+export const getAirlinePnrSDJWTDataWithPayload = (payload) => {
+  const sourceClaims =
+    payload?.claims && typeof payload.claims === "object"
+      ? payload.claims
+      : payload || {};
+  return {
+    claims: {
+      pnr: sourceClaims.pnr ?? DEFAULT_AIRLINE_PNR_CLAIMS.pnr,
+    },
+    disclosureFrame: { _sd: ["pnr"] },
+  };
+};
+
 const DEFAULT_ROOM_KEY_CLAIMS = {
   room_number: "412",
   reservationId: "RES-2026-001234",
