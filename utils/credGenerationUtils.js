@@ -61,17 +61,14 @@ import {
 import cryptoModule from "crypto";
 import { Buffer } from "buffer";
 import { encode } from "cbor-x";
+import { loadAptitudeIssuerSigningMaterial } from "./aptitudeIssuerSigningMaterial.js";
 
 const privateKey = fs.readFileSync("./private-key.pem", "utf-8");
 const publicKeyPem = fs.readFileSync("./public-key.pem", "utf-8");
-const privateKeyPemX509 = fs.readFileSync(
-  "./x509EC/ec_private_pkcs8.key",
-  "utf8"
-);
-const certificatePemX509 = fs.readFileSync(
-  "./x509EC/client_certificate.crt",
-  "utf8"
-);
+const {
+  privateKeyPkcs8: privateKeyPemX509,
+  leafCertificatePem: certificatePemX509,
+} = loadAptitudeIssuerSigningMaterial();
 // DID Web key pair - must match the keys published in the DID document
 let privateKeyPemDidWeb = null;
 let publicKeyPemDidWeb = null;

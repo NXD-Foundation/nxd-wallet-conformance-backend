@@ -8,6 +8,7 @@ import {
   SIGNED_ISSUER_METADATA_TYP,
   signCredentialIssuerMetadata,
 } from "../utils/issuerMetadataSigning.js";
+import { loadAptitudeIssuerSigningMaterial } from "../utils/aptitudeIssuerSigningMaterial.js";
 
 describe("signed Credential Issuer metadata", () => {
   const metadata = {
@@ -57,7 +58,14 @@ describe("signed Credential Issuer metadata", () => {
     expect(response.headers["content-type"]).to.include("application/jwt");
     expect(response.text).to.include(".");
     const protectedHeader = jose.decodeProtectedHeader(response.text);
+    const material = loadAptitudeIssuerSigningMaterial();
     expect(protectedHeader.typ).to.equal(SIGNED_ISSUER_METADATA_TYP);
-    expect(protectedHeader.x5c).to.be.an("array").with.length.greaterThan(0);
+    expect(protectedHeader.x5c).to.deep.equal(material.certChain);
+
+    const verifyKey = await jose.importX509(material.leafCertificatePem, "ES256");
+    const { payload } = await jose.jwtVerify(response.text, verifyKey, {
+      typ: SIGNED_ISSUER_METADATA_TYP,
+    });
+    expect(payload.issuer_info.registration_certificate).to.equal(material.certChain[0]);
   });
 });

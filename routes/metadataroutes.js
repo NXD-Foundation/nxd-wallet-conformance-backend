@@ -11,6 +11,7 @@ import {
   getPublicIssuerBaseUrl,
 } from "../utils/routeUtils.js";
 import { buildIssuerInfo } from "../utils/issuerInfo.js";
+import { loadAptitudeIssuerSigningMaterial } from "../utils/aptitudeIssuerSigningMaterial.js";
 const metadataRouter = express.Router();
 
 const publicKeyPem = fs.readFileSync("./public-key.pem", "utf-8");
@@ -38,7 +39,9 @@ const jwks = pemToJWK(publicKeyPem, "public");
 // parameter once at module load. We intentionally do not fail module init if
 // the registration certificate is missing — the metadata response simply
 // omits `issuer_info` when no material is available.
-let issuerInfoPromise = buildIssuerInfo().catch((err) => {
+let issuerInfoPromise = buildIssuerInfo({
+  certificatePem: loadAptitudeIssuerSigningMaterial().leafCertificatePem,
+}).catch((err) => {
   console.warn("[issuer_info] Failed to build issuer_info:", err?.message);
   return null;
 });

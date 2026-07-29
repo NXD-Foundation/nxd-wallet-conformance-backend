@@ -9,9 +9,9 @@ export const KEY_MATERIAL_PATHS = Object.freeze({
   applicationSigningPublicKey: "./public-key.pem",
   didPrivateKeyPkcs8: "./didjwks/did_private_pkcs8.key",
   didPublicKey: "./didjwks/did_public.pem",
-  /** APTITUDE x509EC fixture (RFC001 §10): issuer metadata JWS signing. */
-  aptitudeX509EcPrivateKey: "./x509EC/ec_private_pkcs8.key",
-  aptitudeX509EcCertificate: "./x509EC/client_certificate.crt",
+  /** EUDI pre-production issuer signing leaf and its wallet trust anchor. */
+  aptitudeIssuerSigningP12: "./certs/WE-BUILD-Verifier.p12",
+  aptitudeIssuerTrustAnchor: "./certs/pidissuerca02_eu.pem",
   /** Verifier direct_post.jwt decryption (same x509EC pair in this repo). */
   verifierEncryptionPrivateKey: "./x509EC/ec_private_pkcs8.key",
   verifierEncryptionCertificate: "./x509EC/client_certificate.crt",

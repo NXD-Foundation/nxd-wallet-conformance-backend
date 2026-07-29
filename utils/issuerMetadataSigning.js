@@ -1,25 +1,8 @@
-import fs from "fs";
 import * as jose from "jose";
-import { pemToBase64Der } from "./sdjwtUtils.js";
-import { KEY_MATERIAL_PATHS } from "./keyMaterialPaths.js";
+import { loadAptitudeIssuerSigningMaterial } from "./aptitudeIssuerSigningMaterial.js";
 
 /** RFC001 / aptitude tests use this typ (see metadataDiscovery.test.js). */
 export const SIGNED_ISSUER_METADATA_TYP = "openid-credential-issuer-metadata+jwt";
-
-function loadAptitudeIssuerMetadataSigningMaterial() {
-  const privateKeyPkcs8 = fs.readFileSync(
-    KEY_MATERIAL_PATHS.aptitudeX509EcPrivateKey,
-    "utf-8",
-  );
-  const certPem = fs.readFileSync(
-    KEY_MATERIAL_PATHS.aptitudeX509EcCertificate,
-    "utf-8",
-  );
-  return {
-    privateKeyPkcs8,
-    certChain: [pemToBase64Der(certPem)],
-  };
-}
 
 function requireEs256Material({ privateKeyPkcs8, certChain }) {
   if (typeof privateKeyPkcs8 !== "string" || !privateKeyPkcs8.includes("PRIVATE KEY")) {
@@ -57,5 +40,5 @@ export async function signCredentialIssuerMetadata(metadata, signingMaterial) {
 }
 
 export async function signCredentialIssuerMetadataFromConfiguredMaterial(metadata) {
-  return signCredentialIssuerMetadata(metadata, loadAptitudeIssuerMetadataSigningMaterial());
+  return signCredentialIssuerMetadata(metadata, loadAptitudeIssuerSigningMaterial());
 }

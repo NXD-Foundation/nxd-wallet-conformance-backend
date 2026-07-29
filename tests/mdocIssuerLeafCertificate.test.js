@@ -1,14 +1,12 @@
 /**
- * The mdoc issuance path loads the leaf X.509 from ./x509EC/client_certificate.crt
- * (see utils/credGenerationUtils.js). Holders may reject credentials if the leaf
+ * The mdoc issuance path loads the EUDI-issued Aptitude signing leaf from the
+ * issuer P12 (see utils/credGenerationUtils.js). Holders may reject credentials if the leaf
  * used in issuerAuth x5chain lacks Key Usage with digitalSignature (RFC 5280 / mDL PKI).
  *
  * We parse with @peculiar/x509 because Node's crypto.X509Certificate.keyUsage is
  * often undefined even when the extension is present (OpenSSL shows it correctly).
  */
 import { expect } from "chai";
-import fs from "fs";
-import path from "path";
 import * as jose from "jose";
 import { decode } from "cbor-x";
 import {
@@ -18,29 +16,15 @@ import {
 } from "@peculiar/x509";
 import { handleCredentialGenerationBasedOnFormat } from "../utils/credGenerationUtils.js";
 import { pemToBase64Der } from "../utils/sdjwtUtils.js";
-
-const MDOC_LEAF_CERT_PATH = path.join(
-  process.cwd(),
-  "x509EC",
-  "client_certificate.crt"
-);
-const MDOC_LEAF_KEY_PATH = path.join(
-  process.cwd(),
-  "x509EC",
-  "ec_private_pkcs8.key"
-);
+import { loadAptitudeIssuerSigningMaterial } from "../utils/aptitudeIssuerSigningMaterial.js";
 
 function getLeafKeyUsage(cert) {
   return cert.getExtension(KeyUsagesExtension);
 }
 
-describe("mdoc issuance leaf certificate (x509EC/client_certificate.crt)", () => {
+describe("mdoc issuance leaf certificate (Aptitude issuer signing material)", () => {
   it("includes Key Usage with the digitalSignature bit set", function () {
-    if (!fs.existsSync(MDOC_LEAF_CERT_PATH)) {
-      this.skip();
-    }
-
-    const pem = fs.readFileSync(MDOC_LEAF_CERT_PATH, "utf8");
+    const pem = loadAptitudeIssuerSigningMaterial().leafCertificatePem;
     const cert = new X509Certificate(pem);
 
     const keyUsage = getLeafKeyUsage(cert);
@@ -59,15 +43,8 @@ describe("mdoc issuance leaf certificate (x509EC/client_certificate.crt)", () =>
   });
 
   it("matches the configured mdoc issuer private key", async function () {
-    if (
-      !fs.existsSync(MDOC_LEAF_CERT_PATH) ||
-      !fs.existsSync(MDOC_LEAF_KEY_PATH)
-    ) {
-      this.skip();
-    }
-
-    const certPem = fs.readFileSync(MDOC_LEAF_CERT_PATH, "utf8");
-    const pkcs8Pem = fs.readFileSync(MDOC_LEAF_KEY_PATH, "utf8");
+    const { leafCertificatePem: certPem, privateKeyPkcs8: pkcs8Pem } =
+      loadAptitudeIssuerSigningMaterial();
 
     const certKey = await jose.importX509(certPem, "ES256", {
       extractable: true,
@@ -84,13 +61,6 @@ describe("mdoc issuance leaf certificate (x509EC/client_certificate.crt)", () =>
   });
 
   it("emits the same leaf certificate in issuerAuth x5chain with digitalSignature key usage", async function () {
-    if (
-      !fs.existsSync(MDOC_LEAF_CERT_PATH) ||
-      !fs.existsSync(MDOC_LEAF_KEY_PATH)
-    ) {
-      this.skip();
-    }
-
     const { publicKey, privateKey } = await jose.generateKeyPair("ES256");
     const proofJwk = await jose.exportJWK(publicKey);
     const proofJwt = await new jose.SignJWT({
@@ -133,7 +103,7 @@ describe("mdoc issuance leaf certificate (x509EC/client_certificate.crt)", () =>
     expect(Buffer.isBuffer(emittedLeafDer) || emittedLeafDer instanceof Uint8Array)
       .to.equal(true);
 
-    const configuredLeafPem = fs.readFileSync(MDOC_LEAF_CERT_PATH, "utf8");
+    const configuredLeafPem = loadAptitudeIssuerSigningMaterial().leafCertificatePem;
     expect(Buffer.from(emittedLeafDer).toString("base64")).to.equal(
       pemToBase64Der(configuredLeafPem)
     );
@@ -148,13 +118,6 @@ describe("mdoc issuance leaf certificate (x509EC/client_certificate.crt)", () =>
   });
 
   it("emits PID mso_mdoc claims under the namespace rather than the doctype", async function () {
-    if (
-      !fs.existsSync(MDOC_LEAF_CERT_PATH) ||
-      !fs.existsSync(MDOC_LEAF_KEY_PATH)
-    ) {
-      this.skip();
-    }
-
     const { publicKey, privateKey } = await jose.generateKeyPair("ES256");
     const proofJwk = await jose.exportJWK(publicKey);
     const proofJwt = await new jose.SignJWT({

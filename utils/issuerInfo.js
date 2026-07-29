@@ -6,10 +6,8 @@
  *   - the registrar-provided registration information (legal name, country,
  *     registrar identifier, etc.).
  *
- * In deployments without an APTITUDE registrar, we self-sign the development
- * certificate at `x509EC/client_certificate.crt` and mark `self_registered:true`
- * in the registration dataset so wallets can distinguish pilot material from
- * production trust anchors.
+ * The active Aptitude issuer certificate may be provided directly by the
+ * issuer-signing material loader, avoiding drift from the metadata JWS signer.
  */
 import fs from "fs";
 import path from "path";
@@ -64,27 +62,28 @@ function readRegistrationDataset(pathOverride) {
  * cannot be loaded (callers should then skip attaching `issuer_info`).
  *
  * @param {object} [options]
- * @param {string} [options.certPath] - Path to PEM certificate
- *   (default: `x509EC/client_certificate.crt`).
+ * @param {string} [options.certPath] - Path to PEM certificate.
+ * @param {string} [options.certificatePem] - Active issuer leaf certificate.
  * @param {string} [options.registrationPath] - Path to registrar dataset JSON
  *   (default: `data/issuer-registration.json`).
  * @returns {Promise<object|null>}
  */
 export async function buildIssuerInfo({
   certPath = process.env.ISSUER_REGISTRATION_CERT_PATH || DEFAULT_CERT_PATH,
+  certificatePem,
   registrationPath = process.env.ISSUER_REGISTRATION_INFO_PATH ||
     DEFAULT_REGISTRATION_PATH,
 } = {}) {
-  if (!fs.existsSync(certPath)) {
+  if (!certificatePem && !fs.existsSync(certPath)) {
     console.warn(
       `[issuer_info] Registration certificate not found at ${certPath}; issuer_info will not be advertised.`,
     );
     return null;
   }
 
-  let pem;
+  let pem = certificatePem;
   try {
-    pem = fs.readFileSync(certPath, "utf-8");
+    if (!pem) pem = fs.readFileSync(certPath, "utf-8");
   } catch (e) {
     console.warn(
       `[issuer_info] Unable to read registration certificate ${certPath}: ${e.message}`,

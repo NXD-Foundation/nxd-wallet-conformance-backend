@@ -53,6 +53,7 @@ import {
   pemToBase64Der,
 } from "../../utils/sdjwtUtils.js";
 import jwt from "jsonwebtoken";
+import { loadAptitudeIssuerSigningMaterial } from "../../utils/aptitudeIssuerSigningMaterial.js";
 
 import {
   handleCredentialGenerationBasedOnFormat,
@@ -415,8 +416,10 @@ const loadCryptographicKeys = () => {
   try {
     const privateKey = fs.readFileSync("./private-key.pem", "utf-8");
     const publicKeyPem = fs.readFileSync("./public-key.pem", "utf-8");
-    const privateKeyPemX509 = fs.readFileSync("./x509EC/ec_private_pkcs8.key", "utf8");
-    const certificatePemX509 = fs.readFileSync("./x509EC/client_certificate.crt", "utf8");
+    const {
+      privateKeyPkcs8: privateKeyPemX509,
+      leafCertificatePem: certificatePemX509,
+    } = loadAptitudeIssuerSigningMaterial();
 
     return {
       privateKey,
