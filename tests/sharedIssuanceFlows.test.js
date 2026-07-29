@@ -170,6 +170,8 @@ describe('Shared Issuance Flows', () => {
               attestation: { proof_signing_alg_values_supported: ['ES256'] },
             },
           },
+          'multi-cred-a': { format: 'dc+sd-jwt', vct: 'multi-cred-a', proof_types_supported: { jwt: { proof_signing_alg_values_supported: ['ES256'] } } },
+          'multi-cred-b': { format: 'dc+sd-jwt', vct: 'multi-cred-b', proof_types_supported: { jwt: { proof_signing_alg_values_supported: ['ES256'] } } },
           'rfc001-device-bound-test': {
             format: 'vc+sd-jwt',
             vct: 'urn:eu.europa.ec.eudi:pid:1',
@@ -3545,4 +3547,226 @@ describe('Shared Issuance Flows', () => {
       expect([200, 500]).to.include(response.status);
     });
   });
-}); 
+
+  describe('Multi-credential pre-auth offer binding', () => {
+    it('authorizes full offered set on token exchange without authorization_details', async function () {
+      if (!cacheServiceRedis.client?.isReady) {
+        this.skip();
+      }
+
+      const preAuthCode = `multi-offer-token-${uuidv4()}`;
+      await cacheServiceRedis.storePreAuthSession(preAuthCode, {
+        status: 'pending',
+        flowType: 'pre-auth',
+        offeredConfigurationIds: ['multi-cred-a', 'multi-cred-b'],
+        credentialPayloads: {
+          'multi-cred-a': { marker: 'payload-a' },
+          'multi-cred-b': { marker: 'payload-b' },
+        },
+        issuedConfigurationIds: [],
+      });
+
+      const { dpopJwt } = await makeTokenDpop();
+      await makeTestWiaClientAssertion();
+      const response = await wireWiaOAuthHeaders(
+        request(app).post('/token_endpoint').set('DPoP', dpopJwt),
+      )
+        .send({
+          ...pickWiaBodyFields(),
+          grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
+          'pre-authorized_code': preAuthCode,
+        })
+        .expect(200);
+
+      expect(response.body.authorization_details).to.be.an('array').with.length(2);
+      expect(response.body.authorization_details.map((e) => e.credential_configuration_id)).to.deep.equal([
+        'multi-cred-a',
+        'multi-cred-b',
+      ]);
+
+      const updated = await cacheServiceRedis.getPreAuthSession(preAuthCode);
+      expect(updated.tokenAuthorizations[response.body.access_token].authorizedConfigurationIds).to.deep.equal([
+        'multi-cred-a',
+        'multi-cred-b',
+      ]);
+    });
+
+    it('keeps each token authorization subset when a pre-authorized code is exchanged twice', async function () {
+      if (!cacheServiceRedis.client?.isReady) {
+        this.skip();
+      }
+
+      const preAuthCode = `multi-offer-token-isolation-${uuidv4()}`;
+      await cacheServiceRedis.storePreAuthSession(preAuthCode, {
+        status: 'pending',
+        flowType: 'pre-auth',
+        offeredConfigurationIds: ['multi-cred-a', 'multi-cred-b'],
+        credentialPayloads: {
+          'multi-cred-a': { marker: 'payload-a' },
+          'multi-cred-b': { marker: 'payload-b' },
+        },
+      });
+
+      await makeTestWiaClientAssertion();
+      const exchange = async (authorization_details) => {
+        const { dpopJwt } = await makeTokenDpop();
+        return wireWiaOAuthHeaders(
+          request(app).post('/token_endpoint').set('DPoP', dpopJwt),
+        ).send({
+          ...pickWiaBodyFields(),
+          grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
+          'pre-authorized_code': preAuthCode,
+          authorization_details,
+        }).expect(200);
+      };
+
+      const first = await exchange([{
+        type: 'openid_credential',
+        credential_configuration_id: 'multi-cred-a',
+      }]);
+      const second = await exchange([{
+        type: 'openid_credential',
+        credential_configuration_id: 'multi-cred-b',
+      }]);
+
+      const updated = await cacheServiceRedis.getPreAuthSession(preAuthCode);
+      expect(updated.tokenAuthorizations[first.body.access_token].authorizedConfigurationIds)
+        .to.deep.equal(['multi-cred-a']);
+      expect(updated.tokenAuthorizations[second.body.access_token].authorizedConfigurationIds)
+        .to.deep.equal(['multi-cred-b']);
+      expect(updated.authorizedConfigurationIds).to.equal(undefined);
+    });
+
+    it('rejects authorization_details for configurations outside the offer', async function () {
+      if (!cacheServiceRedis.client?.isReady) {
+        this.skip();
+      }
+
+      const preAuthCode = `multi-offer-reject-${uuidv4()}`;
+      await cacheServiceRedis.storePreAuthSession(preAuthCode, {
+        status: 'pending',
+        flowType: 'pre-auth',
+        offeredConfigurationIds: ['multi-cred-a'],
+        credentialPayloads: { 'multi-cred-a': { marker: 'payload-a' } },
+        issuedConfigurationIds: [],
+      });
+
+      const { dpopJwt } = await makeTokenDpop();
+      await makeTestWiaClientAssertion();
+      const response = await wireWiaOAuthHeaders(
+        request(app).post('/token_endpoint').set('DPoP', dpopJwt),
+      )
+        .send({
+          ...pickWiaBodyFields(),
+          grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
+          'pre-authorized_code': preAuthCode,
+          authorization_details: [
+            {
+              type: 'openid_credential',
+              credential_configuration_id: 'multi-cred-b',
+            },
+          ],
+        })
+        .expect(400);
+
+      expect(response.body).to.have.property('error', 'invalid_request');
+      expect(response.body.error_description).to.match(/not included in the credential offer/i);
+    });
+
+    it('issues consecutive credentials for authorized configurations using the same access token', async function () {
+      if (!cacheServiceRedis.client?.isReady) {
+        this.skip();
+      }
+
+      const sessionKey = `multi-offer-cred-${uuidv4()}`;
+      const accessToken = `multi-offer-access-${uuidv4()}`;
+
+      await cacheServiceRedis.storePreAuthSession(sessionKey, {
+        status: 'pending',
+        flowType: 'pre-auth',
+        accessToken,
+        offeredConfigurationIds: ['multi-cred-a', 'multi-cred-b'],
+        authorizedConfigurationIds: ['multi-cred-a', 'multi-cred-b'],
+        credentialPayloads: {
+          'multi-cred-a': { marker: 'payload-a' },
+          'multi-cred-b': { marker: 'payload-b' },
+        },
+        issuedConfigurationIds: [],
+      });
+
+      const makeCredentialRequest = async (configurationId) => {
+        const nonce = cryptoUtils.generateNonce();
+        await cacheServiceRedis.storeNonce(nonce, 300);
+        const proofJwt = signProofJwt({
+          nonce,
+          iss: 'test-issuer',
+          aud: process.env.SERVER_URL,
+        });
+        return request(app)
+          .post('/credential')
+          .set('Authorization', `Bearer ${accessToken}`)
+          .send({
+            credential_configuration_id: configurationId,
+            proofs: { jwt: [proofJwt] },
+          });
+      };
+
+      const first = await makeCredentialRequest('multi-cred-a');
+      expect(first.status).to.equal(200);
+      expect(first.body.credentials).to.be.an('array').with.length(1);
+
+      const second = await makeCredentialRequest('multi-cred-b');
+      expect(second.status).to.equal(200);
+      expect(second.body.credentials).to.be.an('array').with.length(1);
+
+      const updated = await cacheServiceRedis.getPreAuthSession(sessionKey);
+      expect(updated.issuedConfigurationIds).to.deep.equal([
+        'multi-cred-a',
+        'multi-cred-b',
+      ]);
+      expect(updated.status).to.equal('success');
+    });
+
+    it('rejects credential requests for configurations not authorized by the access token', async function () {
+      if (!cacheServiceRedis.client?.isReady) {
+        this.skip();
+      }
+
+      const sessionKey = `multi-offer-bind-${uuidv4()}`;
+      const accessToken = `multi-offer-bind-access-${uuidv4()}`;
+      const nonce = cryptoUtils.generateNonce();
+      await cacheServiceRedis.storeNonce(nonce, 300);
+
+      await cacheServiceRedis.storePreAuthSession(sessionKey, {
+        status: 'pending',
+        flowType: 'pre-auth',
+        accessToken,
+        offeredConfigurationIds: ['multi-cred-a', 'multi-cred-b'],
+        authorizedConfigurationIds: ['multi-cred-a'],
+        credentialPayloads: {
+          'multi-cred-a': { marker: 'payload-a' },
+          'multi-cred-b': { marker: 'payload-b' },
+        },
+        issuedConfigurationIds: [],
+      });
+
+      const proofJwt = signProofJwt({
+        nonce,
+        iss: 'test-issuer',
+        aud: process.env.SERVER_URL,
+      });
+
+      const response = await request(app)
+        .post('/credential')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({
+          credential_configuration_id: 'multi-cred-b',
+          proofs: { jwt: [proofJwt] },
+        })
+        .expect(400);
+
+      expect(response.body).to.have.property('error', 'invalid_credential_request');
+      expect(response.body.error_description).to.match(/not authorized for this access token/i);
+    });
+  });
+});

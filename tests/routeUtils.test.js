@@ -13,6 +13,10 @@ import {
   isEtsiIssuanceProfileEnforced,
   parseBooleanEnvFlag,
   extractWIAFromTokenRequest,
+  parseMultiCredentialOfferRequest,
+  preAuthOfferSessionStateMatches,
+  createSessionWithMultiCredentialPayloads,
+  buildCredentialOfferUrl,
 } from '../utils/routeUtils.js';
 
 describe('Route Utils', () => {
@@ -432,4 +436,122 @@ describe('Route Utils', () => {
       expect(extractWIAFromTokenRequest({}, {})).to.equal(null);
     });
   });
-}); 
+
+  describe('parseMultiCredentialOfferRequest', () => {
+    const issuerConfig = {
+      credential_configurations_supported: {
+        'multi-cred-a': { format: 'dc+sd-jwt' },
+        'multi-cred-b': { format: 'dc+sd-jwt' },
+      },
+    };
+
+    it('parses valid multi-credential offer body', () => {
+      const result = parseMultiCredentialOfferRequest(
+        {
+          credentials: [
+            {
+              credential_configuration_id: 'multi-cred-a',
+              payload: { name: 'Alice' },
+            },
+            {
+              credential_configuration_id: 'multi-cred-b',
+              payload: { tier: 'gold' },
+            },
+          ],
+        },
+        issuerConfig,
+      );
+
+      expect(result.offeredConfigurationIds).to.deep.equal([
+        'multi-cred-a',
+        'multi-cred-b',
+      ]);
+      expect(result.credentialPayloads['multi-cred-a']).to.deep.equal({
+        name: 'Alice',
+      });
+      expect(result.credentialPayloads['multi-cred-b']).to.deep.equal({
+        tier: 'gold',
+      });
+    });
+
+    it('rejects duplicate credential_configuration_id values', () => {
+      expect(() =>
+        parseMultiCredentialOfferRequest(
+          {
+            credentials: [
+              {
+                credential_configuration_id: 'multi-cred-a',
+                payload: { a: 1 },
+              },
+              {
+                credential_configuration_id: 'multi-cred-a',
+                payload: { a: 2 },
+              },
+            ],
+          },
+          issuerConfig,
+        ),
+      ).to.throw(/Duplicate credential_configuration_id/);
+    });
+
+    it('rejects unknown credential_configuration_id values', () => {
+      expect(() =>
+        parseMultiCredentialOfferRequest(
+          {
+            credentials: [
+              {
+                credential_configuration_id: 'missing-config',
+                payload: { a: 1 },
+              },
+            ],
+          },
+          issuerConfig,
+        ),
+      ).to.throw(/Unknown credential_configuration_id/);
+    });
+  });
+
+  describe('preAuthOfferSessionStateMatches', () => {
+    it('matches equivalent multi-credential offer sessions', () => {
+      const session = createSessionWithMultiCredentialPayloads(
+        ['multi-cred-a', 'multi-cred-b'],
+        { 'multi-cred-a': { a: 1 }, 'multi-cred-b': { b: 2 } },
+        true,
+      );
+      expect(preAuthOfferSessionStateMatches(session, { ...session })).to.equal(
+        true,
+      );
+    });
+
+    it('detects conflicting multi-credential offer sessions', () => {
+      const existing = createSessionWithMultiCredentialPayloads(
+        ['multi-cred-a'],
+        { 'multi-cred-a': { a: 1 } },
+        true,
+      );
+      const incoming = createSessionWithMultiCredentialPayloads(
+        ['multi-cred-b'],
+        { 'multi-cred-b': { b: 2 } },
+        true,
+      );
+      expect(preAuthOfferSessionStateMatches(existing, incoming)).to.equal(
+        false,
+      );
+    });
+  });
+
+  describe('buildCredentialOfferUrl', () => {
+    it('omits type query parameter when credential type is not provided', () => {
+      const encoded = buildCredentialOfferUrl(
+        'session-123',
+        null,
+        '/credential-offer-no-code-batch',
+      );
+      const decoded = decodeURIComponent(encoded);
+      expect(decoded).to.equal(
+        'http://localhost:3000/credential-offer-no-code-batch/session-123',
+      );
+      expect(decoded).to.not.include('type=');
+    });
+  });
+});

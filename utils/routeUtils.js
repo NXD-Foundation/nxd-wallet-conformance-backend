@@ -1463,6 +1463,26 @@ export const createSessionWithPayload = (credentialPayload, isHaip = true) => {
 };
 
 /**
+ * Create pre-auth session for a multi-configuration credential offer.
+ * @param {string[]} offeredConfigurationIds - Ordered offered configuration ids
+ * @param {Record<string, object>} credentialPayloads - Payload keyed by configuration id
+ * @param {boolean} isHaip - Whether this is a HAIP flow
+ * @returns {Object}
+ */
+export const createSessionWithMultiCredentialPayloads = (
+  offeredConfigurationIds,
+  credentialPayloads,
+  isHaip = true,
+) => {
+  return {
+    ...createBaseSession("pre-auth", isHaip),
+    offeredConfigurationIds,
+    credentialPayloads,
+    issuedConfigurationIds: [],
+  };
+};
+
+/**
  * Create code flow session object
  * @param {string} client_id_scheme - Client ID scheme
  * @param {string} flowType - Flow type
@@ -1540,8 +1560,15 @@ export const generateQRCode = async (credentialOffer, sessionId = null) => {
  */
 export const buildCredentialOfferUrl = (sessionId, credentialType, endpointPath, urlScheme = URL_SCHEMES.STANDARD, additionalParams = {}) => {
   const params = new URLSearchParams();
-  params.append('type', credentialType);
-  
+
+  if (
+    credentialType !== undefined &&
+    credentialType !== null &&
+    String(credentialType).trim() !== ""
+  ) {
+    params.append("type", credentialType);
+  }
+
   // Add additional parameters
   Object.entries(additionalParams).forEach(([key, value]) => {
     if (value !== undefined && value !== null) {
@@ -1849,6 +1876,121 @@ export const isValidSessionId = (sessionId) => {
  */
 export const isValidCredentialPayload = (payload) => {
   return payload && typeof payload === 'object' && Object.keys(payload).length > 0;
+};
+
+/**
+ * Load issuer configuration from disk.
+ * @returns {object}
+ */
+export const loadIssuerConfiguration = () => {
+  const configPath = path.join(process.cwd(), "data", "issuer-config.json");
+  const raw = fs.readFileSync(configPath, "utf-8");
+  return JSON.parse(raw);
+};
+
+/**
+ * Parse and validate a multi-credential pre-auth offer request body.
+ * @param {object} body - Request body with `credentials` array
+ * @param {object} [issuerConfig] - Issuer metadata root; loaded when omitted
+ * @returns {{ offeredConfigurationIds: string[], credentialPayloads: Record<string, object> }}
+ */
+export const parseMultiCredentialOfferRequest = (body, issuerConfig = null) => {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    const err = new Error("Request body must be a JSON object");
+    err.errorCode = "invalid_request";
+    throw err;
+  }
+
+  const { credentials } = body;
+  if (!Array.isArray(credentials) || credentials.length === 0) {
+    const err = new Error("credentials must be a non-empty array");
+    err.errorCode = "invalid_request";
+    throw err;
+  }
+
+  const meta = issuerConfig ?? loadIssuerConfiguration();
+  const supported = meta?.credential_configurations_supported ?? {};
+  const offeredConfigurationIds = [];
+  const credentialPayloads = {};
+  const seen = new Set();
+
+  for (const entry of credentials) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      const err = new Error("Each credentials entry must be an object");
+      err.errorCode = "invalid_request";
+      throw err;
+    }
+
+    const rawId = entry.credential_configuration_id;
+    if (rawId === undefined || rawId === null || String(rawId).trim() === "") {
+      const err = new Error(
+        "Each credentials entry must include credential_configuration_id",
+      );
+      err.errorCode = "invalid_request";
+      throw err;
+    }
+
+    const configurationId = String(rawId).trim();
+    if (seen.has(configurationId)) {
+      const err = new Error(
+        `Duplicate credential_configuration_id: ${configurationId}`,
+      );
+      err.errorCode = "invalid_request";
+      throw err;
+    }
+    seen.add(configurationId);
+
+    if (!supported[configurationId]) {
+      const err = new Error(
+        `Unknown credential_configuration_id: ${configurationId}`,
+      );
+      err.errorCode = "invalid_request";
+      throw err;
+    }
+
+    if (!isValidCredentialPayload(entry.payload)) {
+      const err = new Error(
+        `payload is required for credential_configuration_id: ${configurationId}`,
+      );
+      err.errorCode = "invalid_request";
+      throw err;
+    }
+
+    offeredConfigurationIds.push(configurationId);
+    credentialPayloads[configurationId] = entry.payload;
+  }
+
+  return { offeredConfigurationIds, credentialPayloads };
+};
+
+/**
+ * Compare offer-relevant session fields for idempotent session reuse.
+ * @param {object|null|undefined} existing
+ * @param {object} incoming
+ * @returns {boolean}
+ */
+export const preAuthOfferSessionStateMatches = (existing, incoming) => {
+  if (!existing || !incoming) return false;
+
+  const normalize = (session) => ({
+    flowType: session.flowType ?? null,
+    isHaip: session.isHaip ?? false,
+    offeredConfigurationIds: Array.isArray(session.offeredConfigurationIds)
+      ? [...session.offeredConfigurationIds]
+      : null,
+    credentialPayloads:
+      session.credentialPayloads && typeof session.credentialPayloads === "object"
+        ? session.credentialPayloads
+        : null,
+    credentialPayload:
+      session.credentialPayload && typeof session.credentialPayload === "object"
+        ? session.credentialPayload
+        : null,
+  });
+
+  return (
+    JSON.stringify(normalize(existing)) === JSON.stringify(normalize(incoming))
+  );
 };
 
 // ============================================================================

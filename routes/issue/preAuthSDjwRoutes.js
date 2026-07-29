@@ -29,6 +29,10 @@ import {
   // Session management utilities
   createBaseSession,
   createSessionWithPayload,
+  createSessionWithMultiCredentialPayloads,
+  parseMultiCredentialOfferRequest,
+  preAuthOfferSessionStateMatches,
+  loadIssuerConfiguration,
   
   // QR code and URL generation utilities
   generateQRCode,
@@ -62,6 +66,35 @@ const manageSession = async (sessionId, sessionData) => {
     return existingSession;
   } catch (error) {
     console.error(`[preAuth][${sessionId}] Session management error`, {
+      message: error?.message,
+      stack: error?.stack,
+    });
+    throw new Error(ERROR_MESSAGES.SESSION_CREATION_FAILED);
+  }
+};
+
+// Idempotent offer session creation; rejects conflicting reuse of sessionId
+const manageOfferSession = async (sessionId, sessionData) => {
+  try {
+    const existingSession = await getPreAuthSession(sessionId);
+    if (!existingSession) {
+      await storePreAuthSession(sessionId, sessionData);
+      return sessionData;
+    }
+    if (preAuthOfferSessionStateMatches(existingSession, sessionData)) {
+      return existingSession;
+    }
+    const err = new Error(
+      "Session already exists with different offer data for this sessionId",
+    );
+    err.errorCode = "invalid_request";
+    err.status = 409;
+    throw err;
+  } catch (error) {
+    if (error?.errorCode === "invalid_request" && error?.status === 409) {
+      throw error;
+    }
+    console.error(`[preAuth][${sessionId}] Offer session management error`, {
       message: error?.message,
       stack: error?.stack,
     });
@@ -192,6 +225,61 @@ router.post("/offer-no-code", async (req, res) => {
     res.json(response);
   } catch (error) {
     handleRouteError(error, "Offer no-code POST", res, sessionId);
+  }
+});
+
+/**
+ * Pre-authorized flow without transaction code — multi-configuration offer with payloads.
+ *
+ * Body:
+ * {
+ *   "credentials": [
+ *     { "credential_configuration_id": "VerifiableStudentIDSDJWT", "payload": { ... } },
+ *     { "credential_configuration_id": "LoyaltyCard", "payload": { ... } }
+ *   ]
+ * }
+ */
+router.post("/offer-no-code-batch", async (req, res) => {
+  let sessionId;
+  try {
+    sessionId = getSessionId(req);
+    bindSessionLoggingContext(req, res, sessionId);
+
+    const issuerConfig = loadIssuerConfiguration();
+    const { offeredConfigurationIds, credentialPayloads } =
+      parseMultiCredentialOfferRequest(req.body, issuerConfig);
+
+    const sessionData = createSessionWithMultiCredentialPayloads(
+      offeredConfigurationIds,
+      credentialPayloads,
+      true,
+    );
+    await manageOfferSession(sessionId, sessionData);
+
+    const invocationScheme = getCredentialOfferSchemeFromRequest(req);
+    const credentialOffer = createPreAuthCredentialOfferUri(
+      sessionId,
+      null,
+      "/credential-offer-no-code-batch",
+      invocationScheme,
+    );
+
+    const response = await createCredentialOfferResponse(credentialOffer, sessionId);
+    res.json({
+      ...response,
+      offeredConfigurationIds,
+    });
+  } catch (error) {
+    if (error?.errorCode === "invalid_request") {
+      const status = error.status || 400;
+      return sendErrorResponse(
+        res,
+        "invalid_request",
+        error.message,
+        status,
+      );
+    }
+    handleRouteError(error, "Offer no-code batch POST", res, sessionId);
   }
 });
 

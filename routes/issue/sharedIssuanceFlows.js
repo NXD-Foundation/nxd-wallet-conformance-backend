@@ -391,6 +391,139 @@ function credentialValidationError(message, errorCode) {
   return err;
 }
 
+/**
+ * Resolve which configuration ids are authorized for this pre-auth session/token exchange.
+ * Returns null for legacy single-credential sessions without offeredConfigurationIds.
+ */
+const resolveAuthorizedConfigurationIdsForPreAuthSession = (
+  session,
+  parsedAuthDetails,
+) => {
+  const offered = session?.offeredConfigurationIds;
+  if (!Array.isArray(offered) || offered.length === 0) {
+    return null;
+  }
+
+  if (!parsedAuthDetails || parsedAuthDetails.length === 0) {
+    return [...offered];
+  }
+
+  const authorized = [];
+  for (const entry of parsedAuthDetails) {
+    const resolvedId = resolveCredentialIdentifierFromOpenidCredentialEntry(entry);
+    if (!resolvedId) {
+      const err = new Error(
+        `authorization_details entry is missing a credential identifier (credential_configuration_id or equivalent). See ${SPEC_REFS.VCI_1_0}`,
+      );
+      err.errorCode = "invalid_request";
+      throw err;
+    }
+    if (!offered.includes(resolvedId)) {
+      const err = new Error(
+        `credential_configuration_id '${resolvedId}' was not included in the credential offer`,
+      );
+      err.errorCode = "invalid_request";
+      throw err;
+    }
+    if (!authorized.includes(resolvedId)) {
+      authorized.push(resolvedId);
+    }
+  }
+  return authorized;
+};
+
+/**
+ * Multi-credential authorization belongs to the access token, not the reusable
+ * pre-authorized-code session. Legacy sessions have no token map and retain
+ * their existing session-level behavior.
+ */
+const tokenAuthorizationFor = (sessionObject, accessToken) => {
+  if (!accessToken || !sessionObject?.tokenAuthorizations) return null;
+  return sessionObject.tokenAuthorizations[accessToken] || null;
+};
+
+const assertCredentialConfigurationAuthorizedForSession = (
+  sessionObject,
+  effectiveConfigurationId,
+  tokenAuthorization = null,
+) => {
+  const authorization = tokenAuthorization || sessionObject;
+  const authorized = authorization?.authorizedConfigurationIds;
+  if (!Array.isArray(authorized) || authorized.length === 0) {
+    const offered = sessionObject?.offeredConfigurationIds;
+    if (Array.isArray(offered) && offered.length > 0) {
+      throw credentialValidationError(
+        `Credential configuration '${effectiveConfigurationId}' is not authorized. Exchange the pre-authorized code for an access token before requesting credentials.`,
+        CREDENTIAL_REQUEST_ERROR_CODES.INVALID_CREDENTIAL_REQUEST,
+      );
+    }
+    return;
+  }
+
+  if (!authorized.includes(effectiveConfigurationId)) {
+    throw credentialValidationError(
+      `Credential configuration '${effectiveConfigurationId}' is not authorized for this access token`,
+      CREDENTIAL_REQUEST_ERROR_CODES.INVALID_CREDENTIAL_REQUEST,
+    );
+  }
+
+  const issued = authorization.issuedConfigurationIds || [];
+  if (issued.includes(effectiveConfigurationId)) {
+    throw credentialValidationError(
+      `Credential configuration '${effectiveConfigurationId}' has already been issued in this pre-authorized session`,
+      CREDENTIAL_REQUEST_ERROR_CODES.INVALID_CREDENTIAL_REQUEST,
+    );
+  }
+};
+
+const applySessionCredentialPayloadForConfiguration = (
+  sessionObject,
+  effectiveConfigurationId,
+) => {
+  if (
+    sessionObject?.credentialPayloads &&
+    typeof sessionObject.credentialPayloads === "object" &&
+    sessionObject.credentialPayloads[effectiveConfigurationId]
+  ) {
+    sessionObject.credentialPayload =
+      sessionObject.credentialPayloads[effectiveConfigurationId];
+  }
+};
+
+const recordIssuedConfigurationAndUpdateSessionStatus = (
+  sessionObject,
+  effectiveConfigurationId,
+  tokenAuthorization = null,
+) => {
+  const authorization = tokenAuthorization || sessionObject;
+  if (!Array.isArray(authorization?.authorizedConfigurationIds)) {
+    sessionObject.status = "success";
+    return;
+  }
+
+  const issued = Array.isArray(authorization.issuedConfigurationIds)
+    ? [...authorization.issuedConfigurationIds]
+    : [];
+
+  if (!issued.includes(effectiveConfigurationId)) {
+    issued.push(effectiveConfigurationId);
+  }
+  authorization.issuedConfigurationIds = issued;
+
+  const allIssued = authorization.authorizedConfigurationIds.every((id) =>
+    issued.includes(id),
+  );
+  authorization.status = allIssued ? "success" : "pending";
+
+  // A session can hold more than one token authorization. It is complete only
+  // after every issued token's authorized set is complete; legacy sessions
+  // still have a single session-level authorization and follow the same result.
+  const tokenAuthorizations = Object.values(sessionObject.tokenAuthorizations || {});
+  sessionObject.status = tokenAuthorizations.length > 0
+    ? (tokenAuthorizations.every((entry) => entry.status === "success") ? "success" : "pending")
+    : authorization.status;
+};
+
 // Helper function to extract sessionId from sessionKey
 // sessionKey can be in format "code-flow-sessions:uuid" or just "uuid"
 const extractSessionId = (sessionKey) => {
@@ -412,32 +545,40 @@ const loadIssuerConfig = () => {
   }
 };
 
-// Load cryptographic keys
+// Load OAuth / JWE keys used by the token and credential endpoints.
 const loadCryptographicKeys = () => {
   try {
     const privateKey = fs.readFileSync("./private-key.pem", "utf-8");
     const publicKeyPem = fs.readFileSync("./public-key.pem", "utf-8");
-    const {
-      privateKeyPkcs8: privateKeyPemX509,
-      leafCertificatePem: certificatePemX509,
-    } = loadAptitudeIssuerSigningMaterial();
-
-    return {
-      privateKey,
-      publicKeyPem,
-      privateKeyPemX509,
-      certificatePemX509
-    };
+    return { privateKey, publicKeyPem };
   } catch (error) {
     console.error("Error loading cryptographic keys:", error);
     throw new Error("Failed to load cryptographic keys");
   }
 };
 
+// Load Aptitude leaf signing material for module-level SD-JWT/X509 helpers.
+const loadX509CredentialSigningMaterial = () => {
+  try {
+    const {
+      privateKeyPkcs8: privateKeyPemX509,
+      leafCertificatePem: certificatePemX509,
+    } = loadAptitudeIssuerSigningMaterial();
+
+    return { privateKeyPemX509, certificatePemX509 };
+  } catch (error) {
+    console.error("Error loading X509 credential signing material:", error);
+    throw new Error("Failed to load X509 credential signing material");
+  }
+};
+
 // Initialize cryptographic components
 const initializeCrypto = async () => {
   try {
-    const keys = loadCryptographicKeys();
+    const keys = {
+      ...loadCryptographicKeys(),
+      ...loadX509CredentialSigningMaterial(),
+    };
     const { signer, verifier } = await createSignerVerifierX509(
       keys.privateKeyPemX509,
       keys.certificatePemX509
@@ -872,6 +1013,12 @@ const handlePreAuthorizedCodeFlow = async (
 
   const parsedAuthDetails = parseAuthorizationDetails(authorizationDetails);
 
+  const authorizedConfigurationIds =
+    resolveAuthorizedConfigurationIdsForPreAuthSession(
+      existingPreAuthSession,
+      parsedAuthDetails,
+    );
+
   const generatedAccessToken = buildAccessToken(
     getPublicIssuerBaseUrl(httpReq),
     loadCryptographicKeys().privateKey,
@@ -880,7 +1027,22 @@ const handlePreAuthorizedCodeFlow = async (
   const cNonceForSession = generateNonce();
   await storeNonce(cNonceForSession, NONCE_EXPIRES_IN);
 
-  // Update session
+  // A pre-authorized code can be exchanged again in this test service. Bind
+  // the offered subset and its issuance progress to this particular token so
+  // a later exchange cannot alter an earlier token's permissions.
+  if (authorizedConfigurationIds) {
+    existingPreAuthSession.tokenAuthorizations =
+      existingPreAuthSession.tokenAuthorizations || {};
+    existingPreAuthSession.tokenAuthorizations[generatedAccessToken] = {
+      authorizedConfigurationIds: [...authorizedConfigurationIds],
+      issuedConfigurationIds: [],
+      status: "pending",
+    };
+    existingPreAuthSession.status = "pending";
+  }
+
+  // Keep these legacy fields for existing single-credential sessions and
+  // compatibility callers. Multi-credential enforcement reads the map above.
   existingPreAuthSession.accessToken = generatedAccessToken;
   existingPreAuthSession.c_nonce = cNonceForSession;
 
@@ -902,6 +1064,14 @@ const handlePreAuthorizedCodeFlow = async (
   if (parsedAuthDetails) {
     tokenResponse.authorization_details =
       buildTokenResponseAuthorizationDetails(parsedAuthDetails);
+  } else if (authorizedConfigurationIds?.length) {
+    tokenResponse.authorization_details =
+      buildTokenResponseAuthorizationDetails(
+        authorizedConfigurationIds.map((configurationId) => ({
+          type: "openid_credential",
+          credential_configuration_id: configurationId,
+        })),
+      );
   }
 
   return tokenResponse;
@@ -1772,6 +1942,7 @@ sharedRouter.post("/credential", async (req, res) => {
   let sessionId = null;
   let slog = null;
   let requestId = null;
+  let tokenAuthorization = null;
   
   try {
     const requestBody = await parseCredentialEndpointBody(req);
@@ -1804,6 +1975,7 @@ sharedRouter.post("/credential", async (req, res) => {
     flowType = sessionData.flowType;
     sessionKey = sessionData.sessionKey;
     sessionId = extractSessionId(sessionKey);
+    tokenAuthorization = tokenAuthorizationFor(sessionObject, token);
     
     // Create session logger if we have a sessionId
     if (sessionId) {
@@ -1845,6 +2017,26 @@ sharedRouter.post("/credential", async (req, res) => {
         error: "server_error",
         error_description: ERROR_MESSAGES.SESSION_LOST,
       });
+    }
+
+    try {
+      assertCredentialConfigurationAuthorizedForSession(
+        sessionObject,
+        effectiveConfigurationId,
+        tokenAuthorization,
+      );
+      applySessionCredentialPayloadForConfiguration(
+        sessionObject,
+        effectiveConfigurationId,
+      );
+    } catch (bindingError) {
+      if (bindingError.errorCode === CREDENTIAL_REQUEST_ERROR_CODES.INVALID_CREDENTIAL_REQUEST) {
+        return res.status(400).json({
+          error: CREDENTIAL_REQUEST_ERROR_CODES.INVALID_CREDENTIAL_REQUEST,
+          error_description: bindingError.message,
+        });
+      }
+      throw bindingError;
     }
 
     const issuerConfigForCredential = loadIssuerConfig();
@@ -2222,10 +2414,14 @@ sharedRouter.post("/credential", async (req, res) => {
           } catch {}
         }
 
-        // Mark session as successful after credential issuance and store notification_id
+        // Mark session progress after credential issuance and store notification_id
         if (sessionObject && sessionKey) {
           try {
-            sessionObject.status = "success";
+            recordIssuedConfigurationAndUpdateSessionStatus(
+              sessionObject,
+              effectiveConfigurationId,
+              tokenAuthorization,
+            );
             sessionObject.notification_id = response.notification_id;
 
             if (flowType === "code") {

@@ -13,6 +13,8 @@ import { streamToBuffer } from "@jorgeferrero/stream-to-buffer";
 import {
   getCredentialOfferSchemeFromRequest,
   createCredentialOfferConfig,
+  isValidSessionId,
+  sendErrorResponse,
 } from "../utils/routeUtils.js";
 
 /**
@@ -20,27 +22,30 @@ import {
  *
  * IMPORTANT — These endpoints are NOT a "Batch Credential Endpoint".
  *   OID4VCI 1.0 removed the separate `batch_credential_endpoint` (draft-14)
- *   and RFC001 is constrained to OID4VCI 1.0. Multi-credential issuance is
- *   performed against the standard `POST /credential` endpoint by sending
- *   multiple `proofs.jwt[]` entries together with a `credential_configuration_id`
- *   or `credential_identifier`. See OID4VCI 1.0 §7 "Credential Request"
- *   ("proofs" object) and RFC001 §7.5.
+ *   and RFC001 is constrained to OID4VCI 1.0. When a Credential Offer lists
+ *   multiple `credential_configuration_ids`, the wallet obtains each
+ *   credential through consecutive standard `POST /credential` requests.
+ *   A single `/credential` response may still contain multiple credentials
+ *   only when they share the same configuration and dataset (multi-key batch).
  *
  * What this router does:
- *   - Produces a **credential offer** that advertises more than one
- *     `credential_configuration_ids` entry. This is fully spec-aligned (the
- *     Credential Offer may list multiple configuration ids). The wallet will
- *     then use the standard /credential endpoint to request each credential.
+ *   - Produces a credential offer that advertises more than one
+ *     `credential_configuration_ids` entry. The wallet then uses the standard
+ *     `/credential` endpoint once per offered configuration.
  *
- * Paths are kept stable (`/offer-no-code-batch`, `/credential-offer-no-code-batch/:id`)
- * for backwards compatibility with existing test harnesses (`testCaseRequests.yml`)
- * and wallet fixtures. The naming of this module/router was renamed from
- * `batchRequestRoutes` to avoid suggesting a non-existent RFC001 batch endpoint.
+ * Dynamic offers created via `POST /offer-no-code-batch` store the offered
+ * configuration ids in the pre-auth session. Legacy GET `/offer-no-code-batch`
+ * keeps a hard-coded fallback when no session state is present.
  */
 
 const multiCredentialOfferRouter = express.Router();
 
 const serverURL = process.env.SERVER_URL || "http://localhost:3000";
+
+const LEGACY_BATCH_CONFIGURATION_IDS = [
+  "urn:eu.europa.ec.eudi:pid:1",
+  "PhotoID",
+];
 
 const privateKey = fs.readFileSync("./private-key.pem", "utf-8");
 const publicKeyPem = fs.readFileSync("./public-key.pem", "utf-8");
@@ -51,8 +56,7 @@ const publicKeyPem = fs.readFileSync("./public-key.pem", "utf-8");
 
 /**
  * Pre-authorised flow — credential offer advertising multiple credentials.
- * RFC001 / OID4VCI 1.0: the wallet will subsequently use POST /credential
- * with `proofs.jwt[]` to obtain each credential.
+ * Legacy GET entrypoint; prefer `POST /offer-no-code-batch` for dynamic ids.
  */
 multiCredentialOfferRouter.get(["/offer-no-code-batch"], async (req, res) => {
   const uuid = req.query.sessionId ? req.query.sessionId : uuidv4();
@@ -71,7 +75,7 @@ multiCredentialOfferRouter.get(["/offer-no-code-batch"], async (req, res) => {
     });
   }
   let encodedCredentialOfferUri = encodeURIComponent(
-    `${serverURL}/credential-offer-no-code-batch/${uuid}?type=${credentialType}`
+    `${serverURL}/credential-offer-no-code-batch/${uuid}?type=${credentialType}`,
   );
   const scheme = getCredentialOfferSchemeFromRequest(req);
   let credentialOffer = `${scheme}?credential_offer_uri=${encodedCredentialOfferUri}`;
@@ -92,21 +96,37 @@ multiCredentialOfferRouter.get(["/offer-no-code-batch"], async (req, res) => {
 
 /**
  * Pre-authorised flow — credential offer document (by reference), listing
- * multiple `credential_configuration_ids`. Spec-aligned: the Credential Offer
- * document allows multiple entries in `credential_configuration_ids`.
+ * multiple `credential_configuration_ids`.
  */
 multiCredentialOfferRouter.get(
   ["/credential-offer-no-code-batch/:id"],
-  (req, res) => {
-    const multiIds = ["urn:eu.europa.ec.eudi:pid:1", "PhotoID"];
+  async (req, res) => {
+    const sessionId = req.params.id;
+
+    if (!isValidSessionId(sessionId)) {
+      return sendErrorResponse(
+        res,
+        "invalid_request",
+        "Invalid session ID",
+        400,
+      );
+    }
+
+    const sessionData = await getPreAuthSession(sessionId);
+    const multiIds =
+      Array.isArray(sessionData?.offeredConfigurationIds) &&
+      sessionData.offeredConfigurationIds.length > 0
+        ? sessionData.offeredConfigurationIds
+        : LEGACY_BATCH_CONFIGURATION_IDS;
+
     const config = createCredentialOfferConfig(
       multiIds,
-      req.params.id,
+      sessionId,
       false,
       "urn:ietf:params:oauth:grant-type:pre-authorized_code",
     );
     res.json(config);
-  }
+  },
 );
 
 export default multiCredentialOfferRouter;
