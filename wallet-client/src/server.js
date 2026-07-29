@@ -26,7 +26,7 @@ import {
   prepareCredentialResponseEncryption,
   parseCredentialResponsePayload,
 } from "./lib/credentialResponseEncryption.js";
-import { parseIssuerMetadataHttpResponse } from "./lib/issuerMetadataFetch.js";
+import { parseIssuerMetadataHttpResponse, ISSUER_METADATA_ACCEPT_SEQUENCE } from "./lib/issuerMetadataFetch.js";
 import {
   selectProofSigningAlg,
   buildKeyPairs,
@@ -45,6 +45,11 @@ import { digest } from "@sd-jwt/crypto-nodejs";
 import { verifyReceivedMdlToken } from "../utils/mdlVerification.js";
 import { didKeyToJwks } from "../utils/cryptoUtils.js";
 import { isDpopBoundAccessToken, computeAthForDpop, buildCredentialRequestSelector } from "../utils/tokenUtils.js";
+import {
+  createAttestationChallengeState,
+  initializeAttestationChallengeState,
+  postFormWithWiaAttestationChallengeRetry,
+} from "./lib/attestationChallenge.js";
 
 const app = express();
 app.use(express.json({ limit: "2mb" }));
@@ -118,6 +123,21 @@ function makeSessionLogger(sessionId) {
       appendWalletLog(sessionId, logEntry).catch(() => {});
     } catch {}
   };
+}
+
+async function createIssuanceAttestationChallengeState(authorizationServerMeta, logSessionId, logPrefix) {
+  const slog = logSessionId ? makeSessionLogger(logSessionId) : (() => {});
+  try {
+    return await initializeAttestationChallengeState(authorizationServerMeta);
+  } catch (error) {
+    console.warn(`${logPrefix} attestation challenge initialization failed:`, error?.message || error);
+    try {
+      slog(`${logPrefix} attestation challenge init failed`, {
+        error: error?.message || String(error),
+      });
+    } catch {}
+    return createAttestationChallengeState();
+  }
 }
 
 // Helper function to log errors to both console and Redis (if sessionId available)
@@ -541,7 +561,9 @@ app.post("/issue-codeflow", async (req, res) => {
 });
 
 const port = process.env.PORT || 4000;
-app.listen(port, () => console.log(`Wallet service listening on http://localhost:${port}`));
+if (process.env.NODE_ENV !== "test") {
+  app.listen(port, () => console.log(`Wallet service listening on http://localhost:${port}`));
+}
 
 async function getOfferDeepLink(issuerBase, path, credentialType) {
   if (!path) return undefined;
@@ -634,7 +656,7 @@ function issuerMetadataWalletSessionExtra(issuerMeta) {
   return { issuerMetadataWallet: dbg };
 }
 
-async function discoverIssuerMetadata(credentialIssuerBase, logSessionId) {
+export async function discoverIssuerMetadata(credentialIssuerBase, logSessionId, fetchImpl = fetch) {
   const slog = logSessionId ? makeSessionLogger(logSessionId) : (() => {});
   const base = credentialIssuerBase.replace(/\/$/, "");
   // RFC: if credential_issuer contains a path, well-known URI keeps path suffix
@@ -656,25 +678,30 @@ async function discoverIssuerMetadata(credentialIssuerBase, logSessionId) {
   let meta = null; let lastErr = null;
   console.log("[issuer-meta] trying candidates:", candidates); try { slog("[issuer-meta] candidates", { candidates }); } catch {}
   for (const url of candidates) {
-    try {
-      const res = await fetch(url, { headers: { Accept: "application/json" } });
-      console.log("[issuer-meta]", url, "->", res.status); try { slog("[issuer-meta] fetch", { url, status: res.status }); } catch {}
-      if (res.ok) {
-        const { meta: parsedMeta, debug } = await parseIssuerMetadataHttpResponse(res);
-        meta = parsedMeta;
-        if (debug) {
-          meta._walletIssuerMetadataDebug = debug;
-          try {
-            slog("[issuer-meta] signed JWT issuer metadata verified", {
-              hasRegCert: debug.issuer_info_registration_certificate != null,
-            });
-          } catch {}
+    for (const accept of ISSUER_METADATA_ACCEPT_SEQUENCE) {
+      try {
+        const res = await fetchImpl(url, { headers: { Accept: accept } });
+        console.log("[issuer-meta]", url, "->", res.status, "accept=", accept);
+        try { slog("[issuer-meta] fetch", { url, status: res.status, accept }); } catch {}
+        if (res.ok) {
+          const { meta: parsedMeta, debug } = await parseIssuerMetadataHttpResponse(res);
+          meta = parsedMeta;
+          if (debug) {
+            meta._walletIssuerMetadataDebug = debug;
+            try {
+              slog("[issuer-meta] signed JWT issuer metadata verified", {
+                hasRegCert: debug.issuer_info_registration_certificate != null,
+              });
+            } catch {}
+          }
+          console.log("[issuer-meta] selected:", url);
+          break;
         }
-        console.log("[issuer-meta] selected:", url);
-        break;
-      }
-      lastErr = res.status;
-    } catch (e) { lastErr = e.message || String(e); }
+        lastErr = res.status;
+      } catch (e) { lastErr = e.message || String(e); }
+      if (meta) break;
+    }
+    if (meta) break;
   }
   if (!meta) throw new Error(`Issuer metadata fetch error ${lastErr}`);
   // Normalize property names that can differ across specs/implementations
@@ -1110,6 +1137,30 @@ async function runPreAuthorizedIssuance(
   try {
     slog("[preauth] authorization fields", { walletClientId, scope, configurationId });
   } catch {}
+  if (!authorizationServerMeta) {
+    const authorizationServers = Array.isArray(issuerMeta.authorization_servers)
+      ? issuerMeta.authorization_servers
+      : issuerMeta.authorization_server
+        ? [issuerMeta.authorization_server]
+        : [];
+    const asBase =
+      authorizationServer || authorizationServers[0] || issuerMeta.credential_issuer || apiBase;
+    try {
+      authorizationServerMeta = await discoverAuthorizationServerMetadata(asBase, logSessionId);
+    } catch (error) {
+      console.warn("[preauth] AS metadata for attestation challenge skipped:", error?.message || error);
+      try {
+        slog("[preauth] attestation challenge AS discovery skipped", {
+          error: error?.message || String(error),
+        });
+      } catch {}
+    }
+  }
+  const attestationChallengeState = await createIssuanceAttestationChallengeState(
+    authorizationServerMeta,
+    logSessionId,
+    "[preauth]",
+  );
   const tokenExchange = await exchangeToken({
     tokenEndpoint,
     tokenPayload: {
@@ -1131,6 +1182,7 @@ async function runPreAuthorizedIssuance(
     deviceKeyPath,
     log: slog,
     logPrefix: "[preauth]",
+    challengeState: attestationChallengeState,
   });
   const tokenBody = tokenExchange.tokenBody;
   dpopPrivateJwk = tokenExchange.dpopPrivateJwk;
@@ -1391,6 +1443,11 @@ async function runAuthorizationCodeIssuance(
   try {
     slog("[codeflow] authorization fields", { walletClientId, scope, configurationId });
   } catch {}
+  const attestationChallengeState = await createIssuanceAttestationChallengeState(
+    authorizationServerMeta,
+    logSessionId,
+    "[codeflow]",
+  );
   const authzParams = {
     response_type: "code",
     ...(issuerState ? { issuer_state: issuerState } : {}),
@@ -1410,18 +1467,24 @@ async function runAuthorizationCodeIssuance(
   }
   {
     try {
-      const parWia = await resolveWiaForParOrToken({
-        endpointAudience: parEndpoint,
-        authorizationServerIssuer,
-        clientId: walletClientId,
+      const parRes = await postFormWithWiaAttestationChallengeRetry({
+        postForm: (url, params, dpopHeader, extraHeaders) =>
+          httpPostForm(url, params, logSessionId, dpopHeader, extraHeaders),
+        url: parEndpoint,
+        params: authzParams,
+        resolveWiaForParOrToken,
+        wiaOptions: {
+          endpointAudience: parEndpoint,
+          authorizationServerIssuer,
+          clientId: walletClientId,
+        },
+        challengeState: attestationChallengeState,
       });
-      const parWiaHeaders = parWia.wiaHeaders;
       console.log("[codeflow][par] WIA for PAR validated");
       try {
-        slog("[codeflow][par] PAR WIA", { walletInstanceId: parWia.walletInstanceId });
+        slog("[codeflow][par] PAR WIA", { endpoint: parEndpoint });
       } catch {}
 
-      const parRes = await httpPostForm(parEndpoint, authzParams, logSessionId, null, parWiaHeaders);
       console.log("[codeflow][par] endpoint=", parEndpoint, "status=", parRes.status); try { slog("[codeflow][par] endpoint", { endpoint: parEndpoint, status: parRes.status }); } catch {}
       if (parRes.ok) {
         const parBody = await parRes.json().catch(() => ({}));
@@ -1505,11 +1568,12 @@ async function runAuthorizationCodeIssuance(
     authorizationServerIssuer: codeflowAsIssuer,
     ensureOrCreateEcKeyPair,
     createDPoP,
-    resolveWiaForParOrToken: ({ endpointAudience, authorizationServerIssuer: issuer }) =>
+    resolveWiaForParOrToken: ({ endpointAudience, authorizationServerIssuer: issuer, challenge }) =>
       resolveWiaForParOrToken({
         endpointAudience,
         authorizationServerIssuer: issuer,
         clientId: walletClientId,
+        challenge,
       }),
     shouldRetryTokenExchangeAfterRotatingWalletProviderKey,
     rotateWalletProviderKeyPair,
@@ -1518,6 +1582,7 @@ async function runAuthorizationCodeIssuance(
     deviceKeyPath,
     log: slog,
     logPrefix: "[codeflow]",
+    challengeState: attestationChallengeState,
   });
   const tokenBody = tokenExchange.tokenBody;
   dpopPrivateJwk = tokenExchange.dpopPrivateJwk;

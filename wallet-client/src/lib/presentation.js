@@ -38,7 +38,13 @@ export { normalizeDcqlClaimsToSegmentLists } from "./dcqlClaimsPaths.js";
 import {
   storedCredentialMatchesDcqlQuery,
   presentationFormatFromDcqlQuery,
+  selectWalletCredentialsForDcql,
 } from "./dcqlCredentialSelection.js";
+import {
+  isOpenId4VpPresentInvocation,
+  OPENID4VP_PRESENT_HOST,
+} from "./openid4vpUri.js";
+import { filterSdJwtByDcqlClaims } from "./sdJwtDisclosureSelection.js";
 
 function makeSessionLogger(sessionId) {
   return function sessionLog(...args) {
@@ -106,9 +112,22 @@ function makeSessionLogger(sessionId) {
 function parseOpenId4VpDeepLink(deepLink) {
   console.log("[present] Parsing deep link:", deepLink);
   const url = new URL(deepLink);
-  const supported = new Set(["openid4vp:", "mdoc-openid4vp:", "eu-eaap:"]);
-  if (!supported.has(url.protocol)) {
-    throw new Error(`Unsupported request scheme: ${url.protocol}`);
+  if (url.protocol === "openid4vp:") {
+    if (url.hostname && url.hostname !== OPENID4VP_PRESENT_HOST) {
+      throw new Error(
+        `Unsupported openid4vp authority "${url.hostname}"; expected "${OPENID4VP_PRESENT_HOST}" or bare openid4vp://`,
+      );
+    }
+    if (isOpenId4VpPresentInvocation(url)) {
+      console.log("[present] RFC002 openid4vp://present invocation");
+    } else {
+      console.log("[present] Legacy bare openid4vp:// invocation (empty authority)");
+    }
+  } else {
+    const supported = new Set(["mdoc-openid4vp:", "eu-eaap:"]);
+    if (!supported.has(url.protocol)) {
+      throw new Error(`Unsupported request scheme: ${url.protocol}`);
+    }
   }
   const requestUri = url.searchParams.get("request_uri");
   const clientId = url.searchParams.get("client_id");
@@ -804,23 +823,69 @@ function vpTokenPathForDcqlId(dcqlId) {
   return `$['vp_token'][${JSON.stringify(dcqlId)}]`;
 }
 
+/** Add one presentation to the OpenID4VP DCQL vp_token object. */
+export function appendDcqlVpToken(vpTokenObject, credentialQueryId, vpToken) {
+  if (!vpTokenObject || typeof vpTokenObject !== "object" || Array.isArray(vpTokenObject)) {
+    throw new TypeError("DCQL vp_token container must be an object");
+  }
+  if (typeof credentialQueryId !== "string" || credentialQueryId.length === 0) {
+    throw new TypeError("DCQL credential query id must be a non-empty string");
+  }
+  if (typeof vpToken !== "string" || vpToken.length === 0) {
+    throw new TypeError("DCQL presentation must be a non-empty string");
+  }
+  if (!Array.isArray(vpTokenObject[credentialQueryId])) {
+    vpTokenObject[credentialQueryId] = [];
+  }
+  vpTokenObject[credentialQueryId].push(vpToken);
+  return vpTokenObject;
+}
+
+function resolveDcqlSubmissionFormat(formatsByCredentialId, credId, index, presentationDefinition) {
+  if (formatsByCredentialId instanceof Map) {
+    return (
+      formatsByCredentialId.get(credId) ||
+      inferRootFormat(presentationDefinition)
+    );
+  }
+  if (
+    formatsByCredentialId &&
+    typeof formatsByCredentialId === "object" &&
+    !Array.isArray(formatsByCredentialId)
+  ) {
+    return (
+      formatsByCredentialId[credId] ||
+      inferRootFormat(presentationDefinition)
+    );
+  }
+  if (Array.isArray(formatsByCredentialId)) {
+    return formatsByCredentialId[index] || inferRootFormat(presentationDefinition);
+  }
+  return inferRootFormat(presentationDefinition);
+}
+
 function buildPresentationSubmissionDcql(
   presentationDefinition,
   dcqlQuery,
-  perEntryFormats,
+  formatsByCredentialId,
 ) {
   if (!presentationDefinition) return undefined;
   const inputDescriptors = presentationDefinition.input_descriptors || [];
   const creds = (dcqlQuery && dcqlQuery.credentials) || [];
   if (inputDescriptors.length === creds.length && inputDescriptors.length > 0) {
     const descriptorMap = inputDescriptors.map((d, i) => {
-      const fmt =
-        perEntryFormats[i] || inferRootFormat(presentationDefinition);
+      const credId = creds[i]?.id;
+      const fmt = resolveDcqlSubmissionFormat(
+        formatsByCredentialId,
+        credId,
+        i,
+        presentationDefinition,
+      );
       const submissionFmt = fmt === "jwt_vc_json" ? "jwt_vp" : fmt;
       return {
         id: d.id,
         format: submissionFmt,
-        path: vpTokenPathForDcqlId(creds[i].id),
+        path: vpTokenPathForDcqlId(credId),
       };
     });
     const submission = {
@@ -833,8 +898,13 @@ function buildPresentationSubmissionDcql(
     );
     return JSON.stringify(submission);
   }
-  const singleFmt =
-    perEntryFormats[0] || inferRootFormat(presentationDefinition);
+  const firstCredId = creds[0]?.id;
+  const singleFmt = resolveDcqlSubmissionFormat(
+    formatsByCredentialId,
+    firstCredId,
+    0,
+    presentationDefinition,
+  );
   const submissionFmt = singleFmt === "jwt_vc_json" ? "jwt_vp" : singleFmt;
   return buildPresentationSubmission(presentationDefinition, submissionFmt);
 }
@@ -849,81 +919,28 @@ function inferRootFormat(presentationDefinition) {
   return "dc+sd-jwt";
 }
 
-function decodeDisclosureJsonFromSegment(encoded) {
-  const raw = Buffer.from(encoded, "base64url").toString("utf8");
-  return JSON.parse(raw);
-}
-
-function buildAllowedDisclosureKeysFromDcql(segmentLists) {
-  const keys = new Set();
-  for (const segs of segmentLists) {
-    for (const s of segs) {
-      if (typeof s === "string" && s.length) keys.add(s);
-    }
-  }
-  return keys;
-}
-
 /**
- * Split SD-JWT into issuer JWT and disclosure segments. Strips a trailing KB JWT segment if present
- * (last ~ part with three dot-separated substrings) so filtering only sees disclosures.
- */
-function splitSdJwtJwtDisclosuresAndKb(sdJwt) {
-  let token = sdJwt;
-  while (token.endsWith("~")) token = token.slice(0, -1);
-  const parts = token.split("~");
-  const jwtPart = parts[0];
-  const tail = parts.slice(1);
-  const disclosureParts = [...tail];
-  if (disclosureParts.length > 0) {
-    const last = disclosureParts[disclosureParts.length - 1];
-    if (last.split(".").length === 3) disclosureParts.pop();
-  }
-  return { jwtPart, disclosureParts };
-}
-
-/**
- * When DCQL `credentials[].claims` is set, keep only object-property disclosures (3-element)
- * whose claim name appears in the allowed key set derived from those paths.
- * Omits 2-element array disclosures when filtering is active (narrow DCQL requests).
- * If `claims` is missing or empty, returns `sdJwt` unchanged (including any trailing KB JWT).
+ * When DCQL `credentials[].claims` is set, filter SD-JWT disclosures to those required
+ * by the DCQL claim paths (via `sdJwtDisclosureSelection`). If `claims` is missing or
+ * empty, returns `sdJwt` unchanged.
  *
  * @param {string} sdJwt
  * @param {object | undefined} dcqlEntry - dcql_query.credentials[] element
  */
 export function filterSdJwtDisclosuresForDcqlClaims(sdJwt, dcqlEntry) {
-  if (!sdJwt || typeof sdJwt !== "string" || !sdJwt.includes("~")) return sdJwt;
-  const segmentLists = normalizeDcqlClaimsToSegmentLists(dcqlEntry?.claims);
-  if (segmentLists.length === 0) return sdJwt;
+  if (!sdJwt || typeof sdJwt !== "string") return sdJwt;
+  const claims = dcqlEntry?.claims;
+  if (!Array.isArray(claims) || claims.length === 0) return sdJwt;
 
-  const allowedKeys = buildAllowedDisclosureKeysFromDcql(segmentLists);
-  if (allowedKeys.size === 0) return sdJwt;
+  const format = String(dcqlEntry?.format || "dc+sd-jwt");
+  if (!["dc+sd-jwt", "vc+sd-jwt"].includes(format)) return sdJwt;
 
-  const { jwtPart, disclosureParts } = splitSdJwtJwtDisclosuresAndKb(sdJwt);
-  const kept = [jwtPart];
-  let matched = 0;
-  for (const enc of disclosureParts) {
-    if (!enc) continue;
-    try {
-      const arr = decodeDisclosureJsonFromSegment(enc);
-      if (Array.isArray(arr) && arr.length === 3 && typeof arr[1] === "string") {
-        if (allowedKeys.has(arr[1])) {
-          kept.push(enc);
-          matched++;
-        }
-      }
-    } catch {
-      // skip malformed segment
-    }
-  }
-
-  if (disclosureParts.length > 0 && matched === 0) {
-    throw new Error(
-      `DCQL claims ${JSON.stringify(dcqlEntry.claims)} matched no disclosures in the SD-JWT`,
-    );
-  }
-
-  return kept.join("~");
+  const token = sdJwt.includes("~") ? sdJwt : `${sdJwt}~`;
+  return filterSdJwtByDcqlClaims(token, {
+    id: dcqlEntry?.id || "credential",
+    format,
+    ...dcqlEntry,
+  });
 }
 
 function attachKbJwtToSdJwt(sdJwt, kbJwt) {
@@ -1128,13 +1145,7 @@ async function resolveKeysEnvelopeAndRawFromPick(stored, keyPath, pickedEntry) {
     pickedEntry,
     keyPath,
   });
-  let envelope = pickedEntry.credential;
-  if (stored.multi && Array.isArray(stored.entries)) {
-    const match = stored.entries.find((e) =>
-      ecPublicJwksEqual(e?.keyBinding?.publicJwk, publicJwk),
-    );
-    envelope = (match || pickedEntry).credential;
-  }
+  const envelope = pickedEntry?.credential;
   const rawToken = extractCredentialString(envelope);
   return {
     privateJwk,
@@ -1547,43 +1558,69 @@ export async function performPresentation(
     let vpTokenValue;
     let presentation_submission;
     let didJwk;
+    let privateJwk;
+    let publicJwk;
+    let resolvedDidJwk;
+    let presentationAlg = "ES256";
     const mdocGeneratedNonces = [];
 
     if (hasDcql) {
-      const usedConfigurationIds = new Set();
-      const vpTokenObject = {};
-      const perEntryFormats = [];
-      for (const credQuery of dcqlCredEntries) {
-        const found = await findWalletStoredForDcqlEntry(
-          credQuery,
-          usedConfigurationIds,
+      const selections = await selectWalletCredentialsForDcql({
+        dcqlQuery,
+        listWalletCredentialTypes,
+        getWalletCredentialByType,
+        extractCredentialString,
+        slog,
+      });
+      const hasOnlyOptionalCredentialSets =
+        Array.isArray(dcqlQuery?.credential_sets) &&
+        dcqlQuery.credential_sets.every((credentialSet) => credentialSet?.required === false);
+      if (selections.length === 0 && !hasOnlyOptionalCredentialSets) {
+        throw new Error(
+          "DCQL query could not be satisfied: no wallet credentials match the requested credential queries",
         );
-        if (!found) {
-          throw new Error(
-            `DCQL credential query "${credQuery.id}" could not be satisfied: no wallet credential matches format ${credQuery.format}`,
-          );
-        }
-        usedConfigurationIds.add(found.configurationId);
+      }
+
+      const vpTokenObject = {};
+      const formatsByCredentialId = new Map();
+
+      for (const selection of selections) {
+        const credQuery = selection.matchedQuery;
+        const pickedEntry =
+          selection.pickedEntry ??
+          (selection.stored?.multi && Array.isArray(selection.stored.entries)
+            ? selection.stored.entries[0]
+            : {
+                credential: selection.stored?.credential,
+                keyBinding: selection.stored?.keyBinding,
+              });
+
         const { vpToken: vpStr, mdocGeneratedNonce: entryMdocNonce } =
           await buildVpTokenFromPickedEntry({
-            stored: found.stored,
-            pickedEntry: found.pickedEntry,
+            stored: selection.stored,
+            pickedEntry,
             keyPath,
             clientId,
             responseUri,
             verifierBase,
             nonce,
             presentationDefinition,
-            selectedType: found.configurationId,
+            selectedType: selection.selectedType,
             dcqlEntry: credQuery,
             slog,
             authorizationRequestPayload: payload,
             mdocSessionNonce,
           });
         if (entryMdocNonce) mdocGeneratedNonces.push(entryMdocNonce);
-        perEntryFormats.push(presentationFormatFromDcqlQuery(credQuery));
-        vpTokenObject[credQuery.id] = [vpStr];
+
+        const credId = credQuery.id;
+        appendDcqlVpToken(vpTokenObject, credId, vpStr);
+        formatsByCredentialId.set(
+          credId,
+          presentationFormatFromDcqlQuery(credQuery),
+        );
       }
+
       vpTokenValue = vpTokenObject;
       console.log("[present] Built vp_token as DCQL object (per-query VPs)", {
         credentialIds: Object.keys(vpTokenObject),
@@ -1591,17 +1628,21 @@ export async function performPresentation(
       try {
         slog("[present] vp_token DCQL format", {
           credentialIds: Object.keys(vpTokenObject),
+          selectionCount: selections.length,
         });
       } catch {}
 
-      const resolvedDevicePath = resolveDeviceKeyPath(keyPath);
-      const { publicJwk } = await ensureOrCreateEcKeyPair(resolvedDevicePath);
-      didJwk = resolvedDidJwk;
+      const satisfiedDcqlQuery = {
+        ...dcqlQuery,
+        credentials: dcqlQuery.credentials.filter(
+          (entry) => Array.isArray(vpTokenObject[entry?.id]) && vpTokenObject[entry.id].length > 0,
+        ),
+      };
 
       presentation_submission = buildPresentationSubmissionDcql(
         presentationDefinition,
-        dcqlQuery,
-        perEntryFormats,
+        satisfiedDcqlQuery,
+        formatsByCredentialId,
       );
       if (presentation_submission) {
         console.log(
@@ -1614,6 +1655,12 @@ export async function performPresentation(
           });
         } catch {}
       }
+
+      const resolvedDevicePath = resolveDeviceKeyPath(keyPath);
+      const deviceKeys = await ensureOrCreateEcKeyPair(resolvedDevicePath);
+      privateJwk = deviceKeys.privateJwk;
+      presentationAlg = deviceKeys.privateJwk?.alg || "ES256";
+      didJwk = generateDidJwkFromPrivateJwk(deviceKeys.publicJwk);
     } else {
       let selectedType = credentialType;
       if (!selectedType) {
@@ -1656,12 +1703,16 @@ export async function performPresentation(
         stored.multi && Array.isArray(stored.entries) && stored.entries.length > 0
           ? stored.entries[0]
           : { keyBinding: stored.keyBinding, credential: stored.credential };
-      const { privateJwk, publicJwk, didJwk: resolvedDidJwk, alg: presentationAlg } =
-        await resolvePresentationKeyBinding({
-          stored,
-          pickedEntry: pickedForBinding,
-          keyPath,
-        });
+      ({
+        privateJwk,
+        publicJwk,
+        didJwk: resolvedDidJwk,
+        alg: presentationAlg,
+      } = await resolvePresentationKeyBinding({
+        stored,
+        pickedEntry: pickedForBinding,
+        keyPath,
+      }));
 
       let credentialEnvelopeForVp = stored.credential;
       if (stored.multi && Array.isArray(stored.entries) && stored.entries.length > 0) {

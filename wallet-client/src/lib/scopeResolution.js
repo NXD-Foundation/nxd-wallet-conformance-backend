@@ -1,17 +1,25 @@
 const PRE_AUTHORIZED_GRANT = "urn:ietf:params:oauth:grant-type:pre-authorized_code";
 
+export class ScopeResolutionError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "ScopeResolutionError";
+  }
+}
+
 /**
  * OAuth scope for a selected credential configuration (OpenID4VCI 1.0).
  * Prefer issuer metadata `credential_configurations_supported[id].scope`, then offer grant scope.
+ * Returns null when no scope can be resolved (caller may fall back to authorization_details).
  */
-export function resolveScopeForCredentialConfiguration({
+function resolveScopeForCredentialConfigurationOrNull({
   configurationId,
   issuerMeta = null,
   offer = null,
   grantType = null,
 }) {
   if (!configurationId || typeof configurationId !== "string") {
-    throw new Error("scope_resolution: configurationId is required");
+    throw new ScopeResolutionError("scope_resolution: configurationId is required");
   }
 
   const config = issuerMeta?.credential_configurations_supported?.[configurationId];
@@ -30,6 +38,16 @@ export function resolveScopeForCredentialConfiguration({
   return null;
 }
 
+export function resolveScopeForCredentialConfiguration(args) {
+  const scope = resolveScopeForCredentialConfigurationOrNull(args);
+  if (scope) return scope;
+
+  const configurationId = args?.configurationId ?? "(unknown)";
+  throw new ScopeResolutionError(
+    `issuer-defined scope required for credential configuration '${configurationId}'; none found in Credential Offer or issuer metadata`,
+  );
+}
+
 export function assertAuthorizationDetailsSupportForCredentialRequest({
   configurationId,
   issuerMeta = null,
@@ -37,7 +55,7 @@ export function assertAuthorizationDetailsSupportForCredentialRequest({
   grantType = null,
   authorizationServerMeta = null,
 }) {
-  const scope = resolveScopeForCredentialConfiguration({
+  const scope = resolveScopeForCredentialConfigurationOrNull({
     configurationId,
     issuerMeta,
     offer,

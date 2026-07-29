@@ -116,6 +116,7 @@ export async function buildWiaBundleForParOrToken({
   endpointAudience,
   authorizationServerIssuer,
   wiaTtlSeconds = 3600,
+  challenge = null,
 }) {
   const { privateJwk, publicJwk } = await ensureWalletProviderKeyPair();
   const providerId = resolveWalletProviderIdSync(publicJwk);
@@ -135,6 +136,7 @@ export async function buildWiaBundleForParOrToken({
     publicJwk,
     issuer: instanceId,
     audience: authorizationServerIssuer,
+    challenge,
   });
   return {
     walletProviderId: providerId,
@@ -159,6 +161,7 @@ export async function resolveWiaForParOrToken({
   authorizationServerIssuer,
   wiaTtlSeconds = 3600,
   clientId,
+  challenge = null,
 }) {
   const ext = readExternalAttestationTokens();
   let wiaJwt;
@@ -167,6 +170,12 @@ export async function resolveWiaForParOrToken({
   let walletInstanceId;
 
   if (ext?.wiaHeaderJwt && ext.wiaPopJwt) {
+    if (challenge != null && String(challenge).trim() !== "") {
+      throw new Error(
+        "attestation challenge retry is not supported with WALLET_USE_EXTERNAL_ATTESTATION; " +
+          "external OAuth-Client-Attestation-PoP JWTs cannot be rebound to a new challenge",
+      );
+    }
     wiaJwt = ext.wiaHeaderJwt;
     wiaPopJwt = ext.wiaPopJwt;
   } else {
@@ -174,6 +183,7 @@ export async function resolveWiaForParOrToken({
       endpointAudience,
       authorizationServerIssuer,
       wiaTtlSeconds,
+      challenge,
     });
     wiaJwt = bundle.wiaJwt;
     wiaPopJwt = bundle.wiaPopJwt;
@@ -210,7 +220,13 @@ export async function resolveWiaForParOrToken({
  * WUA for Credential binding: `proofs.jwt` `key_attestation` or `proofs.attestation`.
  * Signed by Wallet Provider key; `iss` = provider; `attested_keys` = ordered proof/holder public JWKs.
  */
-export async function buildWalletUnitAttestationJwt({ credentialEndpoint, proofPublicJwk, proofPublicJwks, eudiWalletInfo }) {
+export async function buildWalletUnitAttestationJwt({
+  credentialEndpoint,
+  proofPublicJwk,
+  proofPublicJwks,
+  eudiWalletInfo,
+  c_nonce = null,
+}) {
   const ext = readExternalAttestationTokens();
   if (ext?.wuaJwt) return ext.wuaJwt;
 
@@ -235,5 +251,6 @@ export async function buildWalletUnitAttestationJwt({ credentialEndpoint, proofP
     eudiWalletInfo,
     alg: "ES256",
     ttlHours: 24,
+    ...(typeof c_nonce === "string" && c_nonce.length > 0 ? { nonce: c_nonce } : {}),
   });
 }

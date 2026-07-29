@@ -49,6 +49,7 @@ import {
   sendVerifierWalletReportedError,
   VerifierRfc002Errors as VErr,
 } from "../../utils/routeUtils.js";
+import { loadVerifierEncryptionKey } from "../../utils/verifierEncryptionKeys.js";
 import {
   summarizeCs03ValidationForLog,
   validateCs03CredentialResponses,
@@ -738,7 +739,7 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
 
         // Decrypt the JWT using X509 EC private key
         await logDebug(sessionId, "Starting HAIP dc_api.jwt decryption");
-        const privateKeyForDecryption = fs.readFileSync("./x509EC/ec_private_pkcs8.key", "utf8");
+        const privateKeyForDecryption = loadVerifierEncryptionKey().privateKeyPem;
 
         let decryptedResponse;
         try {
@@ -1006,7 +1007,8 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
           await logInfo(sessionId, "Processing encrypted JWE response for direct_post.jwt");
 
           // Decrypt the JWE - this may return JWT string (per spec) or payload object (wallet-specific)
-          const decrypted = await decryptJWE(jwtResponse, privateKey, "direct_post.jwt");
+          const privateKeyForDecryption = loadVerifierEncryptionKey().privateKeyPem;
+          const decrypted = await decryptJWE(jwtResponse, privateKeyForDecryption, "direct_post.jwt");
           await logDebug(sessionId, "JWE decryption completed", {
             decryptedType: typeof decrypted
           });

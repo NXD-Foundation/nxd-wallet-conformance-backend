@@ -74,6 +74,14 @@ export async function validateWuaMatchesAttestedKeyPairs(wuaJwt, keyPairs) {
   return payload;
 }
 
+export function assertWuaNonceMatchesCNonce(wuaJwt, expectedCNonce) {
+  if (expectedCNonce == null || expectedCNonce === "") return;
+  const payload = decodeJwt(wuaJwt);
+  if (payload.nonce !== expectedCNonce) {
+    throw new Error("wua_binding: WUA nonce must match issuer c_nonce");
+  }
+}
+
 /**
  * Local RFC001 checks on assembled `proofs` before credential request dispatch.
  */
@@ -82,6 +90,7 @@ export async function validateCredentialProofsBeforeDispatch({
   proofs,
   wuaJwt,
   keyPairs,
+  expectedCNonce = null,
 }) {
   if (proofMode === "attestation") {
     const list = proofs?.attestation;
@@ -89,6 +98,7 @@ export async function validateCredentialProofsBeforeDispatch({
       throw new Error("wua_binding: proofs.attestation must contain exactly one WUA JWT");
     }
     await validateWuaMatchesAttestedKeyPairs(list[0], keyPairs);
+    assertWuaNonceMatchesCNonce(list[0], expectedCNonce);
     if (wuaJwt && list[0] !== wuaJwt) {
       throw new Error("wua_binding: proofs.attestation WUA must match built WUA");
     }
@@ -114,4 +124,5 @@ export async function validateCredentialProofsBeforeDispatch({
     throw new Error("wua_binding: proof key_attestation header must equal WUA JWT");
   }
   await validateWuaMatchesAttestedKeyPairs(wuaJwt, keyPairs);
+  assertWuaNonceMatchesCNonce(wuaJwt, expectedCNonce);
 }

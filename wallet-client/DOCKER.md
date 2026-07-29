@@ -5,8 +5,14 @@ This document describes how to run the wallet-client service using Docker and Do
 ## Quick Start
 
 ```bash
-# Build and start the services
-docker-compose up -d
+# From wallet-client/ (compose build context is the monorepo root)
+docker-compose up -d --build
+
+# Or build the image alone from the monorepo root:
+#   docker build -f wallet-client/Dockerfile -t endimion13/wallet-client:TAG .
+#
+# Do not `docker build .` inside wallet-client/ — shared utils/ live one
+# level up and must be in the build context.
 
 # Check service status
 docker-compose ps
@@ -42,7 +48,15 @@ Redis database for storing credentials and session data.
 | `WALLET_DEBUG_CREDENTIAL` | false | Enable full credential logging |
 | `WALLET_MDL_STRICT` | false | Enable strict MDL verification |
 | `WALLET_POLL_TIMEOUT_MS` | 30000 | Deferred credential polling timeout |
-| `WALLET_POLL_INTERVAL_MS` | 2000 | Deferred credential polling interval |
+| `WALLET_POLL_INTERVAL_MS` | 2000 | Deferred credential polling interval (fallback when issuer omits `interval`) |
+
+## APTITUDE RFC001/002 profile notes
+
+This wallet targets APTITUDE RFC001 issuance (WIA/WUA, DPoP, `eu-eaa-offer://`) and RFC002
+presentation (DCQL, `openid4vp://present`). It does **not** use WE BUILD CS-01/02 profile
+environment variables (`WALLET_PROFILE=webuild-cs01`, `TRUST_PROFILE_PATH`, etc.).
+
+Use `curl http://localhost:4000/health` to inspect runtime configuration.
 
 ## Usage Examples
 
@@ -89,7 +103,7 @@ curl -X POST http://localhost:4000/issue \
 ## Volumes
 
 - `redis-data`: Persistent Redis data storage
-- `./keys:/app/keys:ro`: Read-only mount for key files (optional)
+- `./keys:/workspace/wallet-client/keys:ro`: Read-only mount for key files (optional)
 
 ## Networks
 

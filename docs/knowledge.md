@@ -236,3 +236,12 @@ the RFC004 interfaces where the service assumes a provider role.
   primary explanation for a non-obvious decision.
 - Keep `docs/core/` and `docs/references/` as the local specification base;
   do not duplicate normative text into this wiki.
+
+## Pending Alignment Work
+
+- [Main → APTITUDE alignment plan](./main-to-aptitude-alignment-plan.md) —
+  commit-by-commit analysis of local `main` changes since 2026-06-01 mapped
+  to RFC001/002/004 constraints. **Port backlog complete** on branch
+  `aptitude-alignment` (938 root + 183 wallet tests passing; Docker build verified).
+  Changes are uncommitted — ready for review and PR into `aptitude`.
+  Deferred follow-ups: Phase 6 `sessionContext`, dual-profile config overlays.

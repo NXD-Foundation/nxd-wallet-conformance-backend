@@ -1,5 +1,14 @@
 import { jwtVerify, decodeProtectedHeader, importX509 } from "jose";
 
+/** OpenID4VCI 1.0 §12.2.2 — prefer signed metadata, fall back to JSON. */
+export const ISSUER_METADATA_ACCEPT_PREFER_SIGNED = "application/jwt, application/json";
+export const ISSUER_METADATA_ACCEPT_JSON = "application/json";
+
+export const ISSUER_METADATA_ACCEPT_SEQUENCE = [
+  ISSUER_METADATA_ACCEPT_PREFER_SIGNED,
+  ISSUER_METADATA_ACCEPT_JSON,
+];
+
 function pemFromDerBase64(b64) {
   const body = String(b64).replace(/\s+/g, "");
   const lines = body.match(/.{1,64}/g) || [body];
@@ -16,6 +25,7 @@ export function trimCompactJws(body) {
   if (!t) return null;
   const parts = t.split(".");
   if (parts.length !== 3) return null;
+  if (!parts.every((part) => /^[A-Za-z0-9_-]+$/.test(part))) return null;
   return t;
 }
 

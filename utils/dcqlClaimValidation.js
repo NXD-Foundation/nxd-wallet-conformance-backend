@@ -1,11 +1,11 @@
 /** Resolve a DCQL path against a reconstructed credential claim object. */
-export function getDcqlPathValue(claims, path) {
-  if (!Array.isArray(path) || path.length === 0) return undefined;
-  return path.reduce((value, segment) => {
-    if (value == null || typeof value !== "object") return undefined;
-    return value[segment];
-  }, claims);
-}
+export { getSdJwtPathValue as getDcqlPathValue } from "./sdJwtClaims.js";
+export { getMdocPathValue } from "./mdocClaims.js";
+
+import {
+  getSdJwtPathValue as getDcqlPathValue,
+  selectSdJwtPathValues,
+} from "./sdJwtClaims.js";
 
 function matchesRequestedValue(value, constraint) {
   if (!constraint || typeof constraint !== "object") return true;
@@ -24,16 +24,22 @@ export function validateDcqlClaims(claims, dcqlClaims) {
     return { ok: true, errors: [] };
   }
 
+  // VP extraction returns one reconstructed claim object per presented
+  // credential. Treat that outer array as a list of candidate claim roots,
+  // rather than attempting to resolve object-member paths on the array itself.
+  const claimRoots = Array.isArray(claims) ? claims : [claims];
   const errors = [];
   for (const claim of dcqlClaims) {
     const path = claim?.path;
-    const value = getDcqlPathValue(claims, path);
+    const values = claimRoots.flatMap((root) =>
+      selectSdJwtPathValues(root, path),
+    );
     const label = Array.isArray(path) ? path.join(".") : "<invalid path>";
-    if (value === undefined) {
+    if (values.length === 0) {
       errors.push(`missing requested DCQL claim '${label}'`);
       continue;
     }
-    if (!matchesRequestedValue(value, claim)) {
+    if (!values.some((value) => matchesRequestedValue(value, claim))) {
       errors.push(`DCQL value constraint failed for '${label}'`);
     }
   }

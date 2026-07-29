@@ -1,8 +1,9 @@
 import express from "express";
 import fs from "fs";
-import * as jose from "jose";
 import { pemToJWK } from "../utils/cryptoUtils.js";
-import { pemToBase64Der } from "../utils/sdjwtUtils.js";
+import {
+  signCredentialIssuerMetadataFromConfiguredMaterial,
+} from "../utils/issuerMetadataSigning.js";
 import {
   PROXY_PATH,
   buildOpenIdVerifierMetadataDocument,
@@ -12,17 +13,7 @@ import {
 import { buildIssuerInfo } from "../utils/issuerInfo.js";
 const metadataRouter = express.Router();
 
-const privateKey = fs.readFileSync("./private-key.pem", "utf-8");
 const publicKeyPem = fs.readFileSync("./public-key.pem", "utf-8");
-const issuerMetadataSigningKey = fs.readFileSync(
-  "./x509EC/ec_private_pkcs8.key",
-  "utf-8",
-);
-const issuerMetadataSigningCertPem = fs.readFileSync(
-  "./x509EC/client_certificate.crt",
-  "utf-8",
-);
-const issuerMetadataSigningX5c = [pemToBase64Der(issuerMetadataSigningCertPem)];
 
 const issuerConfig = JSON.parse(
   fs.readFileSync("./data/issuer-config.json", "utf-8")
@@ -56,18 +47,6 @@ function clientWantsSignedMetadata(req) {
   const accept = String(req.headers.accept || "").toLowerCase();
   return accept.includes("application/jwt");
 }
-
-async function signMetadataPayload(payload, typ) {
-  const importedKey = await jose.importPKCS8(issuerMetadataSigningKey, "ES256");
-  return await new jose.SignJWT(payload)
-    .setProtectedHeader({
-      alg: "ES256",
-      typ,
-      x5c: issuerMetadataSigningX5c,
-    })
-    .sign(importedKey);
-}
-
 
 /**
  * Credential Issuer metadata
@@ -124,11 +103,18 @@ metadataRouter.get(
     }
 
     if (clientWantsSignedMetadata(req)) {
-      const signedMetadata = await signMetadataPayload(
-        issuerConfig,
-        "openid-credential-issuer-metadata+jwt",
-      );
-      return res.type("application/jwt").send(signedMetadata);
+      try {
+        const signedMetadata = await signCredentialIssuerMetadataFromConfiguredMaterial(
+          issuerConfig,
+        );
+        return res.type("application/jwt").send(signedMetadata);
+      } catch (error) {
+        console.error("Unable to produce signed Credential Issuer metadata:", error.message);
+        return res.status(503).json({
+          error: "temporarily_unavailable",
+          error_description: "Signed Credential Issuer metadata is unavailable",
+        });
+      }
     }
 
     res.type("application/json").send(issuerConfig);

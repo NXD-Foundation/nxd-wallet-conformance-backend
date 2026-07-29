@@ -6,7 +6,9 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "test": "mocha test/**/*.js"
+    "test": "mocha test/**/*.js",
+    "test:aptitude": "NODE_ENV=test mocha test/**/*.js",
+    "docker:build": "docker build -f Dockerfile -t endimion13/wallet-client:local .."
   },
   "dependencies": {
     "@animo-id/mdoc": "^0.5.2",

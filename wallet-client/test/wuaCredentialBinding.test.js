@@ -64,6 +64,7 @@ describe("WUA credential binding (RFC001 Phase 5)", () => {
     expect(h.key_attestation).to.equal(wuaJwt);
     const wua = decodeJwt(wuaJwt);
     expect(wua.attested_keys).to.have.length(1);
+    expect(wua.nonce).to.equal("nonce-1");
     expect(await publicJwksMatch(wua.attested_keys[0], kp.publicJwk)).to.equal(true);
   });
 
@@ -122,6 +123,31 @@ describe("WUA credential binding (RFC001 Phase 5)", () => {
     }
     expect(err).to.be.an("error");
     expect(String(err.message)).to.match(/attested_keys\[0\]/);
+  });
+
+  it("rejects WUA when c_nonce does not match WUA nonce", async () => {
+    const kp = await makeKeyPair();
+    const { wuaJwt } = await buildCredentialRequestProofs({
+      proofMode: "attestation",
+      credentialEndpoint: "https://issuer.example/credential",
+      aud: "https://issuer.example",
+      c_nonce: "expected-nonce",
+      keyPairs: [kp],
+      selectedAlg: "ES256",
+    });
+    let err = null;
+    try {
+      await validateCredentialProofsBeforeDispatch({
+        proofMode: "attestation",
+        proofs: { attestation: [wuaJwt] },
+        wuaJwt,
+        keyPairs: [kp],
+        expectedCNonce: "other-nonce",
+      });
+    } catch (e) {
+      err = e;
+    }
+    expect(String(err?.message || "")).to.match(/c_nonce/);
   });
 
   it("rejects proofs.jwt without key_attestation", async () => {

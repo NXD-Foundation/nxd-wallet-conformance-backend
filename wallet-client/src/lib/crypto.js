@@ -256,6 +256,7 @@ export async function createWiaPopJwt({
   audience,
   alg = "ES256",
   ttlSeconds = 300,
+  challenge = null,
 }) {
   const now = Math.floor(Date.now() / 1000);
   const header = { alg, typ: "oauth-client-attestation-pop+jwt", jwk: publicJwk };
@@ -266,6 +267,7 @@ export async function createWiaPopJwt({
     nbf: now,
     exp: now + ttlSeconds,
     jti: base64url(crypto.randomBytes(16)),
+    ...(typeof challenge === "string" && challenge.length > 0 ? { challenge } : {}),
   };
 
   const key = await importJWK(privateJwk, alg);
@@ -287,6 +289,7 @@ export async function createWiaPopJwt({
  * @param {object[]} options.attestedKeys - Ordered attested holder JWKs (RFC001 §7.5.1; proof JWT uses index 0)
  * @param {object} options.eudiWalletInfo - EUDI wallet info object with general_info and key_storage_info
  * @param {object} options.status - Optional status/revocation information
+ * @param {string} [options.nonce] - Optional issuer c_nonce bound into WUA (RFC001 key attestation)
  * @param {string} options.alg - Signing algorithm (default: ES256)
  * @param {number} options.ttlHours - Time-to-live in hours (default: 24)
  * @returns {Promise<string>} - Signed WUA JWT
@@ -300,7 +303,8 @@ export async function createWUA({
   attestedKeys, 
   eudiWalletInfo,
   status = null,
-  alg = "ES256", 
+  nonce = null,
+  alg = "ES256",
   ttlHours = 24 
 }) {
   const now = Math.floor(Date.now() / 1000);
@@ -317,6 +321,7 @@ export async function createWUA({
     jti: base64url(crypto.randomBytes(16)),
     eudi_wallet_info: eudiWalletInfo,
     attested_keys: keys,
+    ...(typeof nonce === "string" && nonce.length > 0 ? { nonce } : {}),
     ...(status ? { status } : {}),
   };
 

@@ -1,2 +1,36 @@
+# Dependencies (reinstalled in image)
 node_modules
+wallet-client/node_modules
 npm-debug.log
+
+# VCS and local worktrees
+.git
+.worktrees
+
+# Deprecated key backups and root issuer key material
+deprecated
+/x509
+/x509EC
+/private-key.pem
+/private-key-pkcs8.pem
+/public-key.pem
+**/*.backup.*
+
+# Runtime-mounted wallet keys (not baked into image)
+wallet-client/keys
+
+# Dev, docs, and tests not needed for wallet-client image
+tests
+wallet-client/test
+docs
+reports
+.agents
+.codex
+.github
+openapi
+certbot
+certs
+Insomnia_*.yaml
+hoviTestCases.yml
+aptitude-vci.yml
+aptitude-vp.yml

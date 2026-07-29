@@ -1,13 +1,27 @@
 import assert from "assert";
+import { createHash } from "crypto";
 import {
   normalizeDcqlCredentialFormat,
   storedRawMatchesDcqlEntry,
   filterSdJwtDisclosuresForDcqlClaims,
   normalizeDcqlClaimsToSegmentLists,
+  appendDcqlVpToken,
 } from "../src/lib/presentation.js";
 
 function b64urlJson(obj) {
   return Buffer.from(JSON.stringify(obj), "utf8").toString("base64url");
+}
+
+function disclosureDigest(encodedDisclosure) {
+  return createHash("sha256").update(encodedDisclosure, "ascii").digest("base64url");
+}
+
+function unsignedJwt(payload) {
+  return `${b64urlJson({ alg: "none", typ: "dc+sd-jwt" })}.${b64urlJson(payload)}.sig`;
+}
+
+function disclosureSeg(claimName, value) {
+  return b64urlJson(["salt", claimName, value]);
 }
 
 function minimalSdJwtWithVct(vct) {
@@ -17,6 +31,26 @@ function minimalSdJwtWithVct(vct) {
 }
 
 describe("DCQL vp_token helpers (P1-W-8)", () => {
+  describe("appendDcqlVpToken", () => {
+    it("builds the OpenID4VP DCQL object shape with arrays per query id", () => {
+      const vpToken = {};
+      appendDcqlVpToken(vpToken, "cmwallet", "sd-jwt-one");
+      appendDcqlVpToken(vpToken, "cmwallet", "sd-jwt-two");
+      appendDcqlVpToken(vpToken, "other", "mdoc-one");
+
+      assert.deepStrictEqual(vpToken, {
+        cmwallet: ["sd-jwt-one", "sd-jwt-two"],
+        other: ["mdoc-one"],
+      });
+      assert.deepStrictEqual(JSON.parse(JSON.stringify(vpToken)), vpToken);
+    });
+
+    it("rejects malformed query ids and presentation values", () => {
+      assert.throws(() => appendDcqlVpToken({}, "", "token"), /query id/);
+      assert.throws(() => appendDcqlVpToken({}, "cmwallet", ""), /presentation/);
+    });
+  });
+
   describe("normalizeDcqlCredentialFormat", () => {
     it("normalizes known formats", () => {
       assert.strictEqual(normalizeDcqlCredentialFormat("dc+sd-jwt"), "dc+sd-jwt");
@@ -80,38 +114,29 @@ describe("DCQL vp_token helpers (P1-W-8)", () => {
   });
 
   describe("filterSdJwtDisclosuresForDcqlClaims (P1-W-9)", () => {
-    function minimalJwt() {
-      const header = Buffer.from(JSON.stringify({ alg: "ES256" }), "utf8").toString(
-        "base64url",
-      );
-      const payload = Buffer.from(JSON.stringify({ vct: "https://ex/PID" }), "utf8").toString(
-        "base64url",
-      );
-      return `${header}.${payload}.sig`;
-    }
-
-    function disclosureSeg(claimName, value) {
-      return Buffer.from(
-        JSON.stringify(["salt", claimName, value]),
-        "utf8",
-      ).toString("base64url");
+    function minimalSdJwtWithDisclosures(disclosures) {
+      const digests = disclosures.map(disclosureDigest);
+      const jwt = unsignedJwt({
+        vct: "https://ex/PID",
+        _sd_alg: "sha-256",
+        _sd: digests,
+      });
+      return `${jwt}~${disclosures.join("~")}~`;
     }
 
     it("keeps only disclosures for requested claim keys", () => {
-      const jwt = minimalJwt();
       const dGiven = disclosureSeg("given_name", "Jane");
       const dFamily = disclosureSeg("family_name", "Doe");
-      const sd = `${jwt}~${dGiven}~${dFamily}`;
+      const sd = minimalSdJwtWithDisclosures([dGiven, dFamily]);
       const filtered = filterSdJwtDisclosuresForDcqlClaims(sd, {
         claims: [{ path: ["given_name"] }],
       });
-      assert.strictEqual(filtered, `${jwt}~${dGiven}`);
+      assert.strictEqual(filtered, `${sd.split("~")[0]}~${dGiven}~`);
     });
 
     it("leaves SD-JWT unchanged when claims are omitted", () => {
-      const jwt = minimalJwt();
       const dGiven = disclosureSeg("given_name", "Jane");
-      const sd = `${jwt}~${dGiven}`;
+      const sd = minimalSdJwtWithDisclosures([dGiven]);
       assert.strictEqual(
         filterSdJwtDisclosuresForDcqlClaims(sd, { format: "dc+sd-jwt" }),
         sd,
@@ -119,31 +144,25 @@ describe("DCQL vp_token helpers (P1-W-8)", () => {
     });
 
     it("strips an existing KB JWT segment before filtering", () => {
-      const jwt = minimalJwt();
       const dGiven = disclosureSeg("given_name", "Jane");
       const dFamily = disclosureSeg("family_name", "Doe");
-      const fakeKb = [
-        Buffer.from(JSON.stringify({ alg: "ES256" }), "utf8").toString("base64url"),
-        Buffer.from(JSON.stringify({ nonce: "n" }), "utf8").toString("base64url"),
-        "sig",
-      ].join(".");
-      const sd = `${jwt}~${dGiven}~${dFamily}~${fakeKb}`;
+      const fakeKb = unsignedJwt({ typ: "kb+jwt", nonce: "n" });
+      const sd = `${minimalSdJwtWithDisclosures([dGiven, dFamily]).slice(0, -1)}~${fakeKb}`;
       const filtered = filterSdJwtDisclosuresForDcqlClaims(sd, {
         claims: [{ path: ["given_name"] }],
       });
-      assert.strictEqual(filtered, `${jwt}~${dGiven}`);
+      assert.strictEqual(filtered, `${sd.split("~")[0]}~${dGiven}~`);
     });
 
     it("throws when no disclosure matches requested claims", () => {
-      const jwt = minimalJwt();
       const dFamily = disclosureSeg("family_name", "Doe");
-      const sd = `${jwt}~${dFamily}`;
+      const sd = minimalSdJwtWithDisclosures([dFamily]);
       assert.throws(
         () =>
           filterSdJwtDisclosuresForDcqlClaims(sd, {
             claims: [{ path: ["given_name"] }],
           }),
-        /matched no disclosures/,
+        /missing requested DCQL disclosure/,
       );
     });
   });

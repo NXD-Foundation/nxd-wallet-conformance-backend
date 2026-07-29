@@ -16,7 +16,7 @@ import {
   setSessionContext,
   clearSessionContext,
 } from "../services/cacheServiceRedis.js";
-import { createHash, createPublicKey, X509Certificate } from "crypto";
+import { createHash, createPublicKey, X509Certificate, randomInt } from "crypto";
 import base64url from "base64url";
 import jwt from "jsonwebtoken";
 import path from "path";
@@ -349,6 +349,36 @@ export const TX_CODE_CONFIG = {
   input_mode: "numeric",
   description: "Please provide the one-time code that was sent via e-mail or offline",
 };
+
+/** Generate a numeric transaction code for pre-authorized offers that advertise tx_code. */
+export function generateNumericTxCode(length = TX_CODE_CONFIG.length) {
+  let code = "";
+  for (let i = 0; i < length; i += 1) {
+    code += randomInt(0, 10).toString();
+  }
+  return code;
+}
+
+/** When `requireTxCode` is set, assign the generated code used by test/conformance backends. */
+export function applyPreAuthTxCode(session = {}) {
+  if (session.requireTxCode) {
+    session.expectedTxCode = generateNumericTxCode();
+  }
+  return session;
+}
+
+/** Preserve an existing expectedTxCode; generate one only when missing. */
+export function ensureExpectedTxCode(session = {}) {
+  if (
+    session.requireTxCode &&
+    (session.expectedTxCode === undefined ||
+      session.expectedTxCode === null ||
+      String(session.expectedTxCode).trim() === "")
+  ) {
+    session.expectedTxCode = generateNumericTxCode();
+  }
+  return session;
+}
 
 export const URL_SCHEMES = {
   STANDARD: "openid-credential-offer://",
@@ -1544,16 +1574,21 @@ export const createPreAuthCredentialOfferUri = (sessionId, credentialType, endpo
  * Create credential offer response with QR code
  * @param {string} credentialOffer - Credential offer string
  * @param {string} sessionId - Session ID
+ * @param {string} [txCode] - Generated transaction code (test/conformance backends only)
  * @returns {Promise<Object>} Response object with QR code and deep link
  */
-export const createCredentialOfferResponse = async (credentialOffer, sessionId) => {
+export const createCredentialOfferResponse = async (credentialOffer, sessionId, txCode) => {
   try {
     const qr = await generateQRCode(credentialOffer);
-    return {
+    const response = {
       qr,
       deepLink: credentialOffer,
       sessionId,
     };
+    if (txCode != null) {
+      response.txCode = txCode;
+    }
+    return response;
   } catch (error) {
     logUtilityError("createCredentialOfferResponse", error);
     throw error;

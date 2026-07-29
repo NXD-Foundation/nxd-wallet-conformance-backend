@@ -11,6 +11,7 @@ import {
   resolveDeferredPollResult,
   formatDeferredTerminalError,
 } from "./deferredIssuancePoll.js";
+import { shouldRetryWithAttestationChallenge } from "./attestationChallenge.js";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -163,6 +164,7 @@ export async function exchangeToken({
   deviceKeyPath,
   log,
   logPrefix,
+  challengeState = null,
 }) {
   let dpopPrivateJwk = null;
   let dpopPublicJwk = null;
@@ -193,6 +195,7 @@ export async function exchangeToken({
       endpointAudience: tokenEndpoint,
       authorizationServerIssuer,
       clientId: walletClientId,
+      challenge: challengeState?.consume() ?? null,
     });
     const wiaHeaders = wia.wiaHeaders;
     log?.(`${logPrefix} WIA for Token validated`, {
@@ -201,16 +204,54 @@ export async function exchangeToken({
       attempt: attempt + 1,
     });
 
-    const response = await postForm(
+    let response = await postForm(
       tokenEndpoint,
       { ...tokenPayload, client_id: walletClientId },
       dpopJwt,
       wiaHeaders,
     );
+    challengeState?.updateFromResponse(response.headers);
     lastTokenResponseText = await response.text().catch(() => "");
     if (response.ok) {
       tokenBody = JSON.parse(lastTokenResponseText);
       return { tokenBody, dpopPrivateJwk, dpopPublicJwk };
+    }
+
+    const attestationRetry = shouldRetryWithAttestationChallenge(response, lastTokenResponseText);
+    if (attestationRetry.shouldRetry && attestationRetry.challenge && challengeState) {
+      challengeState?.set(attestationRetry.challenge);
+      const wiaRetry = await resolveWiaForParOrToken({
+        endpointAudience: tokenEndpoint,
+        authorizationServerIssuer,
+        clientId: walletClientId,
+        challenge: challengeState?.consume() ?? null,
+      });
+      let retryDpopJwt = null;
+      try {
+        retryDpopJwt = await createDPoP({
+          privateJwk: dpopPrivateJwk,
+          publicJwk: dpopPublicJwk,
+          htu: tokenEndpoint,
+          htm: "POST",
+          alg: "ES256",
+        });
+      } catch (error) {
+        log?.(`${logPrefix} DPoP regeneration failed for attestation retry`, {
+          error: error?.message,
+        });
+      }
+      response = await postForm(
+        tokenEndpoint,
+        { ...tokenPayload, client_id: walletClientId },
+        retryDpopJwt,
+        wiaRetry.wiaHeaders,
+      );
+      challengeState?.updateFromResponse(response.headers);
+      lastTokenResponseText = await response.text().catch(() => "");
+      if (response.ok) {
+        tokenBody = JSON.parse(lastTokenResponseText);
+        return { tokenBody, dpopPrivateJwk, dpopPublicJwk };
+      }
     }
 
     let errorBody = {};

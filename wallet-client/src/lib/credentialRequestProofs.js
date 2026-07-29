@@ -43,6 +43,7 @@ export async function buildCredentialRequestProofs({
     credentialEndpoint,
     proofPublicJwks: attestPub,
     eudiWalletInfo,
+    c_nonce,
   });
 
   if (proofMode === "attestation") {
@@ -52,6 +53,7 @@ export async function buildCredentialRequestProofs({
       proofs,
       wuaJwt,
       keyPairs,
+      expectedCNonce: c_nonce,
     });
     return { proofs, proofJwt: null, wuaJwt };
   }
@@ -72,6 +74,7 @@ export async function buildCredentialRequestProofs({
     proofs,
     wuaJwt,
     keyPairs,
+    expectedCNonce: c_nonce,
   });
   return { proofs, proofJwt, wuaJwt };
 }

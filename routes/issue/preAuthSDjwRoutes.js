@@ -36,6 +36,7 @@ import {
   createPreAuthCredentialOfferUri,
   createCredentialOfferResponse,
   createCredentialOfferConfig,
+  applyPreAuthTxCode,
   
   // Error handling utilities
   handleRouteError,
@@ -85,10 +86,10 @@ router.get("/offer-tx-code", async (req, res) => {
     const credentialType = getCredentialType(req);
     const signatureType = getSignatureType(req);
 
-    const sessionData = createBaseSession("pre-auth", false, signatureType, {
+    const sessionData = applyPreAuthTxCode(createBaseSession("pre-auth", false, signatureType, {
       requireTxCode: true,
-    });
-    await manageSession(sessionId, sessionData);
+    }));
+    const storedSession = await manageSession(sessionId, sessionData);
 
     const invocationScheme = getCredentialOfferSchemeFromRequest(req);
     const credentialOffer = createPreAuthCredentialOfferUri(
@@ -98,7 +99,11 @@ router.get("/offer-tx-code", async (req, res) => {
       invocationScheme,
     );
 
-    const response = await createCredentialOfferResponse(credentialOffer, sessionId);
+    const response = await createCredentialOfferResponse(
+      credentialOffer,
+      sessionId,
+      storedSession.expectedTxCode,
+    );
 
     res.json(response);
   } catch (error) {
@@ -240,10 +245,10 @@ router.get("/haip-offer-tx-code", async (req, res) => {
 
     const credentialType = getCredentialType(req);
 
-    const sessionData = createBaseSession("pre-auth", true, null, {
+    const sessionData = applyPreAuthTxCode(createBaseSession("pre-auth", true, null, {
       requireTxCode: true,
-    });
-    await manageSession(sessionId, sessionData);
+    }));
+    const storedSession = await manageSession(sessionId, sessionData);
 
     const credentialOffer = createPreAuthCredentialOfferUri(
       sessionId,
@@ -252,7 +257,11 @@ router.get("/haip-offer-tx-code", async (req, res) => {
       URL_SCHEMES.HAIP
     );
 
-    const response = await createCredentialOfferResponse(credentialOffer, sessionId);
+    const response = await createCredentialOfferResponse(
+      credentialOffer,
+      sessionId,
+      storedSession.expectedTxCode,
+    );
     res.json(response);
   } catch (error) {
     handleRouteError(error, "HAIP offer tx-code", res, sessionId);

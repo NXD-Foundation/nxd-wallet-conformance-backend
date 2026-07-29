@@ -389,12 +389,47 @@ describe('Shared Issuance Flows', () => {
       expect(response.body).to.have.property('error', 'invalid_grant');
     });
 
-    it('accepts any non-empty tx_code when offer required tx_code', async () => {
-      const preAuthCode = 'test-pre-auth-tx-any-' + uuidv4();
+    it('MUST return invalid_grant when offer required tx_code but session has no expectedTxCode', async () => {
+      const preAuthCode = 'test-pre-auth-tx-no-expected-' + uuidv4();
       const preAuthSession = {
         status: 'pending',
         authorizationDetails: null,
         requireTxCode: true,
+      };
+
+      if (!cacheServiceRedis.client.isReady) {
+        throw new Error('Redis is not ready - cannot run test');
+      }
+
+      await cacheServiceRedis.storePreAuthSession(preAuthCode, preAuthSession);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      const { dpopJwt } = await makeTokenDpop();
+
+      await makeTestWiaClientAssertion();
+      const response = await wireWiaOAuthHeaders(
+        request(app)
+          .post('/token_endpoint')
+          .set('DPoP', dpopJwt)
+      )
+        .send({
+          ...pickWiaBodyFields(),
+          grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
+          'pre-authorized_code': preAuthCode,
+          tx_code: '1234',
+        })
+        .expect(400);
+
+      expect(response.body).to.have.property('error', 'invalid_grant');
+    });
+
+    it('accepts tx_code when it matches expectedTxCode on the session', async () => {
+      const preAuthCode = 'test-pre-auth-tx-match-' + uuidv4();
+      const preAuthSession = {
+        status: 'pending',
+        authorizationDetails: null,
+        requireTxCode: true,
+        expectedTxCode: '5678',
       };
 
       if (!cacheServiceRedis.client.isReady) {
@@ -416,7 +451,7 @@ describe('Shared Issuance Flows', () => {
           ...pickWiaBodyFields(),
           grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
           'pre-authorized_code': preAuthCode,
-          tx_code: 'not-validated-by-issuer',
+          tx_code: '5678',
         })
         .expect(200);
 

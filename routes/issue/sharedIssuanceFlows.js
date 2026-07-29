@@ -820,9 +820,30 @@ const handlePreAuthorizedCodeFlow = async (
         ? ""
         : String(txCodeFromRequest).trim();
     if (!normalizedTxCode) {
-      throw new Error(
+      const err = new Error(
         `${ERROR_MESSAGES.INVALID_GRANT} Received: missing or empty tx_code, expected: non-empty tx_code in token request because the credential offer included tx_code (RFC001 §6.2.6 / OID4VCI 1.0).`,
       );
+      err.errorCode = "invalid_grant";
+      throw err;
+    }
+    const expectedRaw = existingPreAuthSession.expectedTxCode;
+    const expected =
+      expectedRaw === undefined || expectedRaw === null
+        ? ""
+        : String(expectedRaw).trim();
+    if (!expected) {
+      const err = new Error(
+        `${ERROR_MESSAGES.INVALID_GRANT} Received: tx_code required but issuer session has no expectedTxCode; pre-authorized offers with tx_code must store an expected code at offer creation.`,
+      );
+      err.errorCode = "invalid_grant";
+      throw err;
+    }
+    if (normalizedTxCode !== expected) {
+      const err = new Error(
+        "Invalid or missing tx_code for pre-authorized issuance when tx_code is advertised in the Credential Offer",
+      );
+      err.errorCode = "invalid_grant";
+      throw err;
     }
   }
 
@@ -1707,6 +1728,13 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
     if (error.errorCode === "invalid_dpop_proof") {
       return res.status(400).json({
         error: "invalid_dpop_proof",
+        error_description: error.message,
+      });
+    }
+
+    if (error.errorCode === "invalid_grant") {
+      return res.status(400).json({
+        error: "invalid_grant",
         error_description: error.message,
       });
     }
