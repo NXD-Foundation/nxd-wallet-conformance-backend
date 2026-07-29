@@ -5,8 +5,14 @@ This document describes how to run the wallet-client service using Docker and Do
 ## Quick Start
 
 ```bash
-# Build and start the services
-docker-compose up -d
+# From wallet-client/ (compose context is the monorepo root)
+docker-compose up -d --build
+
+# Or build the image alone from the monorepo root:
+#   docker build -f wallet-client/Dockerfile -t endimion13/wallet-client:TAG .
+#
+# Do not `docker build .` inside wallet-client/ — shared utils/ and trust/
+# live one level up and must be in the build context.
 
 # Check service status
 docker-compose ps
