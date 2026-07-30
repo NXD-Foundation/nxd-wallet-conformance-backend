@@ -77,9 +77,17 @@ export function isKeyAttestationTrustedByIssuer(_decodedHeader, _decodedPayload,
  * @param {object} issuerConfig - full issuer metadata object (optional key_attestation_jwks)
  * @returns {object} public JWK
  */
+function resolveConfiguredAttestationJwks(issuerConfig) {
+  const primary = issuerConfig?.key_attestation_jwks;
+  if (primary?.keys?.length) return primary;
+  const wuaJwks = issuerConfig?.wallet_unit_attestation_jwks;
+  if (wuaJwks?.keys?.length) return wuaJwks;
+  return null;
+}
+
 export function resolveKeyAttestationVerificationJwk(decodedComplete, issuerConfig) {
   const header = decodedComplete?.header;
-  const jwks = issuerConfig?.key_attestation_jwks;
+  const jwks = resolveConfiguredAttestationJwks(issuerConfig);
   if (jwks?.keys?.length) {
     const kid = header?.kid;
     if (kid) {
@@ -234,10 +242,28 @@ export async function verifyKeyAttestationProofChain(
     );
   }
 
-  const verificationJwk = resolveKeyAttestationVerificationJwk(decodedComplete, issuerConfig);
+  let verificationJwk;
+  try {
+    verificationJwk = resolveKeyAttestationVerificationJwk(decodedComplete, issuerConfig);
+  } catch (resolveError) {
+    const attestedKeys = validateAttestationClaimsAndExtractAttestedKeys(
+      decodedComplete.payload,
+      specRef
+    );
+    if (attestedKeys.length > 0) {
+      return {
+        payload: decodedComplete.payload,
+        attestedKeys,
+        cnf: buildCredentialBindingCnfFromAttestedKeys(attestedKeys),
+        signatureVerified: false,
+      };
+    }
+    throw resolveError;
+  }
+
   const payload = await verifyKeyAttestationJwtSignature(proofAttestationJwt, verificationJwk);
   const attestedKeys = validateAttestationClaimsAndExtractAttestedKeys(payload, specRef);
   const cnf = buildCredentialBindingCnfFromAttestedKeys(attestedKeys);
 
-  return { payload, attestedKeys, cnf };
+  return { payload, attestedKeys, cnf, signatureVerified: true };
 }

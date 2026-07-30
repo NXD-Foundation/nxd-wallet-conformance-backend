@@ -130,7 +130,7 @@ describe("WUA validation (routeUtils)", () => {
     expect(result.payload?.iss).to.equal("https://wallet.example");
   });
 
-  it("validateWUA rejects a WUA without iss", async () => {
+  it("validateWUA accepts a WUA without iss (test-service relaxed)", async () => {
     const { privateKey, publicKey } = await jose.generateKeyPair("ES256");
     const pubJwk = await jose.exportJWK(publicKey);
     const compact = await buildMinimalWua({
@@ -140,8 +140,8 @@ describe("WUA validation (routeUtils)", () => {
       claims: { iss: undefined },
     });
     const result = await validateWUA(compact, null, {});
-    expect(result.valid).to.equal(false);
-    expect(result.error).to.match(/missing iss/i);
+    expect(result.valid).to.equal(true);
+    expect(result.payload?.attested_keys).to.be.an("array").with.length(1);
   });
 
   it("validateWUA rejects a WUA without eudi_wallet_info", async () => {

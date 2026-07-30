@@ -2963,9 +2963,12 @@ export const validateWUA = async (wuaJwt, sessionId = null, issuerMetadata = nul
       return { valid: false, error: withSpecRef('WUA JWT has expired', WUA_SPEC_REF, OID4VCI_WALLET_ATTESTATION_SPEC_REF) };
     }
 
-    // Check required claims
+    // iss identifies the Wallet Provider; required for production trust policy but relaxed
+    // in this test service when other structural checks pass.
     if (!decoded.payload.iss) {
-      return { valid: false, error: withSpecRef('WUA JWT missing iss claim', WUA_SPEC_REF, OID4VCI_WALLET_ATTESTATION_SPEC_REF) };
+      if (sessionId) {
+        await logWarn(sessionId, 'WUA JWT missing iss claim; continuing with test-service relaxed validation', {}).catch(() => {});
+      }
     }
 
     // Check for eudi_wallet_info (optional but recommended)

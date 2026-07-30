@@ -116,7 +116,7 @@ routes are kept alongside it for interoperability coverage.
 | DPoP sender constraint | DPoP-bound token creation in `utils/tokenUtils.js`; resource proof verification in `validateDpopProofForResourceRequest` | issuance-flow tests and wallet `credentialNotification.js` |
 | Credential proof and holder binding | `validateCredentialRequest`, `validateProofJWT`, and `verifyProofJWT`; wallet proof construction in `wallet-client/src/lib/credentialRequestProofs.js` | `tests/credGenerationUtilsProofBinding.test.js`, `tests/proofJwtResolver.test.js` |
 | WIA at PAR/token | `validateWIA` in `utils/routeUtils.js`; OAuth client-attestation and PoP validation in `utils/oauthClientAttestation.js` | `tests/oauthClientAttestation.test.js`, `tests/wuaValidation.test.js` |
-| WUA/key attestation at credential request | `validateWUA` and `utils/keyAttestationProof.js`; proof supports `proofs.jwt` and `proofs.attestation` paths. An attestation proof must verify before issuance; decoded, unverified `attested_keys` are never used as credential holder binding. When metadata advertises `proof_types_supported.jwt.key_attestations_required`, the JWT proof must carry a valid protected-header `key_attestation` and its signing key must match the primary attested key. **Test-service trust boundary:** no `key_attestation_jwks` or trusted-attester policy is configured yet, so development verification can use the attestation header JWK and the policy hook is permissive. This proves signature/key binding, not attester or hardware trust; configure pinned attester keys and policy before any production use. | `tests/keyAttestationProof.test.js`, `tests/wuaValidation.test.js`, `tests/sharedIssuanceFlows.test.js` |
+| WUA/key attestation at credential request | `validateWUA` and `utils/keyAttestationProof.js`; proof supports `proofs.jwt` and `proofs.attestation` paths. **Normative target (OpenID4VCI / HAIP):** an attestation proof must verify before issuance; decoded, unverified `attested_keys` must not be used as credential holder binding. When metadata advertises `proof_types_supported.jwt.key_attestations_required`, the JWT proof must carry a valid protected-header `key_attestation` and its signing key must match the primary attested key. **Temporary test-service deviation (2026-07):** for EUDI Reference Wallet interop, see [Temporary test-service relaxations](#temporary-test-service-relaxations-eudi-wallet-interop) below — tighten on the next spec-alignment pass. | `tests/keyAttestationProof.test.js`, `tests/wuaValidation.test.js`, `tests/sharedIssuanceFlows.test.js` |
 | Immediate and deferred credentials | `POST /credential`, `POST /credential_deferred`, `resolveDeferredIssuanceContext` | `tests/sharedIssuanceFlows.test.js` |
 | Nonce and notification | `POST /nonce`, `POST /notification`; wallet client notification helper | shared issuance tests and `wallet-client/src/lib/credentialNotification.js` |
 | Credential response encryption | `utils/credentialResponseEncryption.js`; issuer metadata and wallet `credentialResponseEncryption.js` | `tests/credentialResponseEncryption.test.js` |
@@ -184,6 +184,26 @@ does not impose a key-storage or user-authentication constraint. Its presence
 causes the wallet to use the key-attested JWT proof path, so the issuer must
 continue to validate that proof as it does for the hotel credential. Removing
 the field made this wallet version reject issuer metadata during parsing.
+
+### Temporary test-service relaxations (EUDI wallet interop)
+
+The following are **intentional, temporary** deviations for local interoperability
+with the EUDI Reference Wallet. They are **not** normative APTITUDE or
+OpenID4VCI behaviour and **must be removed or tightened** on the next
+spec-alignment / hardening update (configure proper Wallet Provider trust and
+verification keys instead of relying on these fallbacks).
+
+| Area | Current behaviour | Normative target | Code |
+| --- | --- | --- | --- |
+| `proofs.attestation` verification | When neither `key_attestation_jwks`, `wallet_unit_attestation_jwks`, nor `header.jwk` is available, the issuer logs a warning and binds the credential from **unverified** `attested_keys` in the decoded JWT (`signatureVerified: false`). | Verify the key-attestation / WUA JWS before issuance; bind only from a **verified** payload. Prefer `key_attestation_jwks` or `wallet_unit_attestation_jwks`, else `header.jwk`. | `utils/keyAttestationProof.js` (`verifyKeyAttestationProofChain`), `routes/issue/sharedIssuanceFlows.js` |
+| WUA `iss` claim | Missing `iss` logs a warning; validation continues if structure and signature checks pass. | Reject or apply Wallet Provider trust policy on `iss` (Trusted List / registry). | `utils/routeUtils.js` (`validateWUA`) |
+| Pre-authorized token response | Scope-only pre-auth exchange does **not** synthesize `authorization_details` with `credential_identifiers` (avoids EUDI wallet credential-request mismatch). | When returning `credential_identifiers`, wallets must request with `credential_identifier`; metadata should advertise `credential_identifiers_supported: true`. | `routes/issue/sharedIssuanceFlows.js` (`handlePreAuthorizedCodeFlow`) |
+
+**Next alignment pass (TODO):** remove the unverified `attested_keys` fallback;
+require configured WP verification material; re-enforce strict WUA `iss` and
+trust-list policy; restore token `authorization_details` / identifier flow once
+wallet and issuer agree on the identifying-credential path (OpenID4VCI §3.3.4 /
+§8.2).
 
 ### RFC001 Boundaries
 
@@ -279,7 +299,7 @@ the RFC004 interfaces where the service assumes a provider role.
 | Control | Code location | Notes |
 | --- | --- | --- |
 | OAuth client attestation | `utils/oauthClientAttestation.js` | Enforces JWT type, asymmetric algorithms, `cnf` hygiene, PoP audience and freshness; trust depends on configured JWKS |
-| WIA and WUA | `utils/routeUtils.js` | Validates format/signature/bindings and exposes trust-policy gates; compatibility mode may log rather than reject unavailable WUA/key-attestation verification material |
+| WIA and WUA | `utils/routeUtils.js`, `utils/keyAttestationProof.js` | Validates format/signature/bindings and exposes trust-policy gates. **Temporary:** see [Temporary test-service relaxations](#temporary-test-service-relaxations-eudi-wallet-interop) for unverified attestation binding and relaxed WUA `iss` — tighten on next spec-alignment pass. |
 | DPoP | `utils/tokenUtils.js`, `sharedIssuanceFlows.js` | Binds tokens and resource requests to an EC JWK thumbprint |
 | PKCE | `codeFlowSdJwtRoutes.js`, `sharedIssuanceFlows.js` | S256 is required for the authorization-code path |
 | Credential proof | `sharedIssuanceFlows.js`, `utils/proofJwtResolver.js` | Resolves proof verification keys and validates holder proof constraints |
@@ -331,6 +351,12 @@ the RFC004 interfaces where the service assumes a provider role.
 
 ## Pending Alignment Work
 
+- **Tighten temporary EUDI wallet interop relaxations** — remove unverified
+  `proofs.attestation` / `attested_keys` binding; configure
+  `wallet_unit_attestation_jwks` (or `key_attestation_jwks`); enforce WUA `iss`
+  and Wallet Provider trust policy; reconcile pre-auth token
+  `authorization_details` / `credential_identifiers` with wallet behaviour.
+  See [Temporary test-service relaxations](#temporary-test-service-relaxations-eudi-wallet-interop).
 - [Main → APTITUDE alignment plan](./main-to-aptitude-alignment-plan.md) —
   commit-by-commit analysis of local `main` changes since 2026-06-01 mapped
   to RFC001/002/004 constraints. **Port backlog complete** on branch

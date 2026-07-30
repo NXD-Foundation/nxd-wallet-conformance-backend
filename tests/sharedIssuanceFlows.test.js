@@ -2063,7 +2063,7 @@ describe('Shared Issuance Flows', () => {
       expect(res.body.error_description).to.match(/key_attestation/i);
     });
 
-    it('rejects an unverifiable attestation proof even when ENFORCE_ETSI_ISSUANCE_PROFILE=false', async function () {
+    it('accepts attestation proof using attested_keys when no verification key is configured (test-service relaxed)', async function () {
       if (!cacheServiceRedis.client?.isReady) {
         this.skip();
       }
@@ -2092,9 +2092,8 @@ describe('Shared Issuance Flows', () => {
           proofs: { attestation: [proof] },
         });
 
-      expect(res.status).to.equal(400);
-      expect(res.body).to.have.property('error', 'invalid_proof');
-      expect(res.body.error_description).to.match(/key attestation|attestation/i);
+      expect(res.status).to.equal(200);
+      expect(res.body.credentials).to.be.an('array').with.length(1);
     });
 
     it('P1-1b — MUST return invalid_proof when proof signature does not verify with WUA attested_keys[0]', async function () {
@@ -3549,7 +3548,7 @@ describe('Shared Issuance Flows', () => {
   });
 
   describe('Multi-credential pre-auth offer binding', () => {
-    it('authorizes full offered set on token exchange without authorization_details', async function () {
+    it('authorizes the full offered set without returning authorization_details', async function () {
       if (!cacheServiceRedis.client?.isReady) {
         this.skip();
       }
@@ -3578,11 +3577,7 @@ describe('Shared Issuance Flows', () => {
         })
         .expect(200);
 
-      expect(response.body.authorization_details).to.be.an('array').with.length(2);
-      expect(response.body.authorization_details.map((e) => e.credential_configuration_id)).to.deep.equal([
-        'booking_reference_credential',
-        'airline_pnr_credential',
-      ]);
+      expect(response.body).to.not.have.property('authorization_details');
 
       const updated = await cacheServiceRedis.getPreAuthSession(preAuthCode);
       expect(updated.tokenAuthorizations[response.body.access_token].authorizedConfigurationIds).to.deep.equal([

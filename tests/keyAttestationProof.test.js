@@ -172,11 +172,38 @@ describe("keyAttestationProof", () => {
         },
       };
       const issuerConfig = { key_attestation_jwks: { keys: [attesterPub] } };
-      const { cnf, attestedKeys } = await verifyKeyAttestationProofChain(
+      const { cnf, attestedKeys, signatureVerified } = await verifyKeyAttestationProofChain(
         jwt,
         credConfig,
         issuerConfig
       );
+      expect(signatureVerified).to.equal(true);
+      expect(attestedKeys).to.have.length(1);
+      expect(attestedKeys[0].x).to.equal(holderPub.x);
+      expect(cnf).to.deep.equal({ jwk: holderPub });
+    });
+
+    it("falls back to attested_keys when no verification key is configured", async () => {
+      const holder = await jose.generateKeyPair("ES256");
+      const holderPub = await jose.exportJWK(holder.publicKey);
+      const jwtCompact = await new jose.SignJWT({
+        nonce: "test-nonce-xyz",
+        attested_keys: [holderPub],
+      })
+        .setProtectedHeader({ alg: "ES256", typ: KEY_ATTESTATION_JWT_TYP })
+        .sign(holder.privateKey);
+
+      const credConfig = {
+        proof_types_supported: {
+          attestation: { proof_signing_alg_values_supported: ["ES256"] },
+        },
+      };
+      const { cnf, attestedKeys, signatureVerified } = await verifyKeyAttestationProofChain(
+        jwtCompact,
+        credConfig,
+        {}
+      );
+      expect(signatureVerified).to.equal(false);
       expect(attestedKeys).to.have.length(1);
       expect(attestedKeys[0].x).to.equal(holderPub.x);
       expect(cnf).to.deep.equal({ jwk: holderPub });

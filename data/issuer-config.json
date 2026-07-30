@@ -6,6 +6,7 @@
   "credential_endpoint": "https://server.example.com/credential",
   "deferred_credential_endpoint": "https://server.example.com/credential_deferred",
   "notification_endpoint": "https://server.example.com/notification",
+  "credential_identifiers_supported": true,
   "credential_response_encryption": {
     "alg_values_supported": [
       "ECDH-ES",
@@ -3575,7 +3576,7 @@
           {
             "name": "Airline PNR",
             "locale": "en-GB",
-            "description": "SD-JWT credential containing an airline Passenger Name Record locator."
+            "description": "SD-JWT credential containing an airline Passenger Name Record locator and basic flight details."
           }
         ],
         "claims": [
@@ -3586,6 +3587,50 @@
             "display": [
               {
                 "name": "PNR",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "from"
+            ],
+            "display": [
+              {
+                "name": "From",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "to"
+            ],
+            "display": [
+              {
+                "name": "To",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "flight_date"
+            ],
+            "display": [
+              {
+                "name": "Flight Date",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "airline_name"
+            ],
+            "display": [
+              {
+                "name": "Airline",
                 "locale": "en-GB"
               }
             ]

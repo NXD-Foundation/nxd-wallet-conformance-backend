@@ -1064,14 +1064,6 @@ const handlePreAuthorizedCodeFlow = async (
   if (parsedAuthDetails) {
     tokenResponse.authorization_details =
       buildTokenResponseAuthorizationDetails(parsedAuthDetails);
-  } else if (authorizedConfigurationIds?.length) {
-    tokenResponse.authorization_details =
-      buildTokenResponseAuthorizationDetails(
-        authorizedConfigurationIds.map((configurationId) => ({
-          type: "openid_credential",
-          credential_configuration_id: configurationId,
-        })),
-      );
   }
 
   return tokenResponse;
@@ -2150,7 +2142,7 @@ sharedRouter.post("/credential", async (req, res) => {
         // Mode (3): attestation proof — verify key-attestation JWT and bind credential to attested_keys (no holder PoP JWT).
         if (isAttestationProof) {
           try {
-            const { cnf, attestedKeys } = await verifyKeyAttestationProofChain(
+            const { cnf, attestedKeys, signatureVerified } = await verifyKeyAttestationProofChain(
               requestBody.proofAttestationJwt,
               credConfigForProof,
               issuerConfigForProof,
@@ -2160,10 +2152,18 @@ sharedRouter.post("/credential", async (req, res) => {
             requestBody._attestedKeys = attestedKeys;
             requestBody._credentialBindingCnfList = await dedupeAttestedKeysToCnfList(attestedKeys);
             if (sessionId) {
-              await logInfo(sessionId, "Key attestation proof validated", {
-                effectiveConfigurationId,
-                attestedKeysCount: attestedKeys.length,
-              }).catch(() => {});
+              if (signatureVerified === false) {
+                await logWarn(sessionId, "Key attestation signature not verified; using attested_keys from JWT payload (test-service relaxed mode)", {
+                  effectiveConfigurationId,
+                  attestedKeysCount: attestedKeys.length,
+                  missingIss: !jwt.decode(requestBody.proofAttestationJwt, { complete: false })?.iss,
+                }).catch(() => {});
+              } else {
+                await logInfo(sessionId, "Key attestation proof validated", {
+                  effectiveConfigurationId,
+                  attestedKeysCount: attestedKeys.length,
+                }).catch(() => {});
+              }
             }
           } catch (error) {
             if (sessionId) {

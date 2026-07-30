@@ -1185,6 +1185,10 @@ export const getBookingReferenceSDJWTDataWithPayload = (
 
 const DEFAULT_AIRLINE_PNR_CLAIMS = {
   pnr: "Q7X2LM",
+  from: "ATH",
+  to: "RHO",
+  flight_date: "2026-07-31",
+  airline_name: "Aegean Airlines",
 };
 
 export const getAirlinePnrSDJWTData = () => {
@@ -1196,12 +1200,22 @@ export const getAirlinePnrSDJWTDataWithPayload = (payload) => {
     payload?.claims && typeof payload.claims === "object"
       ? payload.claims
       : payload || {};
-  return {
-    claims: {
-      pnr: sourceClaims.pnr ?? DEFAULT_AIRLINE_PNR_CLAIMS.pnr,
-    },
-    disclosureFrame: { _sd: ["pnr"] },
+
+  const claims = {
+    pnr: sourceClaims.pnr ?? DEFAULT_AIRLINE_PNR_CLAIMS.pnr,
+    from: sourceClaims.from ?? DEFAULT_AIRLINE_PNR_CLAIMS.from,
+    to: sourceClaims.to ?? DEFAULT_AIRLINE_PNR_CLAIMS.to,
+    flight_date:
+      sourceClaims.flight_date ?? DEFAULT_AIRLINE_PNR_CLAIMS.flight_date,
+    airline_name:
+      sourceClaims.airline_name ?? DEFAULT_AIRLINE_PNR_CLAIMS.airline_name,
   };
+
+  const disclosureFrame = {
+    _sd: ["pnr", "from", "to", "flight_date", "airline_name"],
+  };
+
+  return { claims, disclosureFrame };
 };
 
 const DEFAULT_ROOM_KEY_CLAIMS = {
