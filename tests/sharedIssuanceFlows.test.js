@@ -171,7 +171,8 @@ describe('Shared Issuance Flows', () => {
             },
           },
           booking_reference_credential: { format: 'dc+sd-jwt', vct: 'booking_reference_credential', proof_types_supported: { jwt: { proof_signing_alg_values_supported: ['ES256'] } } },
-          airline_pnr_credential: { format: 'dc+sd-jwt', vct: 'airline_pnr_credential', proof_types_supported: { jwt: { proof_signing_alg_values_supported: ['ES256'] } } },
+          airline_pnr_credential: { format: 'dc+sd-jwt', vct: 'urn:eu.aptitude:airline.pnr:1', proof_types_supported: { jwt: { proof_signing_alg_values_supported: ['ES256'] } } },
+          airline_boarding_pass: { format: 'dc+sd-jwt', vct: 'urn:eu.aptitude:airline.boardingpass:1', proof_types_supported: { jwt: { proof_signing_alg_values_supported: ['ES256'] } } },
           'rfc001-device-bound-test': {
             format: 'vc+sd-jwt',
             vct: 'urn:eu.europa.ec.eudi:pid:1',

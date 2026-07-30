@@ -12,7 +12,7 @@ export class ScopeResolutionError extends Error {
  * Prefer issuer metadata `credential_configurations_supported[id].scope`, then offer grant scope.
  * Returns null when no scope can be resolved (caller may fall back to authorization_details).
  */
-function resolveScopeForCredentialConfigurationOrNull({
+export function resolveScopeForCredentialConfigurationOrNull({
   configurationId,
   issuerMeta = null,
   offer = null,

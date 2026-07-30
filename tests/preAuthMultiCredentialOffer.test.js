@@ -84,6 +84,58 @@ describe('Multi-credential pre-auth offer routes', () => {
     expect(stored.credentialPayloads.airline_pnr_credential).to.deep.equal(airlinePnrPayload);
   });
 
+  it('POST /offer-no-code-batch stores signatureType=x509 from query for issuance', async function () {
+    if (!cacheServiceRedis.client?.isReady) {
+      this.skip();
+    }
+
+    const sessionId = `batch-offer-x509-${uuidv4()}`;
+    const response = await request(app)
+      .post('/offer-no-code-batch')
+      .query({ sessionId, signatureType: 'x509' })
+      .send({
+        credentials: [
+          {
+            credential_configuration_id: 'airline_pnr_credential',
+            payload: airlinePnrPayload,
+          },
+        ],
+      })
+      .expect(200);
+
+    expect(response.body.sessionId).to.equal(sessionId);
+    const stored = await cacheServiceRedis.getPreAuthSession(sessionId);
+    expect(stored.signatureType).to.equal('x509');
+    expect(stored.offeredConfigurationIds).to.deep.equal([
+      'airline_pnr_credential',
+    ]);
+  });
+
+  it('POST /offer-no-code-batch stores signatureType=x509 from JSON body for issuance', async function () {
+    if (!cacheServiceRedis.client?.isReady) {
+      this.skip();
+    }
+
+    const sessionId = `batch-offer-x509-body-${uuidv4()}`;
+    const response = await request(app)
+      .post('/offer-no-code-batch')
+      .query({ sessionId })
+      .send({
+        signatureType: 'x509',
+        credentials: [
+          {
+            credential_configuration_id: 'airline_pnr_credential',
+            payload: airlinePnrPayload,
+          },
+        ],
+      })
+      .expect(200);
+
+    expect(response.body.sessionId).to.equal(sessionId);
+    const stored = await cacheServiceRedis.getPreAuthSession(sessionId);
+    expect(stored.signatureType).to.equal('x509');
+  });
+
   it('GET /credential-offer-no-code-batch/:id resolves dynamic ids from session', async function () {
     if (!cacheServiceRedis.client?.isReady) {
       this.skip();

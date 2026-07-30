@@ -63,6 +63,7 @@ multiCredentialOfferRouter.get(["/offer-no-code-batch"], async (req, res) => {
   const credentialType = req.query.credentialType
     ? req.query.credentialType
     : "CombinedCredentials";
+  const signatureType = req.query.signatureType || undefined;
 
   let existingPreAuthSession = await getPreAuthSession(uuid);
   if (!existingPreAuthSession) {
@@ -72,6 +73,7 @@ multiCredentialOfferRouter.get(["/offer-no-code-batch"], async (req, res) => {
       persona: null,
       accessToken: null,
       flowType: "pre-auth",
+      ...(signatureType ? { signatureType } : {}),
     });
   }
   let encodedCredentialOfferUri = encodeURIComponent(

@@ -14,7 +14,7 @@ describe("airline PNR credential", () => {
     expect(configuration).to.include({
       scope: "airline_pnr_credential",
       format: "dc+sd-jwt",
-      vct: "airline_pnr_credential",
+      vct: "urn:eu.aptitude:airline.pnr:1",
     });
     expect(configuration.credential_metadata.claims.map(({ path }) => path)).to.deep.equal([
       ["pnr"],

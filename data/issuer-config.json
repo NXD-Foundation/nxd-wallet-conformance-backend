@@ -3641,7 +3641,123 @@
         "ES256"
       ],
       "format": "dc+sd-jwt",
-      "vct": "airline_pnr_credential",
+      "vct": "urn:eu.aptitude:airline.pnr:1",
+      "proof_types_supported": {
+        "jwt": {
+          "proof_signing_alg_values_supported": [
+            "ES256"
+          ],
+          "key_attestations_required": {}
+        },
+        "attestation": {
+          "proof_signing_alg_values_supported": [
+            "ES256"
+          ],
+          "key_attestations_required": {}
+        }
+      }
+    },
+    "airline_boarding_pass": {
+      "scope": "airline_boarding_pass",
+      "cryptographic_binding_methods_supported": [
+        "jwk"
+      ],
+      "credential_metadata": {
+        "display": [
+          {
+            "name": "Airline Boarding Pass",
+            "locale": "en-GB",
+            "description": "SD-JWT credential containing passenger boarding pass details for an airline flight."
+          }
+        ],
+        "claims": [
+          {
+            "path": ["pnr"],
+            "display": [{ "name": "PNR", "locale": "en-GB" }]
+          },
+          {
+            "path": ["given_name"],
+            "display": [{ "name": "Given Name", "locale": "en-GB" }]
+          },
+          {
+            "path": ["family_name"],
+            "display": [{ "name": "Family Name", "locale": "en-GB" }]
+          },
+          {
+            "path": ["passenger_name"],
+            "display": [{ "name": "Passenger Name", "locale": "en-GB" }]
+          },
+          {
+            "path": ["carrier_name"],
+            "display": [{ "name": "Carrier", "locale": "en-GB" }]
+          },
+          {
+            "path": ["carrier_code"],
+            "display": [{ "name": "Carrier Code", "locale": "en-GB" }]
+          },
+          {
+            "path": ["flight_number"],
+            "display": [{ "name": "Flight Number", "locale": "en-GB" }]
+          },
+          {
+            "path": ["from"],
+            "display": [{ "name": "From", "locale": "en-GB" }]
+          },
+          {
+            "path": ["to"],
+            "display": [{ "name": "To", "locale": "en-GB" }]
+          },
+          {
+            "path": ["departure_datetime"],
+            "display": [{ "name": "Departure", "locale": "en-GB" }]
+          },
+          {
+            "path": ["arrival_datetime"],
+            "display": [{ "name": "Arrival", "locale": "en-GB" }]
+          },
+          {
+            "path": ["terminal"],
+            "display": [{ "name": "Terminal", "locale": "en-GB" }]
+          },
+          {
+            "path": ["gate"],
+            "display": [{ "name": "Gate", "locale": "en-GB" }]
+          },
+          {
+            "path": ["boarding_time"],
+            "display": [{ "name": "Boarding Time", "locale": "en-GB" }]
+          },
+          {
+            "path": ["seat"],
+            "display": [{ "name": "Seat", "locale": "en-GB" }]
+          },
+          {
+            "path": ["boarding_group"],
+            "display": [{ "name": "Boarding Group", "locale": "en-GB" }]
+          },
+          {
+            "path": ["sequence_number"],
+            "display": [{ "name": "Sequence Number", "locale": "en-GB" }]
+          },
+          {
+            "path": ["cabin_class"],
+            "display": [{ "name": "Cabin Class", "locale": "en-GB" }]
+          },
+          {
+            "path": ["ticket_number"],
+            "display": [{ "name": "Ticket Number", "locale": "en-GB" }]
+          },
+          {
+            "path": ["baggage_allowance"],
+            "display": [{ "name": "Baggage Allowance", "locale": "en-GB" }]
+          }
+        ]
+      },
+      "credential_signing_alg_values_supported": [
+        "ES256"
+      ],
+      "format": "dc+sd-jwt",
+      "vct": "urn:eu.aptitude:airline.boardingpass:1",
       "proof_types_supported": {
         "jwt": {
           "proof_signing_alg_values_supported": [

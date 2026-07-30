@@ -821,6 +821,47 @@ export const FULL_PID_DCQL_QUERY = {
   ],
 };
 
+// Semantic VCT for airline PNR SD-JWT (EUDI-style URN; configuration id stays airline_pnr_credential)
+export const AIRLINE_PNR_VCT = "urn:eu.aptitude:airline.pnr:1";
+
+// Semantic VCT for airline boarding pass SD-JWT
+export const AIRLINE_BOARDING_PASS_VCT =
+  "urn:eu.aptitude:airline.boardingpass:1";
+
+// Airline PNR only DCQL query
+export const AIRLINE_PNR_DCQL_QUERY = {
+  credentials: [
+    {
+      id: "airline-pnr",
+      format: "dc+sd-jwt",
+      meta: {
+        vct_values: [AIRLINE_PNR_VCT],
+      },
+      claims: [{ path: ["pnr"] }],
+    },
+  ],
+};
+
+// Airline boarding pass only DCQL query
+export const AIRLINE_BOARDING_PASS_DCQL_QUERY = {
+  credentials: [
+    {
+      id: "airline-boarding-pass",
+      format: "dc+sd-jwt",
+      meta: {
+        vct_values: [AIRLINE_BOARDING_PASS_VCT],
+      },
+      claims: [
+        { path: ["pnr"] },
+        { path: ["flight_number"] },
+        { path: ["seat"] },
+        { path: ["given_name"] },
+        { path: ["family_name"] },
+      ],
+    },
+  ],
+};
+
 // Combined Booking Reference + PID DCQL query
 export const BOOKING_REFERENCE_PID_DCQL_QUERY = {
   credentials: [
@@ -839,6 +880,29 @@ export const BOOKING_REFERENCE_PID_DCQL_QUERY = {
         vct_values: ["urn:eu.europa.ec.eudi:pid:1"],
       },
       // The booking flow needs a minimal PID attribute for identity matching.
+      claims: [{ path: ["family_name"] }],
+    },
+  ],
+};
+
+// Combined Airline PNR + PID DCQL query
+export const PNR_PID_DCQL_QUERY = {
+  credentials: [
+    {
+      id: "airline-pnr",
+      format: "dc+sd-jwt",
+      meta: {
+        vct_values: [AIRLINE_PNR_VCT],
+      },
+      claims: [{ path: ["pnr"] }],
+    },
+    {
+      id: "pid",
+      format: "dc+sd-jwt",
+      meta: {
+        vct_values: ["urn:eu.europa.ec.eudi:pid:1"],
+      },
+      // The PNR flow needs a minimal PID attribute for identity matching.
       claims: [{ path: ["family_name"] }],
     },
   ],
@@ -1335,12 +1399,21 @@ export const getCredentialType = (req) => {
 };
 
 /**
- * Extract signature type from request with default fallback
+ * Extract signature type from request with default fallback.
+ * Prefers body (POST offer helpers), then query (`signatureType` / `signature_type`).
  * @param {Object} req - Express request object
  * @returns {string} Signature type
  */
 export const getSignatureType = (req) => {
-  return req.query.signatureType || DEFAULT_SIGNATURE_TYPE;
+  const fromBody =
+    req.body?.signatureType ||
+    req.body?.signature_type ||
+    undefined;
+  const fromQuery =
+    req.query?.signatureType ||
+    req.query?.signature_type ||
+    undefined;
+  return fromBody || fromQuery || DEFAULT_SIGNATURE_TYPE;
 };
 
 /**
@@ -1467,15 +1540,17 @@ export const createSessionWithPayload = (credentialPayload, isHaip = true) => {
  * @param {string[]} offeredConfigurationIds - Ordered offered configuration ids
  * @param {Record<string, object>} credentialPayloads - Payload keyed by configuration id
  * @param {boolean} isHaip - Whether this is a HAIP flow
+ * @param {string|null} signatureType - Issuer signing mode (e.g. x509, kid-jwk)
  * @returns {Object}
  */
 export const createSessionWithMultiCredentialPayloads = (
   offeredConfigurationIds,
   credentialPayloads,
   isHaip = true,
+  signatureType = null,
 ) => {
   return {
-    ...createBaseSession("pre-auth", isHaip),
+    ...createBaseSession("pre-auth", isHaip, signatureType),
     offeredConfigurationIds,
     credentialPayloads,
     issuedConfigurationIds: [],
@@ -1975,6 +2050,7 @@ export const preAuthOfferSessionStateMatches = (existing, incoming) => {
   const normalize = (session) => ({
     flowType: session.flowType ?? null,
     isHaip: session.isHaip ?? false,
+    signatureType: session.signatureType ?? null,
     offeredConfigurationIds: Array.isArray(session.offeredConfigurationIds)
       ? [...session.offeredConfigurationIds]
       : null,

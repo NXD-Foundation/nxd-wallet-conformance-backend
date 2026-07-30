@@ -1,6 +1,6 @@
 import { storeWalletCredentialByType } from "./cache.js";
 import { resolveWalletInstanceClientId } from "./walletClientId.js";
-import { resolveScopeForCredentialConfiguration } from "./scopeResolution.js";
+import { resolveScopeForCredentialConfigurationOrNull } from "./scopeResolution.js";
 import {
   extractNotificationId,
   resolveNotificationEndpoint,
@@ -43,7 +43,7 @@ export function buildIssuanceAuthorizationFields({
     configurationId,
     credentialIssuer ?? issuerMeta?.credential_issuer,
   );
-  const scope = resolveScopeForCredentialConfiguration({
+  const scope = resolveScopeForCredentialConfigurationOrNull({
     configurationId,
     issuerMeta,
     offer,
@@ -58,6 +58,7 @@ export function buildIssuanceAuthorizationFields({
 
 export {
   resolveScopeForCredentialConfiguration,
+  resolveScopeForCredentialConfigurationOrNull,
   assertAuthorizationDetailsSupportForCredentialRequest,
 } from "./scopeResolution.js";
 export { resolveWalletInstanceClientId } from "./walletClientId.js";

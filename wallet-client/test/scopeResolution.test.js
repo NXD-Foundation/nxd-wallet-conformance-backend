@@ -98,4 +98,20 @@ describe("scope resolution (RFC001 Phase 4)", () => {
     });
     expect(details[0].locations).to.deep.equal(["https://issuer.example"]);
   });
+
+  it("buildIssuanceAuthorizationFields succeeds for scope-less config with authorization_details only", () => {
+    const fields = buildIssuanceAuthorizationFields({
+      configurationId: "LegacyPidConfig",
+      issuerMeta,
+      grantType: "urn:ietf:params:oauth:grant-type:pre-authorized_code",
+    });
+    expect(fields).to.not.have.property("scope");
+    const details = JSON.parse(fields.authorization_details);
+    expect(details).to.have.length(1);
+    expect(details[0]).to.include({
+      type: "openid_credential",
+      credential_configuration_id: "LegacyPidConfig",
+    });
+    expect(details[0].locations).to.deep.equal(["https://issuer.example"]);
+  });
 });

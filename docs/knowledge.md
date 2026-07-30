@@ -151,6 +151,7 @@ for the hotel credential and one for the airline PNR credential.
 curl -X POST http://localhost:3000/offer-no-code-batch \
   -H 'Content-Type: application/json' \
   -d '{
+    "signatureType": "x509",
     "credentials": [
       {
         "credential_configuration_id": "booking_reference_credential",
@@ -171,9 +172,59 @@ curl -X POST http://localhost:3000/offer-no-code-batch \
   }'
 ```
 
+Put `signatureType: "x509"` in the JSON body (preferred for this POST), or as
+a query parameter like `/vci/offer` / `/offer-no-code`. Either way the pre-auth
+session stores `signatureType: "x509"` and issued SD-JWTs include an `x5c`
+header. The EUDI Reference Wallet requires that for presentation; `kid`-only
+signatures are stored but not presentable.
+
 `airline_pnr_credential` is intentionally minimal: its only selectively
 disclosable claim is the customer-facing PNR/record locator. It does not use
 the separate Amadeus Flight Order ID or expose itinerary/passenger data.
+
+### Local airline boarding pass offer
+
+Issue an SD-JWT boarding pass with configuration id `airline_boarding_pass`
+and VCT `urn:eu.aptitude:airline.boardingpass:1`. Prefer `signatureType: "x509"`
+for EUDI Reference Wallet presentation.
+
+```bash
+curl -X POST http://localhost:3000/offer-no-code-batch \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "signatureType": "x509",
+    "credentials": [
+      {
+        "credential_configuration_id": "airline_boarding_pass",
+        "payload": {
+          "pnr": "ABC123",
+          "given_name": "NIKOS",
+          "family_name": "MATKALAINEN",
+          "passenger_name": "NIKOS MATKALAINEN",
+          "carrier_name": "AEGEAN Connect",
+          "carrier_code": "AC",
+          "flight_number": "A3 604",
+          "from": "ATH",
+          "to": "HER",
+          "departure_datetime": "2026-08-01T08:15:00+03:00",
+          "arrival_datetime": "2026-08-01T09:05:00+03:00",
+          "terminal": "Main",
+          "gate": "B12",
+          "boarding_time": "07:35",
+          "seat": "14A",
+          "boarding_group": "2",
+          "sequence_number": "042",
+          "cabin_class": "Economy",
+          "ticket_number": "3901234567890",
+          "baggage_allowance": "1 cabin bag + 1 personal item"
+        }
+      }
+    ]
+  }'
+```
+
+Present with `credential_profile=boarding_pass` (DCQL requests `pnr`,
+`flight_number`, `seat`, `given_name`, `family_name`).
 
 ### EUDI Reference Wallet proof-metadata compatibility
 
@@ -184,6 +235,28 @@ does not impose a key-storage or user-authentication constraint. Its presence
 causes the wallet to use the key-attested JWT proof path, so the issuer must
 continue to validate that proof as it does for the hotel credential. Removing
 the field made this wallet version reject issuer metadata during parsing.
+
+### EUDI Reference Wallet requires X.509-signed SD-JWT credentials for presentation
+
+The EUDI Reference Wallet will **store** SD-JWT VCs signed with `kid` / JWK
+(no `x5c`), but it will **not present** them. During OpenID4VP / DCQL matching
+the wallet extracts claims via Multipaz `SdJwtVcCredential.getClaims`, which
+requires an `x5c` certificate chain on the issuer-signed JWT and throws
+`Only X509-certified keys are supported in SD-JWT` otherwise. That failure is
+swallowed when building presentation candidates, so the UI shows
+“The requested document is not available in your EUDI Wallet” even when the
+credential is registered and the DCQL `vct_values` / claim paths match.
+
+Observed symptoms when issuing with `kid-jwk` (e.g. `aegean#authentication-key`):
+
+- At issuance: `issuerTrustResult=null`, `No certificate chain found`,
+  `verifier.verify() returned null`
+- At presentation: JAR `Resolution.Success`, then `request_no_data` / document
+  not available; no `direct_post`
+
+For EUDI wallet presentation interop, issue SD-JWT credentials (PID, airline
+PNR, booking reference, etc.) with **X.509 / `x5c` signing**, not `kid`-only
+JWK signatures.
 
 ### Temporary test-service relaxations (EUDI wallet interop)
 

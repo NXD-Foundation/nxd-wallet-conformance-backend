@@ -48,6 +48,8 @@ import {
   getBookingReferenceSDJWTDataWithPayload,
   getAirlinePnrSDJWTData,
   getAirlinePnrSDJWTDataWithPayload,
+  getAirlineBoardingPassSDJWTData,
+  getAirlineBoardingPassSDJWTDataWithPayload,
   getRoomKeySDJWTData,
   getRoomKeySDJWTDataWithPayload,
 } from "../utils/credPayloadUtil.js";
@@ -64,6 +66,7 @@ import cryptoModule from "crypto";
 import { Buffer } from "buffer";
 import { encode } from "cbor-x";
 import { loadAptitudeIssuerSigningMaterial } from "./aptitudeIssuerSigningMaterial.js";
+import { AIRLINE_PNR_VCT, AIRLINE_BOARDING_PASS_VCT } from "./routeUtils.js";
 
 const privateKey = fs.readFileSync("./private-key.pem", "utf-8");
 const publicKeyPem = fs.readFileSync("./public-key.pem", "utf-8");
@@ -652,9 +655,18 @@ export async function handleCredentialGenerationBasedOnFormat(
         : getBookingReferenceSDJWTData();
       break;
     case "airline_pnr_credential":
+    case AIRLINE_PNR_VCT:
       credPayload = sessionObject
         ? getAirlinePnrSDJWTDataWithPayload(sessionObject.credentialPayload)
         : getAirlinePnrSDJWTData();
+      break;
+    case "airline_boarding_pass":
+    case AIRLINE_BOARDING_PASS_VCT:
+      credPayload = sessionObject
+        ? getAirlineBoardingPassSDJWTDataWithPayload(
+            sessionObject.credentialPayload,
+          )
+        : getAirlineBoardingPassSDJWTData();
       break;
     case "room_key_credential":
       console.log("!!!!!!!!!!room_key_credential!!!!!!");
@@ -1508,9 +1520,18 @@ export async function handleCredentialGenerationBasedOnFormatDeferred(
         : getBookingReferenceSDJWTData();
       break;
     case "airline_pnr_credential":
+    case AIRLINE_PNR_VCT:
       credPayload = sessionObject
         ? getAirlinePnrSDJWTDataWithPayload(sessionObject.credentialPayload)
         : getAirlinePnrSDJWTData();
+      break;
+    case "airline_boarding_pass":
+    case AIRLINE_BOARDING_PASS_VCT:
+      credPayload = sessionObject
+        ? getAirlineBoardingPassSDJWTDataWithPayload(
+            sessionObject.credentialPayload,
+          )
+        : getAirlineBoardingPassSDJWTData();
       break;
     case "room_key_credential":
       credPayload = sessionObject

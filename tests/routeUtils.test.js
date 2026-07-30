@@ -3,6 +3,11 @@ import {
   createCredentialOfferConfig,
   DEFAULT_MDL_DCQL_QUERY,
   BOOKING_REFERENCE_PID_DCQL_QUERY,
+  AIRLINE_PNR_DCQL_QUERY,
+  AIRLINE_PNR_VCT,
+  AIRLINE_BOARDING_PASS_DCQL_QUERY,
+  AIRLINE_BOARDING_PASS_VCT,
+  PNR_PID_DCQL_QUERY,
   URL_SCHEMES,
   resolveCredentialOfferUrlScheme,
   getCredentialOfferSchemeFromRequest,
@@ -159,6 +164,48 @@ describe('Route Utils', () => {
 
       expect(bookingQuery.meta.vct_values).to.deep.equal(['booking_reference_credential']);
       expect(bookingQuery.claims.map(({ path }) => path)).to.deep.equal([['booking_reference']]);
+
+      expect(pidQuery.meta.vct_values).to.deep.equal(['urn:eu.europa.ec.eudi:pid:1']);
+      expect(pidQuery.claims.map(({ path }) => path)).to.deep.equal([['family_name']]);
+    });
+  });
+
+  describe('AIRLINE_PNR_DCQL_QUERY', () => {
+    it('requests airline PNR credential with EUDI-style vct and pnr claim', () => {
+      const [pnrQuery] = AIRLINE_PNR_DCQL_QUERY.credentials;
+
+      expect(pnrQuery.id).to.equal('airline-pnr');
+      expect(pnrQuery.format).to.equal('dc+sd-jwt');
+      expect(pnrQuery.meta.vct_values).to.deep.equal([AIRLINE_PNR_VCT]);
+      expect(pnrQuery.claims.map(({ path }) => path)).to.deep.equal([['pnr']]);
+    });
+  });
+
+  describe('AIRLINE_BOARDING_PASS_DCQL_QUERY', () => {
+    it('requests airline boarding pass with boarding-pass vct and key claims', () => {
+      const [boardingQuery] = AIRLINE_BOARDING_PASS_DCQL_QUERY.credentials;
+
+      expect(boardingQuery.id).to.equal('airline-boarding-pass');
+      expect(boardingQuery.format).to.equal('dc+sd-jwt');
+      expect(boardingQuery.meta.vct_values).to.deep.equal([
+        AIRLINE_BOARDING_PASS_VCT,
+      ]);
+      expect(boardingQuery.claims.map(({ path }) => path)).to.deep.equal([
+        ['pnr'],
+        ['flight_number'],
+        ['seat'],
+        ['given_name'],
+        ['family_name'],
+      ]);
+    });
+  });
+
+  describe('PNR_PID_DCQL_QUERY', () => {
+    it('requests both airline PNR and PID credentials', () => {
+      const [pnrQuery, pidQuery] = PNR_PID_DCQL_QUERY.credentials;
+
+      expect(pnrQuery.meta.vct_values).to.deep.equal([AIRLINE_PNR_VCT]);
+      expect(pnrQuery.claims.map(({ path }) => path)).to.deep.equal([['pnr']]);
 
       expect(pidQuery.meta.vct_values).to.deep.equal(['urn:eu.europa.ec.eudi:pid:1']);
       expect(pidQuery.claims.map(({ path }) => path)).to.deep.equal([['family_name']]);

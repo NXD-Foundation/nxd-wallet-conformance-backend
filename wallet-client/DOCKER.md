@@ -2,17 +2,42 @@
 
 This document describes how to run the wallet-client service using Docker and Docker Compose.
 
+## Monorepo build context (required)
+
+The `Dockerfile` copies paths relative to the **repository root** (`wallet-client/...` and sibling `utils/`). Shared root `utils/` is re-exported by `wallet-client/utils`, so that directory must be in the build context.
+
+**Do not** run `docker build .` from inside `wallet-client/` — Docker will look for `wallet-client/package.json` under the wrong context and fail with `"/wallet-client/...": not found`.
+
+### Build the image alone
+
+From the **repository root** (`rfc-issuer-v1/`):
+
+```bash
+docker build -f wallet-client/Dockerfile -t endimion13/aptitude-wallet-client:0.0.1f .
+```
+
+From **`wallet-client/`** (context is still the parent):
+
+```bash
+docker build -f Dockerfile -t endimion13/aptitude-wallet-client:0.0.1f ..
+```
+
+Both are equivalent: `-f` points at the Dockerfile; the final `.` / `..` is the **build context** (must be the monorepo root).
+
+### Compose
+
+`docker-compose.yml` already sets `context: ..` and `dockerfile: wallet-client/Dockerfile`, so compose works from `wallet-client/`:
+
+```bash
+cd wallet-client
+docker-compose up -d --build
+```
+
 ## Quick Start
 
 ```bash
 # From wallet-client/ (compose build context is the monorepo root)
 docker-compose up -d --build
-
-# Or build the image alone from the monorepo root:
-#   docker build -f wallet-client/Dockerfile -t endimion13/wallet-client:TAG .
-#
-# Do not `docker build .` inside wallet-client/ — shared utils/ live one
-# level up and must be in the build context.
 
 # Check service status
 docker-compose ps
@@ -117,6 +142,10 @@ curl -X POST http://localhost:4000/issue \
 - Services restart automatically unless explicitly stopped
 
 ## Troubleshooting
+
+### Build fails with `"/wallet-client/...": not found`
+
+You built with context = `wallet-client/` (e.g. `docker build .` inside that folder). Rebuild with monorepo root as context — see [Monorepo build context](#monorepo-build-context-required).
 
 ### Service won't start
 ```bash

@@ -233,11 +233,14 @@ router.post("/offer-no-code", async (req, res) => {
  *
  * Body:
  * {
+ *   "signatureType": "x509",
  *   "credentials": [
  *     { "credential_configuration_id": "VerifiableStudentIDSDJWT", "payload": { ... } },
  *     { "credential_configuration_id": "LoyaltyCard", "payload": { ... } }
  *   ]
  * }
+ *
+ * `signatureType` may also be supplied as a query parameter (same as `/vci/offer`).
  */
 router.post("/offer-no-code-batch", async (req, res) => {
   let sessionId;
@@ -248,11 +251,13 @@ router.post("/offer-no-code-batch", async (req, res) => {
     const issuerConfig = loadIssuerConfiguration();
     const { offeredConfigurationIds, credentialPayloads } =
       parseMultiCredentialOfferRequest(req.body, issuerConfig);
+    const signatureType = getSignatureType(req);
 
     const sessionData = createSessionWithMultiCredentialPayloads(
       offeredConfigurationIds,
       credentialPayloads,
       true,
+      signatureType,
     );
     await manageOfferSession(sessionId, sessionData);
 

@@ -1218,6 +1218,56 @@ export const getAirlinePnrSDJWTDataWithPayload = (payload) => {
   return { claims, disclosureFrame };
 };
 
+const DEFAULT_AIRLINE_BOARDING_PASS_CLAIMS = {
+  pnr: "ABC123",
+  given_name: "NIKOS",
+  family_name: "MATKALAINEN",
+  passenger_name: "NIKOS MATKALAINEN",
+  carrier_name: "AEGEAN Connect",
+  carrier_code: "AC",
+  flight_number: "A3 604",
+  from: "ATH",
+  to: "HER",
+  departure_datetime: "2026-08-01T08:15:00+03:00",
+  arrival_datetime: "2026-08-01T09:05:00+03:00",
+  terminal: "Main",
+  gate: "B12",
+  boarding_time: "07:35",
+  seat: "14A",
+  boarding_group: "2",
+  sequence_number: "042",
+  cabin_class: "Economy",
+  ticket_number: "3901234567890",
+  baggage_allowance: "1 cabin bag + 1 personal item",
+};
+
+const AIRLINE_BOARDING_PASS_CLAIM_KEYS = Object.keys(
+  DEFAULT_AIRLINE_BOARDING_PASS_CLAIMS,
+);
+
+export const getAirlineBoardingPassSDJWTData = () => {
+  return getAirlineBoardingPassSDJWTDataWithPayload(null);
+};
+
+export const getAirlineBoardingPassSDJWTDataWithPayload = (payload) => {
+  const sourceClaims =
+    payload?.claims && typeof payload.claims === "object"
+      ? payload.claims
+      : payload || {};
+
+  const claims = {};
+  for (const key of AIRLINE_BOARDING_PASS_CLAIM_KEYS) {
+    claims[key] =
+      sourceClaims[key] ?? DEFAULT_AIRLINE_BOARDING_PASS_CLAIMS[key];
+  }
+
+  const disclosureFrame = {
+    _sd: [...AIRLINE_BOARDING_PASS_CLAIM_KEYS],
+  };
+
+  return { claims, disclosureFrame };
+};
+
 const DEFAULT_ROOM_KEY_CLAIMS = {
   room_number: "412",
   reservationId: "RES-2026-001234",
