@@ -254,4 +254,83 @@ describe('Multi-credential pre-auth offer routes', () => {
       'booking_reference_credential',
     ]);
   });
+
+  it('POST /offer-no-code accepts cassl_biometric_qr claims wrapper and stores signatureType', async function () {
+    if (!cacheServiceRedis.client?.isReady) {
+      this.skip();
+    }
+
+    const sessionId = `bio-qr-offer-${uuidv4()}`;
+    const claims = {
+      pnr: 'ABC123',
+      given_name: 'Hanna',
+      family_name: 'Matkalainen',
+      flight_number: 'A3 604',
+      from: 'ATH',
+      to: 'HER',
+      picture: 'data:image/jpeg;base64,ZmFrZQ==',
+      valid_from: '2026-07-31T08:10:28.805Z',
+      valid_until: '2026-07-31T20:10:28.805Z',
+    };
+
+    const response = await request(app)
+      .post('/offer-no-code')
+      .query({
+        sessionId,
+        credentialType: 'cassl_biometric_qr',
+        signatureType: 'x509',
+      })
+      .send({
+        credential_type: 'cassl_biometric_qr',
+        claims,
+      })
+      .expect(200);
+
+    expect(response.body.sessionId).to.equal(sessionId);
+    expect(response.body.deepLink).to.include('credential-offer-no-code');
+    expect(response.body.deepLink).to.include(
+      encodeURIComponent('type=cassl_biometric_qr'),
+    );
+
+    const stored = await cacheServiceRedis.getPreAuthSession(sessionId);
+    expect(stored.signatureType).to.equal('x509');
+    expect(stored.credentialPayload).to.deep.equal(claims);
+  });
+
+  it('POST /offer-no-code-batch accepts cassl_biometric_qr payload', async function () {
+    if (!cacheServiceRedis.client?.isReady) {
+      this.skip();
+    }
+
+    const sessionId = `bio-qr-batch-${uuidv4()}`;
+    const payload = {
+      pnr: 'ABC123',
+      given_name: 'Hanna',
+      family_name: 'Matkalainen',
+      flight_number: 'A3 604',
+      from: 'ATH',
+      picture: 'data:image/jpeg;base64,ZmFrZQ==',
+    };
+
+    const response = await request(app)
+      .post('/offer-no-code-batch')
+      .query({ sessionId })
+      .send({
+        signatureType: 'x509',
+        credentials: [
+          {
+            credential_configuration_id: 'cassl_biometric_qr',
+            payload,
+          },
+        ],
+      })
+      .expect(200);
+
+    expect(response.body.offeredConfigurationIds).to.deep.equal([
+      'cassl_biometric_qr',
+    ]);
+    const stored = await cacheServiceRedis.getPreAuthSession(sessionId);
+    expect(stored.signatureType).to.equal('x509');
+    expect(stored.credentialPayloads.cassl_biometric_qr).to.deep.equal(payload);
+  });
 });

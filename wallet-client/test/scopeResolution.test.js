@@ -2,6 +2,7 @@ import { expect } from "chai";
 import {
   resolveScopeForCredentialConfiguration,
   readScopeFromOfferGrant,
+  assertAuthorizationDetailsSupportForCredentialRequest,
 } from "../src/lib/scopeResolution.js";
 import { buildIssuanceAuthorizationFields } from "../src/lib/issuance.js";
 
@@ -113,5 +114,30 @@ describe("scope resolution (RFC001 Phase 4)", () => {
       credential_configuration_id: "LegacyPidConfig",
     });
     expect(details[0].locations).to.deep.equal(["https://issuer.example"]);
+  });
+
+  it("assertAuthorizationDetailsSupport allows scope-less config when AS advertises openid_credential", () => {
+    const result = assertAuthorizationDetailsSupportForCredentialRequest({
+      configurationId: "LegacyPidConfig",
+      issuerMeta,
+      grantType: "urn:ietf:params:oauth:grant-type:pre-authorized_code",
+      authorizationServerMeta: {
+        authorization_details_types_supported: ["openid_credential"],
+      },
+    });
+    expect(result).to.deep.equal({ required: true, scope: null });
+  });
+
+  it("assertAuthorizationDetailsSupport rejects scope-less config when AS omits openid_credential", () => {
+    expect(() =>
+      assertAuthorizationDetailsSupportForCredentialRequest({
+        configurationId: "LegacyPidConfig",
+        issuerMeta,
+        grantType: "urn:ietf:params:oauth:grant-type:pre-authorized_code",
+        authorizationServerMeta: {
+          scopes_supported: ["openid"],
+        },
+      }),
+    ).to.throw(/issuer_metadata_incomplete[\s\S]*authorization_details_types_supported/i);
   });
 });

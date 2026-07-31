@@ -65,8 +65,14 @@ export function assertAuthorizationDetailsSupportForCredentialRequest({
 
   const supported = authorizationServerMeta?.authorization_details_types_supported;
   if (!Array.isArray(supported) || !supported.includes("openid_credential")) {
+    const advertised = Array.isArray(supported) ? supported : null;
     throw new Error(
-      `authorization_details support is required for scope-less credential configuration '${configurationId}'; authorization_details_types_supported must include 'openid_credential'`,
+      `issuer_metadata_incomplete: credential configuration '${configurationId}' has no scope ` +
+        `(issuer metadata / offer grant) and the Authorization Server does not advertise ` +
+        `authorization_details_types_supported including 'openid_credential' ` +
+        `(got ${advertised === null ? "missing/non-array" : JSON.stringify(advertised)}). ` +
+        `Fix: add a scope on the credential configuration (and preferably list it in AS scopes_supported), ` +
+        `or advertise authorization_details_types_supported: ["openid_credential"].`,
     );
   }
   return { required: true, scope: null };

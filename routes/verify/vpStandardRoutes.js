@@ -9,6 +9,7 @@ import {
   BOOKING_REFERENCE_PID_DCQL_QUERY,
   AIRLINE_PNR_DCQL_QUERY,
   AIRLINE_BOARDING_PASS_DCQL_QUERY,
+  BOARDING_PASS_PID_DCQL_QUERY,
   PNR_PID_DCQL_QUERY,
   DEFAULT_TRANSACTION_DATA,
   loadConfigurationFiles,
@@ -63,7 +64,7 @@ vpStandardRouter.use((req, res, next) => {
  * - session_id: Session identifier
  * - client_id_scheme: x509 | did:web | did:jwk
  * - profile: dcql | tx | mdl
- * - credential_profile: pid | pidfull | pnr | boarding_pass | booking_pid | pnr_pid | mdl
+ * - credential_profile: pid | pidfull | pnr | boarding_pass | boarding_pass_pid | booking_pid | pnr_pid | mdl
  * - request_uri_method: get | post
  * - response_mode: direct_post | direct_post.jwt
  * - tx_data: true | false
@@ -143,6 +144,8 @@ vpStandardRouter.get("/vp/request", async (req, res) => {
       dcqlQuery = AIRLINE_PNR_DCQL_QUERY;
     } else if (credentialProfile === "boarding_pass") {
       dcqlQuery = AIRLINE_BOARDING_PASS_DCQL_QUERY;
+    } else if (credentialProfile === "boarding_pass_pid") {
+      dcqlQuery = BOARDING_PASS_PID_DCQL_QUERY;
     } else if (credentialProfile === "pnr_pid") {
       dcqlQuery = PNR_PID_DCQL_QUERY;
     } else {
@@ -173,9 +176,11 @@ vpStandardRouter.get("/vp/request", async (req, res) => {
                   ? AIRLINE_PNR_DCQL_QUERY
                   : credentialProfile === "boarding_pass"
                     ? AIRLINE_BOARDING_PASS_DCQL_QUERY
-                    : credentialProfile === "pnr_pid"
-                      ? PNR_PID_DCQL_QUERY
-                      : DEFAULT_DCQL_QUERY;
+                    : credentialProfile === "boarding_pass_pid"
+                      ? BOARDING_PASS_PID_DCQL_QUERY
+                      : credentialProfile === "pnr_pid"
+                        ? PNR_PID_DCQL_QUERY
+                        : DEFAULT_DCQL_QUERY;
       }
     }
 

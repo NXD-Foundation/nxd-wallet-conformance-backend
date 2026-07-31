@@ -32,6 +32,7 @@ import {
   createSessionWithMultiCredentialPayloads,
   parseMultiCredentialOfferRequest,
   preAuthOfferSessionStateMatches,
+  normalizeSingleCredentialOfferPayload,
   loadIssuerConfiguration,
   
   // QR code and URL generation utilities
@@ -195,7 +196,20 @@ router.get("/offer-no-code", async (req, res) => {
 });
 
 /**
- * Pre-authorized flow without transaction code with request body
+ * Pre-authorized flow without transaction code with request body.
+ *
+ * Accepts either:
+ * - raw claims object
+ * - `{ credential_type, claims }` (used by CASSL biometric QR callers)
+ * - `{ payload }`
+ *
+ * Query/body: `credentialType` / `credential_type`, `signatureType` / `signature_type`, `sessionId`.
+ *
+ * Example (biometric QR):
+ *   POST /offer-no-code?credentialType=cassl_biometric_qr&signatureType=x509
+ *   { "credential_type": "cassl_biometric_qr", "claims": { "pnr": "...", "picture": "data:image/jpeg;base64,..." } }
+ *
+ * Multi-credential offers: use POST /offer-no-code-batch instead.
  */
 router.post("/offer-no-code", async (req, res) => {
   let sessionId;
@@ -204,14 +218,19 @@ router.post("/offer-no-code", async (req, res) => {
     bindSessionLoggingContext(req, res, sessionId);
 
     const credentialType = getCredentialType(req);
-    const credentialPayload = req.body;
+    const signatureType = getSignatureType(req);
+    const credentialPayload = normalizeSingleCredentialOfferPayload(req.body);
 
     if (!isValidCredentialPayload(credentialPayload)) {
       return sendErrorResponse(res, "invalid_request", "Credential payload is required", 400);
     }
 
-    const sessionData = createSessionWithPayload(credentialPayload, true);
-    await manageSession(sessionId, sessionData);
+    const sessionData = createSessionWithPayload(
+      credentialPayload,
+      true,
+      signatureType,
+    );
+    await manageOfferSession(sessionId, sessionData);
 
     const invocationScheme = getCredentialOfferSchemeFromRequest(req);
     const credentialOffer = createPreAuthCredentialOfferUri(
@@ -224,6 +243,10 @@ router.post("/offer-no-code", async (req, res) => {
     const response = await createCredentialOfferResponse(credentialOffer, sessionId);
     res.json(response);
   } catch (error) {
+    if (error?.errorCode === "invalid_request") {
+      const status = error.status || 400;
+      return sendErrorResponse(res, "invalid_request", error.message, status);
+    }
     handleRouteError(error, "Offer no-code POST", res, sessionId);
   }
 });

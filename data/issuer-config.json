@@ -4728,7 +4728,7 @@
           },
           {
             "path": [
-              "qr_code"
+              "picture"
             ],
             "display": [
               {
@@ -4744,6 +4744,53 @@
       ],
       "format": "dc+sd-jwt",
       "vct": "room_key_credential",
+      "proof_types_supported": {
+        "jwt": {
+          "proof_signing_alg_values_supported": [
+            "ES256"
+          ],
+          "key_attestations_required": {}
+        },
+        "attestation": {
+          "proof_signing_alg_values_supported": [
+            "ES256"
+          ],
+          "key_attestations_required": {}
+        }
+      }
+    },
+    "cassl_biometric_qr": {
+      "scope": "cassl_biometric_qr",
+      "cryptographic_binding_methods_supported": [
+        "jwk"
+      ],
+      "credential_metadata": {
+        "display": [
+          {
+            "name": "CASSL Biometric QR",
+            "locale": "en-GB",
+            "description": "SD-JWT credential containing a CASSL biometric QR code image for passenger identity and journey binding."
+          }
+        ],
+        "claims": [
+          {
+            "path": [
+              "picture"
+            ],
+            "display": [
+              {
+                "name": "Biometric QR Code",
+                "locale": "en-GB"
+              }
+            ]
+          }
+        ]
+      },
+      "credential_signing_alg_values_supported": [
+        "ES256"
+      ],
+      "format": "dc+sd-jwt",
+      "vct": "urn:eu.aptitude:cassl.biometricqr:1",
       "proof_types_supported": {
         "jwt": {
           "proof_signing_alg_values_supported": [

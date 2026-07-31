@@ -841,6 +841,9 @@ export const AIRLINE_PNR_VCT = "urn:eu.aptitude:airline.pnr:1";
 export const AIRLINE_BOARDING_PASS_VCT =
   "urn:eu.aptitude:airline.boardingpass:1";
 
+// Semantic VCT for CASSL biometric QR SD-JWT
+export const CASSL_BIOMETRIC_QR_VCT = "urn:eu.aptitude:cassl.biometricqr:1";
+
 // Airline PNR only DCQL query
 export const AIRLINE_PNR_DCQL_QUERY = {
   credentials: [
@@ -870,6 +873,55 @@ export const AIRLINE_BOARDING_PASS_DCQL_QUERY = {
         { path: ["seat"] },
         { path: ["given_name"] },
         { path: ["family_name"] },
+      ],
+    },
+  ],
+};
+
+// Combined Airline boarding pass (all claims) + PID (core identity + picture) DCQL query
+export const BOARDING_PASS_PID_DCQL_QUERY = {
+  credentials: [
+    {
+      id: "airline-boarding-pass",
+      format: "dc+sd-jwt",
+      meta: {
+        vct_values: [AIRLINE_BOARDING_PASS_VCT],
+      },
+      claims: [
+        { path: ["pnr"] },
+        { path: ["given_name"] },
+        { path: ["family_name"] },
+        { path: ["passenger_name"] },
+        { path: ["carrier_name"] },
+        { path: ["carrier_code"] },
+        { path: ["flight_number"] },
+        { path: ["from"] },
+        { path: ["to"] },
+        { path: ["departure_datetime"] },
+        { path: ["arrival_datetime"] },
+        { path: ["terminal"] },
+        { path: ["gate"] },
+        { path: ["boarding_time"] },
+        { path: ["seat"] },
+        { path: ["boarding_group"] },
+        { path: ["sequence_number"] },
+        { path: ["cabin_class"] },
+        { path: ["ticket_number"] },
+        { path: ["baggage_allowance"] },
+      ],
+    },
+    {
+      id: "pid",
+      format: "dc+sd-jwt",
+      meta: {
+        vct_values: ["urn:eu.europa.ec.eudi:pid:1"],
+      },
+      claims: [
+        { path: ["given_name"] },
+        { path: ["family_name"] },
+        { path: ["birthdate"] },
+        { path: ["nationalities"] },
+        { path: ["picture"] },
       ],
     },
   ],
@@ -1411,7 +1463,14 @@ export const getSessionId = (req) => {
  * @returns {string} Credential type
  */
 export const getCredentialType = (req) => {
-  return req.query.credentialType || req.query.type || DEFAULT_CREDENTIAL_TYPE;
+  return (
+    req.query?.credentialType ||
+    req.query?.credential_type ||
+    req.query?.type ||
+    req.body?.credential_type ||
+    req.body?.credentialType ||
+    DEFAULT_CREDENTIAL_TYPE
+  );
 };
 
 /**
@@ -1542,13 +1601,45 @@ export const createBaseSession = (flowType = "pre-auth", isHaip = false, signatu
  * Create session with credential payload
  * @param {Object} credentialPayload - Credential payload data
  * @param {boolean} isHaip - Whether this is a HAIP flow
+ * @param {string|null} signatureType - Issuer signing mode (e.g. x509, kid-jwk)
  * @returns {Object} Session object with credential payload
  */
-export const createSessionWithPayload = (credentialPayload, isHaip = true) => {
+export const createSessionWithPayload = (
+  credentialPayload,
+  isHaip = true,
+  signatureType = null,
+) => {
   return {
-    ...createBaseSession("pre-auth", isHaip),
-    credentialPayload
+    ...createBaseSession("pre-auth", isHaip, signatureType),
+    credentialPayload,
   };
+};
+
+/**
+ * Normalize a single-credential POST offer body.
+ * Accepts either raw claims, or `{ credential_type, claims }` / `{ payload }`.
+ * @param {object} body
+ * @returns {object}
+ */
+export const normalizeSingleCredentialOfferPayload = (body) => {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return body;
+  }
+  if (body.claims && typeof body.claims === "object" && !Array.isArray(body.claims)) {
+    return body.claims;
+  }
+  if (body.payload && typeof body.payload === "object" && !Array.isArray(body.payload)) {
+    return body.payload;
+  }
+  const {
+    signatureType: _st,
+    signature_type: _st2,
+    credential_type: _ct,
+    credentialType: _ct2,
+    credentials: _creds,
+    ...rest
+  } = body;
+  return Object.keys(rest).length > 0 ? rest : body;
 };
 
 /**

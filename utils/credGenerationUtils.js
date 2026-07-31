@@ -52,6 +52,8 @@ import {
   getAirlineBoardingPassSDJWTDataWithPayload,
   getRoomKeySDJWTData,
   getRoomKeySDJWTDataWithPayload,
+  getCasslBiometricQrSDJWTData,
+  getCasslBiometricQrSDJWTDataWithPayload,
 } from "../utils/credPayloadUtil.js";
 
 import { issueX509AttrCredentialWithDefaultKey } from "./issueX509AttrCredential.js";
@@ -66,7 +68,11 @@ import cryptoModule from "crypto";
 import { Buffer } from "buffer";
 import { encode } from "cbor-x";
 import { loadAptitudeIssuerSigningMaterial } from "./aptitudeIssuerSigningMaterial.js";
-import { AIRLINE_PNR_VCT, AIRLINE_BOARDING_PASS_VCT } from "./routeUtils.js";
+import {
+  AIRLINE_PNR_VCT,
+  AIRLINE_BOARDING_PASS_VCT,
+  CASSL_BIOMETRIC_QR_VCT,
+} from "./routeUtils.js";
 
 const privateKey = fs.readFileSync("./private-key.pem", "utf-8");
 const publicKeyPem = fs.readFileSync("./public-key.pem", "utf-8");
@@ -719,6 +725,14 @@ export async function handleCredentialGenerationBasedOnFormat(
             sessionObject.credentialPayload,
           )
         : await getRoomKeySDJWTData();
+      break;
+    case "cassl_biometric_qr":
+    case CASSL_BIOMETRIC_QR_VCT:
+      credPayload = sessionObject
+        ? await getCasslBiometricQrSDJWTDataWithPayload(
+            sessionObject.credentialPayload,
+          )
+        : await getCasslBiometricQrSDJWTData();
       break;
     default:
       throw new Error(`Unsupported credential type: ${credType}`);
@@ -1583,6 +1597,14 @@ export async function handleCredentialGenerationBasedOnFormatDeferred(
             sessionObject.credentialPayload,
           )
         : await getRoomKeySDJWTData();
+      break;
+    case "cassl_biometric_qr":
+    case CASSL_BIOMETRIC_QR_VCT:
+      credPayload = sessionObject
+        ? await getCasslBiometricQrSDJWTDataWithPayload(
+            sessionObject.credentialPayload,
+          )
+        : await getCasslBiometricQrSDJWTData();
       break;
     default:
       throw new Error(`Unsupported credential type: ${credType}`);

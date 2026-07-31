@@ -417,8 +417,10 @@ async function handleWalletTestSession(req, res, issuanceOpts = {}) {
           });
           return res.json(okPayload);
         } catch (err) {
-          const failed = await setStatus("failed", { error: err.message || String(err) });
-          return res.status(500).json({ error: "server_error", error_description: err.message || String(err), state: failed });
+          const errorMessage = err?.message || String(err);
+          await logError(sessionId, "[/session] pre-authorized issuance failed:", errorMessage);
+          const failed = await setStatus("failed", { error: errorMessage });
+          return res.status(500).json({ error: "server_error", error_description: errorMessage, state: failed });
         }
       }
 
@@ -447,8 +449,10 @@ async function handleWalletTestSession(req, res, issuanceOpts = {}) {
           });
           return res.json(okPayload);
         } catch (err) {
-          const failed = await setStatus("failed", { error: err.message || String(err) });
-          return res.status(500).json({ error: "server_error", error_description: err.message || String(err), state: failed });
+          const errorMessage = err?.message || String(err);
+          await logError(sessionId, "[/session] authorization-code issuance failed:", errorMessage);
+          const failed = await setStatus("failed", { error: errorMessage });
+          return res.status(500).json({ error: "server_error", error_description: errorMessage, state: failed });
         }
       }
 
@@ -1127,16 +1131,29 @@ async function runPreAuthorizedIssuance(
     }
     authorizationServerMeta = await discoverAuthorizationServerMetadata(asBase, logSessionId);
   }
-  assertAuthorizationDetailsSupportForCredentialRequest({
-    configurationId,
-    issuerMeta,
-    offer,
-    grantType: "urn:ietf:params:oauth:grant-type:pre-authorized_code",
-    authorizationServerMeta,
-  });
   try {
-    slog("[preauth] authorization fields", { walletClientId, scope, configurationId });
+    slog("[preauth] authorization fields", {
+      walletClientId,
+      scope: scope || null,
+      configurationId,
+      hasAuthorizationDetails: !!authorization_details,
+      asAuthDetailsTypes: authorizationServerMeta?.authorization_details_types_supported ?? null,
+    });
   } catch {}
+  try {
+    assertAuthorizationDetailsSupportForCredentialRequest({
+      configurationId,
+      issuerMeta,
+      offer,
+      grantType: "urn:ietf:params:oauth:grant-type:pre-authorized_code",
+      authorizationServerMeta,
+    });
+  } catch (err) {
+    const errorMessage = err?.message || String(err);
+    console.error("[preauth] authorization parameter check failed:", errorMessage);
+    try { slog("[preauth] authorization parameter check failed", { error: errorMessage }); } catch {}
+    throw err;
+  }
   if (!authorizationServerMeta) {
     const authorizationServers = Array.isArray(issuerMeta.authorization_servers)
       ? issuerMeta.authorization_servers
@@ -1433,16 +1450,29 @@ async function runAuthorizationCodeIssuance(
     grantType: "authorization_code",
     credentialIssuer: issuerMeta?.credential_issuer || apiBase,
   });
-  assertAuthorizationDetailsSupportForCredentialRequest({
-    configurationId,
-    issuerMeta,
-    offer,
-    grantType: "authorization_code",
-    authorizationServerMeta,
-  });
   try {
-    slog("[codeflow] authorization fields", { walletClientId, scope, configurationId });
+    slog("[codeflow] authorization fields", {
+      walletClientId,
+      scope: scope || null,
+      configurationId,
+      hasAuthorizationDetails: !!authorization_details,
+      asAuthDetailsTypes: authorizationServerMeta?.authorization_details_types_supported ?? null,
+    });
   } catch {}
+  try {
+    assertAuthorizationDetailsSupportForCredentialRequest({
+      configurationId,
+      issuerMeta,
+      offer,
+      grantType: "authorization_code",
+      authorizationServerMeta,
+    });
+  } catch (err) {
+    const errorMessage = err?.message || String(err);
+    console.error("[codeflow] authorization parameter check failed:", errorMessage);
+    try { slog("[codeflow] authorization parameter check failed", { error: errorMessage }); } catch {}
+    throw err;
+  }
   const attestationChallengeState = await createIssuanceAttestationChallengeState(
     authorizationServerMeta,
     logSessionId,

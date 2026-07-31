@@ -7,6 +7,7 @@ import {
   AIRLINE_PNR_VCT,
   AIRLINE_BOARDING_PASS_DCQL_QUERY,
   AIRLINE_BOARDING_PASS_VCT,
+  BOARDING_PASS_PID_DCQL_QUERY,
   PNR_PID_DCQL_QUERY,
   URL_SCHEMES,
   resolveCredentialOfferUrlScheme,
@@ -196,6 +197,49 @@ describe('Route Utils', () => {
         ['seat'],
         ['given_name'],
         ['family_name'],
+      ]);
+    });
+  });
+
+  describe('BOARDING_PASS_PID_DCQL_QUERY', () => {
+    it('requests full boarding pass claims plus core PID identity attributes', () => {
+      const [boardingQuery, pidQuery] = BOARDING_PASS_PID_DCQL_QUERY.credentials;
+
+      expect(boardingQuery.meta.vct_values).to.deep.equal([
+        AIRLINE_BOARDING_PASS_VCT,
+      ]);
+      expect(boardingQuery.claims.map(({ path }) => path)).to.deep.equal([
+        ['pnr'],
+        ['given_name'],
+        ['family_name'],
+        ['passenger_name'],
+        ['carrier_name'],
+        ['carrier_code'],
+        ['flight_number'],
+        ['from'],
+        ['to'],
+        ['departure_datetime'],
+        ['arrival_datetime'],
+        ['terminal'],
+        ['gate'],
+        ['boarding_time'],
+        ['seat'],
+        ['boarding_group'],
+        ['sequence_number'],
+        ['cabin_class'],
+        ['ticket_number'],
+        ['baggage_allowance'],
+      ]);
+
+      expect(pidQuery.meta.vct_values).to.deep.equal([
+        'urn:eu.europa.ec.eudi:pid:1',
+      ]);
+      expect(pidQuery.claims.map(({ path }) => path)).to.deep.equal([
+        ['given_name'],
+        ['family_name'],
+        ['birthdate'],
+        ['nationalities'],
+        ['picture'],
       ]);
     });
   });
