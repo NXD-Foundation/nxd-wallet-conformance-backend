@@ -69,7 +69,7 @@ describe('Presentation Definition (PE) structure - OID4VP v1.0', () => {
     assert.ok(allPaths.every(p => typeof p === 'string' && p.startsWith('$.')), 'All field paths must be JSONPath starting with $.');
 
     // Granular selectors: ensure specific claims are requested (data minimization)
-    const requiredClaims = ['given_name', 'family_name', 'birth_date', 'age_over_18'];
+    const requiredClaims = ['given_name', 'family_name', 'birthdate', 'nationalities'];
     for (const claim of requiredClaims) {
       const hasClaim = allPaths.some(p => p.endsWith(`.${claim}`) || p === `$.${claim}`);
       assert.ok(hasClaim, `PD must request granular claim: ${claim}`);

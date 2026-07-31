@@ -35,7 +35,7 @@
               "path": ["$.family_name"]
             },
             {
-              "path": ["$.age_over_18"]
+              "path": ["$.birthdate"]
             },
             {
               "path": ["$.issuing_country"]

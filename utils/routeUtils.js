@@ -798,7 +798,7 @@ export const DEFAULT_DCQL_QUERY = {
   ],
 };
 
-// Full PID DCQL query — all attributes the PID issuer provides
+// Full PID DCQL query — all SD-JWT claim names from the PID Rulebook (Chapter 4)
 export const FULL_PID_DCQL_QUERY = {
   credentials: [
     {
@@ -810,12 +810,25 @@ export const FULL_PID_DCQL_QUERY = {
       claims: [
         { path: ["given_name"] },
         { path: ["family_name"] },
-        { path: ["birth_date"] },
-        { path: ["age_over_18"] },
-        { path: ["issuance_date"] },
-        { path: ["expiry_date"] },
+        { path: ["birthdate"] },
+        { path: ["place_of_birth"] },
+        { path: ["nationalities"] },
+        { path: ["picture"] },
+        { path: ["address"] },
+        { path: ["personal_administrative_number"] },
+        { path: ["birth_family_name"] },
+        { path: ["birth_given_name"] },
+        { path: ["sex"] },
+        { path: ["email"] },
+        { path: ["phone_number"] },
         { path: ["issuing_authority"] },
         { path: ["issuing_country"] },
+        { path: ["date_of_issuance"] },
+        { path: ["date_of_expiry"] },
+        { path: ["document_number"] },
+        { path: ["issuing_jurisdiction"] },
+        { path: ["trust_anchor"] },
+        { path: ["attestation_legal_category"] },
       ],
     },
   ],
@@ -1249,7 +1262,10 @@ export const DEFAULT_MDL_DCQL_QUERY = {
           path: ["urn:eu.europa.ec.eudi:pid:1", "given_name"],
         },
         {
-          path: ["urn:eu.europa.ec.eudi:pid:1", "age_over_18"],
+          path: ["urn:eu.europa.ec.eudi:pid:1", "birth_date"],
+        },
+        {
+          path: ["urn:eu.europa.ec.eudi:pid:1", "nationality"],
         },
       ],
       format: "mso_mdoc",

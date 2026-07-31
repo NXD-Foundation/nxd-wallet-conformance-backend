@@ -6,6 +6,168 @@ import imageDataURI from "image-data-uri";
 import { streamToBuffer } from "@jorgeferrero/stream-to-buffer";
 
 const face_data = fs.readFileSync("./data/face.data", "utf8");
+
+/** Mock PID portrait (JPEG bytes) — see data/portraits/README.md */
+const PID_PORTRAIT_JPEG = fs.readFileSync("./data/portraits/pid-portrait.jpg");
+const PID_PORTRAIT_DATA_URL = `data:image/jpeg;base64,${PID_PORTRAIT_JPEG.toString("base64")}`;
+
+/**
+ * Full mock natural-person PID claims per ARF Annex 3.01 PID Rulebook
+ * (docs/rulebooks/pid-rulebook.md) SD-JWT VC encoding (Chapter 4).
+ */
+function buildPidSdJwtClaims() {
+  const issuance = new Date();
+  const expiry = new Date(issuance);
+  expiry.setFullYear(expiry.getFullYear() + 10);
+  const toFullDate = (d) => d.toISOString().slice(0, 10);
+
+  return {
+    // Mandatory attributes (CIR 2024/2977) — SD-JWT claim names
+    given_name: "Hanna",
+    family_name: "Matkalainen",
+    birthdate: "2005-07-01",
+    place_of_birth: {
+      country: "FI",
+      region: "Uusimaa",
+      locality: "Helsinki",
+    },
+    nationalities: ["FI"],
+    picture: PID_PORTRAIT_DATA_URL,
+
+    // Optional attributes (CIR 2024/2977) — address hierarchy + others
+    address: {
+      formatted: "Mannerheimintie 1, 00100 Helsinki",
+      country: "FI",
+      region: "Uusimaa",
+      locality: "Helsinki",
+      postal_code: "00100",
+      street_address: "Mannerheimintie 1",
+      house_number: "1",
+    },
+    personal_administrative_number: "123456-789A",
+    birth_family_name: "Virtanen",
+    birth_given_name: "Hanna Maria",
+    sex: 2,
+    email: "hanna.matkalainen@example.com",
+    phone_number: "+358401234567",
+
+    // Mandatory metadata
+    issuing_authority: "Digital and Population Data Services Agency",
+    issuing_country: "FI",
+
+    // Optional metadata (administrative validity — YYYY-MM-DD)
+    date_of_issuance: toFullDate(issuance),
+    date_of_expiry: toFullDate(expiry),
+    document_number: "A01234567",
+    issuing_jurisdiction: "FI-18",
+
+    // Additional optional attributes from the Rulebook
+    trust_anchor: "https://example.com/trustanchors/pid/",
+    attestation_legal_category: "PID",
+  };
+}
+
+/**
+ * Disclosure frame for SD-JWT PID — nested frames enable selective disclosure
+ * of address / place_of_birth members (Rulebook §4.1.1).
+ */
+function buildPidSdJwtDisclosureFrame() {
+  return {
+    _sd: [
+      "given_name",
+      "family_name",
+      "birthdate",
+      "nationalities",
+      "picture",
+      "personal_administrative_number",
+      "birth_family_name",
+      "birth_given_name",
+      "sex",
+      "email",
+      "phone_number",
+      "issuing_authority",
+      "issuing_country",
+      "date_of_issuance",
+      "date_of_expiry",
+      "document_number",
+      "issuing_jurisdiction",
+      "trust_anchor",
+      "attestation_legal_category",
+    ],
+    // Nested frames: individual address / place_of_birth members are disclosable
+    place_of_birth: {
+      _sd: ["country", "region", "locality"],
+    },
+    address: {
+      _sd: [
+        "formatted",
+        "country",
+        "region",
+        "locality",
+        "postal_code",
+        "street_address",
+        "house_number",
+      ],
+    },
+  };
+}
+
+/**
+ * Full mock PID claims per Rulebook Chapter 3 (ISO/IEC 18013-5 / mso_mdoc).
+ * Attribute identifiers differ from SD-JWT (e.g. birth_date, nationality, portrait).
+ */
+function buildPidMdocClaims() {
+  const issuance = new Date();
+  const expiry = new Date(issuance);
+  expiry.setFullYear(expiry.getFullYear() + 10);
+  const toFullDate = (d) => d.toISOString().slice(0, 10);
+
+  return {
+    given_name: "Hanna",
+    family_name: "Matkalainen",
+    birth_date: "2005-07-01",
+    place_of_birth: {
+      country: "FI",
+      region: "Uusimaa",
+      locality: "Helsinki",
+    },
+    // Attribute identifier is `nationality`; value type is nationalities array
+    nationality: ["FI"],
+    portrait: PID_PORTRAIT_JPEG,
+
+    resident_address: "Mannerheimintie 1, 00100 Helsinki",
+    resident_country: "FI",
+    resident_state: "Uusimaa",
+    resident_city: "Helsinki",
+    resident_postal_code: "00100",
+    resident_street: "Mannerheimintie 1",
+    personal_administrative_number: "123456-789A",
+    family_name_birth: "Virtanen",
+    given_name_birth: "Hanna Maria",
+    sex: 2,
+    email_address: "hanna.matkalainen@example.com",
+    mobile_phone_number: "+358401234567",
+
+    issuing_authority: "Digital and Population Data Services Agency",
+    issuing_country: "FI",
+    issuance_date: toFullDate(issuance),
+    expiry_date: toFullDate(expiry),
+    document_number: "A01234567",
+    issuing_jurisdiction: "FI-18",
+
+    trust_anchor: "https://example.com/trustanchors/pid/",
+    attestation_legal_category: "PID",
+  };
+}
+
+function buildPidMdocDisclosureFrame(namespace, claimKeys) {
+  return {
+    [namespace]: {
+      _sd: [...claimKeys],
+    },
+  };
+}
+
 // Helper functions to create payloads for different credential types
 
 export const createPIDPayload = (token, serverURL, decodedHeaderSubjectDID) => {
@@ -340,71 +502,21 @@ export const createFerryBoardingPassPayload = (
 // SD-JWT HELPERS
 
 export const getPIDSDJWTData = (decodedHeaderSubjectDID) => {
-  const currentTimestamp = new Date().getTime();
-  const currentDate = new Date();
-  const expTimestamp = currentDate.setFullYear(currentDate.getFullYear() + 1);
-  const claims = {
-    // id: decodedHeaderSubjectDID || uuidv4(),
-    given_name: "Hanna",
-    family_name: "Matkalainen",
-    birth_date: "01.07.2005",
-    age_over_18: true,
-    issuance_date: currentTimestamp,
-    expiry_date: expTimestamp, //expTimestamp.getTime(),
-    issuing_authority: "UAegean Test Issuer",
-    issuing_country: "Finland",
-  };
-
-  const disclosureFrame = {
-    _sd: [
-      // "id",
-      "given_name",
-      "family_name",
-      "birth_date",
-      "age_over_18",
-      "expiry_date",
-      "issuance_date",
-      "issuing_authority",
-      "issuing_country",
-    ],
-  };
-
+  const claims = buildPidSdJwtClaims();
+  const disclosureFrame = buildPidSdJwtDisclosureFrame();
   return { claims, disclosureFrame };
 };
 
 export const getPIDSDJWTDataMsoMdoc = (decodedHeaderSubjectDID) => {
-  const issuanceDate = new Date();
-  const expiryDate = new Date();
-  expiryDate.setFullYear(issuanceDate.getFullYear() + 1);
   const pidMdocNamespace = "urn:eu.europa.ec.eudi:pid:1";
-
+  const mdocClaims = buildPidMdocClaims();
   const claims = {
-    [pidMdocNamespace]: {
-      given_name: "Hanna",
-      family_name: "Matkalainen",
-      birth_date: "2005-07-01",
-      age_over_18: true,
-      issuance_date: issuanceDate.toISOString().split("T")[0],
-      expiry_date: expiryDate.toISOString().split("T")[0],
-      issuing_authority: "UAegean Test Issuer",
-      issuing_country: "FI",
-    },
+    [pidMdocNamespace]: mdocClaims,
   };
-
-  const disclosureFrame = {
-    [pidMdocNamespace]: {
-      _sd: [
-        "given_name",
-        "family_name",
-        "birth_date",
-        "age_over_18",
-        "expiry_date",
-        "issuance_date",
-        "issuing_authority",
-        "issuing_country",
-      ],
-    },
-  };
+  const disclosureFrame = buildPidMdocDisclosureFrame(
+    pidMdocNamespace,
+    Object.keys(mdocClaims),
+  );
 
   return { claims, disclosureFrame };
 };

@@ -23,16 +23,13 @@
             "path": ["$.family_name", "$.credentialSubject.family_name", "$.vc.credentialSubject.family_name"]
           },
           {
-            "path": ["$.birth_date", "$.credentialSubject.birth_date", "$.vc.credentialSubject.birth_date"]
+            "path": ["$.birthdate", "$.credentialSubject.birthdate", "$.vc.credentialSubject.birthdate"]
           },
           {
-            "path": ["$.age_over_18", "$.credentialSubject.age_over_18", "$.vc.credentialSubject.age_over_18"]
+            "path": ["$.place_of_birth", "$.credentialSubject.place_of_birth", "$.vc.credentialSubject.place_of_birth"]
           },
           {
-            "path": ["$.issuance_date", "$.credentialSubject.issuance_date", "$.vc.credentialSubject.issuance_date"]
-          },
-          {
-            "path": ["$.expiry_date", "$.credentialSubject.expiry_date", "$.vc.credentialSubject.expiry_date"]
+            "path": ["$.nationalities", "$.credentialSubject.nationalities", "$.vc.credentialSubject.nationalities"]
           },
           {
             "path": ["$.issuing_authority", "$.credentialSubject.issuing_authority", "$.vc.credentialSubject.issuing_authority"]

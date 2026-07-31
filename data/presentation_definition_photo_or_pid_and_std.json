@@ -38,10 +38,10 @@
               "path": ["$.family_name"]
             },
             {
-              "path": ["$.birth_date"]
+              "path": ["$.birthdate"]
             },
             {
-              "path": ["$.age_over_18"]
+              "path": ["$.nationalities"]
             },
             {
               "path": ["$.issuing_country"]

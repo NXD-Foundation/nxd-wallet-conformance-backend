@@ -24,16 +24,16 @@
             "path": ["$.family_name"]
           },
           {
-            "path": ["$.birth_date"]
+            "path": ["$.birthdate"]
           },
           {
-            "path": ["$.age_over_18"]
+            "path": ["$.nationalities"]
           },
           {
-            "path": ["$.issuance_date"]
+            "path": ["$.date_of_issuance"]
           },
           {
-            "path": ["$.expiry_date"]
+            "path": ["$.date_of_expiry"]
           },
           {
             "path": ["$.issuing_authority"]

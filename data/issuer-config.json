@@ -65,7 +65,7 @@
           },
           {
             "path": [
-              "birth_date"
+              "birthdate"
             ],
             "display": [
               {
@@ -76,33 +76,110 @@
           },
           {
             "path": [
-              "age_over_18"
+              "place_of_birth"
             ],
             "display": [
               {
-                "name": "Age Over 18",
+                "name": "Place of Birth",
                 "locale": "en-GB"
               }
             ]
           },
           {
             "path": [
-              "issuance_date"
+              "nationalities"
             ],
             "display": [
               {
-                "name": "Issuance Date",
+                "name": "Nationalities",
                 "locale": "en-GB"
               }
             ]
           },
           {
             "path": [
-              "expiry_date"
+              "picture"
             ],
             "display": [
               {
-                "name": "Expiry Date",
+                "name": "Portrait",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "address"
+            ],
+            "display": [
+              {
+                "name": "Address",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "personal_administrative_number"
+            ],
+            "display": [
+              {
+                "name": "Personal Administrative Number",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "birth_family_name"
+            ],
+            "display": [
+              {
+                "name": "Birth Family Name",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "birth_given_name"
+            ],
+            "display": [
+              {
+                "name": "Birth Given Name",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "sex"
+            ],
+            "display": [
+              {
+                "name": "Sex",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "email"
+            ],
+            "display": [
+              {
+                "name": "Email",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "phone_number"
+            ],
+            "display": [
+              {
+                "name": "Mobile Phone Number",
                 "locale": "en-GB"
               }
             ]
@@ -125,6 +202,72 @@
             "display": [
               {
                 "name": "Issuing Country",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "date_of_issuance"
+            ],
+            "display": [
+              {
+                "name": "Date of Issuance",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "date_of_expiry"
+            ],
+            "display": [
+              {
+                "name": "Date of Expiry",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "document_number"
+            ],
+            "display": [
+              {
+                "name": "Document Number",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "issuing_jurisdiction"
+            ],
+            "display": [
+              {
+                "name": "Issuing Jurisdiction",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "trust_anchor"
+            ],
+            "display": [
+              {
+                "name": "Trust Anchor",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "attestation_legal_category"
+            ],
+            "display": [
+              {
+                "name": "Attestation Legal Category",
                 "locale": "en-GB"
               }
             ]
@@ -189,7 +332,7 @@
           },
           {
             "path": [
-              "birth_date"
+              "birthdate"
             ],
             "display": [
               {
@@ -200,33 +343,110 @@
           },
           {
             "path": [
-              "age_over_18"
+              "place_of_birth"
             ],
             "display": [
               {
-                "name": "Age Over 18",
+                "name": "Place of Birth",
                 "locale": "en-GB"
               }
             ]
           },
           {
             "path": [
-              "issuance_date"
+              "nationalities"
             ],
             "display": [
               {
-                "name": "Issuance Date",
+                "name": "Nationalities",
                 "locale": "en-GB"
               }
             ]
           },
           {
             "path": [
-              "expiry_date"
+              "picture"
             ],
             "display": [
               {
-                "name": "Expiry Date",
+                "name": "Portrait",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "address"
+            ],
+            "display": [
+              {
+                "name": "Address",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "personal_administrative_number"
+            ],
+            "display": [
+              {
+                "name": "Personal Administrative Number",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "birth_family_name"
+            ],
+            "display": [
+              {
+                "name": "Birth Family Name",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "birth_given_name"
+            ],
+            "display": [
+              {
+                "name": "Birth Given Name",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "sex"
+            ],
+            "display": [
+              {
+                "name": "Sex",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "email"
+            ],
+            "display": [
+              {
+                "name": "Email",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "phone_number"
+            ],
+            "display": [
+              {
+                "name": "Mobile Phone Number",
                 "locale": "en-GB"
               }
             ]
@@ -249,6 +469,72 @@
             "display": [
               {
                 "name": "Issuing Country",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "date_of_issuance"
+            ],
+            "display": [
+              {
+                "name": "Date of Issuance",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "date_of_expiry"
+            ],
+            "display": [
+              {
+                "name": "Date of Expiry",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "document_number"
+            ],
+            "display": [
+              {
+                "name": "Document Number",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "issuing_jurisdiction"
+            ],
+            "display": [
+              {
+                "name": "Issuing Jurisdiction",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "trust_anchor"
+            ],
+            "display": [
+              {
+                "name": "Trust Anchor",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "attestation_legal_category"
+            ],
+            "display": [
+              {
+                "name": "Attestation Legal Category",
                 "locale": "en-GB"
               }
             ]
@@ -313,7 +599,7 @@
           },
           {
             "path": [
-              "birth_date"
+              "birthdate"
             ],
             "display": [
               {
@@ -324,33 +610,110 @@
           },
           {
             "path": [
-              "age_over_18"
+              "place_of_birth"
             ],
             "display": [
               {
-                "name": "Age Over 18",
+                "name": "Place of Birth",
                 "locale": "en-GB"
               }
             ]
           },
           {
             "path": [
-              "issuance_date"
+              "nationalities"
             ],
             "display": [
               {
-                "name": "Issuance Date",
+                "name": "Nationalities",
                 "locale": "en-GB"
               }
             ]
           },
           {
             "path": [
-              "expiry_date"
+              "picture"
             ],
             "display": [
               {
-                "name": "Expiry Date",
+                "name": "Portrait",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "address"
+            ],
+            "display": [
+              {
+                "name": "Address",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "personal_administrative_number"
+            ],
+            "display": [
+              {
+                "name": "Personal Administrative Number",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "birth_family_name"
+            ],
+            "display": [
+              {
+                "name": "Birth Family Name",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "birth_given_name"
+            ],
+            "display": [
+              {
+                "name": "Birth Given Name",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "sex"
+            ],
+            "display": [
+              {
+                "name": "Sex",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "email"
+            ],
+            "display": [
+              {
+                "name": "Email",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "phone_number"
+            ],
+            "display": [
+              {
+                "name": "Mobile Phone Number",
                 "locale": "en-GB"
               }
             ]
@@ -373,6 +736,72 @@
             "display": [
               {
                 "name": "Issuing Country",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "date_of_issuance"
+            ],
+            "display": [
+              {
+                "name": "Date of Issuance",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "date_of_expiry"
+            ],
+            "display": [
+              {
+                "name": "Date of Expiry",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "document_number"
+            ],
+            "display": [
+              {
+                "name": "Document Number",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "issuing_jurisdiction"
+            ],
+            "display": [
+              {
+                "name": "Issuing Jurisdiction",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "trust_anchor"
+            ],
+            "display": [
+              {
+                "name": "Trust Anchor",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "attestation_legal_category"
+            ],
+            "display": [
+              {
+                "name": "Attestation Legal Category",
                 "locale": "en-GB"
               }
             ]
@@ -2000,7 +2429,7 @@
           },
           {
             "path": [
-              "birth_date"
+              "birthdate"
             ],
             "display": [
               {
@@ -2011,33 +2440,110 @@
           },
           {
             "path": [
-              "age_over_18"
+              "place_of_birth"
             ],
             "display": [
               {
-                "name": "Age Over 18",
+                "name": "Place of Birth",
                 "locale": "en-GB"
               }
             ]
           },
           {
             "path": [
-              "issuance_date"
+              "nationalities"
             ],
             "display": [
               {
-                "name": "Issuance Date",
+                "name": "Nationalities",
                 "locale": "en-GB"
               }
             ]
           },
           {
             "path": [
-              "expiry_date"
+              "picture"
             ],
             "display": [
               {
-                "name": "Expiry Date",
+                "name": "Portrait",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "address"
+            ],
+            "display": [
+              {
+                "name": "Address",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "personal_administrative_number"
+            ],
+            "display": [
+              {
+                "name": "Personal Administrative Number",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "birth_family_name"
+            ],
+            "display": [
+              {
+                "name": "Birth Family Name",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "birth_given_name"
+            ],
+            "display": [
+              {
+                "name": "Birth Given Name",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "sex"
+            ],
+            "display": [
+              {
+                "name": "Sex",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "email"
+            ],
+            "display": [
+              {
+                "name": "Email",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "phone_number"
+            ],
+            "display": [
+              {
+                "name": "Mobile Phone Number",
                 "locale": "en-GB"
               }
             ]
@@ -2060,6 +2566,72 @@
             "display": [
               {
                 "name": "Issuing Country",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "date_of_issuance"
+            ],
+            "display": [
+              {
+                "name": "Date of Issuance",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "date_of_expiry"
+            ],
+            "display": [
+              {
+                "name": "Date of Expiry",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "document_number"
+            ],
+            "display": [
+              {
+                "name": "Document Number",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "issuing_jurisdiction"
+            ],
+            "display": [
+              {
+                "name": "Issuing Jurisdiction",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "trust_anchor"
+            ],
+            "display": [
+              {
+                "name": "Trust Anchor",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "attestation_legal_category"
+            ],
+            "display": [
+              {
+                "name": "Attestation Legal Category",
                 "locale": "en-GB"
               }
             ]
@@ -2144,11 +2716,203 @@
           {
             "path": [
               "urn:eu.europa.ec.eudi:pid:1",
-              "age_over_18"
+              "place_of_birth"
             ],
             "display": [
               {
-                "name": "Age Over 18",
+                "name": "Place of Birth",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "urn:eu.europa.ec.eudi:pid:1",
+              "nationality"
+            ],
+            "display": [
+              {
+                "name": "Nationality",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "urn:eu.europa.ec.eudi:pid:1",
+              "portrait"
+            ],
+            "display": [
+              {
+                "name": "Portrait",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "urn:eu.europa.ec.eudi:pid:1",
+              "resident_address"
+            ],
+            "display": [
+              {
+                "name": "Resident Address",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "urn:eu.europa.ec.eudi:pid:1",
+              "resident_country"
+            ],
+            "display": [
+              {
+                "name": "Resident Country",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "urn:eu.europa.ec.eudi:pid:1",
+              "resident_state"
+            ],
+            "display": [
+              {
+                "name": "Resident State",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "urn:eu.europa.ec.eudi:pid:1",
+              "resident_city"
+            ],
+            "display": [
+              {
+                "name": "Resident City",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "urn:eu.europa.ec.eudi:pid:1",
+              "resident_postal_code"
+            ],
+            "display": [
+              {
+                "name": "Resident Postal Code",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "urn:eu.europa.ec.eudi:pid:1",
+              "resident_street"
+            ],
+            "display": [
+              {
+                "name": "Resident Street",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "urn:eu.europa.ec.eudi:pid:1",
+              "personal_administrative_number"
+            ],
+            "display": [
+              {
+                "name": "Personal Administrative Number",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "urn:eu.europa.ec.eudi:pid:1",
+              "family_name_birth"
+            ],
+            "display": [
+              {
+                "name": "Birth Family Name",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "urn:eu.europa.ec.eudi:pid:1",
+              "given_name_birth"
+            ],
+            "display": [
+              {
+                "name": "Birth Given Name",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "urn:eu.europa.ec.eudi:pid:1",
+              "sex"
+            ],
+            "display": [
+              {
+                "name": "Sex",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "urn:eu.europa.ec.eudi:pid:1",
+              "email_address"
+            ],
+            "display": [
+              {
+                "name": "Email",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "urn:eu.europa.ec.eudi:pid:1",
+              "mobile_phone_number"
+            ],
+            "display": [
+              {
+                "name": "Mobile Phone Number",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "urn:eu.europa.ec.eudi:pid:1",
+              "issuing_authority"
+            ],
+            "display": [
+              {
+                "name": "Issuing Authority",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "urn:eu.europa.ec.eudi:pid:1",
+              "issuing_country"
+            ],
+            "display": [
+              {
+                "name": "Issuing Country",
                 "locale": "en-GB"
               }
             ]
@@ -2180,11 +2944,11 @@
           {
             "path": [
               "urn:eu.europa.ec.eudi:pid:1",
-              "issuing_authority"
+              "document_number"
             ],
             "display": [
               {
-                "name": "Issuing Authority",
+                "name": "Document Number",
                 "locale": "en-GB"
               }
             ]
@@ -2192,11 +2956,35 @@
           {
             "path": [
               "urn:eu.europa.ec.eudi:pid:1",
-              "issuing_country"
+              "issuing_jurisdiction"
             ],
             "display": [
               {
-                "name": "Issuing Country",
+                "name": "Issuing Jurisdiction",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "urn:eu.europa.ec.eudi:pid:1",
+              "trust_anchor"
+            ],
+            "display": [
+              {
+                "name": "Trust Anchor",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "urn:eu.europa.ec.eudi:pid:1",
+              "attestation_legal_category"
+            ],
+            "display": [
+              {
+                "name": "Attestation Legal Category",
                 "locale": "en-GB"
               }
             ]
@@ -3672,84 +4460,224 @@
         ],
         "claims": [
           {
-            "path": ["pnr"],
-            "display": [{ "name": "PNR", "locale": "en-GB" }]
+            "path": [
+              "pnr"
+            ],
+            "display": [
+              {
+                "name": "PNR",
+                "locale": "en-GB"
+              }
+            ]
           },
           {
-            "path": ["given_name"],
-            "display": [{ "name": "Given Name", "locale": "en-GB" }]
+            "path": [
+              "given_name"
+            ],
+            "display": [
+              {
+                "name": "Given Name",
+                "locale": "en-GB"
+              }
+            ]
           },
           {
-            "path": ["family_name"],
-            "display": [{ "name": "Family Name", "locale": "en-GB" }]
+            "path": [
+              "family_name"
+            ],
+            "display": [
+              {
+                "name": "Family Name",
+                "locale": "en-GB"
+              }
+            ]
           },
           {
-            "path": ["passenger_name"],
-            "display": [{ "name": "Passenger Name", "locale": "en-GB" }]
+            "path": [
+              "passenger_name"
+            ],
+            "display": [
+              {
+                "name": "Passenger Name",
+                "locale": "en-GB"
+              }
+            ]
           },
           {
-            "path": ["carrier_name"],
-            "display": [{ "name": "Carrier", "locale": "en-GB" }]
+            "path": [
+              "carrier_name"
+            ],
+            "display": [
+              {
+                "name": "Carrier",
+                "locale": "en-GB"
+              }
+            ]
           },
           {
-            "path": ["carrier_code"],
-            "display": [{ "name": "Carrier Code", "locale": "en-GB" }]
+            "path": [
+              "carrier_code"
+            ],
+            "display": [
+              {
+                "name": "Carrier Code",
+                "locale": "en-GB"
+              }
+            ]
           },
           {
-            "path": ["flight_number"],
-            "display": [{ "name": "Flight Number", "locale": "en-GB" }]
+            "path": [
+              "flight_number"
+            ],
+            "display": [
+              {
+                "name": "Flight Number",
+                "locale": "en-GB"
+              }
+            ]
           },
           {
-            "path": ["from"],
-            "display": [{ "name": "From", "locale": "en-GB" }]
+            "path": [
+              "from"
+            ],
+            "display": [
+              {
+                "name": "From",
+                "locale": "en-GB"
+              }
+            ]
           },
           {
-            "path": ["to"],
-            "display": [{ "name": "To", "locale": "en-GB" }]
+            "path": [
+              "to"
+            ],
+            "display": [
+              {
+                "name": "To",
+                "locale": "en-GB"
+              }
+            ]
           },
           {
-            "path": ["departure_datetime"],
-            "display": [{ "name": "Departure", "locale": "en-GB" }]
+            "path": [
+              "departure_datetime"
+            ],
+            "display": [
+              {
+                "name": "Departure",
+                "locale": "en-GB"
+              }
+            ]
           },
           {
-            "path": ["arrival_datetime"],
-            "display": [{ "name": "Arrival", "locale": "en-GB" }]
+            "path": [
+              "arrival_datetime"
+            ],
+            "display": [
+              {
+                "name": "Arrival",
+                "locale": "en-GB"
+              }
+            ]
           },
           {
-            "path": ["terminal"],
-            "display": [{ "name": "Terminal", "locale": "en-GB" }]
+            "path": [
+              "terminal"
+            ],
+            "display": [
+              {
+                "name": "Terminal",
+                "locale": "en-GB"
+              }
+            ]
           },
           {
-            "path": ["gate"],
-            "display": [{ "name": "Gate", "locale": "en-GB" }]
+            "path": [
+              "gate"
+            ],
+            "display": [
+              {
+                "name": "Gate",
+                "locale": "en-GB"
+              }
+            ]
           },
           {
-            "path": ["boarding_time"],
-            "display": [{ "name": "Boarding Time", "locale": "en-GB" }]
+            "path": [
+              "boarding_time"
+            ],
+            "display": [
+              {
+                "name": "Boarding Time",
+                "locale": "en-GB"
+              }
+            ]
           },
           {
-            "path": ["seat"],
-            "display": [{ "name": "Seat", "locale": "en-GB" }]
+            "path": [
+              "seat"
+            ],
+            "display": [
+              {
+                "name": "Seat",
+                "locale": "en-GB"
+              }
+            ]
           },
           {
-            "path": ["boarding_group"],
-            "display": [{ "name": "Boarding Group", "locale": "en-GB" }]
+            "path": [
+              "boarding_group"
+            ],
+            "display": [
+              {
+                "name": "Boarding Group",
+                "locale": "en-GB"
+              }
+            ]
           },
           {
-            "path": ["sequence_number"],
-            "display": [{ "name": "Sequence Number", "locale": "en-GB" }]
+            "path": [
+              "sequence_number"
+            ],
+            "display": [
+              {
+                "name": "Sequence Number",
+                "locale": "en-GB"
+              }
+            ]
           },
           {
-            "path": ["cabin_class"],
-            "display": [{ "name": "Cabin Class", "locale": "en-GB" }]
+            "path": [
+              "cabin_class"
+            ],
+            "display": [
+              {
+                "name": "Cabin Class",
+                "locale": "en-GB"
+              }
+            ]
           },
           {
-            "path": ["ticket_number"],
-            "display": [{ "name": "Ticket Number", "locale": "en-GB" }]
+            "path": [
+              "ticket_number"
+            ],
+            "display": [
+              {
+                "name": "Ticket Number",
+                "locale": "en-GB"
+              }
+            ]
           },
           {
-            "path": ["baggage_allowance"],
-            "display": [{ "name": "Baggage Allowance", "locale": "en-GB" }]
+            "path": [
+              "baggage_allowance"
+            ],
+            "display": [
+              {
+                "name": "Baggage Allowance",
+                "locale": "en-GB"
+              }
+            ]
           }
         ]
       },

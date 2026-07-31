@@ -339,34 +339,80 @@ function derToP1363(derSignature) {
 function mapClaimsToMsoMdoc(claims, vct) {
   const msoMdocClaims = { ...claims }; // Start by copying all claims
 
-  // mDL uses 'birth_date', SD-JWT might use 'birthdate'
+  // PID Rulebook: SD-JWT `birthdate` → mdoc `birth_date`
   if (claims.birthdate) {
     msoMdocClaims.birth_date = claims.birthdate;
-    delete msoMdocClaims.birthdate; // remove original to avoid duplication
+    delete msoMdocClaims.birthdate;
   } else if (claims.birth_date) {
     msoMdocClaims.birth_date = claims.birth_date;
   }
 
-  // mDL 'issue_date' and 'expiry_date' for the document itself
-  if (claims.issuance_date) {
-    msoMdocClaims.issue_date = claims.issuance_date; // Map PID's issuance_date
-    delete msoMdocClaims.issuance_date;
-  } else if (claims.issue_date) {
+  // PID Rulebook: SD-JWT `nationalities` → mdoc attribute `nationality`
+  if (claims.nationalities && !claims.nationality) {
+    msoMdocClaims.nationality = claims.nationalities;
+    delete msoMdocClaims.nationalities;
+  }
+
+  // PID Rulebook: SD-JWT `picture` (data URL) → mdoc `portrait` (bstr)
+  if (claims.picture && !claims.portrait) {
+    const dataUrl = String(claims.picture);
+    const base64 = dataUrl.includes(",") ? dataUrl.split(",")[1] : dataUrl;
+    try {
+      msoMdocClaims.portrait = Buffer.from(base64, "base64");
+    } catch {
+      msoMdocClaims.portrait = claims.picture;
+    }
+    delete msoMdocClaims.picture;
+  }
+
+  // PID Rulebook private names → mdoc identifiers
+  if (claims.date_of_issuance) {
+    msoMdocClaims.issuance_date = claims.date_of_issuance;
+    delete msoMdocClaims.date_of_issuance;
+  }
+  if (claims.date_of_expiry) {
+    msoMdocClaims.expiry_date = claims.date_of_expiry;
+    delete msoMdocClaims.date_of_expiry;
+  }
+  if (claims.birth_family_name) {
+    msoMdocClaims.family_name_birth = claims.birth_family_name;
+    delete msoMdocClaims.birth_family_name;
+  }
+  if (claims.birth_given_name) {
+    msoMdocClaims.given_name_birth = claims.birth_given_name;
+    delete msoMdocClaims.birth_given_name;
+  }
+  if (claims.email) {
+    msoMdocClaims.email_address = claims.email;
+    delete msoMdocClaims.email;
+  }
+  if (claims.phone_number) {
+    msoMdocClaims.mobile_phone_number = claims.phone_number;
+    delete msoMdocClaims.phone_number;
+  }
+
+  // Flatten SD-JWT address object into mdoc resident_* attributes
+  if (claims.address && typeof claims.address === "object") {
+    const a = claims.address;
+    if (a.formatted) msoMdocClaims.resident_address = a.formatted;
+    if (a.country) msoMdocClaims.resident_country = a.country;
+    if (a.region) msoMdocClaims.resident_state = a.region;
+    if (a.locality) msoMdocClaims.resident_city = a.locality;
+    if (a.postal_code) msoMdocClaims.resident_postal_code = a.postal_code;
+    if (a.street_address) msoMdocClaims.resident_street = a.street_address;
+    delete msoMdocClaims.address;
+  }
+
+  // mDL 'issue_date' / 'expiry_date' aliases used by some doc types
+  if (claims.issuance_date && !msoMdocClaims.issuance_date) {
+    msoMdocClaims.issuance_date = claims.issuance_date;
+  }
+  if (claims.issue_date) {
     msoMdocClaims.issue_date = claims.issue_date;
   }
-
-  if (claims.expiry_date) {
-    msoMdocClaims.expiry_date = claims.expiry_date; // Map PID's expiry_date
+  if (claims.expiry_date && !msoMdocClaims.expiry_date) {
+    msoMdocClaims.expiry_date = claims.expiry_date;
   }
-
-  // Placeholder for other claims and VCT specific mappings
-  // For example, for a driver's license (mDL docType):
-  // if (vct === 'some_driver_license_vct') {
-  //   msoMdocClaims.driving_privileges = claims.driving_privileges;
-  //   msoMdocClaims.portrait = claims.portrait; // Needs to be bytes
-  //   msoMdocClaims.document_number = claims.document_number;
-  //   msoMdocClaims.issuing_country = claims.issuing_country;
-  // }
 
   if (
     claims.unique_id &&
@@ -374,12 +420,10 @@ function mapClaimsToMsoMdoc(claims, vct) {
       vct === "VerifiablePIDSDJWTAttestation" ||
       vct === "urn:eu.europa.ec.eudi:pid:1")
   ) {
-    msoMdocClaims.unique_identifier = claims.unique_id; // Example mapping for PID
+    msoMdocClaims.unique_identifier = claims.unique_id;
     delete msoMdocClaims.unique_id;
   }
 
-  // Add more specific mappings based on vct and mDL data element definitions
-  // console.log("Mapped mDL claims:", msoMdocClaims);
   return msoMdocClaims;
 }
 
