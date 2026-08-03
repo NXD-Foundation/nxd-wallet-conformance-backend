@@ -1915,13 +1915,26 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
           }
         }
 
-        // Process claims as before
-        const dcqlValidation = validateDcqlClaims(
-          claimsFromExtraction,
-          vpSession.dcql_query?.credentials?.flatMap((credential) => credential?.claims || []) || [],
-        );
+        // mdoc claims are reconstructed as flat objects, while their DCQL
+        // paths include the namespace as the first segment. The mdoc branches
+        // above already validated both the DeviceResponse and its claims;
+        // applying the generic object-path validator here would incorrectly
+        // look for `claims[namespace][element]` in a flat mdoc object.
+        const requestedDcqlClaims =
+          vpSession.dcql_query?.credentials?.flatMap(
+            (credential) => credential?.claims || [],
+          ) || [];
+        const dcqlValidation = isMdoc
+          ? validateMdocDcqlClaims(claimsFromExtraction, vpSession.dcql_query)
+          : validateDcqlClaims(claimsFromExtraction, requestedDcqlClaims);
+        const allowedFieldsValid = isMdoc
+          ? true
+          : !(
+              vpSession.sdsRequested &&
+              !hasOnlyAllowedFields(claimsFromExtraction, vpSession.sdsRequested)
+            );
         if (
-          (vpSession.sdsRequested && !hasOnlyAllowedFields(claimsFromExtraction, vpSession.sdsRequested)) ||
+          !allowedFieldsValid ||
           !dcqlValidation.ok
         ) {
           const receivedClaims = JSON.stringify(claimsFromExtraction);
@@ -1948,12 +1961,17 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
         }
 
         vpSession.status = "success";
-        vpSession.claims = { ...claimsFromExtraction };
+        vpSession.claims = isMdoc
+          ? claimsFromExtraction[0] || {}
+          : { ...claimsFromExtraction };
         await storeVPSession(sessionId, vpSession);
         
         await logInfo(sessionId, "direct_post.jwt processing completed successfully", {
           status: "success",
-          claimsCount: Object.keys(claimsFromExtraction || {}).length
+          claimsCount: isMdoc
+            ? Object.keys(claimsFromExtraction[0] || {}).length
+            : Object.keys(claimsFromExtraction || {}).length,
+          credentialFormat: isMdoc ? "mso_mdoc" : "non-mdoc",
         });
         
         return res.status(200).json({ status: "ok" });

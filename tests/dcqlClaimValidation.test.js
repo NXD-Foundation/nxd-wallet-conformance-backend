@@ -93,4 +93,30 @@ describe("DCQL claim validation", () => {
     );
     expect(result).to.deep.equal({ ok: true, errors: [] });
   });
+
+  it("validates namespace-qualified mdoc paths against the extracted credential array", () => {
+    const result = validateMdocDcqlClaims(
+      [{
+        age_over_18: true,
+        family_name: "Matkalainen",
+        given_name: "Hanna",
+      }],
+      {
+        credentials: [{
+          id: "cred1",
+          format: "mso_mdoc",
+          claims: [
+            { path: ["urn:eu.europa.ec.eudi:pid:1", "family_name"] },
+            { path: ["urn:eu.europa.ec.eudi:pid:1", "given_name"] },
+            {
+              path: ["urn:eu.europa.ec.eudi:pid:1", "age_over_18"],
+              values: [true],
+            },
+          ],
+        }],
+      },
+    );
+
+    expect(result).to.deep.equal({ ok: true, errors: [] });
+  });
 });
