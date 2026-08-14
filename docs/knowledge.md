@@ -185,8 +185,9 @@ the separate Amadeus Flight Order ID or expose itinerary/passenger data.
 ### Local airline boarding pass offer
 
 Issue an SD-JWT boarding pass with configuration id `airline_boarding_pass`
-and VCT `urn:eu.aptitude:airline.boardingpass:1`. Prefer `signatureType: "x509"`
-for EUDI Reference Wallet presentation.
+and VCT `urn:eu.aptitude:airline.boardingpass:1`. Claims follow IATA Resolution
+792 (BCBP) field semantics. Prefer `signatureType: "x509"` for EUDI Reference
+Wallet presentation.
 
 ```bash
 curl -X POST http://localhost:3000/offer-no-code-batch \
@@ -197,34 +198,41 @@ curl -X POST http://localhost:3000/offer-no-code-batch \
       {
         "credential_configuration_id": "airline_boarding_pass",
         "payload": {
+          "format_code": "M",
+          "number_of_legs": "1",
+          "passenger_name": "MATKALAINEN/NIKOS",
+          "electronic_ticket_indicator": "E",
           "pnr": "ABC123",
+          "from_airport": "ATH",
+          "to_airport": "HER",
+          "operating_carrier": "A3",
+          "flight_number": "0604",
+          "date_of_flight_julian": "213",
+          "compartment_code": "Y",
+          "seat": "014A",
+          "check_in_sequence_number": "00042",
+          "passenger_status": "0",
           "given_name": "NIKOS",
           "family_name": "MATKALAINEN",
-          "passenger_name": "NIKOS MATKALAINEN",
-          "carrier_name": "AEGEAN Connect",
-          "carrier_code": "AC",
-          "flight_number": "A3 604",
-          "from": "ATH",
-          "to": "HER",
+          "carrier_name": "AEGEAN",
           "departure_datetime": "2026-08-01T08:15:00+03:00",
           "arrival_datetime": "2026-08-01T09:05:00+03:00",
           "terminal": "Main",
           "gate": "B12",
           "boarding_time": "07:35",
-          "seat": "14A",
           "boarding_group": "2",
-          "sequence_number": "042",
-          "cabin_class": "Economy",
           "ticket_number": "3901234567890",
-          "baggage_allowance": "1 cabin bag + 1 personal item"
+          "baggage_allowance": "1PC"
         }
       }
     ]
   }'
 ```
 
-Present with `credential_profile=boarding_pass` (DCQL requests `pnr`,
-`flight_number`, `seat`, `given_name`, `family_name`).
+`bcbp_data` is regenerated from the structured BCBP fields unless supplied
+explicitly. Present with `credential_profile=boarding_pass` (DCQL requests
+`pnr`, `operating_carrier`, `flight_number`, `seat`, `passenger_name`,
+`bcbp_data`).
 
 ### EUDI Reference Wallet proof-metadata compatibility
 

@@ -4455,17 +4455,171 @@
           {
             "name": "Airline Boarding Pass",
             "locale": "en-GB",
-            "description": "SD-JWT credential containing passenger boarding pass details for an airline flight."
+            "description": "SD-JWT credential with IATA Resolution 792 (BCBP) aligned boarding pass claims for an airline flight."
           }
         ],
         "claims": [
+          {
+            "path": [
+              "format_code"
+            ],
+            "display": [
+              {
+                "name": "Format Code",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "number_of_legs"
+            ],
+            "display": [
+              {
+                "name": "Number of Legs",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "passenger_name"
+            ],
+            "display": [
+              {
+                "name": "Passenger Name (LASTNAME/FIRSTNAME)",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "electronic_ticket_indicator"
+            ],
+            "display": [
+              {
+                "name": "Electronic Ticket Indicator",
+                "locale": "en-GB"
+              }
+            ]
+          },
           {
             "path": [
               "pnr"
             ],
             "display": [
               {
-                "name": "PNR",
+                "name": "PNR / Record Locator",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "from_airport"
+            ],
+            "display": [
+              {
+                "name": "From Airport",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "to_airport"
+            ],
+            "display": [
+              {
+                "name": "To Airport",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "operating_carrier"
+            ],
+            "display": [
+              {
+                "name": "Operating Carrier",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "flight_number"
+            ],
+            "display": [
+              {
+                "name": "Flight Number",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "date_of_flight_julian"
+            ],
+            "display": [
+              {
+                "name": "Date of Flight (Julian)",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "compartment_code"
+            ],
+            "display": [
+              {
+                "name": "Compartment Code",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "seat"
+            ],
+            "display": [
+              {
+                "name": "Seat",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "check_in_sequence_number"
+            ],
+            "display": [
+              {
+                "name": "Check-in Sequence Number",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "passenger_status"
+            ],
+            "display": [
+              {
+                "name": "Passenger Status",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "bcbp_data"
+            ],
+            "display": [
+              {
+                "name": "BCBP Data",
                 "locale": "en-GB"
               }
             ]
@@ -4494,66 +4648,11 @@
           },
           {
             "path": [
-              "passenger_name"
-            ],
-            "display": [
-              {
-                "name": "Passenger Name",
-                "locale": "en-GB"
-              }
-            ]
-          },
-          {
-            "path": [
               "carrier_name"
             ],
             "display": [
               {
-                "name": "Carrier",
-                "locale": "en-GB"
-              }
-            ]
-          },
-          {
-            "path": [
-              "carrier_code"
-            ],
-            "display": [
-              {
-                "name": "Carrier Code",
-                "locale": "en-GB"
-              }
-            ]
-          },
-          {
-            "path": [
-              "flight_number"
-            ],
-            "display": [
-              {
-                "name": "Flight Number",
-                "locale": "en-GB"
-              }
-            ]
-          },
-          {
-            "path": [
-              "from"
-            ],
-            "display": [
-              {
-                "name": "From",
-                "locale": "en-GB"
-              }
-            ]
-          },
-          {
-            "path": [
-              "to"
-            ],
-            "display": [
-              {
-                "name": "To",
+                "name": "Carrier Name",
                 "locale": "en-GB"
               }
             ]
@@ -4615,44 +4714,11 @@
           },
           {
             "path": [
-              "seat"
-            ],
-            "display": [
-              {
-                "name": "Seat",
-                "locale": "en-GB"
-              }
-            ]
-          },
-          {
-            "path": [
               "boarding_group"
             ],
             "display": [
               {
                 "name": "Boarding Group",
-                "locale": "en-GB"
-              }
-            ]
-          },
-          {
-            "path": [
-              "sequence_number"
-            ],
-            "display": [
-              {
-                "name": "Sequence Number",
-                "locale": "en-GB"
-              }
-            ]
-          },
-          {
-            "path": [
-              "cabin_class"
-            ],
-            "display": [
-              {
-                "name": "Cabin Class",
                 "locale": "en-GB"
               }
             ]

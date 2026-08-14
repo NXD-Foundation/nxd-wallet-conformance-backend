@@ -4,7 +4,23 @@ import fs from "fs";
 import qr from "qr-image";
 import imageDataURI from "image-data-uri";
 import { streamToBuffer } from "@jorgeferrero/stream-to-buffer";
-import { createHash } from "crypto";
+import {
+  buildIataBcbpDataString,
+  getAirlineBoardingPassSDJWTData,
+  getAirlineBoardingPassSDJWTDataWithPayload,
+} from "./airlineBoardingPassUtil.js";
+import {
+  getCasslBiometricQrSDJWTData,
+  getCasslBiometricQrSDJWTDataWithPayload,
+} from "./casslBiometricQrUtil.js";
+
+export {
+  buildIataBcbpDataString,
+  getAirlineBoardingPassSDJWTData,
+  getAirlineBoardingPassSDJWTDataWithPayload,
+  getCasslBiometricQrSDJWTData,
+  getCasslBiometricQrSDJWTDataWithPayload,
+};
 
 const face_data = fs.readFileSync("./data/face.data", "utf8");
 
@@ -1331,56 +1347,6 @@ export const getAirlinePnrSDJWTDataWithPayload = (payload) => {
   return { claims, disclosureFrame };
 };
 
-const DEFAULT_AIRLINE_BOARDING_PASS_CLAIMS = {
-  pnr: "ABC123",
-  given_name: "NIKOS",
-  family_name: "MATKALAINEN",
-  passenger_name: "NIKOS MATKALAINEN",
-  carrier_name: "AEGEAN Connect",
-  carrier_code: "AC",
-  flight_number: "A3 604",
-  from: "ATH",
-  to: "HER",
-  departure_datetime: "2026-08-01T08:15:00+03:00",
-  arrival_datetime: "2026-08-01T09:05:00+03:00",
-  terminal: "Main",
-  gate: "B12",
-  boarding_time: "07:35",
-  seat: "14A",
-  boarding_group: "2",
-  sequence_number: "042",
-  cabin_class: "Economy",
-  ticket_number: "3901234567890",
-  baggage_allowance: "1 cabin bag + 1 personal item",
-};
-
-const AIRLINE_BOARDING_PASS_CLAIM_KEYS = Object.keys(
-  DEFAULT_AIRLINE_BOARDING_PASS_CLAIMS,
-);
-
-export const getAirlineBoardingPassSDJWTData = () => {
-  return getAirlineBoardingPassSDJWTDataWithPayload(null);
-};
-
-export const getAirlineBoardingPassSDJWTDataWithPayload = (payload) => {
-  const sourceClaims =
-    payload?.claims && typeof payload.claims === "object"
-      ? payload.claims
-      : payload || {};
-
-  const claims = {};
-  for (const key of AIRLINE_BOARDING_PASS_CLAIM_KEYS) {
-    claims[key] =
-      sourceClaims[key] ?? DEFAULT_AIRLINE_BOARDING_PASS_CLAIMS[key];
-  }
-
-  const disclosureFrame = {
-    _sd: [...AIRLINE_BOARDING_PASS_CLAIM_KEYS],
-  };
-
-  return { claims, disclosureFrame };
-};
-
 const DEFAULT_ROOM_KEY_CLAIMS = {
   room_number: "412",
   reservationId: "RES-2026-001234",
@@ -1432,236 +1398,6 @@ export const getRoomKeySDJWTDataWithPayload = async (
   const disclosureFrame = {
     _sd: ["id", "room_number", "picture"],
   };
-
-  return { claims, disclosureFrame };
-};
-
-/**
- * Mock CASSL biometric QR payload. The encrypted_template is derived from a
- * portrait image (full JPEG is too large for a scannable QR); we embed a
- * compact base64url digest + portrait prefix as a stand-in biometric template.
- */
-function portraitBytesFromDataUrl(dataUrl) {
-  if (!dataUrl || typeof dataUrl !== "string") return null;
-  const match = dataUrl.match(/^data:image\/[^;]+;base64,(.+)$/i);
-  if (!match) return null;
-  try {
-    return Buffer.from(match[1], "base64");
-  } catch {
-    return null;
-  }
-}
-
-function buildEncryptedTemplateFromPortrait(portraitBytes) {
-  const bytes = portraitBytes?.length ? portraitBytes : PID_PORTRAIT_JPEG;
-  return Buffer.concat([
-    createHash("sha256").update(bytes).digest(),
-    bytes.subarray(0, Math.min(64, bytes.length)),
-  ]).toString("base64url");
-}
-
-function buildBoardingPassDataString(source = {}) {
-  if (source.boarding_pass_data) return String(source.boarding_pass_data);
-  const family = String(source.family_name || "").toUpperCase();
-  const given = String(source.given_name || "").toUpperCase();
-  const pnr = source.pnr || "";
-  const from = source.from || source.departure || "";
-  const to = source.to || "";
-  const flight = String(source.flight_number || source.flight || "").replace(
-    /\s+/g,
-    "",
-  );
-  const seat = source.seat || "";
-  const seq = source.sequence_number || "";
-  if (!family && !given && !pnr && !flight) return undefined;
-  return `M1${family}/${given} E${pnr} ${from}${to}${flight} ${seat}${seq}`
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-/**
- * Map either a structured biometric QR JSON object or the flat offer payload
- * (boarding-pass + PID fields, with `picture` as the portrait source) into
- * overrides for {@link buildDefaultCasslBiometricQrPayload}.
- *
- * Important: flat `picture` is the PID/portrait input for the encrypted
- * template — not the issued QR image claim.
- */
-function mapSourceToBiometricQrOverrides(source = {}) {
-  if (
-    source.passenger ||
-    source.journey ||
-    source.biometric ||
-    source.validity
-  ) {
-    const portraitBytes = portraitBytesFromDataUrl(
-      source.portrait || source.picture,
-    );
-    return {
-      version: source.version,
-      passenger: source.passenger,
-      journey: source.journey,
-      biometric: {
-        ...(source.biometric || {}),
-        ...(portraitBytes
-          ? {
-              encrypted_template:
-                buildEncryptedTemplateFromPortrait(portraitBytes),
-            }
-          : {}),
-      },
-      validity: source.validity,
-      signature: source.signature,
-    };
-  }
-
-  const name =
-    source.passenger_name ||
-    [source.given_name, source.family_name].filter(Boolean).join(" ") ||
-    undefined;
-  const portraitBytes = portraitBytesFromDataUrl(source.picture);
-  const flightRaw = source.flight_number || source.flight;
-  const flight = flightRaw
-    ? String(flightRaw).replace(/\s+/g, "")
-    : undefined;
-  const date =
-    source.flight_date ||
-    (source.departure_datetime
-      ? String(source.departure_datetime).slice(0, 10)
-      : undefined);
-  const departure = source.from || source.departure || source.airport_code;
-  const boardingPassData = buildBoardingPassDataString(source);
-
-  return {
-    passenger: {
-      ...(name ? { name } : {}),
-      ...(source.document_number || source.document_reference
-        ? {
-            document_reference:
-              source.document_number || source.document_reference,
-          }
-        : {}),
-      identity_verified:
-        source.identity_verified !== undefined
-          ? Boolean(source.identity_verified)
-          : true,
-    },
-    journey: {
-      ...(flight ? { flight } : {}),
-      ...(date ? { date } : {}),
-      ...(departure ? { departure } : {}),
-      ...(boardingPassData ? { boarding_pass_data: boardingPassData } : {}),
-    },
-    biometric: {
-      ...(portraitBytes
-        ? { encrypted_template: buildEncryptedTemplateFromPortrait(portraitBytes) }
-        : {}),
-      ...(source.enrolment_method
-        ? { enrolment_method: source.enrolment_method }
-        : {}),
-      ...(source.biometric_session_id
-        ? { session_id: source.biometric_session_id }
-        : {}),
-      ...(source.service_scopes ? { service_scopes: source.service_scopes } : {}),
-    },
-    validity: {
-      ...(source.valid_from || source.not_before
-        ? { not_before: source.valid_from || source.not_before }
-        : {}),
-      ...(source.valid_until || source.expires_at
-        ? { expires_at: source.valid_until || source.expires_at }
-        : {}),
-    },
-  };
-}
-
-function buildDefaultCasslBiometricQrPayload(overrides = {}) {
-  const now = new Date();
-  const expires = new Date(now);
-  expires.setDate(expires.getDate() + 1);
-
-  const defaults = {
-    version: "1",
-    passenger: {
-      name: "NIKOS MATKALAINEN",
-      document_reference: "A01234567",
-      identity_verified: true,
-    },
-    journey: {
-      flight: "A3120",
-      date: "2026-10-28",
-      departure: "ATH",
-      boarding_pass_data: "M1MATKALAINEN/NIKOS      EABC123 ATHHERA3 120 14A042",
-    },
-    biometric: {
-      modality: "face",
-      encrypted_template: buildEncryptedTemplateFromPortrait(PID_PORTRAIT_JPEG),
-      template_format: "mock-portrait-digest-v1",
-      quality: "high",
-      enrolment_method: "passport-plus-live-capture",
-    },
-    validity: {
-      not_before: now.toISOString(),
-      expires_at: expires.toISOString(),
-    },
-  };
-
-  const merged = {
-    version: overrides.version ?? defaults.version,
-    passenger: { ...defaults.passenger, ...(overrides.passenger || {}) },
-    journey: { ...defaults.journey, ...(overrides.journey || {}) },
-    biometric: { ...defaults.biometric, ...(overrides.biometric || {}) },
-    validity: { ...defaults.validity, ...(overrides.validity || {}) },
-  };
-
-  if (overrides.signature) {
-    merged.signature = overrides.signature;
-  } else {
-    const signatureInput = JSON.stringify({
-      version: merged.version,
-      passenger: merged.passenger,
-      journey: merged.journey,
-      biometric: merged.biometric,
-      validity: merged.validity,
-    });
-    merged.signature = createHash("sha256")
-      .update(signatureInput)
-      .digest("base64url");
-  }
-
-  return merged;
-}
-
-export const getCasslBiometricQrSDJWTData = async () => {
-  return getCasslBiometricQrSDJWTDataWithPayload(null);
-};
-
-export const getCasslBiometricQrSDJWTDataWithPayload = async (payload) => {
-  const source =
-    payload?.claims && typeof payload.claims === "object"
-      ? payload.claims
-      : payload || {};
-
-  const qrPayloadSource =
-    source.biometric_qr_payload && typeof source.biometric_qr_payload === "object"
-      ? source.biometric_qr_payload
-      : source.qr_payload && typeof source.qr_payload === "object"
-        ? source.qr_payload
-        : null;
-
-  // Pre-rendered QR only when explicitly supplied under qr_* keys.
-  // Flat `picture` is the portrait used to derive encrypted_template.
-  let picture = source.qr_code ?? source.picture_qr ?? source.qr_picture;
-  if (!picture) {
-    const overrides = qrPayloadSource
-      ? mapSourceToBiometricQrOverrides(qrPayloadSource)
-      : mapSourceToBiometricQrOverrides(source);
-    const biometricPayload = buildDefaultCasslBiometricQrPayload(overrides);
-    picture = await encodeTextAsQrDataUri(JSON.stringify(biometricPayload));
-  }
-
-  const claims = { picture };
-  const disclosureFrame = { _sd: ["picture"] };
 
   return { claims, disclosureFrame };
 };

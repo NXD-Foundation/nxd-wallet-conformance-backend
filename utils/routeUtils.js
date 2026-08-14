@@ -858,7 +858,7 @@ export const AIRLINE_PNR_DCQL_QUERY = {
   ],
 };
 
-// Airline boarding pass only DCQL query
+// Airline boarding pass only DCQL query (IATA BCBP core + identity helpers)
 export const AIRLINE_BOARDING_PASS_DCQL_QUERY = {
   credentials: [
     {
@@ -869,10 +869,11 @@ export const AIRLINE_BOARDING_PASS_DCQL_QUERY = {
       },
       claims: [
         { path: ["pnr"] },
+        { path: ["operating_carrier"] },
         { path: ["flight_number"] },
         { path: ["seat"] },
-        { path: ["given_name"] },
-        { path: ["family_name"] },
+        { path: ["passenger_name"] },
+        { path: ["bcbp_data"] },
       ],
     },
   ],
@@ -888,24 +889,30 @@ export const BOARDING_PASS_PID_DCQL_QUERY = {
         vct_values: [AIRLINE_BOARDING_PASS_VCT],
       },
       claims: [
+        { path: ["format_code"] },
+        { path: ["number_of_legs"] },
+        { path: ["passenger_name"] },
+        { path: ["electronic_ticket_indicator"] },
         { path: ["pnr"] },
+        { path: ["from_airport"] },
+        { path: ["to_airport"] },
+        { path: ["operating_carrier"] },
+        { path: ["flight_number"] },
+        { path: ["date_of_flight_julian"] },
+        { path: ["compartment_code"] },
+        { path: ["seat"] },
+        { path: ["check_in_sequence_number"] },
+        { path: ["passenger_status"] },
+        { path: ["bcbp_data"] },
         { path: ["given_name"] },
         { path: ["family_name"] },
-        { path: ["passenger_name"] },
         { path: ["carrier_name"] },
-        { path: ["carrier_code"] },
-        { path: ["flight_number"] },
-        { path: ["from"] },
-        { path: ["to"] },
         { path: ["departure_datetime"] },
         { path: ["arrival_datetime"] },
         { path: ["terminal"] },
         { path: ["gate"] },
         { path: ["boarding_time"] },
-        { path: ["seat"] },
         { path: ["boarding_group"] },
-        { path: ["sequence_number"] },
-        { path: ["cabin_class"] },
         { path: ["ticket_number"] },
         { path: ["baggage_allowance"] },
       ],

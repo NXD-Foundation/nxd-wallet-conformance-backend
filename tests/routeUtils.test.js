@@ -193,10 +193,11 @@ describe('Route Utils', () => {
       ]);
       expect(boardingQuery.claims.map(({ path }) => path)).to.deep.equal([
         ['pnr'],
+        ['operating_carrier'],
         ['flight_number'],
         ['seat'],
-        ['given_name'],
-        ['family_name'],
+        ['passenger_name'],
+        ['bcbp_data'],
       ]);
     });
   });
@@ -209,24 +210,30 @@ describe('Route Utils', () => {
         AIRLINE_BOARDING_PASS_VCT,
       ]);
       expect(boardingQuery.claims.map(({ path }) => path)).to.deep.equal([
+        ['format_code'],
+        ['number_of_legs'],
+        ['passenger_name'],
+        ['electronic_ticket_indicator'],
         ['pnr'],
+        ['from_airport'],
+        ['to_airport'],
+        ['operating_carrier'],
+        ['flight_number'],
+        ['date_of_flight_julian'],
+        ['compartment_code'],
+        ['seat'],
+        ['check_in_sequence_number'],
+        ['passenger_status'],
+        ['bcbp_data'],
         ['given_name'],
         ['family_name'],
-        ['passenger_name'],
         ['carrier_name'],
-        ['carrier_code'],
-        ['flight_number'],
-        ['from'],
-        ['to'],
         ['departure_datetime'],
         ['arrival_datetime'],
         ['terminal'],
         ['gate'],
         ['boarding_time'],
-        ['seat'],
         ['boarding_group'],
-        ['sequence_number'],
-        ['cabin_class'],
         ['ticket_number'],
         ['baggage_allowance'],
       ]);

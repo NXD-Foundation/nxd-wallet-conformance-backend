@@ -3,7 +3,7 @@ import fs from "fs";
 import {
   getCasslBiometricQrSDJWTData,
   getCasslBiometricQrSDJWTDataWithPayload,
-} from "../utils/credPayloadUtil.js";
+} from "../utils/casslBiometricQrUtil.js";
 import { credentialConfigRequiresJwtProofKeyAttestation } from "../utils/routeUtils.js";
 
 describe("cassl biometric QR credential", () => {
