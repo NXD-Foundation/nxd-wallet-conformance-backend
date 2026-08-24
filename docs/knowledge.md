@@ -38,6 +38,10 @@ request helpers mounted under `/mdl`. Redis-backed state in
 presentation, deferred-issuance, and logging sessions. Tests may run without
 Redis when `NODE_ENV=test` or `ALLOW_NO_REDIS=true`.
 
+The supported runtime is Node 22.12+; use `npm test` for the recursive suite
+and start the Redis Compose service before `npm run test:issuer` when running
+credential-flow integration tests.
+
 ## Authority And Local Sources
 
 Use the following authority order when sources disagree:
@@ -78,7 +82,7 @@ specific offer routes are kept alongside it for interoperability coverage.
 | DPoP sender constraint | DPoP-bound token creation in `utils/tokenUtils.js`; resource proof verification in `validateDpopProofForResourceRequest` | issuance-flow tests and wallet `credentialNotification.js` |
 | Credential proof and holder binding | `validateCredentialRequest`, `validateProofJWT`, and `verifyProofJWT`; wallet proof construction in `wallet-client/src/lib/credentialRequestProofs.js` | `tests/credGenerationUtilsProofBinding.test.js`, `tests/proofJwtResolver.test.js` |
 | WIA at PAR/token | `validateWIA` in `utils/routeUtils.js`; OAuth client-attestation and PoP validation in `utils/oauthClientAttestation.js` | `tests/oauthClientAttestation.test.js`, `tests/wuaValidation.test.js` |
-| WUA/key attestation at credential request | `validateWUA` and `utils/keyAttestationProof.js`; proof supports `proofs.jwt` and `proofs.attestation` paths | `tests/keyAttestationProof.test.js`, `tests/wuaValidation.test.js` |
+| WUA/key attestation at credential request | Shared WUA validation in `utils/wuaVerificationKeyResolver.js`; proof supports `proofs.jwt` and `proofs.attestation` paths | `tests/keyAttestationProof.test.js`, `tests/wuaValidation.test.js` |
 | Immediate and deferred credentials | `POST /credential`, `POST /credential_deferred`, `resolveDeferredIssuanceContext` | `tests/sharedIssuanceFlows.test.js` |
 | Nonce and notification | `POST /nonce`, `POST /notification`; wallet client notification helper | shared issuance tests and `wallet-client/src/lib/credentialNotification.js` |
 | Credential response encryption | `utils/credentialResponseEncryption.js`; issuer metadata and wallet `credentialResponseEncryption.js` | `tests/credentialResponseEncryption.test.js` |
@@ -114,6 +118,13 @@ interoperable discovery surface.
 - `isWuaWalletProviderTrustedByPolicy` and
   `isKeyAttestationTrustedByIssuer` are explicit trust-policy hooks. They are
   not a configured trusted-list implementation today.
+- WUA verification defaults to interoperability mode: when no Wallet Provider
+  key set is configured, a protected-header `jwk` or leaf `x5c` can verify the
+  WUA. Set `ENFORCE_WUA_TRUST_FRAMEWORK=true` to require configured
+  `wallet_unit_attestation_jwks` (or the compatibility alias
+  `key_attestation_jwks`). This enforcement boundary does not yet perform
+  Trusted List lookup, certificate-chain validation, issuer-to-certificate
+  binding, or revocation checking.
 - The configuration advertises `A128GCM` and `A256GCM` credential response
   encryption; request validation and JWE creation enforce the advertised
   parameters. Confirm the selected key-management algorithm with the wallet.
@@ -234,5 +245,10 @@ the RFC004 interfaces where the service assumes a provider role.
   do not infer conformance from metadata advertisement or a helper function.
 - Link focused design notes and test matrices from here when they become the
   primary explanation for a non-obvious decision.
+- When a security concept is accepted through more than one transport,
+  implement shared parsing, key resolution, cryptographic verification, claim
+  validation, and trust-policy functions. Transport handlers may add only
+  transport-specific nonce, proof-of-possession, or binding checks; add parity
+  tests for every accepted transport.
 - Keep `docs/core/` and `docs/references/` as the local specification base;
   do not duplicate normative text into this wiki.

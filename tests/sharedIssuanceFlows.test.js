@@ -8,6 +8,11 @@ import fs from 'fs';
 import jwt from 'jsonwebtoken';
 import * as jose from 'jose';
 import { v4 as uuidv4 } from 'uuid';
+import {
+  signWuaWithX5cOnly,
+  signProofJwtWithKeyAttestation,
+  x509EcFixturesAvailable,
+} from './fixtures/wuaProofFixtures.js';
 
 // Set up environment for testing BEFORE importing modules
 process.env.ALLOW_NO_REDIS = 'true';
@@ -19,6 +24,7 @@ process.env.SERVER_URL = 'http://localhost:3000';
 
 describe('Shared Issuance Flows', () => {
   const originalEtsiEnforcementEnv = process.env.ENFORCE_ETSI_ISSUANCE_PROFILE;
+  const originalWuaTrustFrameworkEnv = process.env.ENFORCE_WUA_TRUST_FRAMEWORK;
   /** Bound at PAR/authorize; token exchange must present the same `client_id` when set (RFC001 P0-2). */
   const TEST_OAUTH_CLIENT_ID = 'test-oauth-client-id';
   /** Bound at PAR/authorize; token exchange must present the same `redirect_uri` when set (RFC001 P0-3). */
@@ -170,6 +176,7 @@ describe('Shared Issuance Flows', () => {
             credential_signing_alg_values_supported: ['ES256'],
             proof_types_supported: {
               jwt: { proof_signing_alg_values_supported: ['ES256'] },
+              attestation: { proof_signing_alg_values_supported: ['ES256'] },
             },
           },
         },
@@ -212,6 +219,11 @@ describe('Shared Issuance Flows', () => {
       process.env.ENFORCE_ETSI_ISSUANCE_PROFILE = originalEtsiEnforcementEnv;
     } else {
       delete process.env.ENFORCE_ETSI_ISSUANCE_PROFILE;
+    }
+    if (originalWuaTrustFrameworkEnv !== undefined) {
+      process.env.ENFORCE_WUA_TRUST_FRAMEWORK = originalWuaTrustFrameworkEnv;
+    } else {
+      delete process.env.ENFORCE_WUA_TRUST_FRAMEWORK;
     }
     if (globalSandbox) {
       globalSandbox.restore();
@@ -2162,6 +2174,143 @@ describe('Shared Issuance Flows', () => {
         jkts.add(jkt);
       }
       expect(jkts.size).to.equal(3);
+    });
+
+    it('P1-1c — MUST return invalid_proof when strict trust enforcement rejects x5c-only WUA without configured keys', async function () {
+      process.env.ENFORCE_ETSI_ISSUANCE_PROFILE = 'true';
+      process.env.ENFORCE_WUA_TRUST_FRAMEWORK = 'true';
+      if (!cacheServiceRedis.client?.isReady) {
+        this.skip();
+      }
+      if (!x509EcFixturesAvailable()) {
+        this.skip();
+      }
+      const { privateKey: holderPriv, publicKey: holderPub } = await jose.generateKeyPair('ES256', {
+        extractable: true,
+      });
+      const holderPubJwk = await jose.exportJWK(holderPub);
+      const wuaJwt = await signWuaWithX5cOnly({ attestedKeys: [holderPubJwk] });
+      expect(wuaJwt).to.be.a('string');
+
+      const nonce = cryptoUtils.generateNonce();
+      await cacheServiceRedis.storeNonce(nonce, 300);
+      const base = process.env.SERVER_URL || 'http://localhost:3000';
+      const proofJwt = await signProofJwtWithKeyAttestation({
+        holderPrivateKey: holderPriv,
+        holderPublicJwk: holderPubJwk,
+        wuaJwt,
+        nonce,
+        aud: base,
+      });
+
+      const sessionKey = 'p11c-x5c-fail-' + uuidv4();
+      const accessToken = 'test-access-token-p11c-' + uuidv4();
+      await cacheServiceRedis.storePreAuthSession(sessionKey, {
+        status: 'success',
+        isDeferred: false,
+        accessToken,
+        c_nonce: nonce,
+      });
+
+      const res = await request(app)
+        .post('/credential')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({
+          credential_configuration_id: 'rfc001-device-bound-test',
+          proofs: { jwt: [proofJwt] },
+        });
+
+      expect(res.status).to.equal(400);
+      expect(res.body).to.have.property('error', 'invalid_proof');
+      expect(res.body.error_description).to.match(/key_attestation|WUA signature|ENFORCE_WUA_TRUST_FRAMEWORK/i);
+    });
+
+    it('P1-1d — MUST accept proofs.jwt when default interoperability mode receives x5c-only WUA', async function () {
+      process.env.ENFORCE_ETSI_ISSUANCE_PROFILE = 'true';
+      delete process.env.ENFORCE_WUA_TRUST_FRAMEWORK;
+      if (!cacheServiceRedis.client?.isReady) {
+        this.skip();
+      }
+      if (!x509EcFixturesAvailable()) {
+        this.skip();
+      }
+      const { privateKey: holderPriv, publicKey: holderPub } = await jose.generateKeyPair('ES256', {
+        extractable: true,
+      });
+      const holderPubJwk = await jose.exportJWK(holderPub);
+      const wuaJwt = await signWuaWithX5cOnly({ attestedKeys: [holderPubJwk] });
+
+      const nonce = cryptoUtils.generateNonce();
+      await cacheServiceRedis.storeNonce(nonce, 300);
+      const base = process.env.SERVER_URL || 'http://localhost:3000';
+      const proofJwt = await signProofJwtWithKeyAttestation({
+        holderPrivateKey: holderPriv,
+        holderPublicJwk: holderPubJwk,
+        wuaJwt,
+        nonce,
+        aud: base,
+      });
+
+      const sessionKey = 'p11d-x5c-ok-' + uuidv4();
+      const accessToken = 'test-access-token-p11d-' + uuidv4();
+      await cacheServiceRedis.storePreAuthSession(sessionKey, {
+        status: 'success',
+        isDeferred: false,
+        accessToken,
+        c_nonce: nonce,
+      });
+
+      const res = await request(app)
+        .post('/credential')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({
+          credential_configuration_id: 'rfc001-device-bound-test',
+          proofs: { jwt: [proofJwt] },
+        });
+
+      expect(res.status).to.equal(200);
+      expect(res.body).to.have.property('credentials');
+      expect(res.body.credentials).to.be.an('array').that.is.not.empty;
+    });
+
+    it('P1-13 — proofs.attestation succeeds with x5c-signed WUA in default interoperability mode', async function () {
+      process.env.ENFORCE_ETSI_ISSUANCE_PROFILE = 'true';
+      delete process.env.ENFORCE_WUA_TRUST_FRAMEWORK;
+      if (!cacheServiceRedis.client?.isReady) {
+        this.skip();
+      }
+      if (!x509EcFixturesAvailable()) {
+        this.skip();
+      }
+      const { publicKey: holderPub } = await jose.generateKeyPair('ES256', { extractable: true });
+      const holderPubJwk = await jose.exportJWK(holderPub);
+      const nonce = cryptoUtils.generateNonce();
+      await cacheServiceRedis.storeNonce(nonce, 300);
+      const wuaJwt = await signWuaWithX5cOnly({
+        attestedKeys: [holderPubJwk],
+        payloadExtras: { nonce },
+      });
+
+      const sessionKey = 'p113-attestation-x5c-' + uuidv4();
+      const accessToken = 'test-access-token-p113-' + uuidv4();
+      await cacheServiceRedis.storePreAuthSession(sessionKey, {
+        status: 'success',
+        isDeferred: false,
+        accessToken,
+        c_nonce: nonce,
+      });
+
+      const res = await request(app)
+        .post('/credential')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({
+          credential_configuration_id: 'rfc001-device-bound-test',
+          proofs: { attestation: [wuaJwt] },
+        });
+
+      expect(res.status).to.equal(200);
+      expect(res.body).to.have.property('credentials');
+      expect(res.body.credentials).to.be.an('array').that.is.not.empty;
     });
 
     it('should handle immediate credential issuance successfully', async () => {

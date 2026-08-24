@@ -22,6 +22,14 @@ import jwt from "jsonwebtoken";
 import path from "path";
 import * as jose from "jose";
 import { assertCnfJwkIsPublicOnly, getOAuthClientAttestationHeaders } from "./oauthClientAttestation.js";
+import {
+  isWalletProviderAttestationTrustedByPolicy,
+  isWuaTrustFrameworkEnforced,
+  resolveWalletProviderAttestationVerificationJwk,
+  verifyWalletProviderAttestation,
+} from "./wuaVerificationKeyResolver.js";
+
+export { isWuaTrustFrameworkEnforced };
 
 const WUA_SPEC_REF =
   "TS3 Wallet Unit Attestation";
@@ -2435,29 +2443,15 @@ function loadIssuerMetadataForWua() {
 }
 
 /**
- * Public key for verifying the WUA JWS. Prefers configured JWKS; falls back to header.jwk (dev / self-contained WUAs).
+ * Public key for verifying the WUA JWS. Delegates to shared Wallet Provider attestation resolver.
  * @param {object} decodedHeader - jwt.decode complete.header
- * @param {object} issuerMetadata - issuer-config root (optional wallet_unit_attestation_jwks)
+ * @param {object} issuerMetadata - issuer-config root (optional wallet_unit_attestation_jwks / key_attestation_jwks)
  * @returns {object} JWK
  */
 export function resolveWuaVerificationJwk(decodedHeader, issuerMetadata) {
-  const jwks = issuerMetadata?.wallet_unit_attestation_jwks;
-  if (jwks?.keys?.length) {
-    const kid = decodedHeader?.kid;
-    if (kid) {
-      const match = jwks.keys.find((k) => k.kid === kid);
-      if (match) return match;
-    }
-    return jwks.keys[0];
-  }
-  if (decodedHeader?.jwk) return decodedHeader.jwk;
-  throw new Error(
-    withSpecRef(
-      "Cannot verify WUA signature: set issuer wallet_unit_attestation_jwks or send WUA with jwk in protected header",
-      WUA_SPEC_REF,
-      OID4VCI_WALLET_ATTESTATION_SPEC_REF
-    )
-  );
+  return resolveWalletProviderAttestationVerificationJwk(decodedHeader, issuerMetadata, {
+    specRefs: [WUA_SPEC_REF, OID4VCI_WALLET_ATTESTATION_SPEC_REF],
+  });
 }
 
 /**
@@ -2467,15 +2461,11 @@ export function resolveWuaVerificationJwk(decodedHeader, issuerMetadata) {
  */
 export async function verifyWuaJwtSignature(wuaJwt, decodedHeader, issuerMetadata = null) {
   const meta = issuerMetadata ?? loadIssuerMetadataForWua();
-  const alg = decodedHeader?.alg || "ES256";
-  if (!alg) {
-    return { ok: false, error: withSpecRef("WUA JWT header missing alg", WUA_SPEC_REF, OID4VCI_WALLET_ATTESTATION_SPEC_REF) };
-  }
   try {
-    const verificationJwk = resolveWuaVerificationJwk(decodedHeader, meta);
-    const key = await jose.importJWK(verificationJwk, alg);
-    await jose.jwtVerify(wuaJwt, key, { algorithms: [alg] });
-    return { ok: true };
+    const verified = await verifyWalletProviderAttestation(wuaJwt, meta, {
+      specRefs: [WUA_SPEC_REF, OID4VCI_WALLET_ATTESTATION_SPEC_REF],
+    });
+    return { ok: true, ...verified };
   } catch (e) {
     const msg = e?.message || String(e);
     return {
@@ -2562,10 +2552,7 @@ export async function verifyWiaJwtSignature(wiaJwt, decodedHeader, issuerMetadat
  * @returns {boolean}
  */
 export function isWuaWalletProviderTrustedByPolicy(wuaPayload, decodedHeader, issuerMetadata) {
-  void decodedHeader;
-  void issuerMetadata;
-  void wuaPayload;
-  return true;
+  return isWalletProviderAttestationTrustedByPolicy(wuaPayload, decodedHeader, issuerMetadata);
 }
 
 // ============================================================================
@@ -2780,39 +2767,7 @@ export const validateWUA = async (wuaJwt, sessionId = null, issuerMetadata = nul
       return { valid: false, error: withSpecRef('WUA JWT is malformed', WUA_SPEC_REF, OID4VCI_WALLET_ATTESTATION_SPEC_REF) };
     }
 
-    // Check expiration
-    const now = Math.floor(Date.now() / 1000);
-    if (decoded.payload.exp && decoded.payload.exp < now) {
-      return { valid: false, error: withSpecRef('WUA JWT has expired', WUA_SPEC_REF, OID4VCI_WALLET_ATTESTATION_SPEC_REF) };
-    }
-
-    // Check required claims
-    if (!decoded.payload.iss) {
-      return { valid: false, error: withSpecRef('WUA JWT missing iss claim', WUA_SPEC_REF, OID4VCI_WALLET_ATTESTATION_SPEC_REF) };
-    }
-
-    // Check for eudi_wallet_info (optional but recommended)
-    const hasEudiWalletInfo = !!decoded.payload.eudi_wallet_info;
-    let generalInfo;
-    let keyStorageInfo;
-    if (!hasEudiWalletInfo) {
-      return { valid: false, error: withSpecRef('eudi_wallet_info claim is missing', WUA_SPEC_REF) };
-    }else{
-      generalInfo = decoded.payload.eudi_wallet_info.general_info;
-      keyStorageInfo = decoded.payload.eudi_wallet_info.key_storage_info;
-      if (!generalInfo || !keyStorageInfo) {
-        return { valid: false, error: withSpecRef('general_info or key_storage_info claim is missing', WUA_SPEC_REF) };
-      }
-    }
-    
-    // Check for attested_keys (required per spec)
-    const hasAttestedKeys = Array.isArray(decoded.payload.attested_keys) && decoded.payload.attested_keys.length > 0;
-    
-    // Check for status/revocation information (required per spec)
-    const hasStatus = !!decoded.payload.status && !!decoded.payload.status.status_list;
-
     const meta = issuerMetadata ?? loadIssuerMetadataForWua();
-    // Cryptographic: WUA must be a valid JWS from a key we resolve (JWKS or dev header.jwk).
     const sigResult = await verifyWuaJwtSignature(wuaJwt, decoded.header, meta);
     if (!sigResult.ok) {
       if (sessionId) {
@@ -2821,20 +2776,12 @@ export const validateWUA = async (wuaJwt, sessionId = null, issuerMetadata = nul
       return { valid: false, error: sigResult.error };
     }
 
-    // Policy: Wallet Provider (`iss`) trusted via Trusted List / registry — not implemented; stub always allows.
-    if (!isWuaWalletProviderTrustedByPolicy(decoded.payload, decoded.header, meta)) {
-      const msg = withSpecRef(
-        "WUA rejected: Wallet Provider (iss) not trusted by issuer policy",
-        WUA_SPEC_REF,
-        OID4VCI_WALLET_ATTESTATION_SPEC_REF
-      );
-      if (sessionId) {
-        await logError(sessionId, msg, { wuaIss: decoded.payload.iss }).catch(() => {});
-      }
-      return { valid: false, error: msg };
-    }
-
-    // TODO: Check revocation status using status_list if present
+    const { payload } = sigResult;
+    const hasEudiWalletInfo = Boolean(payload.eudi_wallet_info);
+    const generalInfo = payload.eudi_wallet_info.general_info;
+    const keyStorageInfo = payload.eudi_wallet_info.key_storage_info;
+    const hasAttestedKeys = true;
+    const hasStatus = sigResult.hasStatus;
 
     if (sessionId) {
       await logInfo(sessionId, "WUA validated (structure + signature + trust stub)", {
@@ -2849,23 +2796,19 @@ export const validateWUA = async (wuaJwt, sessionId = null, issuerMetadata = nul
         attestedKeysCount: decoded.payload.attested_keys?.length || 0,
         signatureVerification: 'verified',
         walletProviderTrustPolicy: 'stub_true (Trusted List not wired)',
-        revocationCheck: 'pending'
+        revocationCheck: 'pending',
+        verificationKeySource: sigResult.verificationKeySource,
+        trustFrameworkEnforced: sigResult.trustFrameworkEnforced,
       }).catch(() => {});
     }
 
-    // Warn if required elements are missing
-    if (!hasAttestedKeys) {
-      if (sessionId) {
-        await logWarn(sessionId, "WUA missing attested_keys", {}).catch(() => {});
-      }
-    }
     if (!hasStatus) {
       if (sessionId) {
         await logWarn(sessionId, "WUA missing status/revocation information", {}).catch(() => {});
       }
     }
 
-    return { valid: true, payload: decoded.payload };
+    return { valid: true, payload, verificationKeySource: sigResult.verificationKeySource };
   } catch (error) {
     const errorMsg = `WUA validation error: ${error.message}`;
     if (sessionId) {

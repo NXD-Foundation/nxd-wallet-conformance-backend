@@ -104,14 +104,15 @@ describe("keyAttestationProof", () => {
       expect(jwk.kid).to.equal("attester-1");
     });
 
-    it("falls back to first JWKS key when kid does not match", async () => {
+    it("rejects unknown kid when JWKS configured", async () => {
       const { publicKey } = await jose.generateKeyPair("ES256");
       const pub = await jose.exportJWK(publicKey);
       const decoded = { header: { kid: "unknown", alg: "ES256" } };
-      const jwk = resolveKeyAttestationVerificationJwk(decoded, {
-        key_attestation_jwks: { keys: [pub] },
-      });
-      expect(jwk.x).to.equal(pub.x);
+      expect(() =>
+        resolveKeyAttestationVerificationJwk(decoded, {
+          key_attestation_jwks: { keys: [pub] },
+        }),
+      ).to.throw(/no configured Wallet Provider key matches kid/);
     });
 
     it("falls back to header.jwk when no JWKS configured", async () => {
@@ -120,6 +121,29 @@ describe("keyAttestationProof", () => {
       const decoded = { header: { alg: "ES256", jwk: pub } };
       const jwk = resolveKeyAttestationVerificationJwk(decoded, {});
       expect(jwk).to.deep.equal(pub);
+    });
+
+    it("accepts x5c-only header by default when no JWKS is configured", async function () {
+      const fs = await import("fs");
+      const path = await import("path");
+      const { pemToBase64Der } = await import("../utils/sdjwtUtils.js");
+      const certPath = path.join(process.cwd(), "x509EC", "client_certificate.crt");
+      if (!fs.existsSync(certPath)) {
+        this.skip();
+      }
+      const prev = process.env.ENFORCE_WUA_TRUST_FRAMEWORK;
+      delete process.env.ENFORCE_WUA_TRUST_FRAMEWORK;
+      try {
+        const pem = fs.readFileSync(certPath, "utf8");
+        const x5c = [pemToBase64Der(pem)];
+        const decoded = { header: { alg: "ES256", x5c } };
+        const jwk = resolveKeyAttestationVerificationJwk(decoded, {});
+        expect(jwk).to.have.property("kty", "EC");
+        expect(jwk).to.have.property("x");
+      } finally {
+        if (prev !== undefined) process.env.ENFORCE_WUA_TRUST_FRAMEWORK = prev;
+        else delete process.env.ENFORCE_WUA_TRUST_FRAMEWORK;
+      }
     });
   });
 
@@ -131,7 +155,14 @@ describe("keyAttestationProof", () => {
       attesterPub.kid = "attester-kid";
       const holderPub = await jose.exportJWK(holder.publicKey);
 
-      const payload = { nonce: "test-nonce-xyz" };
+      const payload = {
+        iss: "https://wallet-provider.example",
+        nonce: "test-nonce-xyz",
+        eudi_wallet_info: {
+          general_info: { name: "test-wallet" },
+          key_storage_info: { level: "tee" },
+        },
+      };
       if (includeAttestedKeys) payload.attested_keys = [holderPub];
 
       const jwt = await new jose.SignJWT(payload)
@@ -142,7 +173,7 @@ describe("keyAttestationProof", () => {
         })
         .sign(attester.privateKey);
 
-      return { jwt, attesterPub, holderPub };
+      return { jwt, attester, attesterPub, holderPub };
     }
 
     it("verifyKeyAttestationJwtSignature succeeds with correct public JWK", async () => {
@@ -180,6 +211,21 @@ describe("keyAttestationProof", () => {
       expect(attestedKeys).to.have.length(1);
       expect(attestedKeys[0].x).to.equal(holderPub.x);
       expect(cnf).to.deep.equal({ jwk: holderPub });
+    });
+
+    it("rejects a standalone WUA missing the shared wallet-info claims", async () => {
+      const { attester, attesterPub } = await makeSignedAttestationJwt();
+      const credConfig = { proof_types_supported: { attestation: { proof_signing_alg_values_supported: ["ES256"] } } };
+      const issuerConfig = { key_attestation_jwks: { keys: [attesterPub] } };
+      const malformed = await new jose.SignJWT({ iss: "https://wallet-provider.example", attested_keys: [{}] })
+        .setProtectedHeader({ alg: "ES256", typ: KEY_ATTESTATION_JWT_TYP, kid: "attester-kid" })
+        .sign(attester.privateKey);
+      try {
+        await verifyKeyAttestationProofChain(malformed, credConfig, issuerConfig);
+        expect.fail("expected shared WUA claim validation failure");
+      } catch (error) {
+        expect(error.message).to.match(/eudi_wallet_info/i);
+      }
     });
   });
 });

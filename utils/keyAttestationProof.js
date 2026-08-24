@@ -10,6 +10,11 @@
 
 import jwt from "jsonwebtoken";
 import * as jose from "jose";
+import {
+  isWalletProviderAttestationTrustedByPolicy,
+  resolveWalletProviderAttestationVerificationJwk,
+  verifyWalletProviderAttestation,
+} from "./wuaVerificationKeyResolver.js";
 
 /** Match sharedIssuanceFlows ERROR_MESSAGES.INVALID_PROOF_* strings for consistent error handling */
 const INVALID_PROOF = "No proof information found";
@@ -67,35 +72,38 @@ export function parseProofAttestationJwtFromCredentialProofs(proofValue, specRef
  * @returns {boolean}
  */
 export function isKeyAttestationTrustedByIssuer(_decodedHeader, _decodedPayload, _issuerConfig) {
-  return true;
+  return isWalletProviderAttestationTrustedByPolicy(
+    _decodedPayload,
+    _decodedHeader,
+    _issuerConfig,
+  );
 }
 
 /**
  * Verification key for the key-attestation JWT signature.
- * Prefers issuer-configured JWKS; falls back to header.jwk only when no JWKS is configured (dev / transitional).
+ * Uses the shared Wallet Provider attestation resolver (same as proofs.jwt key_attestation / WUA).
  * @param {{ header?: object }} decodedComplete - jwt.decode(..., { complete: true })
- * @param {object} issuerConfig - full issuer metadata object (optional key_attestation_jwks)
+ * @param {object} issuerConfig - full issuer metadata object
  * @returns {object} public JWK
  */
 export function resolveKeyAttestationVerificationJwk(decodedComplete, issuerConfig) {
-  const header = decodedComplete?.header;
-  const jwks = issuerConfig?.key_attestation_jwks;
-  if (jwks?.keys?.length) {
-    const kid = header?.kid;
-    if (kid) {
-      const match = jwks.keys.find((k) => k.kid === kid);
-      if (match) return match;
+  try {
+    return resolveWalletProviderAttestationVerificationJwk(decodedComplete?.header, issuerConfig, {
+      specRefs: [KEY_ATTESTATION_SPEC_REF, HAIP_KEY_ATTESTATION_SPEC_REF],
+    });
+  } catch (e) {
+    const msg = e?.message || String(e);
+    if (/Cannot verify WUA signature/i.test(msg)) {
+      throw new Error(
+        withSpecRef(
+          `${INVALID_PROOF_PUBLIC_KEY} Key attestation: ${msg.replace(/^Cannot verify WUA signature:\s*/i, "")}`,
+          KEY_ATTESTATION_SPEC_REF,
+          HAIP_KEY_ATTESTATION_SPEC_REF,
+        ),
+      );
     }
-    return jwks.keys[0];
+    throw e;
   }
-  if (header?.jwk) return header.jwk;
-  throw new Error(
-    withSpecRef(
-      `${INVALID_PROOF_PUBLIC_KEY} Key attestation: configure issuer key_attestation_jwks or provide header.jwk for signature verification.`,
-      KEY_ATTESTATION_SPEC_REF,
-      HAIP_KEY_ATTESTATION_SPEC_REF
-    )
-  );
 }
 
 /**
@@ -224,20 +232,23 @@ export async function verifyKeyAttestationProofChain(
 
   validateKeyAttestationHeaderForCredentialConfig(decodedComplete.header, credConfig, specRef);
 
-  // Wallet Provider trust (Trusted List / iss policy) — stub true; see isKeyAttestationTrustedByIssuer JSDoc.
-  if (!isKeyAttestationTrustedByIssuer(decodedComplete.header, decodedComplete.payload, issuerConfig)) {
+  let verified;
+  try {
+    verified = await verifyWalletProviderAttestation(proofAttestationJwt, issuerConfig, {
+      specRefs: [KEY_ATTESTATION_SPEC_REF, HAIP_KEY_ATTESTATION_SPEC_REF, specRef],
+    });
+  } catch (error) {
     throw new Error(
       withSpecRef(
-        `${INVALID_PROOF_SIGNATURE}: Key attestation is not trusted by issuer policy`,
-        HAIP_KEY_ATTESTATION_SPEC_REF
-      )
+        `${INVALID_PROOF_SIGNATURE}: Key attestation ${error?.message || error}`,
+        KEY_ATTESTATION_SPEC_REF,
+        HAIP_KEY_ATTESTATION_SPEC_REF,
+      ),
     );
   }
-
-  const verificationJwk = resolveKeyAttestationVerificationJwk(decodedComplete, issuerConfig);
-  const payload = await verifyKeyAttestationJwtSignature(proofAttestationJwt, verificationJwk);
+  const { payload } = verified;
   const attestedKeys = validateAttestationClaimsAndExtractAttestedKeys(payload, specRef);
   const cnf = buildCredentialBindingCnfFromAttestedKeys(attestedKeys);
 
-  return { payload, attestedKeys, cnf };
+  return { payload, attestedKeys, cnf, verificationKeySource: verified.verificationKeySource };
 }

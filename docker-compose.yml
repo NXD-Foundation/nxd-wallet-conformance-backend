@@ -1,10 +1,18 @@
 version: '3'
 
 services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
   rfc-issuer:
     container_name: rfc-100
     build: .
     environment:
       SERVER_URL: https://dss.aegean.gr/rfc-issuer
+      REDIS: redis:6379
+    depends_on:
+      - redis
     ports:
       - "3000:3000"
