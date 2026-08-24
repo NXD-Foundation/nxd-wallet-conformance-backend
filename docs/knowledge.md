@@ -242,6 +242,9 @@ Source: [CS-03 verifier flow summary](./cs03-verifier-flow-summary.md).
 - SD-JWT key-binding JWTs must be signed by the holder key in the issued
 credential's `cnf.jwk`. The verifier checks its signature, `nonce`, `aud`,
 and `sd_hash`.
+- For any OpenID4VP `transaction_data` binding, calculate each KB-JWT hash
+over the exact base64url string received in the Authorization Request; do not
+decode the value before hashing.
 - In strict CS-02 presentation, the Wallet also checks that its stored
 presentation key is the credential's `cnf.jwk` before producing a KB-JWT.
 - For mdoc issuance, construct ISO/IEC 18013-5 `IssuerSigned` and return
@@ -267,7 +270,8 @@ CS-02 compatibility relaxations.
 `transaction_data_hashes_alg` algorithm list. For TS-12 dynamic linking, the
 KB-JWT separately contains `transaction_data_hashes` and the required
 `transaction_data_hashes_alg` string (`"sha-256"`). The verifier checks the
-hash against the exact encoded request entry, enforces the TS-12 `amr`
+hash against the exact encoded request entry (without base64url-decoding it),
+enforces the TS-12 `amr`
 factors, and rejects reused KB-JWT `jti` values.
 
 Source: [TS-12 SCA with wallet](./ts12/ts12-electronic-payments-SCA-implementation-with-wallet%20%281%29.md),

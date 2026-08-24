@@ -331,7 +331,8 @@ describe("CS-02 verifier response validation (Phase 4)", () => {
 
   it("binds requested transaction_data hashes in the KB-JWT", () => {
     const encoded = Buffer.from(JSON.stringify({ type: "payment_data", amount: 10 }), "utf8").toString("base64url");
-    const hash = createHash("sha256").update(Buffer.from(encoded, "base64url")).digest("base64url");
+    const hash = createHash("sha256").update(encoded, "utf8").digest("base64url");
+    const decodedByteHash = createHash("sha256").update(Buffer.from(encoded, "base64url")).digest("base64url");
     expect(() => validateCs02KeyBindingJwtClaims({
       kbHeader: { typ: "kb+jwt", alg: "ES256" },
       kbPayload: {
@@ -340,6 +341,14 @@ describe("CS-02 verifier response validation (Phase 4)", () => {
       },
       sessionNonce: "n1", clientId: "client", transactionData: [encoded], options: { strict: true },
     })).not.to.throw();
+    expect(() => validateCs02KeyBindingJwtClaims({
+      kbHeader: { typ: "kb+jwt", alg: "ES256" },
+      kbPayload: {
+        nonce: "n1", aud: "client", iat: Math.floor(Date.now() / 1000), sd_hash: "abc",
+        transaction_data_hashes_alg: "sha-256", transaction_data_hashes: [decodedByteHash],
+      },
+      sessionNonce: "n1", clientId: "client", transactionData: [encoded], options: { strict: true },
+    })).to.throw(/transaction_data_hashes/);
     expect(() => validateCs02KeyBindingJwtClaims({
       kbHeader: { typ: "kb+jwt", alg: "ES256" },
       kbPayload: {

@@ -1,5 +1,6 @@
 import fetch from "node-fetch";
 import crypto from "node:crypto";
+import { computeTransactionDataHash } from "../../../utils/transactionDataHash.js";
 import { jwtVerify, createLocalJWKSet, importJWK, importX509 } from "jose";
 import {
   createProofJwt,
@@ -347,17 +348,13 @@ function attachKbJwtToSdJwt(sdJwt, kbJwt) {
   return `${token}~${kbJwt}`;
 }
 
-function buildCs02TransactionDataProofClaims(transactionData) {
+export function buildCs02TransactionDataProofClaims(transactionData) {
   if (!Array.isArray(transactionData) || transactionData.length === 0) return null;
   const hashes = transactionData.map((entry) => {
     if (typeof entry !== "string" || entry.length === 0) {
       throw new Cs02ValidationError("transaction_data entries must be non-empty strings", "invalid_request");
     }
-    let bytes;
-    try { bytes = Buffer.from(entry, "base64url"); } catch {
-      throw new Cs02ValidationError("transaction_data entries must be base64url", "invalid_request");
-    }
-    return crypto.createHash("sha256").update(bytes).digest("base64url");
+    return computeTransactionDataHash(entry);
   });
   return { transaction_data_hashes: hashes, transaction_data_hashes_alg: "sha-256" };
 }

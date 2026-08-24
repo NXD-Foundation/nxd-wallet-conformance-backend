@@ -1,4 +1,5 @@
-import { createHash, randomUUID } from "crypto";
+import { randomUUID } from "crypto";
+import { computeTransactionDataHash } from "./transactionDataHash.js";
 
 /** TS12 SCA payment credential type (SD-JWT vct). */
 export const TS12_PAYMENT_VCT = "urn:eudi:sca:payment:1";
@@ -101,9 +102,7 @@ export function encodeTs12TransactionData(transactionDataObj) {
  * @returns {string} base64url SHA-256 digest
  */
 export function computeTs12TransactionDataHash(encodedTransactionData) {
-  return createHash("sha256")
-    .update(encodedTransactionData)
-    .digest("base64url");
+  return computeTransactionDataHash(encodedTransactionData);
 }
 
 /**

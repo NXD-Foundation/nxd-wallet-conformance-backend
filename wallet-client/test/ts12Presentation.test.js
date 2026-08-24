@@ -1,10 +1,12 @@
 import { expect } from "chai";
+import { createHash } from "crypto";
 import {
   buildTs12ProofClaims,
   DEFAULT_TS12_AMR,
   resolveTs12TransactionDataForCredential,
   validateTs12PaymentPayloadSchema,
 } from "../src/lib/ts12Presentation.js";
+import { buildCs02TransactionDataProofClaims } from "../src/lib/presentation.js";
 import {
   buildTs12PaymentTransactionData,
   computeTs12TransactionDataHash,
@@ -125,5 +127,18 @@ describe("wallet-client ts12Presentation", () => {
       computeTs12TransactionDataHash(encoded),
     ]);
     expect(claims.transaction_data_hashes_alg).to.equal("sha-256");
+  });
+
+  it("hashes generic transaction_data as the received base64url string", () => {
+    const encoded = Buffer.from(JSON.stringify({ type: "payment_data", amount: 12.34 }), "utf8")
+      .toString("base64url");
+    const claims = buildCs02TransactionDataProofClaims([encoded]);
+
+    expect(claims.transaction_data_hashes).to.deep.equal([
+      computeTs12TransactionDataHash(encoded),
+    ]);
+    expect(claims.transaction_data_hashes).to.not.deep.equal([
+      createHash("sha256").update(Buffer.from(encoded, "base64url")).digest("base64url"),
+    ]);
   });
 });

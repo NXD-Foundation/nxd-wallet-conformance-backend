@@ -10,6 +10,7 @@ import {
   jwtVerify,
 } from "jose";
 import { createHash } from "crypto";
+import { computeTransactionDataHash } from "./transactionDataHash.js";
 import {
   extractKeyBindingJwtFromSdJwt,
   validateSdJwtKeyBindingMatchesCredential,
@@ -583,9 +584,7 @@ export function validateCs02KeyBindingJwtClaims({
     if (kbPayload.transaction_data_hashes_alg !== "sha-256" || !Array.isArray(kbPayload.transaction_data_hashes)) {
       throw new Cs02VerifierResponseError("Key Binding JWT is missing transaction_data_hashes", "invalid_key_binding_jwt");
     }
-    const expected = transactionData.map((entry) => createHash("sha256")
-      .update(Buffer.from(entry, "base64url"))
-      .digest("base64url"));
+    const expected = transactionData.map(computeTransactionDataHash);
     if (expected.length !== kbPayload.transaction_data_hashes.length ||
         expected.some((hash, index) => hash !== kbPayload.transaction_data_hashes[index])) {
       throw new Cs02VerifierResponseError("Key Binding JWT transaction_data_hashes do not match the request", "invalid_key_binding_jwt");
