@@ -1,4 +1,6 @@
 import { expect } from "chai";
+import fs from "fs";
+import path from "path";
 import jwt from "jsonwebtoken";
 import * as jose from "jose";
 import {
@@ -7,6 +9,7 @@ import {
   verifyWuaJwtSignature,
   isWuaWalletProviderTrustedByPolicy,
 } from "../utils/routeUtils.js";
+import { pemToBase64Der } from "../utils/sdjwtUtils.js";
 
 async function buildMinimalWua({ privateKey, publicJwk, attestedKeys }) {
   const key = await jose.importJWK(await jose.exportJWK(privateKey), "ES256");
@@ -60,6 +63,58 @@ describe("WUA validation (routeUtils)", () => {
     const result = await validateWUA(jwt, null, {});
     expect(result.valid).to.equal(true);
     expect(result.payload?.iss).to.equal("https://wallet.example");
+  });
+
+  it("validateWUA accepts a valid x5c-only WUA in default interoperability mode", async function () {
+    const certPath = path.join(process.cwd(), "x509EC", "client_certificate.crt");
+    const keyPath = path.join(process.cwd(), "x509EC", "ec_private_pkcs8.key");
+    if (!fs.existsSync(certPath) || !fs.existsSync(keyPath)) this.skip();
+
+    const signer = await jose.importPKCS8(fs.readFileSync(keyPath, "utf8"), "ES256");
+    const holder = await jose.generateKeyPair("ES256");
+    const holderJwk = await jose.exportJWK(holder.publicKey);
+    const wua = await new jose.SignJWT({
+      eudi_wallet_info: { general_info: { name: "test-wallet" }, key_storage_info: { level: "tee" } },
+      attested_keys: [holderJwk],
+      status: { status_list: { uri: "https://example.com/status", idx: 0 } },
+    })
+      .setProtectedHeader({
+        alg: "ES256",
+        typ: "key-attestation+jwt",
+        x5c: [pemToBase64Der(fs.readFileSync(certPath, "utf8"))],
+      })
+      .sign(signer);
+
+    const result = await validateWUA(wua, null, {});
+    expect(result.valid).to.equal(true);
+    expect(result.verificationKeySource).to.equal("header_x5c");
+
+    const previous = process.env.ENFORCE_WUA_TRUST_FRAMEWORK;
+    process.env.ENFORCE_WUA_TRUST_FRAMEWORK = "true";
+    try {
+      const strictResult = await validateWUA(wua, null, {});
+      expect(strictResult.valid).to.equal(false);
+      expect(strictResult.error).to.match(/ENFORCE_WUA_TRUST_FRAMEWORK/);
+    } finally {
+      if (previous === undefined) delete process.env.ENFORCE_WUA_TRUST_FRAMEWORK;
+      else process.env.ENFORCE_WUA_TRUST_FRAMEWORK = previous;
+    }
+  });
+
+  it("rejects a self-contained WUA when trust-framework enforcement is enabled without configured keys", async () => {
+    const { privateKey, publicKey } = await jose.generateKeyPair("ES256");
+    const pubJwk = await jose.exportJWK(publicKey);
+    const wua = await buildMinimalWua({ privateKey, publicJwk: pubJwk, attestedKeys: [pubJwk] });
+    const previous = process.env.ENFORCE_WUA_TRUST_FRAMEWORK;
+    process.env.ENFORCE_WUA_TRUST_FRAMEWORK = "true";
+    try {
+      const result = await validateWUA(wua, null, {});
+      expect(result.valid).to.equal(false);
+      expect(result.error).to.match(/ENFORCE_WUA_TRUST_FRAMEWORK/);
+    } finally {
+      if (previous === undefined) delete process.env.ENFORCE_WUA_TRUST_FRAMEWORK;
+      else process.env.ENFORCE_WUA_TRUST_FRAMEWORK = previous;
+    }
   });
 
   it("verifyWuaJwtSignature uses wallet_unit_attestation_jwks when kid matches", async () => {

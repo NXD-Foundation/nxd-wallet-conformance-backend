@@ -1651,7 +1651,12 @@ sharedRouter.post("/credential", async (req, res) => {
             requestBody.proofAttestationJwt,
             credConfigForProof,
             issuerConfigForProof,
-            SPEC_REFS.VCI_PROOF
+            SPEC_REFS.VCI_PROOF,
+            // validateWUA above has already cryptographically verified this exact WUA.
+            // Reuse that result so proofs.jwt and proofs.attestation stay on one pipeline.
+            wuaJwt === requestBody.proofAttestationJwt && wuaValidationResult?.valid
+              ? { verifiedAttestation: wuaValidationResult }
+              : undefined
           );
           requestBody._credentialBindingCnf = cnf;
           requestBody._attestedKeys = attestedKeys;

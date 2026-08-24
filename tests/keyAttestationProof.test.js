@@ -108,14 +108,13 @@ describe("keyAttestationProof", () => {
       expect(jwk.kid).to.equal("attester-1");
     });
 
-    it("falls back to first JWKS key when kid does not match", async () => {
+    it("rejects an unknown kid when configured JWKS is present", async () => {
       const { publicKey } = await jose.generateKeyPair("ES256");
       const pub = await jose.exportJWK(publicKey);
       const decoded = { header: { kid: "unknown", alg: "ES256" } };
-      const jwk = resolveKeyAttestationVerificationJwk(decoded, {
+      expect(() => resolveKeyAttestationVerificationJwk(decoded, {
         key_attestation_jwks: { keys: [pub] },
-      });
-      expect(jwk.x).to.equal(pub.x);
+      })).to.throw(/no configured Wallet Provider key matches kid/);
     });
 
     it("falls back to header.jwk when no JWKS configured", async () => {
@@ -162,7 +161,17 @@ describe("keyAttestationProof", () => {
       attesterPub.kid = "attester-kid";
       const holderPub = await jose.exportJWK(holder.publicKey);
 
-      const payload = { nonce: "test-nonce-xyz" };
+      const now = Math.floor(Date.now() / 1000);
+      const payload = {
+        nonce: "test-nonce-xyz",
+        key_storage: ["iso_18045_high"],
+        user_authentication: ["iso_18045_high"],
+        certification: { scheme: "test" },
+        key_storage_status: {
+          status: { status_list: { uri: "https://example.com/status", idx: 0 } },
+          exp: now + 3600,
+        },
+      };
       if (includeAttestedKeys) payload.attested_keys = [holderPub];
 
       const jwt = await new jose.SignJWT(payload)
@@ -228,6 +237,13 @@ describe("keyAttestationProof", () => {
       const jwt = await new jose.SignJWT({
         nonce: "test-nonce-xyz",
         attested_keys: [holderPub],
+        key_storage: ["iso_18045_high"],
+        user_authentication: ["iso_18045_high"],
+        certification: { scheme: "test" },
+        key_storage_status: {
+          status: { status_list: { uri: "https://example.com/status", idx: 0 } },
+          exp: Math.floor(Date.now() / 1000) + 3600,
+        },
       })
         .setProtectedHeader({ alg: "ES256", typ: KEY_ATTESTATION_JWT_TYP, x5c })
         .sign(attesterPrivateKey);

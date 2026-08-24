@@ -278,6 +278,15 @@ Section 3.6 and Section 4.2.
 - Current WUA-required issuance rejects missing or expired core WIA and key
 attestation status fields, but incomplete status-list detail is currently
 warning-only.
+- WUA/key-attestation signature validation is shared by `proofs.jwt` protected
+  header `key_attestation` and `proofs.attestation`. In compatibility mode,
+  configured Wallet Provider keys are preferred, then a protected-header `jwk`
+  or leaf `x5c` may be used when no configured key set exists. Set
+  `ENFORCE_WUA_TRUST_FRAMEWORK=true` to require configured
+  `wallet_unit_attestation_jwks` (or the compatibility alias
+  `key_attestation_jwks`). This source-enforcement switch does not replace the
+  opted-in `trustFramework=true` Trusted List decision, certificate-chain
+  validation, issuer binding, or revocation checks.
 - The Phase 0/1 WE BUILD trust-list consumer now exists under `trust/`, with
   the pilot profile in `data/trust/webuild-wp4-pilot.json`, synthetic signed
   JSON/XML fixtures, and the focused command `npm run test:trust`. Opted-in
@@ -465,6 +474,11 @@ steps in a focused companion document and link it from this file.
 behaviour and retain the plan as historical rationale.
 - Update this file in the same change set as any change to a linked decision,
 profile interpretation, protocol support claim, or documentation location.
+- When a security concept is accepted through multiple transports, share its
+  parsing, key resolution, cryptographic verification, claim validation, and
+  trust-policy functions. Transport handlers may add only transport-specific
+  nonce, proof-of-possession, or binding checks, and every accepted transport
+  needs parity tests.
 
 
 
