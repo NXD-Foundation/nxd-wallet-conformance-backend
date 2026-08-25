@@ -236,6 +236,15 @@ export async function verifyKeyAttestationProofChain(
   try {
     verified = await verifyWalletProviderAttestation(proofAttestationJwt, issuerConfig, {
       specRefs: [KEY_ATTESTATION_SPEC_REF, HAIP_KEY_ATTESTATION_SPEC_REF, specRef],
+      // OpenID4VCI Appendix D.1 key attestations may be produced by the key
+      // storage component, so neither `iss` nor TS3's `eudi_wallet_info` is a
+      // required claim. Keep signature/trust, `iat`, and `attested_keys`
+      // validation mandatory for this proof transport.
+      claimValidation: {
+        requireIssuer: false,
+        requireEudiWalletInfo: false,
+        requireIssuedAt: true,
+      },
     });
   } catch (error) {
     throw new Error(

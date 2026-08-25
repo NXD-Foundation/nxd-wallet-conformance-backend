@@ -92,13 +92,23 @@ export function resolveWalletProviderAttestationVerificationJwk(decodedHeader, i
   return resolveWalletProviderAttestationVerificationKey(decodedHeader, issuerMetadata, options).jwk;
 }
 
-/** Shared required WUA payload checks for every transport. */
+/**
+ * Shared WUA payload checks. The strict Wallet Unit Attestation profile is the
+ * default for legacy/header transports. OpenID4VCI `proofs.attestation` uses
+ * the smaller key-attestation profile and supplies explicit options below.
+ */
 export function validateWalletUnitAttestationClaims(payload, options = {}) {
   const specRefs = options.specRefs ?? [WUA_SPEC_REF, OID4VCI_KEY_ATTESTATION_SPEC_REF];
+  const requireIssuer = options.requireIssuer ?? true;
+  const requireEudiWalletInfo = options.requireEudiWalletInfo ?? true;
+  const requireIssuedAt = options.requireIssuedAt ?? false;
   if (!payload || typeof payload !== "object") throw new Error(withSpecRef("WUA JWT payload is missing or invalid", ...specRefs));
-  if (!payload.iss) throw new Error(withSpecRef("WUA JWT missing iss claim", ...specRefs));
+  if (requireIssuer && !payload.iss) throw new Error(withSpecRef("WUA JWT missing iss claim", ...specRefs));
+  if (requireIssuedAt && !Number.isInteger(payload.iat)) {
+    throw new Error(withSpecRef("WUA JWT missing or invalid iat claim", ...specRefs));
+  }
   const walletInfo = payload.eudi_wallet_info;
-  if (!walletInfo?.general_info || !walletInfo?.key_storage_info) {
+  if (requireEudiWalletInfo && (!walletInfo?.general_info || !walletInfo?.key_storage_info)) {
     throw new Error(withSpecRef("WUA JWT missing eudi_wallet_info.general_info or eudi_wallet_info.key_storage_info", ...specRefs));
   }
   if (!Array.isArray(payload.attested_keys) || payload.attested_keys.length === 0) {
@@ -130,7 +140,10 @@ export async function verifyWalletProviderAttestation(wuaJwt, issuerMetadata = {
   } catch (error) {
     throw new Error(withSpecRef(`WUA signature verification failed: ${error?.message || error}`, ...specRefs));
   }
-  const claimSummary = validateWalletUnitAttestationClaims(payload, { specRefs });
+  const claimSummary = validateWalletUnitAttestationClaims(payload, {
+    specRefs,
+    ...options.claimValidation,
+  });
   if (!isWalletProviderAttestationTrustedByPolicy(payload, decoded.header, issuerMetadata)) {
     throw new Error(withSpecRef("WUA rejected: Wallet Provider (iss) not trusted by issuer policy", ...specRefs));
   }

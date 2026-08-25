@@ -42,23 +42,10 @@ const WALLET_SUPPORTED_CREDENTIAL_FORMATS = new Set([
   "mso_mdoc",
 ]);
 
-// Wallet Demo build 39 uses openid4vci 0.12.1. That release rejects the
-// complete issuer metadata document when any cryptographically-bound
-// configuration advertises just one of `jwt` or `attestation`. Do not let an
-// unrelated, narrower configuration (currently `room_key_credential`) make a
-// valid offered credential undiscoverable.
-function hasWalletCompatibleProofTypes(configuration) {
-  const proofTypes = Object.keys(configuration?.proof_types_supported || {});
-  return proofTypes.length === 0 ||
-    (proofTypes.includes("jwt") && proofTypes.includes("attestation"));
-}
-
 function buildPublishedIssuerMetadata(config) {
   const credential_configurations_supported = Object.fromEntries(
     Object.entries(config.credential_configurations_supported || {}).filter(
-      ([, value]) =>
-        WALLET_SUPPORTED_CREDENTIAL_FORMATS.has(value?.format) &&
-        hasWalletCompatibleProofTypes(value),
+      ([, value]) => WALLET_SUPPORTED_CREDENTIAL_FORMATS.has(value?.format),
     ),
   );
 

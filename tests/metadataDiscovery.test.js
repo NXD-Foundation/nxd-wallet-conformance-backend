@@ -1126,14 +1126,20 @@ describe('OIDC4VCI V1.0 - Metadata Discovery Compliance', () => {
       expect(formats.has('x509_attr'), 'x509_attr').to.be.false;
     });
 
-    it('does not publish proof configurations rejected by wallet openid4vci 0.12.1', async () => {
+    it('publishes wallet-compatible jwt and attestation proof metadata', async () => {
       const response = await request(app)
         .get('/.well-known/openid-credential-issuer')
         .expect(200);
 
       const configurations = response.body.credential_configurations_supported;
       expect(configurations).to.have.property('ETSIRfc001PidVcSdJwt');
-      expect(configurations).to.not.have.property('room_key_credential');
+      expect(configurations).to.have.property('room_key_credential');
+      expect(configurations.room_key_credential.proof_types_supported).to.deep.include({
+        attestation: {
+          proof_signing_alg_values_supported: ['ES256'],
+          key_attestations_required: {},
+        },
+      });
 
       for (const configuration of Object.values(configurations)) {
         const proofTypes = Object.keys(configuration.proof_types_supported || {});

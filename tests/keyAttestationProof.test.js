@@ -148,7 +148,11 @@ describe("keyAttestationProof", () => {
   });
 
   describe("verifyKeyAttestationJwtSignature and verifyKeyAttestationProofChain", () => {
-    async function makeSignedAttestationJwt({ includeAttestedKeys = true } = {}) {
+    async function makeSignedAttestationJwt({
+      includeAttestedKeys = true,
+      includeIssuer = true,
+      includeWalletInfo = true,
+    } = {}) {
       const attester = await jose.generateKeyPair("ES256");
       const holder = await jose.generateKeyPair("ES256");
       const attesterPub = await jose.exportJWK(attester.publicKey);
@@ -156,13 +160,16 @@ describe("keyAttestationProof", () => {
       const holderPub = await jose.exportJWK(holder.publicKey);
 
       const payload = {
-        iss: "https://wallet-provider.example",
+        iat: 1_700_000_000,
         nonce: "test-nonce-xyz",
-        eudi_wallet_info: {
+      };
+      if (includeIssuer) payload.iss = "https://wallet-provider.example";
+      if (includeWalletInfo) {
+        payload.eudi_wallet_info = {
           general_info: { name: "test-wallet" },
           key_storage_info: { level: "tee" },
-        },
-      };
+        };
+      }
       if (includeAttestedKeys) payload.attested_keys = [holderPub];
 
       const jwt = await new jose.SignJWT(payload)
@@ -213,18 +220,30 @@ describe("keyAttestationProof", () => {
       expect(cnf).to.deep.equal({ jwk: holderPub });
     });
 
-    it("rejects a standalone WUA missing the shared wallet-info claims", async () => {
-      const { attester, attesterPub } = await makeSignedAttestationJwt();
+    it("accepts an OpenID4VCI key attestation without WUA-only iss or wallet-info claims", async () => {
+      const { jwt, attesterPub, holderPub } = await makeSignedAttestationJwt({
+        includeIssuer: false,
+        includeWalletInfo: false,
+      });
+      const credConfig = {
+        proof_types_supported: {
+          attestation: { proof_signing_alg_values_supported: ["ES256"] },
+        },
+      };
+      const issuerConfig = { key_attestation_jwks: { keys: [attesterPub] } };
+      const { cnf } = await verifyKeyAttestationProofChain(jwt, credConfig, issuerConfig);
+      expect(cnf).to.deep.equal({ jwk: holderPub });
+    });
+
+    it("rejects a key attestation without attested keys", async () => {
+      const { jwt, attesterPub } = await makeSignedAttestationJwt({ includeAttestedKeys: false });
       const credConfig = { proof_types_supported: { attestation: { proof_signing_alg_values_supported: ["ES256"] } } };
       const issuerConfig = { key_attestation_jwks: { keys: [attesterPub] } };
-      const malformed = await new jose.SignJWT({ iss: "https://wallet-provider.example", attested_keys: [{}] })
-        .setProtectedHeader({ alg: "ES256", typ: KEY_ATTESTATION_JWT_TYP, kid: "attester-kid" })
-        .sign(attester.privateKey);
       try {
-        await verifyKeyAttestationProofChain(malformed, credConfig, issuerConfig);
-        expect.fail("expected shared WUA claim validation failure");
+        await verifyKeyAttestationProofChain(jwt, credConfig, issuerConfig);
+        expect.fail("expected key-attestation claim validation failure");
       } catch (error) {
-        expect(error.message).to.match(/eudi_wallet_info/i);
+        expect(error.message).to.match(/attested_keys/i);
       }
     });
   });

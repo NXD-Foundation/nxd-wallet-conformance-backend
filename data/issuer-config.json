@@ -2639,6 +2639,10 @@
         "jwt": {
           "proof_signing_alg_values_supported": ["ES256"],
           "key_attestations_required": {}
+        },
+        "attestation": {
+          "proof_signing_alg_values_supported": ["ES256"],
+          "key_attestations_required": {}
         }
       }
     }

@@ -12,6 +12,10 @@ or conformance decisions, read the linked specification first, then confirm
 the current code and tests. Keep this document current when changing a
 protocol boundary, security control, or declared support level.
 
+Current EUDI-wallet interoperability changes intended for transfer to the
+APTITUDE branch are tracked in
+[APTITUDE issuer migration notes](./aptitude-issuer-migration.md).
+
 ## System At A Glance
 
 The repository contains a Node.js/Express service with three cooperating
