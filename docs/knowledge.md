@@ -78,7 +78,7 @@ specific offer routes are kept alongside it for interoperability coverage.
 
 | RFC001 concern | Implementation mapping | Verification |
 | --- | --- | --- |
-| Discovery and issuer metadata | `routes/metadataroutes.js`; `data/issuer-config.json`; `data/oauth-config.json` | `tests/metadataDiscovery.test.js` |
+| Discovery and issuer metadata | `routes/metadataroutes.js`; `data/issuer-config.json`; `data/oauth-config.json`. Signed metadata uses the offer's `SERVER_URL` issuer identifier, `openidvci-issuer-metadata+jwt`, and issuer-certificate `x5c`; it also advertises ECDH-ES request encryption. | `tests/metadataDiscovery.test.js` |
 | Credential offers and wallet invocation | `routes/issue/preAuthSDjwRoutes.js`, `routes/issue/codeFlowSdJwtRoutes.js`, `routes/issue/vciStandardRoutes.js`, `routes/multiCredentialOfferRoutes.js` | `tests/preAuthSDjwRoutes.test.js`, `tests/sharedIssuanceFlows.test.js` |
 | Authorization-code grant | `POST /par` or `/authorize/par`, `GET /authorize`, then `POST /token_endpoint` | `tests/codeFlowSdJwtRoutes.test.js` |
 | PAR and PKCE S256 | `routes/issue/codeFlowSdJwtRoutes.js` stores immutable PAR payloads, requires `request_uri` when configuration requires PAR, and validates S256; `validatePKCE` verifies the token request | `tests/codeFlowSdJwtRoutes.test.js` |
@@ -86,7 +86,7 @@ specific offer routes are kept alongside it for interoperability coverage.
 | DPoP sender constraint | DPoP-bound token creation in `utils/tokenUtils.js`; resource proof verification in `validateDpopProofForResourceRequest` | issuance-flow tests and wallet `credentialNotification.js` |
 | Credential proof and holder binding | `validateCredentialRequest`, `validateProofJWT`, and `verifyProofJWT`; wallet proof construction in `wallet-client/src/lib/credentialRequestProofs.js` | `tests/credGenerationUtilsProofBinding.test.js`, `tests/proofJwtResolver.test.js` |
 | WIA at PAR/token | `validateWIA` in `utils/routeUtils.js`; OAuth client-attestation and PoP validation in `utils/oauthClientAttestation.js` | `tests/oauthClientAttestation.test.js`, `tests/wuaValidation.test.js` |
-| WUA/key attestation at credential request | Shared WUA validation in `utils/wuaVerificationKeyResolver.js`; proof supports `proofs.jwt` and `proofs.attestation` paths | `tests/keyAttestationProof.test.js`, `tests/wuaValidation.test.js` |
+| WUA/key attestation at credential request | Shared WUA validation in `utils/wuaVerificationKeyResolver.js`; proof supports `proofs.jwt` and `proofs.attestation` paths. The direct OpenID4VCI key-attestation path requires signature/trust, `iat`, nonce, and `attested_keys`, but does not require WUA-only `iss` or `eudi_wallet_info`. | `tests/keyAttestationProof.test.js`, `tests/wuaValidation.test.js` |
 | Immediate and deferred credentials | `POST /credential`, `POST /credential_deferred`, `resolveDeferredIssuanceContext` | `tests/sharedIssuanceFlows.test.js` |
 | Nonce and notification | `POST /nonce`, `POST /notification`; wallet client notification helper | shared issuance tests and `wallet-client/src/lib/credentialNotification.js` |
 | Credential response encryption | `utils/credentialResponseEncryption.js`; issuer metadata and wallet `credentialResponseEncryption.js` | `tests/credentialResponseEncryption.test.js` |
@@ -226,6 +226,22 @@ the RFC004 interfaces where the service assumes a provider role.
   `proof_types_supported` to include `key_attestations_required`; omitting it
   can cause signed metadata resolution to stop after certificate trust
   succeeds, before authorization-server metadata is requested.
+- Credential-request encryption is advertised with the issuer agreement JWK,
+  `alg_values_supported: ["ECDH-ES"]`, and the configured content-encryption
+  algorithms. `POST /credential` decrypts the compact-JWE body before normal
+  proof validation.
+- `room_key_credential` advertises both ES256 `jwt` and `attestation` proof
+  types, including `key_attestations_required`, because both credential-proof
+  paths are implemented.
+- The EUDI reference wallet can send a standards-valid `proofs.attestation`
+  JWT without `iss` or `eudi_wallet_info`. The direct key-attestation parser
+  accepts that shape while retaining signature, type, `iat`, nonce, and
+  `attested_keys` checks; stricter WUA checks remain the default for the
+  header-carried WUA path.
+- The issuer metadata endpoint is currently a reference-wallet compatibility
+  projection. Before a strict ETSI APTITUDE deployment, resolve its omitted
+  `issuer_info` and ETSI format/encryption requirements; see
+  [APTITUDE issuer migration notes](./aptitude-issuer-migration.md).
 - RFC002 routes use prefixed DID verifier identifiers and publish a strict
   metadata projection at `/client-metadata/rfc002`; broad metadata remains for
   compatibility routes.
