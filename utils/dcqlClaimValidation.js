@@ -1,10 +1,25 @@
-/** Resolve a DCQL path against a reconstructed credential claim object. */
-export function getDcqlPathValue(claims, path) {
-  if (!Array.isArray(path) || path.length === 0) return undefined;
+function resolvePath(root, path) {
   return path.reduce((value, segment) => {
     if (value == null || typeof value !== "object") return undefined;
     return value[segment];
-  }, claims);
+  }, root);
+}
+
+/**
+ * Resolve a DCQL path against reconstructed credential claims.
+ * `extractClaimsFromRequest` returns an array of credential objects; a single
+ * object is also accepted.
+ */
+export function getDcqlPathValue(claims, path) {
+  if (!Array.isArray(path) || path.length === 0) return undefined;
+  if (Array.isArray(claims)) {
+    for (const root of claims) {
+      const value = resolvePath(root, path);
+      if (value !== undefined) return value;
+    }
+    return undefined;
+  }
+  return resolvePath(claims, path);
 }
 
 function matchesRequestedValue(value, constraint) {

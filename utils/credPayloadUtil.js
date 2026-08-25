@@ -340,33 +340,35 @@ export const createFerryBoardingPassPayload = (
 // SD-JWT HELPERS
 
 export const getPIDSDJWTData = (decodedHeaderSubjectDID) => {
-  const currentTimestamp = new Date().getTime();
-  const currentDate = new Date();
-  const expTimestamp = currentDate.setFullYear(currentDate.getFullYear() + 1);
+  const issuanceDate = new Date();
+  const expiryDate = new Date();
+  expiryDate.setFullYear(issuanceDate.getFullYear() + 1);
+  const isoDate = (d) => d.toISOString().split("T")[0];
+  // ARF Annex 3.01 §5 SD-JWT VC PID claim names (not ISO mdoc identifiers)
   const claims = {
-    // id: decodedHeaderSubjectDID || uuidv4(),
     given_name: "Hanna",
     family_name: "Matkalainen",
-    birth_date: "01.07.2005",
-    age_over_18: true,
-    issuance_date: currentTimestamp,
-    expiry_date: expTimestamp, //expTimestamp.getTime(),
+    birthdate: "2005-07-01",
+    age_equal_or_over: { "18": true },
+    date_of_issuance: isoDate(issuanceDate),
+    date_of_expiry: isoDate(expiryDate),
     issuing_authority: "UAegean Test Issuer",
-    issuing_country: "Finland",
+    issuing_country: "FI",
   };
 
   const disclosureFrame = {
     _sd: [
-      // "id",
       "given_name",
       "family_name",
-      "birth_date",
-      "age_over_18",
-      "expiry_date",
-      "issuance_date",
+      "birthdate",
+      "date_of_expiry",
+      "date_of_issuance",
       "issuing_authority",
       "issuing_country",
     ],
+    age_equal_or_over: {
+      _sd: ["18"],
+    },
   };
 
   return { claims, disclosureFrame };

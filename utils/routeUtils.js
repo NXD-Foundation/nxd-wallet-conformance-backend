@@ -776,7 +776,7 @@ export const DEFAULT_DCQL_QUERY = {
   ],
 };
 
-// Full PID DCQL query — all attributes the PID issuer provides
+// Full PID DCQL query — ARF Annex 3.01 §5 SD-JWT VC claim names (not ISO mdoc identifiers)
 export const FULL_PID_DCQL_QUERY = {
   credentials: [
     {
@@ -788,10 +788,9 @@ export const FULL_PID_DCQL_QUERY = {
       claims: [
         { path: ["given_name"] },
         { path: ["family_name"] },
-        { path: ["birth_date"] },
-        { path: ["age_over_18"] },
-        { path: ["issuance_date"] },
-        { path: ["expiry_date"] },
+        { path: ["birthdate"] },
+        { path: ["date_of_issuance"] },
+        { path: ["date_of_expiry"] },
         { path: ["issuing_authority"] },
         { path: ["issuing_country"] },
       ],

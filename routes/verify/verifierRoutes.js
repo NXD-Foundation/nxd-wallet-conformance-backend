@@ -1946,12 +1946,16 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
         }
 
         vpSession.status = "success";
-        vpSession.claims = { ...claimsFromExtraction };
+        vpSession.claims = Array.isArray(claimsFromExtraction)
+          ? (claimsFromExtraction.length === 1 ? { ...claimsFromExtraction[0] } : claimsFromExtraction)
+          : { ...claimsFromExtraction };
         await storeVPSession(sessionId, vpSession);
         
         await logInfo(sessionId, "direct_post.jwt processing completed successfully", {
           status: "success",
-          claimsCount: Object.keys(claimsFromExtraction || {}).length
+          claimsCount: Array.isArray(claimsFromExtraction)
+            ? claimsFromExtraction.length
+            : Object.keys(claimsFromExtraction || {}).length
         });
         
         return res.status(200).json({ status: "ok" });
@@ -2704,11 +2708,13 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
       }
 
       vpSession.status = "success";
-      vpSession.claims = { ...claimsFromExtraction };
+      vpSession.claims = Array.isArray(claimsFromExtraction)
+        ? (claimsFromExtraction.length === 1 ? { ...claimsFromExtraction[0] } : claimsFromExtraction)
+        : { ...claimsFromExtraction };
       await storeVPSession(sessionId, vpSession);
 
       if (slog) {
-        try { slog("[PRESENTATION] direct_post processing completed successfully", { status: "success", claimsCount: Object.keys(claimsFromExtraction || {}).length }); } catch {}
+        try { slog("[PRESENTATION] direct_post processing completed successfully", { status: "success", claimsCount: Array.isArray(claimsFromExtraction) ? claimsFromExtraction.length : Object.keys(claimsFromExtraction || {}).length }); } catch {}
         logHttpResponse(slog, requestId, `/direct_post/${sessionId}`, 200, "OK", res.getHeaders(), { status: "ok" });
         try { slog("[PRESENTATION] [COMPLETE] Processing direct_post VP response", { success: true }); } catch {}
       }

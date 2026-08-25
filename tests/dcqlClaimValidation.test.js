@@ -29,6 +29,40 @@ describe("DCQL claim validation", () => {
     expect(result.errors).to.have.length(2);
   });
 
+  it("resolves paths across an array of extracted credential objects", () => {
+    const extracted = [{
+      given_name: "Hanna",
+      family_name: "Matkalainen",
+      birthdate: "2005-07-01",
+      date_of_issuance: "2026-08-25",
+      date_of_expiry: "2027-08-25",
+      issuing_authority: "UAegean Test Issuer",
+      issuing_country: "FI",
+    }];
+    const dcqlClaims = [
+      { path: ["given_name"] },
+      { path: ["family_name"] },
+      { path: ["birthdate"] },
+      { path: ["date_of_issuance"] },
+      { path: ["date_of_expiry"] },
+      { path: ["issuing_authority"] },
+      { path: ["issuing_country"] },
+    ];
+    expect(getDcqlPathValue(extracted, ["given_name"])).to.equal("Hanna");
+    expect(validateDcqlClaims(extracted, dcqlClaims)).to.deep.equal({ ok: true, errors: [] });
+  });
+
+  it("matches DCQL claims split across multiple presented credentials", () => {
+    const extracted = [
+      { booking_reference: "ABC123" },
+      { family_name: "Matkalainen" },
+    ];
+    expect(validateDcqlClaims(extracted, [
+      { path: ["booking_reference"] },
+      { path: ["family_name"] },
+    ])).to.deep.equal({ ok: true, errors: [] });
+  });
+
   it("validates mdoc namespace paths against extracted elements", () => {
     const result = validateMdocDcqlClaims(
       { age_over_18: true, family_name: "Doe" },
