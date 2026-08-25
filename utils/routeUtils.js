@@ -780,6 +780,17 @@ export const CONFIG = {
   },
 };
 
+// Minimal PID DCQL claims — aligned with data/presentation_definition_pid.json
+export const MINIMAL_PID_DCQL_CLAIMS = [
+  { path: ["given_name"] },
+  { path: ["family_name"] },
+  { path: ["birthdate"] },
+  { path: ["place_of_birth"] },
+  { path: ["nationalities"] },
+  { path: ["issuing_authority"] },
+  { path: ["issuing_country"] },
+];
+
 // Default DCQL query configuration
 export const DEFAULT_DCQL_QUERY = {
   credentials: [
@@ -789,11 +800,7 @@ export const DEFAULT_DCQL_QUERY = {
       meta: {
         vct_values: ["urn:eu.europa.ec.eudi:pid:1"],
       },
-      claims: [
-        {
-          path: ["family_name"],
-        },
-      ],
+      claims: MINIMAL_PID_DCQL_CLAIMS,
     },
   ],
 };
@@ -1497,6 +1504,52 @@ export const getSignatureType = (req) => {
     undefined;
   return fromBody || fromQuery || DEFAULT_SIGNATURE_TYPE;
 };
+
+/**
+ * Signature type for GET /vci/offer (and similar standardized offers).
+ * EUDI PID SD-JWT credentials must be X.509-signed (x5c) to be presentable;
+ * when signature_type is omitted and the offer targets that profile, default to x509.
+ *
+ * @param {import('express').Request} req
+ * @param {string} credentialType - credential_configuration_id
+ * @returns {string}
+ */
+export function resolveVciOfferSignatureType(req, credentialType) {
+  const explicit =
+    req.body?.signatureType ||
+    req.body?.signature_type ||
+    req.query?.signatureType ||
+    req.query?.signature_type;
+  if (explicit) return explicit;
+
+  const configId = String(credentialType || "").trim();
+  if (!configId) return DEFAULT_SIGNATURE_TYPE;
+
+  try {
+    const supported =
+      loadIssuerConfiguration()?.credential_configurations_supported || {};
+    const cfg = supported[configId];
+    const vct = cfg?.vct || cfg?.doctype;
+    const format = cfg?.format;
+    if (
+      format === "dc+sd-jwt" &&
+      vct === "urn:eu.europa.ec.eudi:pid:1"
+    ) {
+      return "x509";
+    }
+    if (format === "mso_mdoc" && vct === "urn:eu.europa.ec.eudi:pid:1") {
+      return "x509";
+    }
+  } catch {
+    // fall through to global default
+  }
+
+  if (configId === "urn:eu.europa.ec.eudi:pid:1") {
+    return "x509";
+  }
+
+  return DEFAULT_SIGNATURE_TYPE;
+}
 
 /**
  * Extract client ID scheme from request with default fallback

@@ -17,6 +17,7 @@ import {
   applyPreAuthTxCode,
   bindSessionLoggingContext,
   handleRouteError,
+  resolveVciOfferSignatureType,
 } from "../../utils/routeUtils.js";
 import {
   getCodeFlowSession,
@@ -56,7 +57,7 @@ vciStandardRouter.get("/vci/offer", async (req, res) => {
     const txCodeRequired = req.query.tx_code_required === "true";
     const credentialType = req.query.credential_type || getCredentialType(req);
     const credentialFormat = req.query.credential_format || "sd-jwt";
-    const signatureType = req.query.signature_type || getSignatureType(req);
+    const signatureType = resolveVciOfferSignatureType(req, credentialType);
     const issuance = resolveCodeFlowOfferIssuanceOptions(req);
 
     requestId = logHttpRequest(slog, "GET", "/vci/offer", req.headers, req.query);

@@ -85,8 +85,9 @@ function buildPidSdJwtClaims() {
 }
 
 /**
- * Disclosure frame for SD-JWT PID — nested frames enable selective disclosure
- * of address / place_of_birth members (Rulebook §4.1.1).
+ * Disclosure frame for SD-JWT PID.
+ * place_of_birth and address are top-level _sd entries so DCQL whole-object
+ * paths (e.g. ["place_of_birth"], ["address"]) match what vpStandardRoutes requests.
  */
 function buildPidSdJwtDisclosureFrame() {
   return {
@@ -94,8 +95,10 @@ function buildPidSdJwtDisclosureFrame() {
       "given_name",
       "family_name",
       "birthdate",
+      "place_of_birth",
       "nationalities",
       "picture",
+      "address",
       "personal_administrative_number",
       "birth_family_name",
       "birth_given_name",
@@ -111,21 +114,6 @@ function buildPidSdJwtDisclosureFrame() {
       "trust_anchor",
       "attestation_legal_category",
     ],
-    // Nested frames: individual address / place_of_birth members are disclosable
-    place_of_birth: {
-      _sd: ["country", "region", "locality"],
-    },
-    address: {
-      _sd: [
-        "formatted",
-        "country",
-        "region",
-        "locality",
-        "postal_code",
-        "street_address",
-        "house_number",
-      ],
-    },
   };
 }
 

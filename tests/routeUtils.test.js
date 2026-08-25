@@ -1,7 +1,9 @@
 import { expect } from 'chai';
 import {
   createCredentialOfferConfig,
+  DEFAULT_DCQL_QUERY,
   DEFAULT_MDL_DCQL_QUERY,
+  MINIMAL_PID_DCQL_CLAIMS,
   BOOKING_REFERENCE_PID_DCQL_QUERY,
   AIRLINE_PNR_DCQL_QUERY,
   AIRLINE_PNR_VCT,
@@ -23,9 +25,30 @@ import {
   preAuthOfferSessionStateMatches,
   createSessionWithMultiCredentialPayloads,
   buildCredentialOfferUrl,
+  resolveVciOfferSignatureType,
 } from '../utils/routeUtils.js';
 
 describe('Route Utils', () => {
+  describe('resolveVciOfferSignatureType', () => {
+    it('defaults EUDI PID SD-JWT offers to x509 when signature_type is omitted', () => {
+      expect(
+        resolveVciOfferSignatureType(
+          { query: {} },
+          'urn:eu.europa.ec.eudi:pid:1',
+        ),
+      ).to.equal('x509');
+    });
+
+    it('respects an explicit signature_type override', () => {
+      expect(
+        resolveVciOfferSignatureType(
+          { query: { signature_type: 'kid-jwk' } },
+          'urn:eu.europa.ec.eudi:pid:1',
+        ),
+      ).to.equal('kid-jwk');
+    });
+  });
+
   describe('createCredentialOfferConfig', () => {
     it('should set issuer_state for authorization code flow', () => {
       const config = createCredentialOfferConfig(
@@ -143,6 +166,25 @@ describe('Route Utils', () => {
       expect(config).to.have.property('credential_issuer');
       expect(config.credential_issuer).to.be.a('string');
       expect(config.credential_issuer).to.match(/^https?:\/\//);
+    });
+  });
+
+  describe('DEFAULT_DCQL_QUERY', () => {
+    it('requests minimal PID claims aligned with presentation_definition_pid.json', () => {
+      const [pidQuery] = DEFAULT_DCQL_QUERY.credentials;
+
+      expect(pidQuery.format).to.equal('dc+sd-jwt');
+      expect(pidQuery.meta.vct_values).to.deep.equal(['urn:eu.europa.ec.eudi:pid:1']);
+      expect(pidQuery.claims).to.deep.equal(MINIMAL_PID_DCQL_CLAIMS);
+      expect(pidQuery.claims.map(({ path }) => path[0])).to.deep.equal([
+        'given_name',
+        'family_name',
+        'birthdate',
+        'place_of_birth',
+        'nationalities',
+        'issuing_authority',
+        'issuing_country',
+      ]);
     });
   });
 
