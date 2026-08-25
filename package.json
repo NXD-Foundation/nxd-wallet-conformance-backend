@@ -7,7 +7,7 @@
   "scripts": {
     "test": "mocha --recursive tests",
     "test:issuer": "REDIS=localhost:6379 mocha --recursive tests",
-    "dev": "SERVER_URL=https://7210-2a02-587-8701-ab00-77de-f8ab-bdc6-595d.ngrok-free.app node server.js"
+    "dev": "SERVER_URL=https://ed11-2a02-1388-a28-3505-a0b5-cdc0-9000-3d12.ngrok-free.app node server.js"
   },
   "author": "",
   "license": "ISC",

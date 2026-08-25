@@ -7,7 +7,7 @@
 
   "credential_response_encryption": {
     "alg_values_supported": ["ECDH-ES", "RSA-OAEP-256"],
-    "enc_values_supported": ["A128GCM", "A256GCM"],
+    "enc_values_supported": ["A256GCM"],
     "encryption_required": false
   },
 
@@ -72,7 +72,12 @@
       "vct": "urn:eu.europa.ec.eudi:pid:1",
       "proof_types_supported": {
         "jwt": {
-          "proof_signing_alg_values_supported": ["ES256"]
+          "proof_signing_alg_values_supported": ["ES256"],
+          "key_attestations_required": {}
+        },
+        "attestation": {
+          "proof_signing_alg_values_supported": ["ES256"],
+          "key_attestations_required": {}
         }
       }
     },
@@ -128,7 +133,12 @@
       "vct": "urn:eu.europa.ec.eudi:pid:1",
       "proof_types_supported": {
         "jwt": {
-          "proof_signing_alg_values_supported": ["ES256"]
+          "proof_signing_alg_values_supported": ["ES256"],
+          "key_attestations_required": {}
+        },
+        "attestation": {
+          "proof_signing_alg_values_supported": ["ES256"],
+          "key_attestations_required": {}
         }
       }
     },
@@ -184,7 +194,12 @@
       "vct": "urn:eu.europa.ec.eudi:pid:1",
       "proof_types_supported": {
         "jwt": {
-          "proof_signing_alg_values_supported": ["ES256"]
+          "proof_signing_alg_values_supported": ["ES256"],
+          "key_attestations_required": {}
+        },
+        "attestation": {
+          "proof_signing_alg_values_supported": ["ES256"],
+          "key_attestations_required": {}
         }
       }
     },
@@ -236,7 +251,12 @@
       "vct": "VerifiablePortableDocumentA1SDJWT",
       "proof_types_supported": {
         "jwt": {
-          "proof_signing_alg_values_supported": ["ES256"]
+          "proof_signing_alg_values_supported": ["ES256"],
+          "key_attestations_required": {}
+        },
+        "attestation": {
+          "proof_signing_alg_values_supported": ["ES256"],
+          "key_attestations_required": {}
         }
       }
     },
@@ -288,7 +308,12 @@
       "vct": "VerifiablePortableDocumentA2SDJWT",
       "proof_types_supported": {
         "jwt": {
-          "proof_signing_alg_values_supported": ["ES256"]
+          "proof_signing_alg_values_supported": ["ES256"],
+          "key_attestations_required": {}
+        },
+        "attestation": {
+          "proof_signing_alg_values_supported": ["ES256"],
+          "key_attestations_required": {}
         }
       }
     },
@@ -388,7 +413,12 @@
       "format": "jwt_vc_json",
       "proof_types_supported": {
         "jwt": {
-          "proof_signing_alg_values_supported": ["ES256"]
+          "proof_signing_alg_values_supported": ["ES256"],
+          "key_attestations_required": {}
+        },
+        "attestation": {
+          "proof_signing_alg_values_supported": ["ES256"],
+          "key_attestations_required": {}
         }
       },
       "credential_definition": {
@@ -495,7 +525,12 @@
       "vct": "VerifiablePIDSDJWT",
       "proof_types_supported": {
         "jwt": {
-          "proof_signing_alg_values_supported": ["ES256"]
+          "proof_signing_alg_values_supported": ["ES256"],
+          "key_attestations_required": {}
+        },
+        "attestation": {
+          "proof_signing_alg_values_supported": ["ES256"],
+          "key_attestations_required": {}
         }
       }
     },
@@ -596,7 +631,8 @@
       "vct": "VerifiablePIDSDJWTAttestation",
       "proof_types_supported": {
         "jwt": {
-          "proof_signing_alg_values_supported": ["ES256"]
+          "proof_signing_alg_values_supported": ["ES256"],
+          "key_attestations_required": {}
         },
         "attestation": {
           "proof_signing_alg_values_supported": ["ES256"],
@@ -783,7 +819,12 @@
       "vct": "VerifiableePassportCredentialSDJWT",
       "proof_types_supported": {
         "jwt": {
-          "proof_signing_alg_values_supported": ["ES256"]
+          "proof_signing_alg_values_supported": ["ES256"],
+          "key_attestations_required": {}
+        },
+        "attestation": {
+          "proof_signing_alg_values_supported": ["ES256"],
+          "key_attestations_required": {}
         }
       }
     },
@@ -947,7 +988,12 @@
       "vct": "VerifiableStudentIDSDJWT",
       "proof_types_supported": {
         "jwt": {
-          "proof_signing_alg_values_supported": ["ES256"]
+          "proof_signing_alg_values_supported": ["ES256"],
+          "key_attestations_required": {}
+        },
+        "attestation": {
+          "proof_signing_alg_values_supported": ["ES256"],
+          "key_attestations_required": {}
         }
       }
     },
@@ -1102,7 +1148,12 @@
       "vct": "VerifiableFerryBoardingPassCredentialSDJWT",
       "proof_types_supported": {
         "jwt": {
-          "proof_signing_alg_values_supported": ["ES256"]
+          "proof_signing_alg_values_supported": ["ES256"],
+          "key_attestations_required": {}
+        },
+        "attestation": {
+          "proof_signing_alg_values_supported": ["ES256"],
+          "key_attestations_required": {}
         }
       }
     },
@@ -1265,7 +1316,12 @@
       "vct": "VerifiablevReceiptSDJWT",
       "proof_types_supported": {
         "jwt": {
-          "proof_signing_alg_values_supported": ["ES256"]
+          "proof_signing_alg_values_supported": ["ES256"],
+          "key_attestations_required": {}
+        },
+        "attestation": {
+          "proof_signing_alg_values_supported": ["ES256"],
+          "key_attestations_required": {}
         }
       }
     },
@@ -1367,7 +1423,12 @@
       "vct": "urn:eu.europa.ec.eudi:pid:1",
       "proof_types_supported": {
         "jwt": {
-          "proof_signing_alg_values_supported": ["ES256"]
+          "proof_signing_alg_values_supported": ["ES256"],
+          "key_attestations_required": {}
+        },
+        "attestation": {
+          "proof_signing_alg_values_supported": ["ES256"],
+          "key_attestations_required": {}
         }
       }
     },
@@ -1468,7 +1529,12 @@
       "doctype": "urn:eu.europa.ec.eudi:pid:1",
       "proof_types_supported": {
         "jwt": {
-          "proof_signing_alg_values_supported": ["ES256"]
+          "proof_signing_alg_values_supported": ["ES256"],
+          "key_attestations_required": {}
+        },
+        "attestation": {
+          "proof_signing_alg_values_supported": ["ES256"],
+          "key_attestations_required": {}
         }
       }
     },
@@ -1616,7 +1682,12 @@
       "vct": "PaymentWalletAttestation",
       "proof_types_supported": {
         "jwt": {
-          "proof_signing_alg_values_supported": ["ES256"]
+          "proof_signing_alg_values_supported": ["ES256"],
+          "key_attestations_required": {}
+        },
+        "attestation": {
+          "proof_signing_alg_values_supported": ["ES256"],
+          "key_attestations_required": {}
         }
       }
     },
@@ -2173,7 +2244,12 @@
       "vct": "eu.europa.ec.eudi.photoid.1",
       "proof_types_supported": {
         "jwt": {
-          "proof_signing_alg_values_supported": ["ES256"]
+          "proof_signing_alg_values_supported": ["ES256"],
+          "key_attestations_required": {}
+        },
+        "attestation": {
+          "proof_signing_alg_values_supported": ["ES256"],
+          "key_attestations_required": {}
         }
       }
     },
@@ -2266,7 +2342,12 @@
       "vct": "eu.europa.ec.eudi.pcd.1",
       "proof_types_supported": {
         "jwt": {
-          "proof_signing_alg_values_supported": ["ES256"]
+          "proof_signing_alg_values_supported": ["ES256"],
+          "key_attestations_required": {}
+        },
+        "attestation": {
+          "proof_signing_alg_values_supported": ["ES256"],
+          "key_attestations_required": {}
         }
       }
     },
@@ -2466,7 +2547,12 @@
       "vct": "LoyaltyCard",
       "proof_types_supported": {
         "jwt": {
-          "proof_signing_alg_values_supported": ["ES256"]
+          "proof_signing_alg_values_supported": ["ES256"],
+          "key_attestations_required": {}
+        },
+        "attestation": {
+          "proof_signing_alg_values_supported": ["ES256"],
+          "key_attestations_required": {}
         }
       }
     },
@@ -2514,7 +2600,12 @@
       "vct": "booking_reference_credential",
       "proof_types_supported": {
         "jwt": {
-          "proof_signing_alg_values_supported": ["ES256"]
+          "proof_signing_alg_values_supported": ["ES256"],
+          "key_attestations_required": {}
+        },
+        "attestation": {
+          "proof_signing_alg_values_supported": ["ES256"],
+          "key_attestations_required": {}
         }
       }
     },
@@ -2546,7 +2637,8 @@
       "vct": "room_key_credential",
       "proof_types_supported": {
         "jwt": {
-          "proof_signing_alg_values_supported": ["ES256"]
+          "proof_signing_alg_values_supported": ["ES256"],
+          "key_attestations_required": {}
         }
       }
     }

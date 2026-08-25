@@ -218,6 +218,10 @@ the RFC004 interfaces where the service assumes a provider role.
 - The wallet accepts standard JSON issuer metadata, does not require `openid`
   in optional AS `scopes_supported`, and uses `authorization_details` for a
   scope-less configuration only when the AS advertises `openid_credential`.
+- EUDI wallet metadata parsing requires every `jwt` or `attestation` entry in
+  `proof_types_supported` to include `key_attestations_required`; omitting it
+  can cause signed metadata resolution to stop after certificate trust
+  succeeds, before authorization-server metadata is requested.
 - RFC002 routes use prefixed DID verifier identifiers and publish a strict
   metadata projection at `/client-metadata/rfc002`; broad metadata remains for
   compatibility routes.

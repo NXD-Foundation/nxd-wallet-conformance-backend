@@ -1,5 +1,5 @@
 import crypto from "crypto";
-import { execSync } from "child_process";
+import { execFileSync } from "child_process";
 import jwt from "jsonwebtoken";
 import * as jose from "jose";
 import base64url from "base64url";
@@ -42,27 +42,71 @@ function extractCertificateChain(certPem) {
  * Used for x509 and dc_api flows.
  * @returns {{ privateKeyPkcs8: string, certChain: string[] }}
  */
-function loadVerifierP12() {
-  const p12Path = path.resolve(process.cwd(), "certs", "WE-BUILD-Verifier.p12");
-  const passphrase = process.env.WEBUILD_P12_PASSWORD || "webuild";
+const DEFAULT_VERIFIER_CA_PEMS = [
+  path.resolve(process.cwd(), "certs", "pidissuerca02_eu.pem"),
+];
 
-  if (!fs.existsSync(p12Path)) {
+function extractConfiguredCaChain(certChain) {
+  if (!Array.isArray(certChain) || certChain.length !== 1) return certChain;
+
+  const seen = new Set(certChain);
+  const caPaths = (process.env.WEBUILD_X5C_CA_PEM
+    ? process.env.WEBUILD_X5C_CA_PEM.split(",")
+    : DEFAULT_VERIFIER_CA_PEMS
+  ).map((entry) => path.isAbsolute(entry.trim())
+    ? entry.trim()
+    : path.resolve(process.cwd(), entry.trim()));
+
+  for (const caPath of caPaths) {
+    if (!fs.existsSync(caPath)) continue;
+    const caPem = fs.readFileSync(caPath, "utf8");
+    for (const certificate of extractCertificateChain(caPem)) {
+      if (!seen.has(certificate)) {
+        certChain.push(certificate);
+        seen.add(certificate);
+      }
+    }
+  }
+
+  if (certChain.length === 1 && !/^true$/i.test(process.env.WEBUILD_X5C_ALLOW_LEAF_ONLY || "")) {
+    throw new Error("WE-BUILD verifier x5c CA chain is unavailable. Add certs/pidissuerca02_eu.pem or set WEBUILD_X5C_CA_PEM.");
+  }
+  return certChain;
+}
+
+function runP12Command(mode, p12Path, env) {
+  const args = ["pkcs12", "-in", p12Path, "-passin", "env:WEBUILD_P12_PASS"];
+  if (mode === "cert") args.push("-nokeys");
+  else args.push("-nodes", "-nocerts");
+  return execFileSync("openssl", args, {
+    encoding: "utf8",
+    maxBuffer: 64 * 1024,
+    env,
+  });
+}
+
+export function loadVerifierP12({ p12Path, passphrase } = {}) {
+  const resolvedP12Path = p12Path
+    ? (path.isAbsolute(p12Path) ? p12Path : path.resolve(process.cwd(), p12Path))
+    : path.resolve(process.cwd(), "certs", "WE-BUILD-Verifier.p12");
+  const effectivePassphrase = passphrase || process.env.WEBUILD_P12_PASSWORD || "webuild";
+
+  if (!fs.existsSync(resolvedP12Path)) {
     throw new Error(
-      `WE-BUILD Verifier P12 not found at ${p12Path}. Place the p12 file in ./certs/`
+      `WE-BUILD Verifier P12 not found at ${resolvedP12Path}. Place the p12 file in ./certs/`
     );
   }
 
   try {
-    const envWithPass = { ...process.env, WEBUILD_P12_PASS: passphrase };
-    const certPem = execSync(
-      `openssl pkcs12 -in "${p12Path}" -nokeys -passin env:WEBUILD_P12_PASS`,
-      { encoding: "utf8", maxBuffer: 64 * 1024, env: envWithPass }
-    );
-    const privateKeyPem = execSync(
-      `openssl pkcs12 -in "${p12Path}" -nodes -nocerts -passin env:WEBUILD_P12_PASS`,
-      { encoding: "utf8", maxBuffer: 64 * 1024, env: envWithPass }
-    );
-    const certChain = extractCertificateChain(certPem);
+    const envWithPass = { ...process.env, WEBUILD_P12_PASS: effectivePassphrase };
+    const certPem = runP12Command("cert", resolvedP12Path, envWithPass);
+    /*
+      `openssl pkcs12 -in "${resolvedP12Path}" -nokeys -passin env:WEBBUILD_P12_PASS`,
+    const privateKeyPem = runP12Command("private", resolvedP12Path, envWithPass);
+      `openssl pkcs12 -in "${resolvedP12Path}" -nodes -nocerts -passin env:WEBUILD_P12_PASS`,
+    */
+    const privateKeyPem = runP12Command("private", resolvedP12Path, envWithPass);
+    const certChain = extractConfiguredCaChain(extractCertificateChain(certPem));
     const privateKey = crypto.createPrivateKey(privateKeyPem);
     const privateKeyPkcs8 = privateKey.export({
       type: "pkcs8",

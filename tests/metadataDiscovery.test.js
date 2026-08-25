@@ -181,7 +181,7 @@ describe('OIDC4VCI V1.0 - Metadata Discovery Compliance', () => {
       expect(metadata).to.have.property('credential_configurations_supported').that.is.an('object');
     });
 
-    it('MUST advertise A128GCM and A256GCM in credential_response_encryption (RFC001 P2-4)', async () => {
+    it('MUST advertise A256GCM in credential_response_encryption', async () => {
       const response = await request(app)
         .get('/.well-known/openid-credential-issuer')
         .expect(200);
@@ -189,37 +189,15 @@ describe('OIDC4VCI V1.0 - Metadata Discovery Compliance', () => {
       expect(response.body).to.have.property('credential_response_encryption').that.is.an('object');
       const encList = response.body.credential_response_encryption.enc_values_supported;
       expect(encList).to.be.an('array');
-      expect(encList).to.include('A128GCM');
       expect(encList).to.include('A256GCM');
     });
 
-    it('MUST include issuer_info with registration certificate and registrar dataset (RFC001 §7.7 SHALL 8)', async () => {
+    it('MUST not advertise an untrusted issuer_info registration certificate', async () => {
       const response = await request(app)
         .get('/.well-known/openid-credential-issuer')
         .expect(200);
 
-      expect(response.body).to.have.property('issuer_info').that.is.an('object');
-      const issuerInfo = response.body.issuer_info;
-
-      expect(issuerInfo).to.have.property('registration_certificate').that.is.a('string');
-      expect(issuerInfo.registration_certificate).to.match(/^[A-Za-z0-9+/=]+$/);
-      expect(issuerInfo.registration_certificate.length).to.be.greaterThan(100);
-
-      expect(issuerInfo).to.have.property('registration_certificate_pem').that.includes('BEGIN CERTIFICATE');
-      expect(issuerInfo).to.have.property('registration_certificate_summary').that.is.an('object');
-      const summary = issuerInfo.registration_certificate_summary;
-      expect(summary).to.include.keys([
-        'subject',
-        'issuer',
-        'serial_number',
-        'not_before',
-        'not_after',
-        'self_signed',
-      ]);
-      expect(summary.self_signed).to.be.a('boolean');
-
-      expect(issuerInfo).to.have.property('registration_information').that.is.an('object');
-      expect(issuerInfo).to.have.property('profile').that.includes('ETSI TS 119 472-3');
+      expect(response.body).to.not.have.property('issuer_info');
     });
 
     it('MUST support signed issuer metadata with x5c when client requests application/jwt (RFC001 §7.7 SHALL 7)', async () => {
@@ -233,7 +211,7 @@ describe('OIDC4VCI V1.0 - Metadata Discovery Compliance', () => {
 
       const protectedHeader = jose.decodeProtectedHeader(response.text);
       expect(protectedHeader).to.have.property('alg', 'ES256');
-      expect(protectedHeader).to.have.property('typ', 'openid-credential-issuer-metadata+jwt');
+      expect(protectedHeader).to.have.property('typ', 'openidvci-issuer-metadata+jwt');
       expect(protectedHeader).to.have.property('x5c').that.is.an('array').with.length.greaterThan(0);
 
       const verifyKey = await jose.importX509(x5cToPem(protectedHeader.x5c[0]), 'ES256');
@@ -241,7 +219,7 @@ describe('OIDC4VCI V1.0 - Metadata Discovery Compliance', () => {
 
       expect(payload).to.have.property('credential_issuer', 'https://issuer.example.com');
       expect(payload).to.have.property('credential_endpoint', 'https://issuer.example.com/credential');
-      expect(payload).to.have.property('issuer_info').that.is.an('object');
+      expect(payload).to.not.have.property('issuer_info');
     });
 
     it('MUST include credential_issuer identifier in metadata', async () => {
@@ -1134,7 +1112,7 @@ describe('OIDC4VCI V1.0 - Metadata Discovery Compliance', () => {
       expect(response.body).to.not.have.property('batch_credential_endpoint');
     });
 
-    it('RFC001 ETSI: issuer metadata MUST advertise SD-JWT VC (vc+sd-jwt or dc+sd-jwt), vc+jwt, and x509_attr in at least one credential configuration each', async () => {
+    it('publishes only EUDI reference-wallet-supported credential formats', async () => {
       const response = await request(app)
         .get('/.well-known/openid-credential-issuer')
         .expect(200);
@@ -1144,8 +1122,26 @@ describe('OIDC4VCI V1.0 - Metadata Discovery Compliance', () => {
       const hasSdJwtVcFormat =
         formats.has('vc+sd-jwt') || formats.has('dc+sd-jwt');
       expect(hasSdJwtVcFormat, 'vc+sd-jwt or dc+sd-jwt').to.be.true;
-      expect(formats.has('vc+jwt'), 'vc+jwt').to.be.true;
-      expect(formats.has('x509_attr'), 'x509_attr').to.be.true;
+      expect(formats.has('vc+jwt'), 'vc+jwt').to.be.false;
+      expect(formats.has('x509_attr'), 'x509_attr').to.be.false;
+    });
+
+    it('does not publish proof configurations rejected by wallet openid4vci 0.12.1', async () => {
+      const response = await request(app)
+        .get('/.well-known/openid-credential-issuer')
+        .expect(200);
+
+      const configurations = response.body.credential_configurations_supported;
+      expect(configurations).to.have.property('ETSIRfc001PidVcSdJwt');
+      expect(configurations).to.not.have.property('room_key_credential');
+
+      for (const configuration of Object.values(configurations)) {
+        const proofTypes = Object.keys(configuration.proof_types_supported || {});
+        if (proofTypes.length > 0) {
+          expect(proofTypes).to.include('jwt');
+          expect(proofTypes).to.include('attestation');
+        }
+      }
     });
 
     it('MUST use authorization_servers (array) instead of authorization_server (string)', async () => {
