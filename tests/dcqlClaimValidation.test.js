@@ -2,8 +2,12 @@ import { expect } from "chai";
 import {
   getDcqlPathValue,
   validateDcqlClaims,
+  validateDcqlQueryClaims,
   validateMdocDcqlClaims,
 } from "../utils/dcqlClaimValidation.js";
+import {
+  BOOKING_REFERENCE_PID_EDC_DCQL_QUERY,
+} from "../utils/routeUtils.js";
 
 describe("DCQL claim validation", () => {
   const claims = {
@@ -118,5 +122,49 @@ describe("DCQL claim validation", () => {
     );
 
     expect(result).to.deep.equal({ ok: true, errors: [] });
+  });
+
+  it("accepts optional EDC name disclosure without requiring assistant entitlement", () => {
+    const extractedClaims = [
+      { reservationReference: "OTA-MT8NQ9L0-EV703R" },
+      { family_name: "Matkalainen" },
+      { family_name: "Matkalainen", given_name: "Hanna" },
+    ];
+
+    expect(
+      validateDcqlQueryClaims(
+        extractedClaims,
+        BOOKING_REFERENCE_PID_EDC_DCQL_QUERY,
+      ),
+    ).to.deep.equal({ ok: true, errors: [] });
+  });
+
+  it("accepts optional EDC assistant entitlement without requiring holder name", () => {
+    const extractedClaims = [
+      { reservationReference: "OTA-MT8NQ9L0-EV703R" },
+      { family_name: "Matkalainen" },
+      { assistant_entitlement: true },
+    ];
+
+    expect(
+      validateDcqlQueryClaims(
+        extractedClaims,
+        BOOKING_REFERENCE_PID_EDC_DCQL_QUERY,
+      ),
+    ).to.deep.equal({ ok: true, errors: [] });
+  });
+
+  it("accepts booking_pid_edc presentations without the optional EDC credential", () => {
+    const extractedClaims = [
+      { reservationReference: "OTA-MT8NQ9L0-EV703R" },
+      { family_name: "Matkalainen" },
+    ];
+
+    expect(
+      validateDcqlQueryClaims(
+        extractedClaims,
+        BOOKING_REFERENCE_PID_EDC_DCQL_QUERY,
+      ),
+    ).to.deep.equal({ ok: true, errors: [] });
   });
 });

@@ -851,6 +851,9 @@ export const AIRLINE_BOARDING_PASS_VCT =
 // Semantic VCT for CASSL biometric QR SD-JWT
 export const CASSL_BIOMETRIC_QR_VCT = "urn:eu.aptitude:cassl.biometricqr:1";
 
+// Provisional VCT for European Disability Card SD-JWT (Directive EU 2024/2841)
+export const EUROPEAN_DISABILITY_CARD_VCT = "urn:eu.europa.ec.eudi:edc:1";
+
 // Airline PNR only DCQL query
 export const AIRLINE_PNR_DCQL_QUERY = {
   credentials: [
@@ -941,16 +944,17 @@ export const BOARDING_PASS_PID_DCQL_QUERY = {
   ],
 };
 
-// Combined Booking Reference + PID DCQL query
+// Combined Accommodation Voucher (booking_reference_credential) + PID DCQL query.
+// Requests reservationReference from the voucher; PID family_name supports guest-name matching.
 export const BOOKING_REFERENCE_PID_DCQL_QUERY = {
   credentials: [
     {
-      id: "booking-reference",
+      id: "accommodation-voucher",
       format: "dc+sd-jwt",
       meta: {
         vct_values: ["booking_reference_credential"],
       },
-      claims: [{ path: ["booking_reference"] }],
+      claims: [{ path: ["reservationReference"] }],
     },
     {
       id: "pid",
@@ -958,8 +962,59 @@ export const BOOKING_REFERENCE_PID_DCQL_QUERY = {
       meta: {
         vct_values: ["urn:eu.europa.ec.eudi:pid:1"],
       },
-      // The booking flow needs a minimal PID attribute for identity matching.
+      // Guest-name matching: verifier compares PID family_name with voucher guest.
       claims: [{ path: ["family_name"] }],
+    },
+  ],
+};
+
+// DCQL credential id for optional European Disability Card presentations.
+export const EUROPEAN_DISABILITY_CARD_DCQL_CREDENTIAL_ID = "european-disability-card";
+
+// Combined Accommodation Voucher + PID + optional European Disability Card.
+// EDC is optional; when presented, wallet discloses either holder name or assistant entitlement.
+export const BOOKING_REFERENCE_PID_EDC_DCQL_QUERY = {
+  credentials: [
+    {
+      id: "accommodation-voucher",
+      format: "dc+sd-jwt",
+      meta: {
+        vct_values: ["booking_reference_credential"],
+      },
+      claims: [{ path: ["reservationReference"] }],
+    },
+    {
+      id: "pid",
+      format: "dc+sd-jwt",
+      meta: {
+        vct_values: ["urn:eu.europa.ec.eudi:pid:1"],
+      },
+      claims: [{ path: ["family_name"] }],
+    },
+    {
+      id: EUROPEAN_DISABILITY_CARD_DCQL_CREDENTIAL_ID,
+      format: "dc+sd-jwt",
+      meta: {
+        vct_values: [EUROPEAN_DISABILITY_CARD_VCT],
+      },
+      claims: [
+      
+        { id: "edc_assistant_entitlement", path: ["assistant_entitlement"] },
+      ],
+      claim_sets: [
+       
+        ["edc_assistant_entitlement"],
+      ],
+    },
+  ],
+  credential_sets: [
+    {
+      required: true,
+      options: [["accommodation-voucher", "pid"]],
+    },
+    {
+      required: false,
+      options: [[EUROPEAN_DISABILITY_CARD_DCQL_CREDENTIAL_ID]],
     },
   ],
 };

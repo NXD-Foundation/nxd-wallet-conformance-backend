@@ -28,6 +28,9 @@ The public protocol model is configuration-driven:
 
 - [issuer-config.json](../data/issuer-config.json) publishes credential
   configurations, formats, endpoints, and credential-response encryption.
+- [credential-payload-examples.md](../data/credential-payload-examples.md)
+  documents mock issued-claim JSON for each published credential configuration
+  (built from `utils/credPayloadUtil.js`).
 - [oauth-config.json](../data/oauth-config.json) publishes OAuth/PAR/PKCE,
   client-attestation, DPoP, and grant capabilities.
 - [verifier-config.json](../data/verifier-config.json) publishes verifier
@@ -140,12 +143,19 @@ interoperable discovery surface.
 | `GET /.well-known/openid-credential-issuer` | Credential issuer metadata |
 | `GET /.well-known/oauth-authorization-server` | Authorization server metadata |
 
-### Local hotel + airline PNR multi-credential offer
+### Local Accommodation Voucher + airline PNR multi-credential offer
 
 For a localhost interoperability test, create a by-reference offer with the
 following request. The response's `deepLink` is the URI to open in the wallet;
 the wallet then sends consecutive standard `POST /credential` requests, one
-for the hotel credential and one for the airline PNR credential.
+for the Accommodation Voucher (`booking_reference_credential`) and one for the
+airline PNR credential.
+
+The configuration id, OAuth scope, and VCT remain `booking_reference_credential`
+for compatibility. Issued claims use the canonical Accommodation Voucher schema
+(`reservationReference`, `property`, `stay`, etc.). Legacy offer payload fields
+(`booking_reference`, `hotel_id`, `arrival_date`, …) are still accepted during
+deprecation and are translated at issuance time.
 
 ```bash
 curl -X POST http://localhost:3000/offer-no-code-batch \
@@ -169,6 +179,41 @@ curl -X POST http://localhost:3000/offer-no-code-batch \
         "payload": { "pnr": "Q7X2LM" }
       }
     ]
+  }'
+```
+
+Canonical offer input is also supported:
+
+```json
+{
+  "credential_configuration_id": "booking_reference_credential",
+  "payload": {
+    "reservationReference": "OTA-MS62DP17-VQPSKP",
+    "supplierReference": "SEDIT-X OTA Booking Portal",
+    "property": { "id": "9213", "name": "Test Hotel Rhodes" },
+    "stay": { "checkInDate": "2026-07-31", "checkOutDate": "2026-08-04" },
+    "guest": { "givenName": "Hanna", "familyName": "Matkalainen" }
+  }
+}
+```
+
+### Local Hotel Pass offer
+
+Issue a QR-based visual presentation pass with configuration id
+`room_key_credential` (display name **Hotel Pass**). This is not a cryptographic
+mobile-room-key or door-access credential. Prefer `reservationReference` as the
+QR source; `reservationId` remains a deprecated input alias.
+
+```bash
+curl -X POST http://localhost:3000/offer-no-code \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "signatureType": "x509",
+    "credentialType": "room_key_credential",
+    "credentialPayload": {
+      "room_number": "412",
+      "reservationReference": "RES-2026-001234"
+    }
   }'
 ```
 
@@ -263,7 +308,7 @@ Observed symptoms when issuing with `kid-jwk` (e.g. `aegean#authentication-key`)
   not available; no `direct_post`
 
 For EUDI wallet presentation interop, issue SD-JWT credentials (PID, airline
-PNR, booking reference, etc.) with **X.509 / `x5c` signing**, not `kid`-only
+PNR, Accommodation Voucher reservation reference, etc.) with **X.509 / `x5c` signing**, not `kid`-only
 JWK signatures.
 
 ### Temporary test-service relaxations (EUDI wallet interop)

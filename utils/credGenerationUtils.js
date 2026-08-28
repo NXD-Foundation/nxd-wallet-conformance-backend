@@ -54,6 +54,8 @@ import {
   getRoomKeySDJWTDataWithPayload,
   getCasslBiometricQrSDJWTData,
   getCasslBiometricQrSDJWTDataWithPayload,
+  getEuropeanDisabilityCardSDJWTData,
+  getEuropeanDisabilityCardSDJWTDataWithPayload,
 } from "../utils/credPayloadUtil.js";
 
 import { issueX509AttrCredentialWithDefaultKey } from "./issueX509AttrCredential.js";
@@ -72,6 +74,7 @@ import {
   AIRLINE_PNR_VCT,
   AIRLINE_BOARDING_PASS_VCT,
   CASSL_BIOMETRIC_QR_VCT,
+  EUROPEAN_DISABILITY_CARD_VCT,
 } from "./routeUtils.js";
 
 const privateKey = fs.readFileSync("./private-key.pem", "utf-8");
@@ -719,7 +722,6 @@ export async function handleCredentialGenerationBasedOnFormat(
         : getAirlineBoardingPassSDJWTData();
       break;
     case "room_key_credential":
-      console.log("!!!!!!!!!!room_key_credential!!!!!!");
       credPayload = sessionObject
         ? await getRoomKeySDJWTDataWithPayload(
             sessionObject.credentialPayload,
@@ -733,6 +735,14 @@ export async function handleCredentialGenerationBasedOnFormat(
             sessionObject.credentialPayload,
           )
         : await getCasslBiometricQrSDJWTData();
+      break;
+    case "european_disability_card":
+    case EUROPEAN_DISABILITY_CARD_VCT:
+      credPayload = sessionObject
+        ? getEuropeanDisabilityCardSDJWTDataWithPayload(
+            sessionObject.credentialPayload,
+          )
+        : getEuropeanDisabilityCardSDJWTData();
       break;
     default:
       throw new Error(`Unsupported credential type: ${credType}`);
@@ -1605,6 +1615,14 @@ export async function handleCredentialGenerationBasedOnFormatDeferred(
             sessionObject.credentialPayload,
           )
         : await getCasslBiometricQrSDJWTData();
+      break;
+    case "european_disability_card":
+    case EUROPEAN_DISABILITY_CARD_VCT:
+      credPayload = sessionObject
+        ? getEuropeanDisabilityCardSDJWTDataWithPayload(
+            sessionObject.credentialPayload,
+          )
+        : getEuropeanDisabilityCardSDJWTData();
       break;
     default:
       throw new Error(`Unsupported credential type: ${credType}`);

@@ -4260,74 +4260,107 @@
       "credential_metadata": {
         "display": [
           {
-            "name": "Hotel Booking Reference",
+            "name": "Accommodation Voucher",
             "locale": "en-GB",
-            "description": "SD-JWT credential containing hotel booking reference details."
+            "description": "SD-JWT accommodation voucher with reservation, property, stay, room, and guest details. Claim semantics align conceptually with OpenTravel reservation/property/stay models and UN/EDIFACT-style supplier and booking references—not as native XML/segment field syntax."
           }
         ],
         "claims": [
           {
             "path": [
-              "booking_reference"
+              "reservationReference"
             ],
             "display": [
               {
-                "name": "Booking Reference",
+                "name": "Reservation Reference",
                 "locale": "en-GB"
               }
             ]
           },
           {
             "path": [
-              "hotel_id"
+              "supplierReference"
             ],
             "display": [
               {
-                "name": "Hotel ID",
+                "name": "Supplier Reference",
                 "locale": "en-GB"
               }
             ]
           },
           {
             "path": [
-              "hotel_name"
+              "property"
             ],
             "display": [
               {
-                "name": "Hotel Name",
+                "name": "Property",
                 "locale": "en-GB"
               }
             ]
           },
           {
             "path": [
-              "arrival_date"
+              "stay"
             ],
             "display": [
               {
-                "name": "Arrival Date",
+                "name": "Stay",
                 "locale": "en-GB"
               }
             ]
           },
           {
             "path": [
-              "departure_date"
+              "room"
             ],
             "display": [
               {
-                "name": "Departure Date",
+                "name": "Room",
                 "locale": "en-GB"
               }
             ]
           },
           {
             "path": [
-              "booking_platform"
+              "ratePlanCode"
             ],
             "display": [
               {
-                "name": "Booking Platform",
+                "name": "Rate Plan Code",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "reservationStatus"
+            ],
+            "display": [
+              {
+                "name": "Reservation Status",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "voucherReference"
+            ],
+            "display": [
+              {
+                "name": "Voucher Reference",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "guest"
+            ],
+            "display": [
+              {
+                "name": "Guest",
                 "locale": "en-GB"
               }
             ]
@@ -4775,9 +4808,9 @@
       "credential_metadata": {
         "display": [
           {
-            "name": "Room Key",
+            "name": "Hotel Pass",
             "locale": "en-GB",
-            "description": "SD-JWT credential containing hotel room access details."
+            "description": "SD-JWT visual presentation pass with room number and QR code. Not a cryptographic mobile-room-key or door-access credential."
           }
         ],
         "claims": [
@@ -4810,6 +4843,156 @@
       ],
       "format": "dc+sd-jwt",
       "vct": "room_key_credential",
+      "proof_types_supported": {
+        "jwt": {
+          "proof_signing_alg_values_supported": [
+            "ES256"
+          ],
+          "key_attestations_required": {}
+        },
+        "attestation": {
+          "proof_signing_alg_values_supported": [
+            "ES256"
+          ],
+          "key_attestations_required": {}
+        }
+      }
+    },
+    "european_disability_card": {
+      "scope": "european_disability_card",
+      "cryptographic_binding_methods_supported": [
+        "jwk"
+      ],
+      "credential_metadata": {
+        "display": [
+          {
+            "name": "European Disability Card",
+            "locale": "en-GB",
+            "description": "SD-JWT credential aligned with Directive (EU) 2024/2841 Annex I fields. Provisional digital wallet schema pending Commission implementing acts.",
+            "background_color": "#004494",
+            "text_color": "#FFFFFF"
+          }
+        ],
+        "claims": [
+          {
+            "path": [
+              "family_name"
+            ],
+            "display": [
+              {
+                "name": "Family Name",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "given_name"
+            ],
+            "display": [
+              {
+                "name": "Given Name",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "birth_date"
+            ],
+            "display": [
+              {
+                "name": "Date of Birth",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "serial_number"
+            ],
+            "display": [
+              {
+                "name": "Serial Number",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "issue_date"
+            ],
+            "display": [
+              {
+                "name": "Issue Date",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "expiry_date"
+            ],
+            "display": [
+              {
+                "name": "Expiry Date",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "issuing_country"
+            ],
+            "display": [
+              {
+                "name": "Issuing Country",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "portrait"
+            ],
+            "display": [
+              {
+                "name": "Portrait",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "assistant_entitlement"
+            ],
+            "display": [
+              {
+                "name": "Assistant Entitlement",
+                "locale": "en-GB",
+                "description": "Annex I optional indicator for personal assistant or accompanying person entitlement."
+              }
+            ]
+          },
+          {
+            "path": [
+              "disability_status_recognised"
+            ],
+            "display": [
+              {
+                "name": "Disability Status Recognised",
+                "locale": "en-GB",
+                "description": "Essential attribute for selective disclosure in EUDI Wallet presentations."
+              }
+            ]
+          }
+        ]
+      },
+      "credential_signing_alg_values_supported": [
+        "ES256"
+      ],
+      "format": "dc+sd-jwt",
+      "vct": "urn:eu.europa.ec.eudi:edc:1",
       "proof_types_supported": {
         "jwt": {
           "proof_signing_alg_values_supported": [

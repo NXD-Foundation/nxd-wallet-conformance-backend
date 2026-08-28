@@ -29,6 +29,7 @@
     "airline_pnr_credential",
     "airline_boarding_pass",
     "room_key_credential",
+    "european_disability_card",
     "cassl_biometric_qr"
   ],
   "response_types_supported": ["code"],

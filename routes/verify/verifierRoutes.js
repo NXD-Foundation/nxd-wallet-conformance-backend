@@ -58,6 +58,7 @@ import { evaluateDirectPostJwtStateCorrelation } from "../../utils/vpSessionCorr
 import { validateSdJwtKeyBindingMatchesCredential } from "../../utils/sdJwtKeyBinding.js";
 import {
   validateDcqlClaims,
+  validateDcqlQueryClaims,
   validateMdocDcqlClaims,
 } from "../../utils/dcqlClaimValidation.js";
 
@@ -1920,13 +1921,9 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
         // above already validated both the DeviceResponse and its claims;
         // applying the generic object-path validator here would incorrectly
         // look for `claims[namespace][element]` in a flat mdoc object.
-        const requestedDcqlClaims =
-          vpSession.dcql_query?.credentials?.flatMap(
-            (credential) => credential?.claims || [],
-          ) || [];
         const dcqlValidation = isMdoc
           ? validateMdocDcqlClaims(claimsFromExtraction, vpSession.dcql_query)
-          : validateDcqlClaims(claimsFromExtraction, requestedDcqlClaims);
+          : validateDcqlQueryClaims(claimsFromExtraction, vpSession.dcql_query);
         const allowedFieldsValid = isMdoc
           ? true
           : !(
@@ -2692,9 +2689,9 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
 
       await logInfo(sessionId, "Nonce verification successful");
 
-      const dcqlValidation = validateDcqlClaims(
+      const dcqlValidation = validateDcqlQueryClaims(
         claimsFromExtraction,
-        vpSession.dcql_query?.credentials?.flatMap((credential) => credential?.claims || []) || [],
+        vpSession.dcql_query,
       );
       if (
         (vpSession.sdsRequested && !hasOnlyAllowedFields(claimsFromExtraction, vpSession.sdsRequested)) ||

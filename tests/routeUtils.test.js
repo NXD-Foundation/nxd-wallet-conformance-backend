@@ -5,6 +5,9 @@ import {
   DEFAULT_MDL_DCQL_QUERY,
   MINIMAL_PID_DCQL_CLAIMS,
   BOOKING_REFERENCE_PID_DCQL_QUERY,
+  BOOKING_REFERENCE_PID_EDC_DCQL_QUERY,
+  EUROPEAN_DISABILITY_CARD_DCQL_CREDENTIAL_ID,
+  EUROPEAN_DISABILITY_CARD_VCT,
   AIRLINE_PNR_DCQL_QUERY,
   AIRLINE_PNR_VCT,
   AIRLINE_BOARDING_PASS_DCQL_QUERY,
@@ -202,11 +205,14 @@ describe('Route Utils', () => {
   });
 
   describe('BOOKING_REFERENCE_PID_DCQL_QUERY', () => {
-    it('requests both booking reference and PID credentials', () => {
-      const [bookingQuery, pidQuery] = BOOKING_REFERENCE_PID_DCQL_QUERY.credentials;
+    it('requests Accommodation Voucher reservationReference and PID family_name for guest matching', () => {
+      const [voucherQuery, pidQuery] = BOOKING_REFERENCE_PID_DCQL_QUERY.credentials;
 
-      expect(bookingQuery.meta.vct_values).to.deep.equal(['booking_reference_credential']);
-      expect(bookingQuery.claims.map(({ path }) => path)).to.deep.equal([['booking_reference']]);
+      expect(voucherQuery.id).to.equal('accommodation-voucher');
+      expect(voucherQuery.meta.vct_values).to.deep.equal(['booking_reference_credential']);
+      expect(voucherQuery.claims.map(({ path }) => path)).to.deep.equal([
+        ['reservationReference'],
+      ]);
 
       expect(pidQuery.meta.vct_values).to.deep.equal(['urn:eu.europa.ec.eudi:pid:1']);
       expect(pidQuery.claims.map(({ path }) => path)).to.deep.equal([['family_name']]);
@@ -289,6 +295,45 @@ describe('Route Utils', () => {
         ['birthdate'],
         ['nationalities'],
         ['picture'],
+      ]);
+    });
+  });
+
+  describe('BOOKING_REFERENCE_PID_EDC_DCQL_QUERY', () => {
+    it('requires accommodation voucher and PID, with optional EDC name or entitlement disclosure', () => {
+      const [voucherQuery, pidQuery, edcQuery] =
+        BOOKING_REFERENCE_PID_EDC_DCQL_QUERY.credentials;
+
+      expect(voucherQuery.id).to.equal('accommodation-voucher');
+      expect(voucherQuery.meta.vct_values).to.deep.equal(['booking_reference_credential']);
+      expect(voucherQuery.claims.map(({ path }) => path)).to.deep.equal([
+        ['reservationReference'],
+      ]);
+
+      expect(pidQuery.meta.vct_values).to.deep.equal(['urn:eu.europa.ec.eudi:pid:1']);
+      expect(pidQuery.claims.map(({ path }) => path)).to.deep.equal([['family_name']]);
+
+      expect(edcQuery.id).to.equal(EUROPEAN_DISABILITY_CARD_DCQL_CREDENTIAL_ID);
+      expect(edcQuery.meta.vct_values).to.deep.equal([EUROPEAN_DISABILITY_CARD_VCT]);
+      expect(edcQuery.claims.map(({ id, path }) => [id, path])).to.deep.equal([
+        ['edc_given_name', ['given_name']],
+        ['edc_family_name', ['family_name']],
+        ['edc_assistant_entitlement', ['assistant_entitlement']],
+      ]);
+      expect(edcQuery.claim_sets).to.deep.equal([
+        ['edc_given_name', 'edc_family_name'],
+        ['edc_assistant_entitlement'],
+      ]);
+
+      expect(BOOKING_REFERENCE_PID_EDC_DCQL_QUERY.credential_sets).to.deep.equal([
+        {
+          required: true,
+          options: [['accommodation-voucher', 'pid']],
+        },
+        {
+          required: false,
+          options: [[EUROPEAN_DISABILITY_CARD_DCQL_CREDENTIAL_ID]],
+        },
       ]);
     });
   });

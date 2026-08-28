@@ -1244,14 +1244,101 @@ export const getLoyaltyCardSDJWTDataWithPayload = (
   return { claims, disclosureFrame };
 };
 
-const DEFAULT_BOOKING_REFERENCE_CLAIMS = {
-  booking_reference: "BR-2026-00042",
-  hotel_id: "hotel-123",
-  hotel_name: "Example Hotel Athens",
-  arrival_date: "2026-06-12",
-  departure_date: "2026-06-15",
-  booking_platform: "Example Booking Portal",
+const DEFAULT_ACCOMMODATION_VOUCHER_CLAIMS = {
+  reservationReference: "BR-2026-00042",
+  supplierReference: "SUP-2026-00001",
+  property: { id: "hotel-123", name: "Example Hotel Athens" },
+  stay: { checkInDate: "2026-06-12", checkOutDate: "2026-06-15" },
+  room: { type: "Standard Double" },
+  ratePlanCode: "BAR",
+  reservationStatus: "Confirmed",
+  voucherReference: "VCH-2026-00042",
+  guest: { givenName: "Hanna", familyName: "Matkalainen" },
 };
+
+const ACCOMMODATION_VOUCHER_DISCLOSURE_FRAME = {
+  _sd: [
+    "id",
+    "reservationReference",
+    "supplierReference",
+    "property",
+    "stay",
+    "room",
+    "ratePlanCode",
+    "reservationStatus",
+    "voucherReference",
+    "guest",
+  ],
+};
+
+function normalizeStayDate(value) {
+  if (value == null || value === "") {
+    return undefined;
+  }
+  const normalized = String(value);
+  return /^\d{4}-\d{2}-\d{2}/.test(normalized)
+    ? normalized.slice(0, 10)
+    : normalized;
+}
+
+function buildAccommodationVoucherClaims(sourceClaims) {
+  return {
+    reservationReference:
+      sourceClaims.reservationReference ??
+      sourceClaims.booking_reference ??
+      DEFAULT_ACCOMMODATION_VOUCHER_CLAIMS.reservationReference,
+    supplierReference:
+      sourceClaims.supplierReference ??
+      sourceClaims.booking_platform ??
+      DEFAULT_ACCOMMODATION_VOUCHER_CLAIMS.supplierReference,
+    property: {
+      id:
+        sourceClaims.property?.id ??
+        sourceClaims.hotel_id ??
+        DEFAULT_ACCOMMODATION_VOUCHER_CLAIMS.property.id,
+      name:
+        sourceClaims.property?.name ??
+        sourceClaims.hotel_name ??
+        DEFAULT_ACCOMMODATION_VOUCHER_CLAIMS.property.name,
+    },
+    stay: {
+      checkInDate: normalizeStayDate(
+        sourceClaims.stay?.checkInDate ??
+          sourceClaims.arrival_date ??
+          DEFAULT_ACCOMMODATION_VOUCHER_CLAIMS.stay.checkInDate,
+      ),
+      checkOutDate: normalizeStayDate(
+        sourceClaims.stay?.checkOutDate ??
+          sourceClaims.departure_date ??
+          DEFAULT_ACCOMMODATION_VOUCHER_CLAIMS.stay.checkOutDate,
+      ),
+    },
+    room: {
+      type:
+        sourceClaims.room?.type ??
+        DEFAULT_ACCOMMODATION_VOUCHER_CLAIMS.room.type,
+    },
+    ratePlanCode:
+      sourceClaims.ratePlanCode ??
+      DEFAULT_ACCOMMODATION_VOUCHER_CLAIMS.ratePlanCode,
+    reservationStatus:
+      sourceClaims.reservationStatus ??
+      DEFAULT_ACCOMMODATION_VOUCHER_CLAIMS.reservationStatus,
+    voucherReference:
+      sourceClaims.voucherReference ??
+      DEFAULT_ACCOMMODATION_VOUCHER_CLAIMS.voucherReference,
+    guest: {
+      givenName:
+        sourceClaims.guest?.givenName ??
+        sourceClaims.given_name ??
+        DEFAULT_ACCOMMODATION_VOUCHER_CLAIMS.guest.givenName,
+      familyName:
+        sourceClaims.guest?.familyName ??
+        sourceClaims.family_name ??
+        DEFAULT_ACCOMMODATION_VOUCHER_CLAIMS.guest.familyName,
+    },
+  };
+}
 
 export const getBookingReferenceSDJWTData = (decodedHeaderSubjectDID) => {
   return getBookingReferenceSDJWTDataWithPayload(null, decodedHeaderSubjectDID);
@@ -1259,7 +1346,7 @@ export const getBookingReferenceSDJWTData = (decodedHeaderSubjectDID) => {
 
 export const getBookingReferenceSDJWTDataWithPayload = (
   payload,
-  decodedHeaderSubjectDID
+  decodedHeaderSubjectDID,
 ) => {
   const sourceClaims =
     payload?.claims && typeof payload.claims === "object"
@@ -1268,36 +1355,10 @@ export const getBookingReferenceSDJWTDataWithPayload = (
 
   const claims = {
     id: decodedHeaderSubjectDID || uuidv4(),
-    booking_reference:
-      sourceClaims.booking_reference ??
-      DEFAULT_BOOKING_REFERENCE_CLAIMS.booking_reference,
-    hotel_id:
-      sourceClaims.hotel_id ?? DEFAULT_BOOKING_REFERENCE_CLAIMS.hotel_id,
-    hotel_name:
-      sourceClaims.hotel_name ?? DEFAULT_BOOKING_REFERENCE_CLAIMS.hotel_name,
-    arrival_date:
-      sourceClaims.arrival_date ?? DEFAULT_BOOKING_REFERENCE_CLAIMS.arrival_date,
-    departure_date:
-      sourceClaims.departure_date ??
-      DEFAULT_BOOKING_REFERENCE_CLAIMS.departure_date,
-    booking_platform:
-      sourceClaims.booking_platform ??
-      DEFAULT_BOOKING_REFERENCE_CLAIMS.booking_platform,
+    ...buildAccommodationVoucherClaims(sourceClaims),
   };
 
-  const disclosureFrame = {
-    _sd: [
-      "id",
-      "booking_reference",
-      "hotel_id",
-      "hotel_name",
-      "arrival_date",
-      "departure_date",
-      "booking_platform",
-    ],
-  };
-
-  return { claims, disclosureFrame };
+  return { claims, disclosureFrame: ACCOMMODATION_VOUCHER_DISCLOSURE_FRAME };
 };
 
 const DEFAULT_AIRLINE_PNR_CLAIMS = {
@@ -1337,7 +1398,7 @@ export const getAirlinePnrSDJWTDataWithPayload = (payload) => {
 
 const DEFAULT_ROOM_KEY_CLAIMS = {
   room_number: "412",
-  reservationId: "RES-2026-001234",
+  reservationReference: "RES-2026-001234",
 };
 
 const ROOM_KEY_QR_CONFIG = {
@@ -1367,15 +1428,17 @@ export const getRoomKeySDJWTDataWithPayload = async (
       ? payload.claims
       : payload || {};
 
-  const reservationId =
-    sourceClaims.reservationId ?? DEFAULT_ROOM_KEY_CLAIMS.reservationId;
+  const qrSourceText =
+    sourceClaims.reservationReference ??
+    sourceClaims.reservationId ??
+    DEFAULT_ROOM_KEY_CLAIMS.reservationReference;
   const room_number =
     sourceClaims.room_number ?? DEFAULT_ROOM_KEY_CLAIMS.room_number;
   // EUDI wallets only render `picture` / `portrait` claim keys as images.
   const picture =
     sourceClaims.picture ??
     sourceClaims.qr_code ??
-    (await encodeTextAsQrDataUri(reservationId));
+    (await encodeTextAsQrDataUri(qrSourceText));
 
   const claims = {
     id: decodedHeaderSubjectDID || uuidv4(),
@@ -1388,4 +1451,124 @@ export const getRoomKeySDJWTDataWithPayload = async (
   };
 
   return { claims, disclosureFrame };
+};
+
+const DEFAULT_EUROPEAN_DISABILITY_CARD_CLAIMS = {
+  family_name: "Matkalainen",
+  given_name: "Hanna",
+  birth_date: "1990-05-23",
+  serial_number: "EDC-FI-2026-0001234",
+  issue_date: "2026-01-15",
+  expiry_date: "2031-01-14",
+  issuing_country: "FI",
+  portrait: PID_PORTRAIT_DATA_URL,
+  assistant_entitlement: true,
+  disability_status_recognised: true,
+};
+
+const EUROPEAN_DISABILITY_CARD_DISCLOSURE_FRAME = {
+  _sd: [
+    "id",
+    "family_name",
+    "given_name",
+    "birth_date",
+    "serial_number",
+    "issue_date",
+    "expiry_date",
+    "issuing_country",
+    "portrait",
+    "assistant_entitlement",
+    "disability_status_recognised",
+  ],
+};
+
+function normalizeEdcDate(value) {
+  if (value == null || value === "") {
+    return undefined;
+  }
+  const normalized = String(value);
+  return /^\d{4}-\d{2}-\d{2}/.test(normalized)
+    ? normalized.slice(0, 10)
+    : normalized;
+}
+
+function normalizeAssistantEntitlement(sourceClaims) {
+  if (sourceClaims.assistant_entitlement != null) {
+    return Boolean(sourceClaims.assistant_entitlement);
+  }
+  if (sourceClaims.assistant_indicator != null) {
+    const indicator = String(sourceClaims.assistant_indicator).toUpperCase();
+    return indicator === "A" || indicator === "TRUE";
+  }
+  if (sourceClaims.A != null) {
+    const indicator = String(sourceClaims.A).toUpperCase();
+    return indicator === "A" || indicator === "TRUE";
+  }
+  return DEFAULT_EUROPEAN_DISABILITY_CARD_CLAIMS.assistant_entitlement;
+}
+
+function buildEuropeanDisabilityCardClaims(sourceClaims) {
+  return {
+    family_name:
+      sourceClaims.family_name ??
+      sourceClaims.surname ??
+      DEFAULT_EUROPEAN_DISABILITY_CARD_CLAIMS.family_name,
+    given_name:
+      sourceClaims.given_name ??
+      sourceClaims.forename ??
+      sourceClaims.given_name_unicode ??
+      DEFAULT_EUROPEAN_DISABILITY_CARD_CLAIMS.given_name,
+    birth_date: normalizeEdcDate(
+      sourceClaims.birth_date ??
+        sourceClaims.date_of_birth ??
+        DEFAULT_EUROPEAN_DISABILITY_CARD_CLAIMS.birth_date,
+    ),
+    serial_number:
+      sourceClaims.serial_number ??
+      sourceClaims.file_number ??
+      DEFAULT_EUROPEAN_DISABILITY_CARD_CLAIMS.serial_number,
+    issue_date: normalizeEdcDate(
+      sourceClaims.issue_date ??
+        DEFAULT_EUROPEAN_DISABILITY_CARD_CLAIMS.issue_date,
+    ),
+    expiry_date: normalizeEdcDate(
+      sourceClaims.expiry_date ??
+        DEFAULT_EUROPEAN_DISABILITY_CARD_CLAIMS.expiry_date,
+    ),
+    issuing_country:
+      sourceClaims.issuing_country ??
+      DEFAULT_EUROPEAN_DISABILITY_CARD_CLAIMS.issuing_country,
+    portrait:
+      sourceClaims.portrait ??
+      sourceClaims.picture ??
+      DEFAULT_EUROPEAN_DISABILITY_CARD_CLAIMS.portrait,
+    assistant_entitlement: normalizeAssistantEntitlement(sourceClaims),
+    disability_status_recognised:
+      sourceClaims.disability_status_recognised ??
+      DEFAULT_EUROPEAN_DISABILITY_CARD_CLAIMS.disability_status_recognised,
+  };
+}
+
+export const getEuropeanDisabilityCardSDJWTData = (decodedHeaderSubjectDID) => {
+  return getEuropeanDisabilityCardSDJWTDataWithPayload(
+    null,
+    decodedHeaderSubjectDID,
+  );
+};
+
+export const getEuropeanDisabilityCardSDJWTDataWithPayload = (
+  payload,
+  decodedHeaderSubjectDID,
+) => {
+  const sourceClaims =
+    payload?.claims && typeof payload.claims === "object"
+      ? payload.claims
+      : payload || {};
+
+  const claims = {
+    id: decodedHeaderSubjectDID || uuidv4(),
+    ...buildEuropeanDisabilityCardClaims(sourceClaims),
+  };
+
+  return { claims, disclosureFrame: EUROPEAN_DISABILITY_CARD_DISCLOSURE_FRAME };
 };

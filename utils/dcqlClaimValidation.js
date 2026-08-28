@@ -6,6 +6,7 @@ import {
   getSdJwtPathValue as getDcqlPathValue,
   selectSdJwtPathValues,
 } from "./sdJwtClaims.js";
+import { selectSatisfiedClaimSet } from "./dcqlCore.js";
 
 function matchesRequestedValue(value, constraint) {
   if (!constraint || typeof constraint !== "object") return true;
@@ -16,6 +17,151 @@ function matchesRequestedValue(value, constraint) {
     return JSON.stringify(constraint.value) === JSON.stringify(value);
   }
   return true;
+}
+
+function claimPathKey(path) {
+  return Array.isArray(path) ? path.join(".") : "";
+}
+
+function isClaimPresentInRoot(claimRoot, claim) {
+  const values = selectSdJwtPathValues(claimRoot, claim?.path);
+  return (
+    values.length > 0 && values.some((value) => matchesRequestedValue(value, claim))
+  );
+}
+
+function claimRootSatisfiesCredentialQuery(claimRoot, credQuery) {
+  const claims = Array.isArray(credQuery?.claims) ? credQuery.claims : [];
+  if (claims.length === 0) {
+    return true;
+  }
+
+  if (Array.isArray(credQuery.claim_sets) && credQuery.claim_sets.length > 0) {
+    return (
+      selectSatisfiedClaimSet(credQuery, (claim) =>
+        isClaimPresentInRoot(claimRoot, claim),
+      ) !== null
+    );
+  }
+
+  return claims.every((claim) => isClaimPresentInRoot(claimRoot, claim));
+}
+
+function claimsForCredentialValidation(credQuery, claimRoot) {
+  const claims = Array.isArray(credQuery?.claims) ? credQuery.claims : [];
+  if (!Array.isArray(credQuery?.claim_sets) || credQuery.claim_sets.length === 0) {
+    return claims;
+  }
+
+  const satisfiedClaimSet = selectSatisfiedClaimSet(credQuery, (claim) =>
+    isClaimPresentInRoot(claimRoot, claim),
+  );
+  if (!satisfiedClaimSet) {
+    return claims;
+  }
+
+  return claims.filter(
+    (claim) => typeof claim?.id === "string" && satisfiedClaimSet.has(claim.id),
+  );
+}
+
+function getOptionalCredentialIds(dcqlQuery) {
+  const optionalIds = new Set();
+  for (const set of Array.isArray(dcqlQuery?.credential_sets)
+    ? dcqlQuery.credential_sets
+    : []) {
+    if (set?.required === false) {
+      for (const option of Array.isArray(set?.options) ? set.options : []) {
+        for (const id of Array.isArray(option) ? option : []) {
+          optionalIds.add(id);
+        }
+      }
+    }
+  }
+  return optionalIds;
+}
+
+function sortCredentialsForMatching(credentials) {
+  const claimPathOwners = new Map();
+  for (const credential of credentials) {
+    for (const claim of credential?.claims || []) {
+      const key = claimPathKey(claim?.path);
+      if (!key) continue;
+      if (!claimPathOwners.has(key)) {
+        claimPathOwners.set(key, new Set());
+      }
+      claimPathOwners.get(key).add(credential.id);
+    }
+  }
+
+  return [...credentials].sort((left, right) => {
+    const leftExclusive = (left?.claims || []).filter(
+      (claim) => claimPathOwners.get(claimPathKey(claim?.path))?.size === 1,
+    ).length;
+    const rightExclusive = (right?.claims || []).filter(
+      (claim) => claimPathOwners.get(claimPathKey(claim?.path))?.size === 1,
+    ).length;
+    return rightExclusive - leftExclusive;
+  });
+}
+
+function findMatchingClaimRootIndex(credQuery, claimRoots, usedIndices) {
+  for (let index = 0; index < claimRoots.length; index += 1) {
+    if (usedIndices.has(index)) continue;
+    if (claimRootSatisfiesCredentialQuery(claimRoots[index], credQuery)) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+/**
+ * Validate extracted VP claims against a full DCQL query, honouring claim_sets
+ * and optional credential_sets entries.
+ */
+export function validateDcqlQueryClaims(claims, dcqlQuery) {
+  const credentials = Array.isArray(dcqlQuery?.credentials)
+    ? dcqlQuery.credentials.filter((credential) => credential?.format !== "mso_mdoc")
+    : [];
+  if (credentials.length === 0) {
+    return { ok: true, errors: [] };
+  }
+
+  const claimRoots = Array.isArray(claims) ? claims : [claims];
+  const optionalCredentialIds = getOptionalCredentialIds(dcqlQuery);
+  const usedRootIndices = new Set();
+  const errors = [];
+
+  for (const credQuery of sortCredentialsForMatching(credentials)) {
+    const rootIndex = findMatchingClaimRootIndex(
+      credQuery,
+      claimRoots,
+      usedRootIndices,
+    );
+
+    if (rootIndex === -1) {
+      if (optionalCredentialIds.has(credQuery.id)) {
+        continue;
+      }
+      errors.push(`missing presentation for credential '${credQuery.id}'`);
+      continue;
+    }
+
+    usedRootIndices.add(rootIndex);
+    const validation = validateDcqlClaims(
+      [claimRoots[rootIndex]],
+      claimsForCredentialValidation(credQuery, claimRoots[rootIndex]),
+    );
+    if (!validation.ok) {
+      errors.push(
+        ...validation.errors.map(
+          (error) => `credential '${credQuery.id}': ${error}`,
+        ),
+      );
+    }
+  }
+
+  return { ok: errors.length === 0, errors };
 }
 
 /** Validate that a reconstructed credential satisfies the requested DCQL claims. */
