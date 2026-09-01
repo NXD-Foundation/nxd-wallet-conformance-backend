@@ -170,6 +170,39 @@ export function shouldRetryWithAttestationChallenge(response, responseText) {
 }
 
 /**
+ * Read response text without draining node-fetch bodies that were already logged via clone().
+ * @param {Response & { _responseText?: string }} response
+ * @returns {Promise<string>}
+ */
+export async function readFetchResponseText(response) {
+  if (typeof response?._responseText === "string") {
+    return response._responseText;
+  }
+  return response.text().catch(() => "");
+}
+
+/**
+ * Parse JSON from a fetch response, preferring cached text from httpPostForm/httpPostJson.
+ * @param {Response & { _responseText?: string, _parsedBody?: unknown }} response
+ * @returns {Promise<Record<string, unknown>>}
+ */
+export async function readFetchResponseJson(response) {
+  if (response?._parsedBody && typeof response._parsedBody === "object") {
+    return response._parsedBody;
+  }
+  const responseText = await readFetchResponseText(response);
+  if (!responseText) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(responseText);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
  * Initialize challenge state from AS metadata `challenge_endpoint` when advertised.
  * @param {object|null|undefined} asMeta
  * @param {{ fetchImpl?: typeof fetch }} [options]
@@ -207,7 +240,7 @@ export async function postFormWithWiaAttestationChallengeRetry({
   let res = await postForm(url, params, dpopHeader, headers);
   challengeState?.updateFromResponse(res.headers);
 
-  const responseText = await res.clone().text().catch(() => "");
+  const responseText = await readFetchResponseText(res);
   const { shouldRetry, challenge } = shouldRetryWithAttestationChallenge(res, responseText);
   if (shouldRetry && challenge) {
     challengeState?.set(challenge);

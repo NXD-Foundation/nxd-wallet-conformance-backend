@@ -1,4 +1,6 @@
 import { expect } from "chai";
+import fetch from "node-fetch";
+import http from "http";
 import {
   ATTESTATION_CHALLENGE_HEADER,
   AttestationChallengeError,
@@ -6,6 +8,9 @@ import {
   extractAttestationChallenge,
   fetchAttestationChallenge,
   parseAttestationOAuthError,
+  postFormWithWiaAttestationChallengeRetry,
+  readFetchResponseJson,
+  readFetchResponseText,
   shouldRetryWithAttestationChallenge,
 } from "../src/lib/attestationChallenge.js";
 
@@ -89,5 +94,58 @@ describe("wallet-client attestationChallenge", () => {
     }
     expect(thrown).to.be.instanceOf(AttestationChallengeError);
     expect(thrown.errorCode).to.equal("missing_attestation_challenge");
+  });
+
+  it("readFetchResponseJson preserves PAR body after httpPostForm-style logging clone", async () => {
+    const server = http.createServer((_req, res) => {
+      const body = JSON.stringify({
+        request_uri: "urn:issuer:example:par:abc",
+        expires_in: 90,
+      });
+      res.writeHead(201, {
+        "content-type": "application/json",
+        "content-length": String(Buffer.byteLength(body)),
+      });
+      res.end(body);
+    });
+    await new Promise((resolve) => server.listen(0, resolve));
+    const port = server.address().port;
+
+    async function httpPostForm(url) {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: "response_type=code",
+      });
+      const resClone = res.clone();
+      const responseText = await resClone.text().catch(() => "");
+      let responseBody = null;
+      try {
+        responseBody = responseText ? JSON.parse(responseText) : null;
+      } catch {
+        responseBody = null;
+      }
+      res._responseText = responseText;
+      if (responseBody !== null) {
+        res._parsedBody = responseBody;
+      }
+      return res;
+    }
+
+    const parRes = await postFormWithWiaAttestationChallengeRetry({
+      postForm: httpPostForm,
+      url: `http://127.0.0.1:${port}/par`,
+      params: { response_type: "code" },
+      resolveWiaForParOrToken: async () => ({ wiaHeaders: {} }),
+      challengeState: createAttestationChallengeState(),
+    });
+
+    expect(parRes.ok).to.equal(true);
+    const parBody = await readFetchResponseJson(parRes);
+    expect(parBody.request_uri).to.equal("urn:issuer:example:par:abc");
+    expect(parBody.expires_in).to.equal(90);
+    expect(await readFetchResponseText(parRes)).to.include("request_uri");
+
+    await new Promise((resolve) => server.close(resolve));
   });
 });

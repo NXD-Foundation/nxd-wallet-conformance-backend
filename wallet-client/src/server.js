@@ -49,6 +49,7 @@ import {
   createAttestationChallengeState,
   initializeAttestationChallengeState,
   postFormWithWiaAttestationChallengeRetry,
+  readFetchResponseJson,
 } from "./lib/attestationChallenge.js";
 
 const app = express();
@@ -901,6 +902,10 @@ async function httpPostJson(url, body, logSessionId, extraHeaders = {}) {
   try {
     responseBody = responseText ? JSON.parse(responseText) : null;
   } catch {}
+  res._responseText = responseText;
+  if (responseBody !== null) {
+    res._parsedBody = responseBody;
+  }
   
   try { console.log("[http] <-", url, res.status); } catch {}
   try { 
@@ -962,6 +967,10 @@ async function httpPostForm(url, params, logSessionId, dpopHeader = null, extraH
   try {
     responseBody = responseText ? JSON.parse(responseText) : null;
   } catch {}
+  res._responseText = responseText;
+  if (responseBody !== null) {
+    res._parsedBody = responseBody;
+  }
   
   try { console.log("[http] <-", url, res.status); } catch {}
   try { 
@@ -1517,7 +1526,7 @@ async function runAuthorizationCodeIssuance(
 
       console.log("[codeflow][par] endpoint=", parEndpoint, "status=", parRes.status); try { slog("[codeflow][par] endpoint", { endpoint: parEndpoint, status: parRes.status }); } catch {}
       if (parRes.ok) {
-        const parBody = await parRes.json().catch(() => ({}));
+        const parBody = await readFetchResponseJson(parRes);
         const requestUri = parBody.request_uri;
         console.log("[codeflow][par] request_uri=", requestUri, "expires_in=", parBody.expires_in); try { slog("[codeflow][par] request_uri", { requestUri, expiresIn: parBody.expires_in }); } catch {}
         if (requestUri) {
