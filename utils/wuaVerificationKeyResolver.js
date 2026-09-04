@@ -3,7 +3,9 @@ import { X509Certificate } from "crypto";
 import jwt from "jsonwebtoken";
 import * as jose from "jose";
 
+export const KEY_ATTESTATION_JWT_TYP = "key-attestation+jwt";
 const DEFAULT_REFS = ["TS3 Wallet Unit Attestation", "OpenID4VCI 1.0 Appendix D.1"];
+const KA_TYP_REFS = ["OpenID4VCI 1.0 Appendix D.1", "CS-04 Annex A.2"];
 
 function withSpecRef(message, ...refs) {
   const present = refs.filter(Boolean);
@@ -85,6 +87,15 @@ export async function verifyWalletProviderAttestation(wuaJwt, metadata = {}, opt
   const refs = options.specRefs ?? DEFAULT_REFS;
   const decoded = jwt.decode(wuaJwt, { complete: true });
   if (!decoded?.header || !decoded?.payload) throw new Error(withSpecRef("WUA JWT is malformed", ...refs));
+  if (decoded.header.typ !== KEY_ATTESTATION_JWT_TYP) {
+    throw new Error(
+      withSpecRef(
+        `Proof JWT is malformed or missing algorithm. Key attestation: invalid typ. Received: '${decoded.header.typ ?? "missing"}', expected: '${KEY_ATTESTATION_JWT_TYP}'`,
+        ...KA_TYP_REFS,
+        ...refs.filter((ref) => !KA_TYP_REFS.includes(ref))
+      )
+    );
+  }
   if (!decoded.header.alg || typeof decoded.header.alg !== "string") throw new Error(withSpecRef("WUA JWT header missing alg", ...refs));
   const resolved = resolveWalletProviderAttestationVerificationKey(decoded.header, metadata, { specRefs: refs });
   let payload;

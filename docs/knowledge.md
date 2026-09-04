@@ -11,6 +11,10 @@ Use it to orient implementation, review, and investigation work quickly. For
 behaviour that affects interoperability or conformance, follow the linked
 source of truth and then verify the current code and tests.
 
+Agents should load the [project-knowledge](../.cursor/skills/project-knowledge/SKILL.md)
+skill at task start so work follows this file's authority order, ITB/ITB+
+meaning, and Fast Lookup routing.
+
 ## Project At A Glance
 
 This repository is a configuration-driven Node.js/Express service with three
@@ -20,6 +24,15 @@ related roles:
 - An OpenID4VP 1.0 credential verifier.
 - A companion wallet-holder service under `wallet-client/` for exercising the
 supported issuance and presentation flows.
+
+Together, these three components are the WE BUILD Interoperability Test Bed
+Plus (ITB+) reference deployment maintained in this repository. For future
+references and discussions, treat **this codebase** — its current routes,
+configuration, wallet client, and tests — as what "ITB" or "ITB+" means here,
+unless a document explicitly points at the upstream WP4 ITB specification or
+a separately hosted instance. The WE BUILD CS profiles describe what the test
+bed is meant to validate; this repository is the running implementation that
+ITB+ scenarios exercise against.
 
 The primary supported credential families are SD-JWT VC, JWT VC, and
 `mso_mdoc` (mDL/PID). Redis provides session, state, nonce, and deferred
@@ -103,8 +116,9 @@ same `nonce`; the proof JWT and KA nonce are checked together before dispatch.
 interoperability clarification because OpenID4VCI 1.0 describes that field as
 a URL string while the CS-04 example uses an object. The implementation does
 not silently override CS-04 for a Keycloak-specific shape.
-- The KA JOSE type is `key-attestation+jwt`; the alternate spelling in the
-CS-04 example is treated as a documentation typo.
+- The KA JOSE type is `key-attestation+jwt`, as cited by CS-04 Annex A.2 from
+OpenID4VCI 1.0 Appendix D.1. Shared KA validation rejects the unhyphenated
+`keyattestation+jwt` spelling.
 
 Source: [CS-04 WUA lifecycle](./core/cs-04-wua-lifecycle.md) and
 [CS-04 interoperability issue](./issues/cs04-key-attestation-interoperability.md).

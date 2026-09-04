@@ -2,7 +2,8 @@
 
 ## Status
 
-Open clarification for the WE BUILD CS-04 profile.
+Open clarification for the WE BUILD CS-04 profile. The KA JOSE `typ`
+discrepancy is closed; `certification` type and `key_storage_status` remain.
 
 ## Discrepancies
 
@@ -11,8 +12,12 @@ development or certification metadata. OpenID4VCI 1.0 Appendix D.1 defines
 `certification` as a string URL. The CS-04 normative requirement requires a
 `certification` claim but does not explicitly state the JSON type.
 
-The CS-04 example also uses `keyattestation+jwt`, while OpenID4VCI 1.0
-requires the JOSE type `key-attestation+jwt`.
+## Resolved: KA JOSE `typ`
+
+CS-04 Annex A.2 now cites `typ` as `key-attestation+jwt` from OpenID4VCI 1.0
+Appendix D.1. The implementation emits and validates that hyphenated form on
+both `proofs.jwt` (`key_attestation`) and `proofs.attestation`. The older
+unhyphenated spelling `keyattestation+jwt` is rejected.
 
 ## Current WE BUILD decision
 
@@ -20,8 +25,8 @@ requires the JOSE type `key-attestation+jwt`.
 - The implementation retains the CS-04 example's certification object until
   the profile authors clarify whether that example is illustrative or
   normative.
-- The implementation uses `key-attestation+jwt`, which is the explicit
-  OpenID4VCI wire requirement and is not changed to match the example typo.
+- The KA JOSE type is `key-attestation+jwt` (OpenID4VCI 1.0 Appendix D.1 and
+  CS-04 Annex A.2).
 - `key_storage_status` remains mandatory under CS-04 even though it is not a
   core OpenID4VCI Appendix D field.
 - The issuer-provided `c_nonce` is copied into the KA `nonce` claim as required

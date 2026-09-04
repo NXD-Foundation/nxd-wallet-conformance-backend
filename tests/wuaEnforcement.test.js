@@ -56,7 +56,7 @@ async function signPop({ walletPrivateKey, clientId, audience = AS_ISSUER }) {
     .sign(walletPrivateKey);
 }
 
-async function buildMinimalKa({ privateKey, publicJwk, attestedKeys, includeStatus = true, statusExpOffsetSeconds = 86400 * 60 }) {
+async function buildMinimalKa({ privateKey, publicJwk, attestedKeys, includeStatus = true, statusExpOffsetSeconds = 86400 * 60, typ = "key-attestation+jwt" }) {
   const now = Math.floor(Date.now() / 1000);
   const payload = {
     iat: now,
@@ -73,7 +73,7 @@ async function buildMinimalKa({ privateKey, publicJwk, attestedKeys, includeStat
     };
   }
   return new jose.SignJWT(payload)
-    .setProtectedHeader({ alg: ALG, typ: "keyattestation+jwt", jwk: publicJwk })
+    .setProtectedHeader({ alg: ALG, typ, jwk: publicJwk })
     .sign(privateKey);
 }
 
@@ -274,5 +274,23 @@ describe("KA validation (validateWUA)", () => {
     const result = await validateWUA(ka, null, {});
     expect(result.valid).to.equal(false);
     expect(result.error).to.match(/signature/i);
+  });
+
+  it("rejects KA with unhyphenated typ keyattestation+jwt", async () => {
+    const { privateKey, publicKey } = await jose.generateKeyPair(ALG, { extractable: true });
+    const pubJwk = await jose.exportJWK(publicKey);
+    const holderJwk = await jose.exportJWK(publicKey);
+    const ka = await buildMinimalKa({
+      privateKey,
+      publicJwk: pubJwk,
+      attestedKeys: [holderJwk],
+      typ: "keyattestation+jwt",
+    });
+    const result = await validateWUA(ka, null, {});
+    expect(result.valid).to.equal(false);
+    expect(result.error).to.match(/invalid typ/i);
+    expect(result.error).to.match(/key-attestation\+jwt/);
+    expect(result.error).to.match(/OpenID4VCI 1\.0 Appendix D\.1/);
+    expect(result.error).to.match(/CS-04 Annex A\.2/);
   });
 });

@@ -65,6 +65,32 @@ describe("WUA validation (routeUtils)", () => {
     expect(result.payload?.iss).to.equal("https://wallet.example");
   });
 
+  it("validateWUA rejects unhyphenated typ keyattestation+jwt", async () => {
+    const { privateKey, publicKey } = await jose.generateKeyPair("ES256");
+    const pubJwk = await jose.exportJWK(publicKey);
+    const jwtToken = await new jose.SignJWT({
+      iss: "https://wallet.example",
+      aud: "https://issuer.example/credential",
+      iat: Math.floor(Date.now() / 1000),
+      exp: Math.floor(Date.now() / 1000) + 3600,
+      jti: "wua-test-jti",
+      eudi_wallet_info: {
+        general_info: { name: "test-wallet" },
+        key_storage_info: { level: "tee" },
+      },
+      attested_keys: [pubJwk],
+      status: { status_list: { uri: "https://example.com/status", idx: 0 } },
+    })
+      .setProtectedHeader({ alg: "ES256", typ: "keyattestation+jwt", jwk: pubJwk })
+      .sign(await jose.importJWK(await jose.exportJWK(privateKey), "ES256"));
+    const result = await validateWUA(jwtToken, null, {});
+    expect(result.valid).to.equal(false);
+    expect(result.error).to.match(/invalid typ/i);
+    expect(result.error).to.match(/key-attestation\+jwt/);
+    expect(result.error).to.match(/OpenID4VCI 1\.0 Appendix D\.1/);
+    expect(result.error).to.match(/CS-04 Annex A\.2/);
+  });
+
   it("validateWUA accepts a valid x5c-only WUA in default interoperability mode", async function () {
     const certPath = path.join(process.cwd(), "x509EC", "client_certificate.crt");
     const keyPath = path.join(process.cwd(), "x509EC", "ec_private_pkcs8.key");

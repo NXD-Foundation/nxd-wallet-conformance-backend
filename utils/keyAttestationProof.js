@@ -12,9 +12,12 @@ import jwt from "jsonwebtoken";
 import * as jose from "jose";
 import {
   isWalletProviderAttestationTrustedByPolicy,
+  KEY_ATTESTATION_JWT_TYP,
   resolveWalletProviderAttestationVerificationKey,
   verifyWalletProviderAttestation,
 } from "./wuaVerificationKeyResolver.js";
+
+export { KEY_ATTESTATION_JWT_TYP };
 
 /** Match sharedIssuanceFlows ERROR_MESSAGES.INVALID_PROOF_* strings for consistent error handling */
 const INVALID_PROOF = "No proof information found";
@@ -31,8 +34,6 @@ function withSpecRef(message, ...refs) {
   if (present.length === 0) return message;
   return `${message}${message.endsWith(".") ? "" : "."} See ${present.join(" and ")}.`;
 }
-
-export const KEY_ATTESTATION_JWT_TYP = "key-attestation+jwt";
 
 /**
  * Conformance-style parsing: proofs.attestation MUST be a JSON array containing exactly one JWT string.

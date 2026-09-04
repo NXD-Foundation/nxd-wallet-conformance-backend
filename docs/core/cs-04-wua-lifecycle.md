@@ -12,7 +12,7 @@ Date: 15-June-2026
 - Miriam Weber, Procivis, Switzerland
 - Eelco Klaver, Credenco, Netherlands
 
-# Table of Contents
+## Table of Contents
 
 - [WE BUILD - Conformance Specification CS-04: Individual Wallet Unit Attestation (WUA) Lifecycle](#we-build---conformance-specification-cs-04-individual-wallet-unit-attestation-wua-lifecycle)
 - [Table of Contents](#table-of-contents)
@@ -437,6 +437,7 @@ Payload:
 
 Where each element comes from:
 - `alg` (ES256, ES384 or ES512) - TS-03 [3], clause 2.6.
+- `typ` (`key-attestation+jwt`) - OpenID4VCI [5], Appendix D.1
 - `attested_keys`, `key_storage`, `certification`, `key_storage_status` - TS-03 [3], clause 2.3.2.
 - `user_authentication` - OpenID4VCI [5], Appendix D, as referenced by TS-03 [3], clause 2.3.2.
 - Signing a `jwt` proof with the key at index 0 of `attested_keys` - TS-03 [3], clause 2.2.2.1.

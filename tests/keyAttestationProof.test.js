@@ -62,6 +62,15 @@ describe("keyAttestationProof", () => {
       ).to.throw(/invalid typ/);
     });
 
+    it("rejects unhyphenated typ keyattestation+jwt", () => {
+      expect(() =>
+        validateKeyAttestationHeaderForCredentialConfig(
+          { typ: "keyattestation+jwt", alg: "ES256" },
+          credConfig
+        )
+      ).to.throw(/invalid typ/);
+    });
+
     it("rejects unsupported alg", () => {
       expect(() =>
         validateKeyAttestationHeaderForCredentialConfig(

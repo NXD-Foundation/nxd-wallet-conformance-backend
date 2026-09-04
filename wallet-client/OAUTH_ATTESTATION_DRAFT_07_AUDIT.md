@@ -245,7 +245,7 @@ Gaps:
 
 - KA is locally signed, not Wallet Provider-signed.
 - KA JOSE header lacks `x5c`.
-- KA uses the standards spelling `typ: key-attestation+jwt`. The previous CS-04 example spelling `keyattestation+jwt` has been corrected locally and is tracked for upstream clarification.
+- KA uses `typ: key-attestation+jwt` (OpenID4VCI 1.0 Appendix D.1 and CS-04 Annex A.2).
 - KA structural claims are now present and validated locally. The CS-04 object-shaped `certification` is intentionally retained; its interoperability with implementations expecting the OpenID4VCI string form is tracked separately.
 - KA nonce binding is now included when an issuer nonce is available, and the proof path validates the nonce and `attested_keys[0]` binding before sending the request.
 - No issuer metadata evaluation for `key_attestations_required` minimum `key_storage` and `user_authentication` levels.
