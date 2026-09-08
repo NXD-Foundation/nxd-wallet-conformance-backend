@@ -47,6 +47,9 @@ Redis database for storing credentials and session data.
 | `CS01_DISABLE_PRE_AUTHORIZED` | unset | **CS-01 only.** Set `true` to block `pre-authorized_code`; `authorization_code` still works |
 | `WALLET_CLIENT_ID` | `wallet-client` | OAuth `client_id`; must match Wallet Unit Attestation subject in CS-01 mode |
 | `WALLET_ATTESTATION_SOURCE` | `local-key` | Attestation key source (`local-key` only; `trust-framework` not yet implemented) |
+| `WALLET_PROVIDER_URL` | unset | Public Wallet Provider base URL behind the reverse proxy (HTTPS required for `webuild-cs01`). Example: `https://host.example/wallet-client`. WIA/KA `status_list.uri` values are `{WALLET_PROVIDER_URL}/status-lists/{wia\|ka}/1`. |
+| `WALLET_STATUS_ADMIN_TOKEN` | unset | Bearer token for `POST /status-lists/:kind/:listId/entries/:idx/revoke`. Required in `webuild-cs01` mode. |
+| `WALLET_STATUS_LIST_TTL` | `3600` | Status List Token `ttl`/`exp` interval and HTTP `Cache-Control` max-age, in seconds. |
 | `WALLET_CREDENTIAL_TTL` | 86400 | Credential storage TTL (seconds) |
 | `WALLET_TEST_SESSION_TTL` | 86400 | Test session TTL (seconds) |
 | `WALLET_DEBUG_CREDENTIAL` | false | Enable full credential logging |
@@ -63,6 +66,7 @@ Use this profile for ITB+ and remote interop against CS-01 issuers (including Sp
 - **Pre-auth path:** WUA headers (no body `client_assertion`), DPoP mandatory, credential selection via `credential_configuration_ids`
 - **Deferred issuance:** polls `/credential_deferred` with `Authorization: DPoP` + `DPoP` proof header; honors issuer `interval` from 202 responses
 - **Opt-out:** `CS01_DISABLE_PRE_AUTHORIZED=true` disables pre-auth only (legacy strict CS-01 testers)
+- **WIA/KA status lists:** the wallet-client is the Wallet Provider publisher. CS-01 startup requires `WALLET_PROVIDER_URL` (HTTPS) and `WALLET_STATUS_ADMIN_TOKEN`. The reverse proxy must forward the advertised `/status-lists/...` path unchanged to this service; the Status List JWT `sub` and the WIA/KA `status_list.uri` are that public URL.
 
 Example `docker-compose.yml` override:
 
@@ -71,9 +75,28 @@ environment:
   - WALLET_PROFILE=webuild-cs01
   - WALLET_CLIENT_ID=wallet-client
   - WALLET_ATTESTATION_SOURCE=local-key
+  - WALLET_PROVIDER_URL=https://host.example/wallet-client
+  - WALLET_STATUS_ADMIN_TOKEN=change-me
 ```
 
-Check runtime policy: `curl http://localhost:4000/health` — `grantPolicy.preAuthorizedEnabled` should be `true` unless opted out.
+Check runtime policy: `curl http://localhost:4000/health` — `grantPolicy.preAuthorizedEnabled` should be `true` unless opted out. `statusLists.wia` and `statusLists.ka` should match the reverse-proxied URLs.
+
+Status list fetch (issuers/relying parties):
+
+```bash
+curl -H "Accept: application/statuslist+jwt" \
+  https://host.example/wallet-client/status-lists/wia/1
+curl -H "Accept: application/statuslist+jwt" \
+  https://host.example/wallet-client/status-lists/ka/1
+```
+
+Revoke a published entry:
+
+```bash
+curl -X POST \
+  -H "Authorization: Bearer change-me" \
+  https://host.example/wallet-client/status-lists/wia/1/entries/0/revoke
+```
 
 ## Usage Examples
 

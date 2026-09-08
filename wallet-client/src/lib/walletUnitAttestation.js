@@ -20,11 +20,15 @@ import {
 } from "./crypto.js";
 import { assertOutboundClientIdAligned } from "./walletClientId.js";
 import { isWebuildCs01Profile } from "./profile.js";
+import {
+  allocateWuaStatusMaintenance,
+  bindWuaStatusListAttestationJti,
+  resetWuaStatusListForTests,
+} from "./wuaStatusList.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WALLET_PROVIDER_KEY_PATH = path.resolve(__dirname, "../../x509EC/ec_private_pkcs8.key");
 const WALLET_PROVIDER_CERT_PATH = path.resolve(__dirname, "../../x509EC/client_certificate.crt");
-const STATUS_MAINTENANCE_SECONDS = 31 * 24 * 60 * 60;
 const CS01_WIA_TTL_SECONDS = 23 * 60 * 60;
 const CS01_KA_TTL_HOURS = 23;
 const issuedAttestationIds = new Set();
@@ -173,22 +177,6 @@ function loadWalletProviderFixtureMaterial() {
   };
 }
 
-function statusListReference(kind) {
-  return {
-    status_list: {
-      idx: Math.floor(Math.random() * 1000000),
-      uri: `https://wallet-provider.example/status/${kind}`,
-    },
-  };
-}
-
-function statusMaintenanceObject(kind, now) {
-  return {
-    status: statusListReference(kind),
-    exp: now + STATUS_MAINTENANCE_SECONDS,
-  };
-}
-
 function markAttestationJwtUsedOnce(jwt, label) {
   const payload = decodeJwt(jwt);
   const jti = payload?.jti;
@@ -204,6 +192,7 @@ function markAttestationJwtUsedOnce(jwt, label) {
 
 export function resetWalletUnitAttestationLifecycleForTests() {
   issuedAttestationIds.clear();
+  resetWuaStatusListForTests();
 }
 
 export function getWalletUnitAttestationLifecycleStateForTests() {
@@ -224,6 +213,7 @@ async function createLocalKeyWalletUnitAttestationClientAuth({
   const { privateJwk, publicJwk } = cnfKeys;
   const now = Math.floor(Date.now() / 1000);
   const walletProvider = cs01 ? loadWalletProviderFixtureMaterial() : null;
+  const clientStatus = cs01 ? await allocateWuaStatusMaintenance({ kind: "wia", now }) : null;
   const attestationJwt = await createOAuthClientAttestationJwt({
     privateJwk,
     privateKeyPem: walletProvider?.privateKeyPem || null,
@@ -245,7 +235,10 @@ async function createLocalKeyWalletUnitAttestationClientAuth({
             scheme: "local-dev-fixture",
             assurance: "not-trust-framework-validated",
           },
-          client_status: statusMaintenanceObject("wia", now),
+          client_status: {
+            status: clientStatus.status,
+            exp: clientStatus.exp,
+          },
         }
       : null,
   });
@@ -259,6 +252,13 @@ async function createLocalKeyWalletUnitAttestationClientAuth({
   });
   assertOutboundClientIdAligned({ clientId, attestationJwt, popJwt });
   const attestationJti = markAttestationJwtUsedOnce(attestationJwt, "WIA");
+  if (clientStatus) {
+    await bindWuaStatusListAttestationJti({
+      kind: "wia",
+      idx: clientStatus.idx,
+      jti: attestationJti,
+    });
+  }
   return {
     source: ATTESTATION_SOURCES.LOCAL_KEY,
     trustFrameworkIntegrated: false,
@@ -333,6 +333,7 @@ export async function createWalletUnitCredentialKeyAttestation({
   const now = Math.floor(Date.now() / 1000);
   const walletProvider = cs01 ? loadWalletProviderFixtureMaterial() : null;
   const issuer = cs01 ? null : generateDidJwkFromPrivateJwk(publicJwk);
+  const keyStorageStatus = cs01 ? await allocateWuaStatusMaintenance({ kind: "ka", now }) : null;
   const attestationJwt = await createWUA({
     privateJwk,
     privateKeyPem: walletProvider?.privateKeyPem || null,
@@ -363,13 +364,23 @@ export async function createWalletUnitCredentialKeyAttestation({
             scheme: "local-dev-fixture",
             assurance: "software-test-key",
           },
-          key_storage_status: statusMaintenanceObject("ka", now),
+          key_storage_status: {
+            status: keyStorageStatus.status,
+            exp: keyStorageStatus.exp,
+          },
         }
       : null,
     alg,
     ttlHours: cs01 ? CS01_KA_TTL_HOURS : ttlHours,
   });
   const attestationJti = markAttestationJwtUsedOnce(attestationJwt, "KA");
+  if (keyStorageStatus) {
+    await bindWuaStatusListAttestationJti({
+      kind: "ka",
+      idx: keyStorageStatus.idx,
+      jti: attestationJti,
+    });
+  }
   return {
     source,
     trustFrameworkIntegrated: false,

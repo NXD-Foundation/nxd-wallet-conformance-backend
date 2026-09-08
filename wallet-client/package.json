@@ -6,9 +6,9 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "test": "mocha \"test/**/*.js\"",
-    "test:cs02": "mocha test/cs02RequestValidation.test.js test/cs02DcqlValidation.test.js test/sdJwtDisclosureSelection.test.js test/dcqlCredentialSelection.test.js --exit",
-    "test:cs01": "mocha test/cs01Conformance.test.js test/issuanceCs01PreAuth.test.js test/profile.test.js test/scopeResolution.test.js test/walletClientId.test.js test/dpopBinding.test.js test/walletUnitAttestation.test.js test/credentialProofBinding.test.js test/deferredIssuance.test.js",
+    "test": "NODE_ENV=test mocha \"test/**/*.js\" --exit",
+    "test:cs02": "NODE_ENV=test mocha test/cs02RequestValidation.test.js test/cs02DcqlValidation.test.js test/sdJwtDisclosureSelection.test.js test/dcqlCredentialSelection.test.js --exit",
+    "test:cs01": "NODE_ENV=test mocha test/cs01Conformance.test.js test/issuanceCs01PreAuth.test.js test/profile.test.js test/scopeResolution.test.js test/walletClientId.test.js test/dpopBinding.test.js test/walletUnitAttestation.test.js test/credentialProofBinding.test.js test/deferredIssuance.test.js test/wuaStatusList.test.js --exit",
     "docker:build": "docker build -f wallet-client/Dockerfile -t endimion13/wallet-client:local .."
   },
   "dependencies": {

@@ -34,6 +34,12 @@ services:
       - WALLET_CLIENT_ID=wallet-client
       # Attestation source: local-key only (trust-framework not yet implemented)
       - WALLET_ATTESTATION_SOURCE=local-key
+      # Public Wallet Provider base URL as advertised behind the reverse proxy.
+      # Required (HTTPS) when WALLET_PROFILE=webuild-cs01. Must match the
+      # externally routed path so WIA/KA status_list.uri values resolve.
+      # - WALLET_PROVIDER_URL=https://example.com/wallet-client
+      # - WALLET_STATUS_ADMIN_TOKEN=change-me
+      # - WALLET_STATUS_LIST_TTL=3600
       - WALLET_DEBUG_CREDENTIAL=false
       - WALLET_MDL_STRICT=false
       

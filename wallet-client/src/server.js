@@ -44,6 +44,11 @@ import {
   createLegacyBodyClientAssertionJwt,
   allowsLegacyBodyClientAssertion,
 } from "./lib/walletUnitAttestation.js";
+import {
+  assertWuaStatusListPublisherConfig,
+  describeWuaStatusListPublisher,
+} from "./lib/wuaStatusList.js";
+import { createWuaStatusListRouter } from "./routes/wuaStatusListRoutes.js";
 import { normalizeTrustFrameworkFlag, trustFrameworkSessionProps } from "../../utils/trustFrameworkPolicy.js";
 import { createWalletContext } from "../../utils/sessionContext.js";
 import { credentialTypeFromJwtVcPayload, enforceIssuedCredentialTrust, resolveIssuerScopeEvidence } from "./lib/trustFramework.js";
@@ -82,6 +87,7 @@ const activeAttestationConfiguration = describeAttestationConfiguration(activeWa
 const activeCs01GrantPolicy = describeCs01GrantPolicy(activeWalletProfile);
 const app = express();
 app.use(express.json({ limit: "2mb" }));
+app.use(createWuaStatusListRouter());
 
 installProcessLogHandlers();
 
@@ -259,6 +265,7 @@ app.get("/health", (req, res) =>
     grantPolicy: activeCs01GrantPolicy,
     walletClientId: activeWalletClientId,
     attestation: activeAttestationConfiguration,
+    statusLists: describeWuaStatusListPublisher(),
   }),
 );
 
@@ -581,6 +588,7 @@ let serverInstance = null;
 
 export function startWalletServer() {
   if (serverInstance) return serverInstance;
+  assertWuaStatusListPublisherConfig(activeWalletProfile);
   serverInstance = app.listen(port, () => {
     console.log(`Wallet service listening on http://localhost:${port}`);
     console.log(`Wallet profile: ${activeWalletProfile}`);

@@ -110,6 +110,15 @@ Sources: [CS-01](./core/cs-01-credential-issuance%20%281%29.md),
 `attested_keys`, `key_storage`, `user_authentication`, `certification`, and
 `key_storage_status` are retained, with short-lived KA tokens and proof
 binding to `attested_keys[0]`.
+- The wallet-client Wallet Provider publishes IETF Token Status List
+  JWTs for WIA (`client_status.status`) and KA (`key_storage_status.status`)
+  at `GET /status-lists/wia/1` and `GET /status-lists/ka/1`. CS-04 pins
+  [draft-ietf-oauth-status-list-20](./rfc/draft-ietf-oauth-status-list-20.txt)
+  for that wire format (`typ: statuslist+jwt`, `bits: 1`, ZLIB/DEFLATE,
+  LSB-first packing). CS-01 attestations advertise those URIs from
+  `WALLET_PROVIDER_URL`, keep status maintenance at least 31 days ahead of
+  presentation, and retain list entries until that `exp`. Issuer-side fetch
+  and bit evaluation of those lists is still out of scope.
 - When an issuer supplies `c_nonce`, the KA carried in a JWT proof includes the
 same `nonce`; the proof JWT and KA nonce are checked together before dispatch.
 - The CS-04 `certification` example is currently tracked as an open
@@ -120,8 +129,9 @@ not silently override CS-04 for a Keycloak-specific shape.
 OpenID4VCI 1.0 Appendix D.1. Shared KA validation rejects the unhyphenated
 `keyattestation+jwt` spelling.
 
-Source: [CS-04 WUA lifecycle](./core/cs-04-wua-lifecycle.md) and
-[CS-04 interoperability issue](./issues/cs04-key-attestation-interoperability.md).
+Sources: [CS-04 WUA lifecycle](./core/cs-04-wua-lifecycle.md),
+[Token Status List draft-20](./rfc/draft-ietf-oauth-status-list-20.txt),
+and [CS-04 interoperability issue](./issues/cs04-key-attestation-interoperability.md).
 
 ### Credential Issuer Metadata Discovery
 
@@ -310,7 +320,11 @@ Section 3.6 and Section 4.2.
 
 - Current WUA-required issuance rejects missing or expired core WIA and key
 attestation status fields, but incomplete status-list detail is currently
-warning-only.
+warning-only. The wallet-client now hosts resolvable WIA/KA Token Status
+Lists per [draft-ietf-oauth-status-list-20](./rfc/draft-ietf-oauth-status-list-20.txt);
+issuers that fetch `status_list.uri` can retrieve a signed
+`application/statuslist+jwt`. This repository's issuer still does not fetch
+or evaluate those bits.
 - WUA/key-attestation signature validation is shared by `proofs.jwt` protected
   header `key_attestation` and `proofs.attestation`. In compatibility mode,
   configured Wallet Provider keys are preferred, then a protected-header `jwk`
@@ -454,10 +468,11 @@ re-entering active protocol directories.
 | [CS-02 credential presentation](./core/cs-02-credential-presentation%20%281%29.md)                   | WE BUILD presentation and verifier requirements                                                                             | Normative profile            |
 | [CS-03 remote signing](./core/cs-03-remote-signing-with-wallet-units%20%283%29.md)                   | Wallet- and QTSP-centric remote signing                                                                                     | Normative profile            |
 | [CS-04 WUA lifecycle](./core/cs-04-wua-lifecycle.md)                                                 | WUA lifecycle, binding, revocation, and key attestation                                                                     | Normative profile            |
+| [Token Status List draft-20](./rfc/draft-ietf-oauth-status-list-20.txt)                              | CS-04-pinned WIA/KA revocation Status List Token wire format (JWT, bits, compression, HTTP)                                 | Pinned Internet-Draft        |
 | [CS-07 DC API presentation and issuance](./core/cs-07-credential-presentation-dc-api-updated.md)     | Pre-flight browser-mediated credential presentation and issuance requirements                                               | Normative pre-flight profile |
 | [CS-12 SCA payments](./core/cs-12-sca-payments%20(1).md)                                             | WE BUILD profile of TS-12 for `sca-iban`, `sca-user`, and `sca-card-dpc` payment presentations                              | Normative pre-flight profile |
 | [TS-12 SCA with wallet](./ts12/ts12-electronic-payments-SCA-implementation-with-wallet%20(1).md)     | Wallet-based strong customer authentication and transaction data                                                            | External specification       |
-| `[docs/rfc/](./rfc/)`                                                                                | Local copies of OpenID4VCI 1.0, OpenID4VP 1.0, the CS-07-pinned W3C DC API draft, HAIP 1.0 draft 03, RFC 7591, and RFC 9449 | Reference copies             |
+| `[docs/rfc/](./rfc/)`                                                                                | Local copies of OpenID4VCI 1.0, OpenID4VP 1.0, the CS-07-pinned W3C DC API draft, HAIP 1.0 draft 03, RFC 7591, RFC 9449, and Token Status List draft-20 | Reference copies             |
 
 
 
@@ -522,7 +537,7 @@ profile interpretation, protocol support claim, or documentation location.
 | If you are changing...                                      | Read first                                                                |
 | ----------------------------------------------------------- | ------------------------------------------------------------------------- |
 | Credential offers, PAR, token, proofs, or deferred issuance | CS-01, attestation options, relevant VCI matrix                           |
-| WUA/WIA/KA validation or trust                              | CS-04 and future WUA enforcement                                          |
+| WUA/WIA/KA validation, trust, or status-list publication    | CS-04, Token Status List draft-20, wallet-client publisher, future WUA enforcement |
 | VP requests, metadata, response modes, or DCQL              | CS-02, verifier metadata model, VP matrix                                 |
 | Browser-mediated DC API presentation                        | CS-07, pinned W3C DC API draft, OpenID4VP Appendix A, CS-07 verifier plan |
 | Remote qualified signing                                    | CS-03 and CS-03 verifier flow summary                                     |

@@ -74,7 +74,9 @@ describe("wallet-client walletUnitAttestation (Phase 7)", () => {
     expect(payload).to.have.property("wallet_version", "1.0.0");
     expect(payload).to.have.property("wallet_solution_certification_information");
     expect(payload).to.have.nested.property("client_status.status.status_list.uri");
-    expect(payload.client_status.exp - Math.floor(Date.now() / 1000)).to.be.greaterThan(30 * 24 * 60 * 60);
+    expect(payload.client_status.status.status_list.uri).to.match(/\/status-lists\/wia\/1$/);
+    expect(payload.client_status.status.status_list.idx).to.equal(0);
+    expect(payload.client_status.exp - payload.exp).to.be.at.least(31 * 24 * 60 * 60);
     expect(payload.exp - payload.iat).to.be.lessThan(24 * 60 * 60);
     expect(result.headers["OAuth-Client-Attestation-PoP"]).to.be.a("string");
   });
@@ -134,7 +136,9 @@ describe("wallet-client walletUnitAttestation (Phase 7)", () => {
     expect(payload).to.have.property("certification");
     expect(payload).to.have.property("nonce", "issuer-c_nonce");
     expect(payload).to.have.nested.property("key_storage_status.status.status_list.uri");
-    expect(payload.key_storage_status.exp - Math.floor(Date.now() / 1000)).to.be.greaterThan(30 * 24 * 60 * 60);
+    expect(payload.key_storage_status.status.status_list.uri).to.match(/\/status-lists\/ka\/1$/);
+    expect(payload.key_storage_status.status.status_list.idx).to.equal(0);
+    expect(payload.key_storage_status.exp - payload.exp).to.be.at.least(31 * 24 * 60 * 60);
     expect(payload.exp - payload.iat).to.be.lessThan(24 * 60 * 60);
     expect(() => validateWalletUnitKeyAttestation({
       attestationJwt: result.attestationJwt,

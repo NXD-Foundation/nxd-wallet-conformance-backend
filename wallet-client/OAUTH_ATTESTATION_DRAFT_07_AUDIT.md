@@ -337,7 +337,7 @@ Required through TS03/CS-04:
 - One-use WIA/KA controls or permitted per-issuer reuse state.
 - Anti-linkability handling for status indices and attested keys.
 
-Current status: missing except short local WIA-like TTL.
+Current status: WIA/KA include CS-04 status maintenance objects. The wallet-client Wallet Provider publishes draft-20 Token Status Lists at `/status-lists/wia/1` and `/status-lists/ka/1`, allocates unique indices, and keeps entries until `client_status.exp` / `key_storage_status.exp`. Issuer-side fetch and bit evaluation of those lists is still out of scope.
 
 ## Challenge at PAR
 
@@ -367,7 +367,7 @@ So the gap analysis should not mark missing PAR challenge support as a CS-01/TS0
 | KA has Wallet Provider `x5c` | Missing | Current uses local signing |
 | KA includes `certification` | Present (CS-04 shape) | Object-vs-string interoperability clarification remains open |
 | KA includes `key_storage` and `user_authentication` | Present | Local structural validation is covered by tests |
-| KA includes `key_storage_status` | Present | Local structural validation is covered; live status trust remains out of scope |
+| KA includes `key_storage_status` | Present | CS-01 KA references a published Token Status List at `key_storage_status.status.status_list`; issuer-side fetch/bit evaluation remains out of scope |
 | Proof signed by `attested_keys[0]` | Partial | Works in single-key path, needs assertion/tests |
 | Evaluate `key_attestations_required` metadata | Missing | CS-01 Section 7.5/7.7 gap |
 | Deferred credential polling | Partial | Present, binding/UI not fully audited |

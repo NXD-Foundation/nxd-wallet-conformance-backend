@@ -147,3 +147,45 @@ registerLogSinks({
   appendGlobalLog,
 });
 
+function statusListNextKey(kind, listId) {
+  return `wallet:statuslist:${kind}:${listId}:next`;
+}
+
+function statusListEntriesKey(kind, listId) {
+  return `wallet:statuslist:${kind}:${listId}:entries`;
+}
+
+export function createRedisStatusListStorage() {
+  return {
+    async allocate(kind, listId, metadata) {
+      const next = await walletRedisClient.incr(statusListNextKey(kind, listId));
+      const idx = next - 1;
+      await walletRedisClient.hSet(
+        statusListEntriesKey(kind, listId),
+        String(idx),
+        JSON.stringify({ status: 0, ...metadata }),
+      );
+      return idx;
+    },
+    async allocatedCount(kind, listId) {
+      const raw = await walletRedisClient.get(statusListNextKey(kind, listId));
+      return raw ? Number(raw) : 0;
+    },
+    async getEntry(kind, listId, idx) {
+      const raw = await walletRedisClient.hGet(statusListEntriesKey(kind, listId), String(idx));
+      return raw ? JSON.parse(raw) : null;
+    },
+    async putEntry(kind, listId, idx, entry) {
+      await walletRedisClient.hSet(
+        statusListEntriesKey(kind, listId),
+        String(idx),
+        JSON.stringify(entry),
+      );
+    },
+    async listEntries(kind, listId) {
+      const all = await walletRedisClient.hGetAll(statusListEntriesKey(kind, listId));
+      return Object.entries(all).map(([idx, raw]) => [Number(idx), JSON.parse(raw)]);
+    },
+  };
+}
+
