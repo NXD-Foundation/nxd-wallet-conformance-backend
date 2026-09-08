@@ -866,7 +866,26 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
       } }),
     );
     expect(response.walletNonce).to.equal("wallet-nonce-3");
-    expect(request.body).to.equal("wallet_nonce=wallet-nonce-3");
+    expect(request.body).to.include("wallet_nonce=wallet-nonce-3");
+    expect(request.body).to.not.include("wallet_metadata=");
+  });
+
+  it("sends wallet_metadata encryption keys only for CS-12 payment request URIs", async () => {
+    let request;
+    await fetchCs02AuthorizationRequestJwt(
+      "https://verifier.example/ts12/payment/x509VPrequest/session-1",
+      "post",
+      strictOptions({ walletNonce: "wallet-nonce-4", fetchImpl: async (_url, init) => {
+        request = init;
+        return {
+          ok: true,
+          headers: { get: () => CS02_REQUEST_URI_CONTENT_TYPE },
+          text: async () => "a.b.c",
+        };
+      } }),
+    );
+    expect(request.body).to.include("wallet_nonce=wallet-nonce-4");
+    expect(request.body).to.include("wallet_metadata=");
   });
 
   it("supports POST request-URI retrieval without inline client_metadata", async () => {

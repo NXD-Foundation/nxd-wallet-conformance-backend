@@ -81,6 +81,7 @@ import {
   validateKaLevelsAgainstMetadata,
   sessionRequiresWua,
 } from "../../utils/wuaEnforcementPolicy.js";
+import { applyScaWuaExpiryHint } from "../../utils/ts12PaymentUtils.js";
 import {
   DEFERRED_CREDENTIAL_POLL_INTERVAL_SECONDS,
   advanceDeferredCredentialPollState,
@@ -803,7 +804,13 @@ const handleAuthorizationCodeFlow = async (
 };
 
 // Handle immediate credential issuance
-const handleImmediateCredentialIssuance = async (requestBody, sessionObject, effectiveConfigurationId, sessionId = null) => {
+const handleImmediateCredentialIssuance = async (
+  requestBody,
+  sessionObject,
+  effectiveConfigurationId,
+  sessionId = null,
+  wuaExp = null,
+) => {
   // Determine format from credential configuration (VCI v1.0 requirement)
   const issuerConfig = loadIssuerConfig();
   const credConfig = issuerConfig.credential_configurations_supported[effectiveConfigurationId];
@@ -813,6 +820,8 @@ const handleImmediateCredentialIssuance = async (requestBody, sessionObject, eff
   }
 
   requestBody.vct = effectiveConfigurationId;
+
+  applyScaWuaExpiryHint(requestBody, wuaExp);
 
   // Determine format - default to 'dc+sd-jwt' for backward compatibility
   let format = credConfig.format || 'dc+sd-jwt';
@@ -847,7 +856,13 @@ const handleImmediateCredentialIssuance = async (requestBody, sessionObject, eff
 };
 
 // Handle deferred credential issuance
-const handleDeferredCredentialIssuance = async (requestBody, sessionObject, sessionKey, flowType) => {
+const handleDeferredCredentialIssuance = async (
+  requestBody,
+  sessionObject,
+  sessionKey,
+  flowType,
+  wuaExp = null,
+) => {
   const transaction_id = generateNonce();
   const notification_id = uuidv4();
 
@@ -855,6 +870,8 @@ const handleDeferredCredentialIssuance = async (requestBody, sessionObject, sess
     requestBody.vct =
       requestBody.credential_configuration_id || requestBody.credential_identifier;
   }
+
+  applyScaWuaExpiryHint(requestBody, wuaExp);
 
   sessionObject.transaction_id = transaction_id;
   sessionObject.notification_id = notification_id;
@@ -1804,8 +1821,15 @@ sharedRouter.post("/credential", async (req, res) => {
     }
 
     // Handle credential issuance
+    const wuaExp = wuaValidationResult?.valid ? wuaValidationResult.payload?.exp : null;
     if (sessionObject.isDeferred) {
-      const response = await handleDeferredCredentialIssuance(requestBody, sessionObject, sessionKey, flowType);
+      const response = await handleDeferredCredentialIssuance(
+        requestBody,
+        sessionObject,
+        sessionKey,
+        flowType,
+        wuaExp,
+      );
       if (slog) {
         try { slog("[CREDENTIAL] Deferred credential issuance initiated", { transaction_id: response.transaction_id }); } catch {}
         logHttpResponse(slog, requestId, "/credential", 202, "Accepted", res.getHeaders(), response);
@@ -1814,7 +1838,13 @@ sharedRouter.post("/credential", async (req, res) => {
       return sendCredentialSuccessResponse(res, 202, response, requestBody);
     } else {
       try {
-        const response = await handleImmediateCredentialIssuance(requestBody, sessionObject, effectiveConfigurationId, sessionId);
+        const response = await handleImmediateCredentialIssuance(
+          requestBody,
+          sessionObject,
+          effectiveConfigurationId,
+          sessionId,
+          wuaExp,
+        );
         if (slog) {
           try { slog("[CREDENTIAL] Credential issued successfully", { effectiveConfigurationId, notification_id: response.notification_id }); } catch {}
           const logResponse = { ...response };

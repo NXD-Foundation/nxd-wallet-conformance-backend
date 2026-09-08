@@ -2489,12 +2489,13 @@
         }
       }
     },
-    "urn:eudi:sca:payment:1": {
-      "scope": "urn:eudi:sca:payment:1",
+    "https://webuildconsortium.eu/sca/sca-iban/1.0": {
+      "scope": "https://webuildconsortium.eu/sca/sca-iban/1.0",
       "cryptographic_binding_methods_supported": [
         "jwk"
       ],
       "category": "urn:eu:europa:ec:eudi:sua:sca",
+      "extends": "https://webuildconsortium.eu/sca/1.0",
       "transaction_data_types": {
         "urn:eudi:sca:payment:1": {
           "schema": "urn:eudi:sca:payment:1",
@@ -2576,7 +2577,7 @@
       "credential_metadata": {
         "display": [
           {
-            "name": "TS12 Payment SCA Attestation",
+            "name": "SCA-IBAN Attestation",
             "locale": "en-GB",
             "background_color": "#0059f8",
             "text_color": "#FFFFFF",
@@ -2594,6 +2595,17 @@
             "display": [
               {
                 "name": "Account Holder ID",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "masked_iban"
+            ],
+            "display": [
+              {
+                "name": "Masked IBAN",
                 "locale": "en-GB"
               }
             ]
@@ -2630,25 +2642,118 @@
                 "locale": "en-GB"
               }
             ]
-          },
+          }
+        ]
+      },
+      "credential_signing_alg_values_supported": [
+        "ES256"
+      ],
+      "format": "dc+sd-jwt",
+      "vct": "https://webuildconsortium.eu/sca/sca-iban/1.0",
+      "proof_types_supported": {
+        "jwt": {
+          "proof_signing_alg_values_supported": [
+            "ES256"
+          ],
+          "key_attestations_required": {}
+        },
+        "attestation": {
+          "proof_signing_alg_values_supported": [
+            "ES256"
+          ],
+          "key_attestations_required": {}
+        }
+      }
+    },
+    "https://webuildconsortium.eu/sca/sca-user/1.0": {
+      "scope": "https://webuildconsortium.eu/sca/sca-user/1.0",
+      "cryptographic_binding_methods_supported": [
+        "jwk"
+      ],
+      "category": "urn:eu:europa:ec:eudi:sua:sca",
+      "extends": "https://webuildconsortium.eu/sca/1.0",
+      "transaction_data_types": {
+        "urn:eudi:sca:payment:1": {
+          "schema": "urn:eudi:sca:payment:1",
+          "claims": [
+            {
+              "path": [
+                "payload",
+                "amount"
+              ],
+              "visualisation": 1,
+              "display": [
+                {
+                  "lang": "en-GB",
+                  "label": "Amount",
+                  "description": "Payment amount"
+                }
+              ]
+            },
+            {
+              "path": [
+                "payload",
+                "payee",
+                "name"
+              ],
+              "visualisation": 1,
+              "display": [
+                {
+                  "lang": "en-GB",
+                  "label": "Payee",
+                  "description": "Recipient of the payment"
+                }
+              ]
+            }
+          ],
+          "ui_labels": {
+            "affirmative_action_label": [
+              {
+                "lang": "en-GB",
+                "value": "Confirm payment"
+              }
+            ],
+            "denial_action_label": [
+              {
+                "lang": "en-GB",
+                "value": "Cancel"
+              }
+            ]
+          }
+        }
+      },
+      "credential_metadata": {
+        "display": [
+          {
+            "name": "SCA-User Attestation",
+            "locale": "en-GB",
+            "background_color": "#0059f8",
+            "text_color": "#FFFFFF",
+            "logo": {
+              "uri": "https://avatars.githubusercontent.com/u/140810559?s=400&u=ee2a7f495f540fd5f23ca59d38b7411ea56c0d6d&v=4",
+              "alt_text": "Demo ASPSP"
+            }
+          }
+        ],
+        "claims": [
           {
             "path": [
-              "psp_name"
+              "sub"
             ],
             "display": [
               {
-                "name": "Payment Service Provider",
+                "name": "User identifier",
                 "locale": "en-GB"
               }
             ]
           },
           {
             "path": [
-              "account_holder_name"
+              "masked_psu_id"
             ],
             "display": [
               {
-                "name": "Account Holder",
+                "name": "Masked PSU identifier",
                 "locale": "en-GB"
               }
             ]
@@ -2659,7 +2764,133 @@
         "ES256"
       ],
       "format": "dc+sd-jwt",
-      "vct": "urn:eudi:sca:payment:1",
+      "vct": "https://webuildconsortium.eu/sca/sca-user/1.0",
+      "proof_types_supported": {
+        "jwt": {
+          "proof_signing_alg_values_supported": [
+            "ES256"
+          ],
+          "key_attestations_required": {}
+        },
+        "attestation": {
+          "proof_signing_alg_values_supported": [
+            "ES256"
+          ],
+          "key_attestations_required": {}
+        }
+      }
+    },
+    "https://webuildconsortium.eu/sca/sca-card-dpc/1.0": {
+      "scope": "https://webuildconsortium.eu/sca/sca-card-dpc/1.0",
+      "cryptographic_binding_methods_supported": [
+        "jwk"
+      ],
+      "category": "urn:eu:europa:ec:eudi:sua:sca",
+      "extends": "https://webuildconsortium.eu/sca/1.0",
+      "transaction_data_types": {
+        "urn:eudi:sca:payment:1": {
+          "schema": "urn:eudi:sca:payment:1",
+          "claims": [
+            {
+              "path": [
+                "payload",
+                "amount"
+              ],
+              "visualisation": 1,
+              "display": [
+                {
+                  "lang": "en-GB",
+                  "label": "Amount",
+                  "description": "Payment amount"
+                }
+              ]
+            },
+            {
+              "path": [
+                "payload",
+                "payee",
+                "name"
+              ],
+              "visualisation": 1,
+              "display": [
+                {
+                  "lang": "en-GB",
+                  "label": "Payee",
+                  "description": "Recipient of the payment"
+                }
+              ]
+            }
+          ],
+          "ui_labels": {
+            "affirmative_action_label": [
+              {
+                "lang": "en-GB",
+                "value": "Confirm payment"
+              }
+            ],
+            "denial_action_label": [
+              {
+                "lang": "en-GB",
+                "value": "Cancel"
+              }
+            ]
+          }
+        }
+      },
+      "credential_metadata": {
+        "display": [
+          {
+            "name": "SCA-Card (DPC) Attestation",
+            "locale": "en-GB",
+            "background_color": "#0059f8",
+            "text_color": "#FFFFFF",
+            "logo": {
+              "uri": "https://avatars.githubusercontent.com/u/140810559?s=400&u=ee2a7f495f540fd5f23ca59d38b7411ea56c0d6d&v=4",
+              "alt_text": "Demo ASPSP"
+            }
+          }
+        ],
+        "claims": [
+          {
+            "path": [
+              "credential_id"
+            ],
+            "display": [
+              {
+                "name": "Credential ID",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "network"
+            ],
+            "display": [
+              {
+                "name": "Payment network",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "card_id"
+            ],
+            "display": [
+              {
+                "name": "Card token reference",
+                "locale": "en-GB"
+              }
+            ]
+          }
+        ]
+      },
+      "credential_signing_alg_values_supported": [
+        "ES256"
+      ],
+      "format": "dc+sd-jwt",
+      "vct": "https://webuildconsortium.eu/sca/sca-card-dpc/1.0",
       "proof_types_supported": {
         "jwt": {
           "proof_signing_alg_values_supported": [

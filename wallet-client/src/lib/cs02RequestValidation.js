@@ -9,6 +9,9 @@ import {
   importJWK,
   importX509,
   decodeProtectedHeader,
+  compactDecrypt,
+  generateKeyPair,
+  exportJWK,
 } from "jose";
 import { X509Certificate } from "@peculiar/x509";
 import {
@@ -27,6 +30,7 @@ import {
   Cs02TrustPolicyError,
 } from "../../utils/cs02TrustPolicy.js";
 import { isStrictCs02Base64Url, decodeStrictCs02Base64Url, isStrictCs02EcP256Jwk } from "../../utils/cs02Encoding.js";
+import { isCompactJwe, TS12_PAYMENT_TRANSACTION_TYPE, isTs12PaymentRequestUri } from "../../utils/ts12PaymentUtils.js";
 
 export {
   validateX509SanDnsTrustAnchor,
@@ -44,6 +48,8 @@ export const CS02_ALLOWED_CLIENT_ID_SCHEMES = new Set([
 export const CS02_DEFAULT_AUDIENCES = ["https://self-issued.me/v2"];
 export const CS02_REQUEST_URI_CONTENT_TYPE = "application/oauth-authz-req+jwt";
 export const CS02_ALLOWED_REQUEST_URI_METHODS = new Set(["get", "post"]);
+export const WALLET_AUTHORIZATION_ENCRYPTION_ALG = "ECDH-ES+A256KW";
+export const WALLET_AUTHORIZATION_ENCRYPTION_ENC = "A256GCM";
 export const CS02_DEFAULT_REQUEST_MAX_LIFETIME_SEC = 300;
 export const CS02_DEFAULT_CLOCK_SKEW_SEC = 300;
 export const CS02_NONCE_PATTERN = /^[A-Za-z0-9_-]+$/;
@@ -51,6 +57,9 @@ export const CS02_SUPPORTED_TRANSACTION_DATA_TYPES = new Set([
   "qes_authorization",
   "payment_data",
   "https://cloudsignatureconsortium.org/2025/qes",
+]);
+export const TS12_SUPPORTED_TRANSACTION_DATA_TYPES = new Set([
+  TS12_PAYMENT_TRANSACTION_TYPE,
 ]);
 
 export class Cs02ValidationError extends Error {
@@ -481,7 +490,10 @@ export function validateCs02TransactionData(transactionData, log = () => {}, dcq
     if (typeof decoded.type !== "string" || decoded.type.length === 0) {
       throw new Cs02ValidationError(`transaction_data[${index}] must include a non-empty type`, "invalid_request");
     }
-    if (!CS02_SUPPORTED_TRANSACTION_DATA_TYPES.has(decoded.type)) {
+    if (
+      !CS02_SUPPORTED_TRANSACTION_DATA_TYPES.has(decoded.type) &&
+      !TS12_SUPPORTED_TRANSACTION_DATA_TYPES.has(decoded.type)
+    ) {
       throw new Cs02ValidationError(
         `Unsupported transaction_data type "${decoded.type}"`,
         "invalid_request",
@@ -806,6 +818,30 @@ export async function validateAndVerifyCs02AuthorizationRequest(
   };
 }
 
+export async function createWalletAuthorizationEncryptionMaterial() {
+  const { publicKey, privateKey } = await generateKeyPair(WALLET_AUTHORIZATION_ENCRYPTION_ALG, {
+    extractable: true,
+  });
+  const publicJwk = await exportJWK(publicKey);
+  publicJwk.kty = publicJwk.kty || "EC";
+  publicJwk.use = "enc";
+  publicJwk.alg = WALLET_AUTHORIZATION_ENCRYPTION_ALG;
+  publicJwk.kid = "wallet-authz-enc";
+  return {
+    privateKey,
+    walletMetadata: {
+      jwks: { keys: [publicJwk] },
+      authorization_encryption_alg_values_supported: [WALLET_AUTHORIZATION_ENCRYPTION_ALG],
+      authorization_encryption_enc_values_supported: [WALLET_AUTHORIZATION_ENCRYPTION_ENC],
+    },
+  };
+}
+
+export async function decryptAuthorizationRequestJwe(jwe, privateKey) {
+  const { plaintext } = await compactDecrypt(jwe, privateKey);
+  return new TextDecoder().decode(plaintext);
+}
+
 export async function fetchCs02AuthorizationRequestJwt(requestUri, method, options, log = () => {}) {
   const normalizedMethod = validateCs02RequestUriMethod(method, log);
   validateCs02RequestUri(requestUri, options, log);
@@ -815,10 +851,19 @@ export async function fetchCs02AuthorizationRequestJwt(requestUri, method, optio
     Accept: CS02_REQUEST_URI_CONTENT_TYPE,
   };
 
+  let encryptionMaterial = options?.walletEncryptionMaterial || null;
   let response;
   if (normalizedMethod === "post") {
+    const offerEncryption =
+      Boolean(encryptionMaterial) || isTs12PaymentRequestUri(requestUri);
+    if (offerEncryption && !encryptionMaterial) {
+      encryptionMaterial = await createWalletAuthorizationEncryptionMaterial();
+    }
     const form = new URLSearchParams();
     if (options?.walletNonce != null) form.set("wallet_nonce", options.walletNonce);
+    if (offerEncryption) {
+      form.set("wallet_metadata", JSON.stringify(encryptionMaterial.walletMetadata));
+    }
     response = await fetchImpl(requestUri, {
       method: "POST",
       headers: {
@@ -847,7 +892,8 @@ export async function fetchCs02AuthorizationRequestJwt(requestUri, method, optio
 
   validateCs02RequestUriResponseContentType(contentType, log);
 
-  if (!body || body.split(".").length < 3) {
+  const partCount = body ? body.split(".").length : 0;
+  if (!body || partCount < 3) {
     logValidationFailure(log, "request_uri_body_not_jar", { bodyLength: body?.length || 0 });
     throw new Cs02ValidationError(
       "Request URI response must contain a signed authorization request JWT",
@@ -855,7 +901,31 @@ export async function fetchCs02AuthorizationRequestJwt(requestUri, method, optio
     );
   }
 
-  return { requestJwt: body, contentType, walletNonce: options?.walletNonce ?? null };
+  let requestJwt = body;
+  const encrypted = isCompactJwe(body);
+  if (encrypted) {
+    if (!encryptionMaterial?.privateKey) {
+      throw new Cs02ValidationError(
+        "Encrypted authorization request received but no wallet encryption key is available",
+        "invalid_request",
+      );
+    }
+    try {
+      requestJwt = await decryptAuthorizationRequestJwe(body, encryptionMaterial.privateKey);
+    } catch (error) {
+      throw new Cs02ValidationError(
+        `Failed to decrypt authorization request: ${error.message}`,
+        "invalid_request",
+      );
+    }
+  }
+
+  return {
+    requestJwt,
+    encrypted,
+    contentType,
+    walletNonce: options?.walletNonce ?? null,
+  };
 }
 
 export function summarizeJarForLog(requestJwt) {

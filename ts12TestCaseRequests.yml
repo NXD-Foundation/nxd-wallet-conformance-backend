@@ -23,12 +23,12 @@ ts12_flow_overview:
   registration_issuance:
     description: >
       ASPSP issues a device-bound SCA attestation (category urn:eu:europa:ec:eudi:sua:sca)
-      with vct urn:eudi:sca:payment:1 via authorization code flow (GET /offer-code-sd-jwt,
-      client_id_scheme=x509_san_dns). Wallet stores IBAN/BIC/currency claims for later
+      with vct https://webuildconsortium.eu/sca/sca-iban/1.0 via authorization code flow (GET /offer-code-sd-jwt,
+      client_id_scheme=x509_san_dns). Wallet stores masked_iban/IBAN/BIC/currency claims for later
       selective disclosure during payment authorization.
     offer_endpoint: "/offer-code-sd-jwt"
-    credential_config_id: "urn:eudi:sca:payment:1"
-    vct: "urn:eudi:sca:payment:1"
+    credential_config_id: "https://webuildconsortium.eu/sca/sca-iban/1.0"
+    vct: "https://webuildconsortium.eu/sca/sca-iban/1.0"
     sca_category: "urn:eu:europa:ec:eudi:sua:sca"
     format: "dc+sd-jwt"
 
@@ -38,7 +38,7 @@ ts12_flow_overview:
       urn:eudi:sca:payment:1 transactional data (amount, payee, transaction_id).
       Wallet signs transaction_data_hashes in the KB-JWT for PSD2 dynamic linking.
     transaction_data_type: "urn:eudi:sca:payment:1"
-    dcql_credential_id: "ts12-payment-sca-01"
+    dcql_credential_id: "sca_iban"
     response_endpoint: "/direct_post/{session_id}"
     kb_jwt_required_claims:
       - jti          # PSD2 authentication code (TS12 §3.6)
@@ -59,14 +59,14 @@ credential_issuance:
       name: "TS12 SCA attestation - authorization code + x509_san_dns"
       description: >
         Primary TS12 issuance flow. Returns openid-credential-offer:// QR/deepLink for
-        urn:eudi:sca:payment:1 (SCA payment attestation) using authorization code flow
+        https://webuildconsortium.eu/sca/sca-iban/1.0 (SCA-IBAN attestation) using authorization code flow
         with x509_san_dns client authentication. Mimics ASPSP registration of a payment
         account authenticator into the EUDI Wallet per ARF §2.6.4 / TS12 §5.1.
       method: "GET"
       path: "/offer-code-sd-jwt"
-      url: "http://localhost:3000/offer-code-sd-jwt?credentialType=urn:eudi:sca:payment:1&sessionId=1232&client_id_scheme=x509_san_dns&signatureType=x509"
+      url: "http://localhost:3000/offer-code-sd-jwt?credentialType=https://webuildconsortium.eu/sca/sca-iban/1.0&sessionId=1232&client_id_scheme=x509_san_dns&signatureType=x509"
       parameters:
-        credentialType: "urn:eudi:sca:payment:1"
+        credentialType: "https://webuildconsortium.eu/sca/sca-iban/1.0"
         sessionId: "1232"
         client_id_scheme: "x509_san_dns"
         signatureType: "x509"
@@ -77,11 +77,10 @@ credential_issuance:
         - sessionId
       expected_credential_claims:
         - sub
+        - masked_iban
         - iban
         - bic
         - currency
-        - psp_name
-        - account_holder_name
 
     - id: "TS12-ISSUE-02"
       name: "TS12 credential offer payload (wallet fetches offer by sessionId)"
@@ -90,10 +89,10 @@ credential_issuance:
         offer JSON referenced by credential_issuer in the openid-credential-offer URL.
       method: "GET"
       path: "/credential-offer-code-sd-jwt/:id"
-      url: "http://localhost:3000/credential-offer-code-sd-jwt/1232?credentialType=urn:eudi:sca:payment:1"
+      url: "http://localhost:3000/credential-offer-code-sd-jwt/1232?credentialType=https://webuildconsortium.eu/sca/sca-iban/1.0"
       parameters:
         sessionId: "1232"
-        credentialType: "urn:eudi:sca:payment:1"
+        credentialType: "https://webuildconsortium.eu/sca/sca-iban/1.0"
       spec_reference: "OID4VCI / TS12 §4.1"
       prerequisite: "TS12-ISSUE-01"
 
@@ -104,7 +103,7 @@ issuer_metadata:
   - id: "TS12-META-01"
     name: "OpenID Credential Issuer metadata"
     description: >
-      Standard OID4VCI issuer metadata. Verify urn:eudi:sca:payment:1 appears under
+      Standard OID4VCI issuer metadata. Verify https://webuildconsortium.eu/sca/sca-iban/1.0, sca-user, and sca-card-dpc appear under
       credential_configurations_supported with category urn:eu:europa:ec:eudi:sua:sca and
       transaction_data_types for payment authorization flows.
     method: "GET"
@@ -115,13 +114,13 @@ issuer_metadata:
   - id: "TS12-META-02"
     name: "TS12 payment SCA attestation VCT metadata"
     description: >
-      SD-JWT-VC type metadata for urn:eudi:sca:payment:1. Wallet uses category and
-      transaction_data_types to recognise the credential as an SCA attestation (TS12 §3).
+      SD-JWT-VC type metadata for https://webuildconsortium.eu/sca/sca-iban/1.0. Wallet uses category and
+      transaction_data_types to recognise the credential as an SCA attestation (TS12 §3 / CS-12).
     method: "GET"
-    path: "/.well-known/vct/urn:eudi:sca:payment:1"
-    url: "http://localhost:3000/.well-known/vct/urn%3Aeudi%3Asca%3Apayment%3A1"
+    path: "/.well-known/vct/https://webuildconsortium.eu/sca/sca-iban/1.0"
+    url: "http://localhost:3000/.well-known/vct/https%3A%2F%2Fwebuildconsortium.eu%2Fsca%2Fsca-iban%2F1.0"
     parameters:
-      vct: "urn:eudi:sca:payment:1"
+      vct: "https://webuildconsortium.eu/sca/sca-iban/1.0"
     spec_reference: "TS12 §3 / SD-JWT-VC §6"
 
   - id: "TS12-META-03"
@@ -144,14 +143,15 @@ ts12_payment_authorization:
       name: "Default TS12 payment authorization (Coffee Shop €12.34)"
       description: >
         Generate a signed OID4VP authorization request for PSD2 payment confirmation.
-        Includes DCQL query for ts12-payment-sca-01 (vct urn:eudi:sca:payment:1) and
+        Includes DCQL query for sca_iban (vct https://webuildconsortium.eu/sca/sca-iban/1.0) and
         base64url transaction_data with payee, amount, and transaction_id for dynamic linking.
         Wallet must echo response_mode and include amr + jti in the KB-JWT (TS12 §3.6).
       method: "GET"
       path: "/ts12/payment/request"
-      url: "http://localhost:3000/ts12/payment/request?session_id=ts12-pay-001&merchant=Coffee%20Shop&payee_id=shop-42&currency=EUR&amount=12.34&transaction_id=tx-coffee-001&response_mode=direct_post&request_uri_method=post"
+      url: "http://localhost:3000/ts12/payment/request?session_id=ts12-pay-001&attestation_type=sca-iban&merchant=Coffee%20Shop&payee_id=shop-42&currency=EUR&amount=12.34&transaction_id=tx-coffee-001&response_mode=direct_post&request_uri_method=post"
       parameters:
         session_id: "ts12-pay-001"
+        attestation_type: "sca-iban"
         merchant: "Coffee Shop"
         payee_id: "shop-42"
         currency: "EUR"
@@ -206,22 +206,24 @@ ts12_payment_authorization:
       spec_reference: "TS12 §3 / OID4VP"
 
     - id: "TS12-PAY-04"
-      name: "TS12 payment authorization - request_uri GET method"
+      name: "TS12 payment authorization - request_uri GET method rejected"
       description: >
-        TS12 payment request where the wallet retrieves the signed authorization request
-        via GET on request_uri (cross-device QR flow variant).
+        CS-12 forbids unencrypted GET delivery of SCA Authorization Requests outside
+        the Digital Credentials API. This call must return 400.
       method: "GET"
       path: "/ts12/payment/request"
-      url: "http://localhost:3000/ts12/payment/request?session_id=ts12-pay-004&merchant=QR%20Payee&amount=5.00&currency=EUR&transaction_id=tx-qr-004&request_uri_method=get&response_mode=direct_post"
+      url: "http://localhost:3000/ts12/payment/request?session_id=ts12-pay-004&merchant=QR%20Payee&amount=5.00&currency=EUR&payee_id=shop-42&transaction_id=tx-qr-004&request_uri_method=get&response_mode=direct_post"
       parameters:
         session_id: "ts12-pay-004"
         merchant: "QR Payee"
         amount: "5.00"
         currency: "EUR"
+        payee_id: "shop-42"
         transaction_id: "tx-qr-004"
         request_uri_method: "get"
         response_mode: "direct_post"
-      spec_reference: "TS12 / OID4VP / CS-02 §6.2"
+      expected_status: 400
+      spec_reference: "CS-12 §7.4 item 2"
 
     - id: "TS12-PAY-05"
       name: "TS12 payment authorization - minimal defaults"
@@ -240,16 +242,16 @@ ts12_payment_authorization:
     - id: "TS12-REQ-01"
       name: "Fetch signed authorization request (GET request_uri)"
       description: >
-        Wallet retrieves the JAR-signed OID4VP authorization request after scanning the
-        openid4vp:// QR or deep link from TS12-PAY-04. Session must exist from a prior
-        /ts12/payment/request call with the same session_id.
+        GET request_uri is rejected for CS-12 SCA sessions. Use POST with wallet_metadata
+        encryption keys instead (TS12-REQ-02).
       method: "GET"
       path: "/ts12/payment/x509VPrequest/:id"
-      url: "http://localhost:3000/ts12/payment/x509VPrequest/ts12-pay-004"
+      url: "http://localhost:3000/ts12/payment/x509VPrequest/ts12-pay-001"
       parameters:
-        session_id: "ts12-pay-004"
-      spec_reference: "OID4VP JAR / TS12 §3.5"
-      prerequisite: "TS12-PAY-04"
+        session_id: "ts12-pay-001"
+      expected_status: 400
+      spec_reference: "CS-12 §7.4 item 2"
+      prerequisite: "TS12-PAY-01"
 
     - id: "TS12-REQ-02"
       name: "Fetch signed authorization request (POST request_uri + wallet metadata)"
@@ -273,7 +275,7 @@ ts12_payment_authorization:
       description: >
         Expected wallet callback after user SCA consent. POST vp_token (SD-JWT + KB-JWT)
         to the response_uri from the authorization request. Verifier validates nonce,
-        dynamic linking hash, vct urn:eudi:sca:payment:1, jti, response_mode, and amr.
+        dynamic linking hash, vct https://webuildconsortium.eu/sca/sca-iban/1.0, jti, response_mode, and amr.
         On success, jti is stored as ts12_authentication_code (PSD2 auth code).
       method: "POST"
       path: "/direct_post/:id"
@@ -295,7 +297,7 @@ ts12_payment_authorization:
         - code: "transaction_data_hash_mismatch"
           when: "KB-JWT transaction_data_hashes do not match authorization request"
         - code: "missing_sca_credential"
-          when: "Presented credential vct is not urn:eudi:sca:payment:1"
+          when: "Presented credential vct is not https://webuildconsortium.eu/sca/sca-iban/1.0"
 
 # ==============================================================================
 # STATUS ENDPOINTS (TS12 sessions)
@@ -303,7 +305,7 @@ ts12_payment_authorization:
 status_endpoints:
   - id: "TS12-STATUS-01"
     name: "Check TS12 issuance session status"
-    description: "Poll credential issuance outcome after wallet completes OID4VCI for urn:eudi:sca:payment:1"
+    description: "Poll credential issuance outcome after wallet completes OID4VCI for https://webuildconsortium.eu/sca/sca-iban/1.0"
     method: "GET"
     path: "/issuance-status"
     url: "http://localhost:3000/issuance-status?sessionId=1232"
@@ -338,13 +340,13 @@ status_endpoints:
 # ==============================================================================
 ts12_reference:
   credential:
-    configuration_id: "urn:eudi:sca:payment:1"
-    vct: "urn:eudi:sca:payment:1"
+    configuration_id: "https://webuildconsortium.eu/sca/sca-iban/1.0"
+    vct: "https://webuildconsortium.eu/sca/sca-iban/1.0"
     category: "urn:eu:europa:ec:eudi:sua:sca"
     format: "dc+sd-jwt"
-    dcql_credential_id: "ts12-payment-sca-01"
+    dcql_credential_id: "sca_iban"
     requested_claims:
-      - sub
+      - masked_iban
       - iban
       - bic
       - currency
@@ -399,8 +401,8 @@ ts12_test_scenarios:
     description: "Cross-device QR payment authorization (GET request_uri)"
     steps:
       - "TS12-ISSUE-01"
-      - "TS12-PAY-04"
-      - "TS12-REQ-01"
+      - "TS12-PAY-01"
+      - "TS12-REQ-02"
       - "TS12-VP-01"
       - "TS12-STATUS-02"
 

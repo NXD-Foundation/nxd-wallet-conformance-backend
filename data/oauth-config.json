@@ -20,7 +20,9 @@
     "urn:eu.europa.ec.eudi:pid:1",
     "urn:eu.europa.ec.eudi:pid:1:mso_mdoc",
     "PaymentWalletAttestation",
-    "urn:eudi:sca:payment:1",
+    "https://webuildconsortium.eu/sca/sca-iban/1.0",
+    "https://webuildconsortium.eu/sca/sca-user/1.0",
+    "https://webuildconsortium.eu/sca/sca-card-dpc/1.0",
     "PhotoID",
     "PCD",
     "LoyaltyCard"

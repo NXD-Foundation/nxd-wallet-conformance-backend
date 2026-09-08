@@ -1,4 +1,10 @@
-import { computeTs12TransactionDataHash, TS12_PAYMENT_VCT } from "./ts12PaymentUtils.js";
+import {
+  audienceIncludesRp,
+  computeTs12TransactionDataHash,
+  getTs12AttestationTypeByVct,
+  isTs12ScaVct,
+  TS12_SCA_IBAN_VCT,
+} from "./ts12PaymentUtils.js";
 const TS12_TRANSACTION_HASH_ALG = "sha-256";
 
 const TS12_AMR_VALUES = {
@@ -44,7 +50,7 @@ export function validateTs12KeyBindingJwt({
   expectedResponseMode,
   encodedTransactionData,
   seenJti = null,
-  expectedVct = TS12_PAYMENT_VCT,
+  expectedVct = TS12_SCA_IBAN_VCT,
 }) {
   if (!kbPayload || typeof kbPayload !== "object") {
     return { ok: false, code: "missing_key_binding", error: "Key Binding JWT payload is missing" };
@@ -187,7 +193,8 @@ export function validateTs12KeyBindingJwt({
  */
 export function validateTs12PresentedCredential(
   extractedClaims,
-  expectedVct = TS12_PAYMENT_VCT,
+  expectedVct = TS12_SCA_IBAN_VCT,
+  { rpClientId = null } = {},
 ) {
   const claimsArray = Array.isArray(extractedClaims)
     ? extractedClaims
@@ -195,12 +202,32 @@ export function validateTs12PresentedCredential(
       ? [extractedClaims]
       : [];
 
+  const presentedScaVcts = claimsArray
+    .map((item) => item?.vct)
+    .filter((vct) => isTs12ScaVct(vct));
+  if (presentedScaVcts.length > 1) {
+    return {
+      ok: false,
+      code: "combined_sca_presentation",
+      error: "Presentation must contain at most one of sca-iban, sca-user, or sca-card-dpc",
+    };
+  }
+
   const credential = claimsArray.find((item) => item?.vct === expectedVct);
   if (!credential) {
     return {
       ok: false,
       code: "missing_sca_credential",
       error: `Presented credential with vct '${expectedVct}' was not found`,
+    };
+  }
+
+  const attestationType = getTs12AttestationTypeByVct(expectedVct);
+  if (attestationType?.requiresAud && !audienceIncludesRp(credential.aud, rpClientId)) {
+    return {
+      ok: false,
+      code: "aud_mismatch",
+      error: "sca-user attestation aud does not include the Relying Party identifier",
     };
   }
 
@@ -217,27 +244,29 @@ export function validateTs12PaymentPresentationResponse({
   extractedClaims,
   vpSession,
   seenJti = null,
+  rpClientId = null,
 }) {
   const encodedTransactionData = Array.isArray(vpSession?.transaction_data)
     ? vpSession.transaction_data[0]
     : vpSession?.ts12_encoded_transaction_data;
+  const expectedVct = vpSession?.ts12_expected_vct || TS12_SCA_IBAN_VCT;
+  const resolvedRpClientId = rpClientId || vpSession?.client_id || null;
 
   const kbResult = validateTs12KeyBindingJwt({
     kbPayload,
     expectedResponseMode: vpSession?.response_mode || "direct_post",
     encodedTransactionData,
     seenJti,
-    expectedVct: vpSession?.ts12_expected_vct || TS12_PAYMENT_VCT,
+    expectedVct,
   });
 
   if (!kbResult.ok) {
     return kbResult;
   }
 
-  const credResult = validateTs12PresentedCredential(
-    extractedClaims,
-    vpSession?.ts12_expected_vct || TS12_PAYMENT_VCT,
-  );
+  const credResult = validateTs12PresentedCredential(extractedClaims, expectedVct, {
+    rpClientId: resolvedRpClientId,
+  });
 
   if (!credResult.ok) {
     return credResult;

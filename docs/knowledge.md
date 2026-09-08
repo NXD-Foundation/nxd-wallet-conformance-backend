@@ -272,23 +272,38 @@ Sources: [SD-JWT key-binding fixes](./sd-jwt-key-binding-interop.md),
 [mdoc generation](./mdoc-credential-generation.md), and
 [mdoc interop fixes](./mdoc-interop-fixes.md).
 
-### TS-12 Payment SCA
+### TS-12 / CS-12 Payment SCA
 
-- The implemented TS-12 scope is the `urn:eudi:sca:payment:1` SCA
-attestation and payment transaction type, requested with DCQL and presented
-as an SD-JWT-VC with a KB-JWT.
-- `VERIFIER_TS12_COMPATIBILITY=true` is a narrow CS-02 strict-mode exception:
-it permits that TS-12 `transaction_data.type`; it does not enable the other
-CS-02 compatibility relaxations.
+- CS-12 in `docs/core/` is the WE BUILD profile of TS-12. ITB+ issues and
+  presents the three in-scope attestation types
+  `https://webuildconsortium.eu/sca/sca-iban/1.0`,
+  `https://webuildconsortium.eu/sca/sca-user/1.0`, and
+  `https://webuildconsortium.eu/sca/sca-card-dpc/1.0`. The URN
+  `urn:eudi:sca:payment:1` is only the payment `transaction_data.type` and
+  payload schema id, not a credential `vct`.
+- `/ts12/payment/request` asks for exactly one of those VCTs (default
+  `sca-iban`) and always uses `request_uri_method=post`. The Request Object
+  is encrypted with Wallet Unit `wallet_metadata` JWKs that advertise
+  `use=enc`. GET on `/ts12/payment/x509VPrequest/:id` is always rejected.
+  Optional TS12 payment payload fields (`purpose`, `amount_estimated`,
+  `amount_earmarked`, `sct_inst`) are accepted. The CLI wallet does not
+  render visualisation/`ui_labels`.
+- CS-12 `urn:eudi:sca:payment:1` is a first-class verifier
+  `transaction_data` type. `VERIFIER_TS12_COMPATIBILITY=true` remains
+  accepted but is not required to generate or validate that type. The
+  wallet also accepts this payment type in CS-02 request validation.
 - The encoded OpenID4VP `transaction_data` contains its required
-`transaction_data_hashes_alg` algorithm list. For TS-12 dynamic linking, the
-KB-JWT separately contains `transaction_data_hashes` and the required
-`transaction_data_hashes_alg` string (`"sha-256"`). The verifier checks the
-hash against the exact encoded request entry (without base64url-decoding it),
-enforces the TS-12 `amr`
-factors, and rejects reused KB-JWT `jti` values.
+  `transaction_data_hashes_alg` algorithm list. For TS-12 dynamic linking, the
+  KB-JWT separately contains `transaction_data_hashes` and the required
+  `transaction_data_hashes_alg` string (`"sha-256"`). The verifier checks the
+  hash against the exact encoded request entry (without base64url-decoding it),
+  enforces the TS-12 `amr` factors, rejects reused KB-JWT `jti` values, and
+  treats a validated `jti` as the PSD2 Authentication Code. `sca-user`
+  presentations also require the credential `aud` to include the RP
+  `client_id`.
 
-Source: [TS-12 SCA with wallet](./ts12/ts12-electronic-payments-SCA-implementation-with-wallet%20%281%29.md),
+Sources: [CS-12 SCA payments](./core/cs-12-sca-payments%20(1).md) and
+[TS-12 SCA with wallet](./ts12/ts12-electronic-payments-SCA-implementation-with-wallet%20(1).md),
 Section 3.6 and Section 4.2.
 
 ### Wallet Attestation And Trust
@@ -440,7 +455,8 @@ re-entering active protocol directories.
 | [CS-03 remote signing](./core/cs-03-remote-signing-with-wallet-units%20%283%29.md)                   | Wallet- and QTSP-centric remote signing                                                                                     | Normative profile            |
 | [CS-04 WUA lifecycle](./core/cs-04-wua-lifecycle.md)                                                 | WUA lifecycle, binding, revocation, and key attestation                                                                     | Normative profile            |
 | [CS-07 DC API presentation and issuance](./core/cs-07-credential-presentation-dc-api-updated.md)     | Pre-flight browser-mediated credential presentation and issuance requirements                                               | Normative pre-flight profile |
-| [TS-12 SCA with wallet](./ts12/ts12-electronic-payments-SCA-implementation-with-wallet%20%281%29.md) | Wallet-based strong customer authentication and transaction data                                                            | External specification       |
+| [CS-12 SCA payments](./core/cs-12-sca-payments%20(1).md)                                             | WE BUILD profile of TS-12 for `sca-iban`, `sca-user`, and `sca-card-dpc` payment presentations                              | Normative pre-flight profile |
+| [TS-12 SCA with wallet](./ts12/ts12-electronic-payments-SCA-implementation-with-wallet%20(1).md)     | Wallet-based strong customer authentication and transaction data                                                            | External specification       |
 | `[docs/rfc/](./rfc/)`                                                                                | Local copies of OpenID4VCI 1.0, OpenID4VP 1.0, the CS-07-pinned W3C DC API draft, HAIP 1.0 draft 03, RFC 7591, and RFC 9449 | Reference copies             |
 
 
@@ -511,6 +527,6 @@ profile interpretation, protocol support claim, or documentation location.
 | Browser-mediated DC API presentation                        | CS-07, pinned W3C DC API draft, OpenID4VP Appendix A, CS-07 verifier plan |
 | Remote qualified signing                                    | CS-03 and CS-03 verifier flow summary                                     |
 | SD-JWT holder binding                                       | SD-JWT key-binding fixes                                                  |
-| TS-12 payment SCA and transaction data                      | TS-12 SCA with wallet                                                     |
+| TS-12 / CS-12 payment SCA and transaction data              | CS-12 SCA payments, then TS-12 SCA with wallet                |
 | mdoc metadata, issuance, or presentation                    | mdoc generation and mdoc interop fixes                                    |
 | X.509 JAR signing certificates                              | JAR x5c certificate-chain plan                                            |

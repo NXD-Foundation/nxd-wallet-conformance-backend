@@ -123,7 +123,13 @@ describe("CS-02 verifier request generation (Phase 3)", () => {
     })).not.to.throw();
   });
 
-  it("keeps strict mode while allowing TS12 transaction_data when VERIFIER_TS12_COMPATIBILITY=true", () => {
+  it("allows CS-12 payment transaction_data in strict JAR generation without an env flag", () => {
+    const options = resolveVerifierCs02Options({});
+    expect(options.strict).to.equal(true);
+    expect(options.allowTs12TransactionData).to.equal(true);
+  });
+
+  it("keeps strict mode when VERIFIER_TS12_COMPATIBILITY=true", () => {
     const options = resolveVerifierCs02Options({ VERIFIER_TS12_COMPATIBILITY: "true" });
     expect(options.strict).to.equal(true);
     expect(options.allowTs12TransactionData).to.equal(true);
@@ -217,7 +223,7 @@ describe("CS-02 verifier request generation (Phase 3)", () => {
     ).to.not.throw();
   });
 
-  it("rejects TS12 transaction_data by default in strict mode", () => {
+  it("accepts TS12 transaction_data in strict mode", () => {
     expect(() =>
       validateCs02TransactionDataEntries(
         [
@@ -230,10 +236,10 @@ describe("CS-02 verifier request generation (Phase 3)", () => {
         validDcqlQuery(),
         { strict: true },
       ),
-    ).to.throw(Cs02VerifierRequestError, 'Unsupported transaction_data type "urn:eudi:sca:payment:1"');
+    ).to.not.throw();
   });
 
-  it("accepts TS12 transaction_data only when VERIFIER_TS12_COMPATIBILITY is enabled", () => {
+  it("accepts TS12 transaction_data when VERIFIER_TS12_COMPATIBILITY is enabled", () => {
     expect(() =>
       validateCs02TransactionDataEntries(
         [

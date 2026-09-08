@@ -25,6 +25,7 @@ import {
 import { buildStrictCs02ClientMetadata } from "./cs02TrustPolicy.js";
 import { isStrictCs02Base64Url } from "./cs02Encoding.js";
 import { resolveCs07VerifierOrigin } from "./cs07DcApi.js";
+import { selectTs12EncryptionJwk } from "./ts12PaymentUtils.js";
 
 /**
  * Extract certificate chain from a PEM file (fullchain or single cert)
@@ -343,7 +344,7 @@ export async function buildVpRequestJWT(
   cs07DcApi = false,
   cs07VerifierOrigin = null,
 ) {
-  const cs02Options = resolveVerifierCs02Options(process.env);
+    const cs02Options = resolveVerifierCs02Options(process.env);
   const cs07Origin = cs07DcApi
     ? (cs07VerifierOrigin || resolveCs07VerifierOrigin({ serverURL }))
     : null;
@@ -731,11 +732,7 @@ export async function buildVpRequestJWT(
       "Encrypting request object using wallet's public key from wallet_metadata."
     );
 
-    const jwks = wallet_metadata.jwks;
-    // Find a key suitable for encryption
-    const encryptionKey = jwks.keys.find(
-      (k) => k.use === "enc" || k.use === undefined
-    );
+    const encryptionKey = selectTs12EncryptionJwk(wallet_metadata);
     if (!encryptionKey) {
       throw new Error(
         "No suitable encryption key found in wallet_metadata.jwks"

@@ -39,7 +39,9 @@ import {
   getVReceiptSDJWTData,
   getVReceiptSDJWTDataWithPayload,
   createPaymentWalletAttestationPayload,
-  createTs12PaymentScaAttestationPayload,
+  createTs12ScaIbanAttestationPayload,
+  createTs12ScaUserAttestationPayload,
+  createTs12ScaCardDpcAttestationPayload,
   createPhotoIDAttestationPayload,
   getFerryBoardingPassSDJWTData,
   createPCDAttestationPayload,
@@ -52,6 +54,13 @@ import {
   Document,
   IssuerSignedDocument
 } from "@auth0/mdl";
+import {
+  capScaExpiryUnix,
+  isTs12ScaCredentialType,
+  TS12_SCA_CARD_DPC_VCT,
+  TS12_SCA_IBAN_VCT,
+  TS12_SCA_USER_VCT,
+} from "./ts12PaymentUtils.js";
 
 import cryptoModule from "crypto";
 import { Buffer } from "buffer";
@@ -564,8 +573,15 @@ export async function handleCredentialGenerationBasedOnFormat(
     case "PaymentWalletAttestation":
       credPayload = createPaymentWalletAttestationPayload(issuerName);
       break;
+    case TS12_SCA_IBAN_VCT:
     case "urn:eudi:sca:payment:1":
-      credPayload = createTs12PaymentScaAttestationPayload(issuerName);
+      credPayload = createTs12ScaIbanAttestationPayload();
+      break;
+    case TS12_SCA_USER_VCT:
+      credPayload = createTs12ScaUserAttestationPayload(resolvedServerURL);
+      break;
+    case TS12_SCA_CARD_DPC_VCT:
+      credPayload = createTs12ScaCardDpcAttestationPayload();
       break;
     case "VerifiablevReceiptSDJWT":
       credPayload = sessionObject
@@ -599,6 +615,13 @@ export async function handleCredentialGenerationBasedOnFormat(
   const now = new Date();
   const expiryDate = new Date(now);
   expiryDate.setMonth(now.getMonth() + 6);
+  if (isTs12ScaCredentialType(credType)) {
+    const cappedExp = capScaExpiryUnix(
+      Math.floor(expiryDate.getTime() / 1000),
+      requestBody._wuaExp,
+    );
+    expiryDate.setTime(cappedExp * 1000);
+  }
 
   if (format === "vc+sd-jwt") {
     // W3C VCDM 2.0 secured with SD-JWT (VC-JOSE-COSE) — DIIP v5 compliant
@@ -1401,8 +1424,15 @@ export async function handleCredentialGenerationBasedOnFormatDeferred(
     case "PaymentWalletAttestation":
       credPayload = createPaymentWalletAttestationPayload(issuerName);
       break;
+    case TS12_SCA_IBAN_VCT:
     case "urn:eudi:sca:payment:1":
-      credPayload = createTs12PaymentScaAttestationPayload(issuerName);
+      credPayload = createTs12ScaIbanAttestationPayload();
+      break;
+    case TS12_SCA_USER_VCT:
+      credPayload = createTs12ScaUserAttestationPayload(resolvedServerURL);
+      break;
+    case TS12_SCA_CARD_DPC_VCT:
+      credPayload = createTs12ScaCardDpcAttestationPayload();
       break;
     case "VerifiablevReceiptSDJWT":
       credPayload = sessionObject
@@ -1460,6 +1490,13 @@ export async function handleCredentialGenerationBasedOnFormatDeferred(
   const now = new Date();
   const expiryDate = new Date(now);
   expiryDate.setMonth(now.getMonth() + 6);
+  if (isTs12ScaCredentialType(credType)) {
+    const cappedExp = capScaExpiryUnix(
+      Math.floor(expiryDate.getTime() / 1000),
+      requestBody._wuaExp,
+    );
+    expiryDate.setTime(cappedExp * 1000);
+  }
   // Issue credential
   const credential = await sdjwt.issue(
     {

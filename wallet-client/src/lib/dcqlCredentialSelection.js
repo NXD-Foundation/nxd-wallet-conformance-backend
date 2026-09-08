@@ -13,6 +13,10 @@ import {
 import { parseSdJwtClaims, selectSatisfiedSdJwtClaimSet, claimSatisfiesSdJwtConstraints } from "../../utils/sdJwtClaims.js";
 import { extractMdocDocType } from "./mdocDocType.js";
 import { evaluateCs02CredentialSets } from "../../utils/cs02DcqlCore.js";
+import {
+  assertSingleScaAttestationInDcql,
+  Ts12PaymentValidationError,
+} from "../../utils/ts12PaymentUtils.js";
 
 function safeSlog(slog, event, data) {
   if (typeof slog !== "function") return;
@@ -393,6 +397,15 @@ export async function selectWalletCredentialsForDcql({
   if (!dcqlQuery || !Array.isArray(dcqlQuery.credentials) || dcqlQuery.credentials.length === 0) {
     safeSlog(slog, "[dcql] selection skipped", { reason: "dcql_query.credentials missing or empty" });
     return [];
+  }
+
+  try {
+    assertSingleScaAttestationInDcql(dcqlQuery);
+  } catch (error) {
+    if (error instanceof Ts12PaymentValidationError) {
+      throw new Error(error.message);
+    }
+    throw error;
   }
 
   validateCredentialSets(dcqlQuery, slog);

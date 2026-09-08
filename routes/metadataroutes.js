@@ -233,6 +233,9 @@ metadataRouter.get(
     if (configEntry.category) {
       metadata.category = configEntry.category;
     }
+    if (configEntry.extends) {
+      metadata.extends = configEntry.extends;
+    }
     if (configEntry.transaction_data_types) {
       metadata.transaction_data_types = configEntry.transaction_data_types;
     }

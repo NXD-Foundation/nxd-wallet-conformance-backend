@@ -76,7 +76,9 @@ export function resolveVerifierCs02Options(env = process.env) {
     allowRs256Jar: compatibility,
     allowUnsignedRedirectUriJar: compatibility,
     allowLegacyOpenId4VpInvocation: compatibility,
-    allowTs12TransactionData: compatibility || ts12Compatibility,
+    // CS-12 payment type is first-class in this ITB. The env flag remains accepted.
+    allowTs12TransactionData: true,
+    ts12Compatibility,
   };
 }
 
@@ -176,10 +178,8 @@ export function validateCs02TransactionDataEntries(transactionData, dcqlQuery, o
     }
 
     const supportedTypes = new Set(CS02_SUPPORTED_TRANSACTION_DATA_TYPES);
-    if (options.allowTs12TransactionData) {
-      for (const type of TS12_SUPPORTED_TRANSACTION_DATA_TYPES) {
-        supportedTypes.add(type);
-      }
+    for (const type of TS12_SUPPORTED_TRANSACTION_DATA_TYPES) {
+      supportedTypes.add(type);
     }
 
     if (

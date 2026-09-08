@@ -41,7 +41,10 @@ import {
 import {
   buildTs12ProofClaims,
   resolveTs12TransactionDataForCredential,
+  assertTs12RequestDelivery,
+  assertTs12ScaPresentationConstraints,
 } from "./ts12Presentation.js";
+import { isCompactJwe, isTs12PaymentRequestUri } from "../../utils/ts12PaymentUtils.js";
 import {
   OPENID4VP_PRESENT_HOST,
   isOpenId4VpPresentInvocation,
@@ -52,6 +55,8 @@ import {
   validateCs02DeepLink,
   fetchCs02AuthorizationRequestJwt,
   validateAndVerifyCs02AuthorizationRequest,
+  createWalletAuthorizationEncryptionMaterial,
+  decryptAuthorizationRequestJwe,
 } from "./cs02RequestValidation.js";
 import {
   validateCs02PresentationQuery,
@@ -96,8 +101,14 @@ function parseOpenId4VpDeepLink(deepLink, { cs02Options, log } = {}) {
 async function fetchAuthorizationRequestJwt(requestUri, method) {
   if (!requestUri) throw new Error("Missing request_uri in deep link");
   if (method && method.toLowerCase() === "post") {
+    const offerEncryption = isTs12PaymentRequestUri(requestUri);
+    const encryptionMaterial = offerEncryption
+      ? await createWalletAuthorizationEncryptionMaterial()
+      : null;
     const form = new URLSearchParams();
-    // Optionally include wallet hints; server tolerates empty payload
+    if (encryptionMaterial) {
+      form.set("wallet_metadata", JSON.stringify(encryptionMaterial.walletMetadata));
+    }
     console.log("[present] Fetching request JWT via POST:", requestUri);
     const res = await fetch(requestUri, {
       method: "POST",
@@ -115,7 +126,14 @@ async function fetchAuthorizationRequestJwt(requestUri, method) {
       throw new Error(
         `Auth request POST error ${res.status}${text ? ": " + text : ""}`,
       );
-    return text;
+    if (isCompactJwe(text)) {
+      if (!encryptionMaterial?.privateKey) {
+        throw new Error("Encrypted authorization request received but no wallet encryption key is available");
+      }
+      const requestJwt = await decryptAuthorizationRequestJwe(text, encryptionMaterial.privateKey);
+      return { requestJwt, encrypted: true };
+    }
+    return { requestJwt: text, encrypted: false };
   }
   console.log("[present] Fetching request JWT via GET:", requestUri);
   const res = await fetch(requestUri);
@@ -127,7 +145,7 @@ async function fetchAuthorizationRequestJwt(requestUri, method) {
     text?.length,
   );
   if (!res.ok) throw new Error(`Auth request GET error ${res.status}`);
-  return text;
+  return { requestJwt: text, encrypted: isCompactJwe(text) };
 }
 
 function decodeJwt(token) {
@@ -490,6 +508,12 @@ async function buildPresentableVpTokenForSelection({
     );
   }
 
+  assertTs12ScaPresentationConstraints({
+    dcqlQuery: payload?.dcql_query,
+    stored,
+    clientId,
+  });
+
   const isMdoc = isMdocCredential(vpToken);
   const isSdJwt = !isMdoc && typeof vpToken === "string" && vpToken.includes("~");
   if (isSdJwt && matchedQuery) {
@@ -740,6 +764,7 @@ export async function performPresentation(
     let payload;
     let x5cSignatureVerified = false;
     let effectiveClientMetadata = null;
+    let requestEncrypted = false;
     if (cs02Options.strict) {
       const requestWalletNonce = method === "post"
         ? crypto.randomBytes(16).toString("base64url")
@@ -751,6 +776,7 @@ export async function performPresentation(
         slog,
       );
       requestJwt = fetched.requestJwt;
+      requestEncrypted = Boolean(fetched.encrypted);
       ({ header, payload, effectiveClientMetadata } = await validateAndVerifyCs02AuthorizationRequest(requestJwt, {
         deepLinkClientId: clientId,
         deepLinkUrl,
@@ -768,11 +794,15 @@ export async function performPresentation(
         });
       } catch {}
     } else {
-      requestJwt = await fetchAuthorizationRequestJwt(requestUri, method);
+      const fetched = await fetchAuthorizationRequestJwt(requestUri, method);
+      requestJwt = fetched.requestJwt;
+      requestEncrypted = Boolean(fetched.encrypted);
       ({ header, payload, x5cSignatureVerified } = await verifyAuthorizationRequestJwt(requestJwt, {
         expectedClientId: clientId,
       }));
     }
+
+    assertTs12RequestDelivery({ method, encrypted: requestEncrypted, payload });
 
     await enforceVerifierPresentationTrust({
       sessionId: logSessionId,
@@ -1097,6 +1127,12 @@ export async function performPresentation(
     } catch {}
     if (!stored || !stored.credential)
       throw new Error("Credential not found in wallet cache");
+
+    assertTs12ScaPresentationConstraints({
+      dcqlQuery: payload?.dcql_query,
+      stored,
+      clientId,
+    });
 
     // Extract the credential token from the wallet cache
     let vpToken = extractCredentialString(stored.credential);

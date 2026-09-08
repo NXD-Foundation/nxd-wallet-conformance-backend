@@ -9,12 +9,15 @@ import {
   bindSessionLoggingContext,
 } from "../../utils/routeUtils.js";
 import {
-  TS12_DCQL_QUERY,
-  TS12_PAYMENT_VCT,
   Ts12PaymentValidationError,
+  assertSingleScaAttestationInDcql,
+  buildTs12DcqlQuery,
   buildTs12PaymentTransactionData,
   encodeTs12TransactionData,
+  hasTs12EncryptionJwk,
   parseTs12PaymentRequestInput,
+  parseTs12WalletMetadata,
+  resolveTs12AttestationType,
 } from "../../utils/ts12PaymentUtils.js";
 import { makeSessionLogger, logHttpRequest, logHttpResponse } from "../../utils/sessionLogger.js";
 import { trustFrameworkSessionProps } from "../../utils/trustFrameworkPolicy.js";
@@ -34,11 +37,12 @@ const clientMetadata = JSON.parse(
 );
 
 /**
- * Generate a mock TS12 payment presentation request for EUDI Wallets.
+ * Generate a mock CS-12 / TS12 payment presentation request for EUDI Wallets.
  *
  * Query/body parameters:
  * - required: amount, currency, merchant/payee.name, payee_id/payee.id, transaction_id
- * - optional: session_id, response_mode (default direct_post), request_uri_method (get|post, default post)
+ * - optional: session_id, response_mode (default direct_post)
+ * - optional: attestation_type (sca-iban | sca-user | sca-card-dpc, default sca-iban)
  * - optional TS12 fields: execution_date, recurrence, pisp
  */
 async function handleTs12PaymentRequest(req, res) {
@@ -54,8 +58,24 @@ async function handleTs12PaymentRequest(req, res) {
     const responseMode = req.body?.response_mode || req.query.response_mode || "direct_post";
     const requestUriMethod = req.body?.request_uri_method || req.query.request_uri_method || "post";
     const paymentInput = { ...req.query, ...req.body };
+
+    if (String(requestUriMethod).toLowerCase() === "get") {
+      throw new Ts12PaymentValidationError(
+        ["CS-12 requires request_uri_method=post and encrypted JAR delivery outside the Digital Credentials API"],
+        "invalid_request_uri_method",
+      );
+    }
+
+    const attestationType = resolveTs12AttestationType(
+      paymentInput.attestation_type || paymentInput.vct,
+    );
+    const dcqlQuery = buildTs12DcqlQuery(attestationType.id);
+    assertSingleScaAttestationInDcql(dcqlQuery);
     const paymentPayload = parseTs12PaymentRequestInput(paymentInput);
-    const transactionDataObj = buildTs12PaymentTransactionData(paymentPayload);
+    const transactionDataObj = buildTs12PaymentTransactionData(
+      paymentPayload,
+      attestationType.credentialId,
+    );
     const encodedTransactionData = encodeTs12TransactionData(transactionDataObj);
 
     requestId = logHttpRequest(slog, req.method, "/ts12/payment/request", req.headers, {
@@ -63,7 +83,9 @@ async function handleTs12PaymentRequest(req, res) {
       sessionId,
       trustPolicy: trustFrameworkSessionProps(req.query).trustPolicy,
       responseMode,
-      requestUriMethod,
+      requestUriMethod: "post",
+      attestationType: attestationType.id,
+      expectedVct: attestationType.vct,
     });
 
     const result = await generateVPRequest({
@@ -75,12 +97,12 @@ async function handleTs12PaymentRequest(req, res) {
       clientMetadata,
       kid: null,
       serverURL: CONFIG.SERVER_URL,
-      dcqlQuery: TS12_DCQL_QUERY,
+      dcqlQuery,
       transactionData: encodedTransactionData,
       ts12Payment: true,
       ts12PaymentPayload: transactionDataObj.payload,
-      ts12ExpectedVct: TS12_PAYMENT_VCT,
-      usePostMethod: requestUriMethod !== "get",
+      ts12ExpectedVct: attestationType.vct,
+      usePostMethod: true,
       routePath: "/ts12/payment/x509VPrequest",
     });
 
@@ -88,12 +110,16 @@ async function handleTs12PaymentRequest(req, res) {
       ...result,
       payment: transactionDataObj.payload,
       transactionDataType: transactionDataObj.type,
+      attestationType: attestationType.id,
+      expectedVct: attestationType.vct,
     };
 
     logHttpResponse(slog, requestId, "/ts12/payment/request", 200, "OK", res.getHeaders(), response);
     try {
       slog("[VERIFIER] [COMPLETE] TS12 payment request generated", {
         sessionId,
+        attestationType: attestationType.id,
+        expectedVct: attestationType.vct,
         transactionId: transactionDataObj.payload.transaction_id,
         amount: transactionDataObj.payload.amount,
         currency: transactionDataObj.payload.currency,
@@ -125,7 +151,7 @@ async function handleTs12PaymentRequest(req, res) {
     );
     if (error instanceof Ts12PaymentValidationError) {
       errorResponse.errors = error.errors;
-      errorResponse.code = "invalid_ts12_payment_payload";
+      errorResponse.code = error.code || "invalid_ts12_payment_payload";
     }
     res.status(statusCode).json(errorResponse);
   }
@@ -143,7 +169,8 @@ ts12PaymentRouter
     let requestId = null;
 
     try {
-      const { wallet_nonce: walletNonce, wallet_metadata: walletMetadata } = req.body;
+      const { wallet_nonce: walletNonce, wallet_metadata: walletMetadataRaw } = req.body;
+      const walletMetadata = parseTs12WalletMetadata(walletMetadataRaw);
 
       requestId = logHttpRequest(
         slog,
@@ -152,6 +179,23 @@ ts12PaymentRouter
         req.headers,
         req.body,
       );
+
+      if (!hasTs12EncryptionJwk(walletMetadata)) {
+        logHttpResponse(
+          slog,
+          requestId,
+          `/ts12/payment/x509VPrequest/${sessionId}`,
+          400,
+          "Error",
+          res.getHeaders(),
+          { error: "wallet_metadata.jwks with an encryption key is required" },
+        );
+        return res.status(400).json({
+          error: "invalid_request",
+          error_description:
+            "CS-12 requires the Wallet Unit to provide encryption keys in wallet_metadata for POST delivery of the Request Object",
+        });
+      }
 
       const result = await processVPRequest({
         sessionId,
@@ -219,37 +263,20 @@ ts12PaymentRouter
         req.query,
       );
 
-      const result = await processVPRequest({
-        sessionId,
-        clientMetadata,
-        serverURL: CONFIG.SERVER_URL,
-        clientId: CONFIG.CLIENT_ID,
-        kid: null,
-      });
-
-      if (result.error) {
-        logHttpResponse(
-          slog,
-          requestId,
-          `/ts12/payment/x509VPrequest/${sessionId}`,
-          result.status,
-          "Error",
-          res.getHeaders(),
-          { error: result.error },
-        );
-        return res.status(result.status).json({ error: result.error });
-      }
-
       logHttpResponse(
         slog,
         requestId,
         `/ts12/payment/x509VPrequest/${sessionId}`,
-        200,
-        "OK",
+        400,
+        "Error",
         res.getHeaders(),
-        { jwtLength: result.jwt?.length },
+        { error: "unencrypted_request_not_allowed" },
       );
-      res.type(CONFIG.CONTENT_TYPE).send(result.jwt);
+      return res.status(400).json({
+        error: "invalid_request",
+        error_description:
+          "CS-12 forbids unencrypted GET delivery of SCA Authorization Requests outside the Digital Credentials API",
+      });
     } catch (error) {
       logHttpResponse(
         slog,

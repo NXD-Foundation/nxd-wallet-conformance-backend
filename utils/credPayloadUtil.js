@@ -4,6 +4,7 @@ import fs from "fs";
 import qr from "qr-image";
 import imageDataURI from "image-data-uri";
 import { streamToBuffer } from "@jorgeferrero/stream-to-buffer";
+import { rpClientIdFromServerUrl } from "./ts12PaymentUtils.js";
 
 const face_data = fs.readFileSync("./data/face.data", "utf8");
 // Helper functions to create payloads for different credential types
@@ -862,29 +863,49 @@ export const createPaymentWalletAttestationPayload = (serverURL) => {
   return { claims, disclosureFrame };
 };
 
-export const createTs12PaymentScaAttestationPayload = (serverURL) => {
+export const createTs12ScaIbanAttestationPayload = () => {
+  const iban = "DE99370501981234567890";
   const claims = {
-    aud: `${serverURL}/.well-known/oauth-authorization-server`,
     sub: "d9c28888-b166-4cf4-bb75-0d374b6214d4",
-    iban: "DE99370501981234567890",
+    masked_iban: `${iban.slice(0, 4)}${"*".repeat(Math.max(iban.length - 8, 0))}${iban.slice(-4)}`,
+    iban,
     bic: "COLSDE33XXX",
     currency: "EUR",
-    psp_name: "Demo ASPSP",
-    account_holder_name: "Demo Account Holder",
   };
 
   const disclosureFrame = {
-    _sd: [
-      "iban",
-      "bic",
-      "currency",
-      "psp_name",
-      "account_holder_name",
-    ],
+    _sd: ["masked_iban", "iban", "bic", "currency"],
   };
 
   return { claims, disclosureFrame };
 };
+
+export const createTs12ScaUserAttestationPayload = (serverURL) => {
+  const claims = {
+    aud: rpClientIdFromServerUrl(serverURL),
+    sub: "37774a3f-ab14-43c3-96bc-bb1066a30a1d",
+    masked_psu_id: "DE89****3000",
+  };
+
+  return { claims, disclosureFrame: {} };
+};
+
+export const createTs12ScaCardDpcAttestationPayload = () => {
+  const claims = {
+    credential_id: "urn:uuid:9f2b7a2e-3b74-4a0d-9b1a-0e6a91f5d2c8",
+    network: "mastercard",
+    card_id: "mc-8c3f2d1a",
+  };
+
+  const disclosureFrame = {
+    _sd: ["credential_id", "network", "card_id"],
+  };
+
+  return { claims, disclosureFrame };
+};
+
+/** @deprecated Use createTs12ScaIbanAttestationPayload. Kept for existing callers. */
+export const createTs12PaymentScaAttestationPayload = () => createTs12ScaIbanAttestationPayload();
 
 export const createPhotoIDAttestationPayload = (serverURL) => {
   // Generate basic timestamps for demonstration

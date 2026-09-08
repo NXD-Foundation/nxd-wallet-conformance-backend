@@ -8,6 +8,7 @@ import { generateRefreshToken } from "./tokenUtils.js";
 import { Resolver } from "did-resolver";
 import { getResolver } from "@cef-ebsi/key-did-resolver";
 import fetch from "node-fetch";
+import { selectTs12EncryptionJwk } from "../../utils/ts12PaymentUtils.js";
 
 /**
  * Extract certificate chain from a PEM file (fullchain or single cert)
@@ -347,11 +348,7 @@ buildVpRequestJWT(
       "Encrypting request object using wallet's public key from wallet_metadata."
     );
 
-    const jwks = wallet_metadata.jwks;
-    // Find a key suitable for encryption
-    const encryptionKey = jwks.keys.find(
-      (k) => k.use === "enc" || k.use === undefined
-    );
+    const encryptionKey = selectTs12EncryptionJwk(wallet_metadata);
     if (!encryptionKey) {
       throw new Error("No suitable encryption key found in wallet_metadata.jwks");
     }

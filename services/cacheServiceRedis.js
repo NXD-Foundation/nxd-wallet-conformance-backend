@@ -264,15 +264,34 @@ export function withVPSessionLifecycle(sessionValue, now = Math.floor(Date.now()
   };
 }
 
+const memoryVpSessions = new Map();
+
+function canUseMemoryVpFallback() {
+  return process.env.ALLOW_NO_REDIS === "true" || process.env.NODE_ENV === "test";
+}
+
 export async function storeVPSession(sessionKey, sessionValue) {
+  const ttlInSeconds = Number(VP_TIMEOUT) || 180;
+  const value = withVPSessionLifecycle(
+    withCanonicalSessionContext(sessionKey, sessionValue, "verification"),
+    Math.floor(Date.now() / 1000),
+    ttlInSeconds,
+  );
+
+  if (!client.isReady) {
+    if (canUseMemoryVpFallback()) {
+      memoryVpSessions.set(sessionKey, {
+        value,
+        expiresAtMs: Date.now() + ttlInSeconds * 1000,
+      });
+      return;
+    }
+    console.log("Redis not ready, skipping storeVPSession");
+    return;
+  }
+
   try {
     const key = `vp-sessions:${sessionKey}`;
-    const ttlInSeconds = Number(VP_TIMEOUT) || 180;
-    const value = withVPSessionLifecycle(
-      withCanonicalSessionContext(sessionKey, sessionValue, "verification"),
-      Math.floor(Date.now() / 1000),
-      ttlInSeconds,
-    );
     await client.setEx(key, ttlInSeconds, JSON.stringify(value)); // Set with expiration
     console.log(`VP Session stored under key: ${key}`);
   } catch (err) {
@@ -281,6 +300,17 @@ export async function storeVPSession(sessionKey, sessionValue) {
 }
 
 export async function getVPSession(sessionKey) {
+  if (!client.isReady && canUseMemoryVpFallback()) {
+    const entry = memoryVpSessions.get(sessionKey);
+    if (!entry) return null;
+    const nowUnix = Math.floor(Date.now() / 1000);
+    if (entry.expiresAtMs <= Date.now() || (entry.value?.expires_at != null && Number(entry.value.expires_at) <= nowUnix)) {
+      memoryVpSessions.delete(sessionKey);
+      return null;
+    }
+    return entry.value;
+  }
+
   try {
     const key = `vp-sessions:${sessionKey}`;
     const result = await client.get(key);

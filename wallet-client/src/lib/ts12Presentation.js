@@ -1,9 +1,14 @@
+import { parseSdJwtClaims } from "../../utils/sdJwtClaims.js";
 import ts12PaymentSchema from "../../data/ts12-urn-eudi-sca-payment-1-data-model.json" with { type: "json" };
 import {
+  audienceIncludesRp,
+  assertSingleScaAttestationInDcql,
   computeTs12TransactionDataHash,
+  getTs12AttestationTypeByVct,
+  requestDeclaresTs12PaymentTransaction,
   TS12_PAYMENT_TRANSACTION_TYPE,
-  TS12_PAYMENT_VCT,
   TS12_SCA_CATEGORY,
+  Ts12PaymentValidationError,
 } from "../../utils/ts12PaymentUtils.js";
 
 export const TS12_TRANSACTION_HASH_ALGORITHM = "sha-256";
@@ -37,7 +42,7 @@ function resolveStoredCredentialConfig(stored) {
 }
 
 export function validateTs12PaymentPayloadSchema(payload, schemaId) {
-  if (schemaId !== TS12_PAYMENT_VCT || ts12PaymentSchema.$id !== schemaId) {
+  if (schemaId !== TS12_PAYMENT_TRANSACTION_TYPE || ts12PaymentSchema.$id !== schemaId) {
     throw new Error(`Unsupported TS12 transaction_data schema '${schemaId}'`);
   }
 
@@ -64,6 +69,18 @@ export function validateTs12PaymentPayloadSchema(payload, schemaId) {
   }
   if (payload.date_time !== undefined && !isIsoDateTime(payload.date_time)) {
     throw new Error("TS12 transaction_data payload.date_time must be an ISO8601 date-time");
+  }
+  if (payload.purpose !== undefined && typeof payload.purpose !== "string") {
+    throw new Error("TS12 transaction_data payload.purpose must be a string");
+  }
+  if (payload.amount_estimated !== undefined && typeof payload.amount_estimated !== "boolean") {
+    throw new Error("TS12 transaction_data payload.amount_estimated must be a boolean");
+  }
+  if (payload.amount_earmarked !== undefined && typeof payload.amount_earmarked !== "boolean") {
+    throw new Error("TS12 transaction_data payload.amount_earmarked must be a boolean");
+  }
+  if (payload.sct_inst !== undefined && typeof payload.sct_inst !== "boolean") {
+    throw new Error("TS12 transaction_data payload.sct_inst must be a boolean");
   }
   if (payload.execution_date !== undefined && !isIsoDate(payload.execution_date)) {
     throw new Error("TS12 transaction_data payload.execution_date must be an ISO8601 date");
@@ -157,8 +174,54 @@ export function resolveTs12TransactionDataForCredential({
   return {
     encodedTransactionData: match.entry,
     decodedTransactionData: match.decoded,
-    expectedVct: credentialConfig.vct || stored?.metadata?.configurationId || TS12_PAYMENT_VCT,
+    expectedVct: credentialConfig.vct || stored?.metadata?.configurationId || null,
   };
+}
+
+export function assertTs12RequestDelivery({ method, encrypted, payload }) {
+  if (!requestDeclaresTs12PaymentTransaction(payload?.transaction_data)) {
+    return;
+  }
+  if (String(method || "get").toLowerCase() !== "post") {
+    throw new Error(
+      "CS-12 SCA Authorization Requests outside the Digital Credentials API must use request_uri_method=post",
+    );
+  }
+  if (!encrypted) {
+    throw new Error("CS-12 SCA Authorization Requests outside the Digital Credentials API must be encrypted");
+  }
+}
+
+export function assertTs12ScaPresentationConstraints({ dcqlQuery, stored, clientId }) {
+  try {
+    assertSingleScaAttestationInDcql(dcqlQuery);
+  } catch (error) {
+    if (error instanceof Ts12PaymentValidationError) {
+      throw new Error(error.message);
+    }
+    throw error;
+  }
+
+  const expectedVct = stored?.metadata?.credentialConfiguration?.vct || stored?.metadata?.configurationId;
+  const attestationType = getTs12AttestationTypeByVct(expectedVct);
+  if (!attestationType?.requiresAud) {
+    return;
+  }
+
+  let aud = stored?.metadata?.aud || stored?.claims?.aud;
+  if (aud == null) {
+    const token = typeof stored?.credential === "string"
+      ? stored.credential
+      : stored?.credential?.credential || stored?.credential?.token;
+    if (typeof token === "string") {
+      try {
+        aud = parseSdJwtClaims(token)?.claims?.aud;
+      } catch {}
+    }
+  }
+  if (!audienceIncludesRp(aud, clientId)) {
+    throw new Error("sca-user attestation aud does not include the Relying Party identifier");
+  }
 }
 
 export function buildTs12ProofClaims({
