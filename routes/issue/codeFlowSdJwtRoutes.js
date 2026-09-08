@@ -77,6 +77,9 @@ import {
   getTrustedClientAttesterJwks,
 } from "../../utils/oauthClientAttestation.js";
 import {
+  applyWiaStatusEvidenceToSession,
+} from "../../utils/wuaStatusListVerifier.js";
+import {
   issuanceRequestRequiresWua,
   extractRequestedCredentialConfigurationIds,
 } from "../../utils/wuaEnforcementPolicy.js";
@@ -128,6 +131,7 @@ function createPARRequest(requestData) {
     requiresWua: requestData.requiresWua === true,
     wiaCnfJkt: requestData.wiaCnfJkt || null,
     clientStatusPresent: requestData.clientStatusPresent === true,
+    wiaStatusList: requestData.wiaStatusList || null,
     requestedCredentialConfigurationIds: requestData.requestedCredentialConfigurationIds || [],
   });
 
@@ -240,6 +244,7 @@ function updateSessionForAuthorization(existingCodeSession, requestData) {
     existingCodeSession.requiresWua = true;
     existingCodeSession.wiaCnfJkt = requestData.wiaCnfJkt || null;
     existingCodeSession.clientStatusPresent = requestData.clientStatusPresent === true;
+    applyWiaStatusEvidenceToSession(existingCodeSession, requestData.wiaStatusList);
   }
   if (Array.isArray(requestData.requestedCredentialConfigurationIds)) {
     existingCodeSession.requestedCredentialConfigurationIds = requestData.requestedCredentialConfigurationIds;
@@ -679,10 +684,19 @@ codeFlowRouterSDJWT.post(["/par", "/authorize/par"], async (req, res) => {
         try { slog("[ISSUER] [PAR] [WARN] WIA validation warning", { warning: w }); } catch {}
       }
     }
+    if (requiresWua && attestationResult.ok && attestationResult.wiaStatusList && slog) {
+      try {
+        slog("[ISSUER] [PAR] WIA status-list validated", {
+          uri: attestationResult.wiaStatusList.uri,
+          idx: attestationResult.wiaStatusList.idx,
+        });
+      } catch {}
+    }
 
     requestData.requiresWua = requiresWua;
     requestData.wiaCnfJkt = attestationResult.wiaCnfJkt || null;
     requestData.clientStatusPresent = attestationResult.clientStatusPresent === true;
+    requestData.wiaStatusList = attestationResult.wiaStatusList || null;
     requestData.requestedCredentialConfigurationIds = requestedCredentialConfigurationIds;
 
     // Legacy body client_assertion path (optional observability only)

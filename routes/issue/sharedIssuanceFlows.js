@@ -76,6 +76,12 @@ import {
   getTrustedClientAttesterJwks,
 } from "../../utils/oauthClientAttestation.js";
 import {
+  applyWiaStatusEvidenceToSession,
+  evaluateWuaStatusList,
+  parseReferencedTokenStatus,
+  statusListLogDetails,
+} from "../../utils/wuaStatusListVerifier.js";
+import {
   isWuaRequiredCredentialId,
   credentialConfigRequiresKeyAttestation,
   validateKaLevelsAgainstMetadata,
@@ -178,7 +184,24 @@ const CREDENTIAL_REQUEST_ERROR_CODES = {
 };
 
 
-/** OID4VCI 1.0 §8.3.1 — error code invalid_nonce + optional fresh c_nonce for retry */
+async function evaluateRequiredIssuanceStatusList({ uri, idx, verificationJwk, kind, slog, logPrefix }) {
+  try {
+    const result = await evaluateWuaStatusList({ uri, idx, verificationJwk, kind });
+    if (slog) {
+      try { slog(`${logPrefix} status-list validated`, statusListLogDetails(result)); } catch {}
+    }
+    return { ok: true, result };
+  } catch (error) {
+    if (slog) {
+      try {
+        slog(`${logPrefix} [ERROR] status-list validation failed`, statusListLogDetails(error, { uri, idx }));
+      } catch {}
+    }
+    return { ok: false, error };
+  }
+}
+
+
 async function respondInvalidNonceCredentialError(res, error, ctx) {
   const { sessionObject, sessionKey, flowType, sessionId } = ctx;
   const errorResponse = {
@@ -983,10 +1006,11 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
     // Resolve issuance session early for WUA-required enforcement.
     let codeFlowSessionForWua = null;
     let preAuthSessionForWua = null;
+    let codeFlowSessionKeyForWua = null;
     if (grant_type === "authorization_code" && code) {
-      const issuanceSessionId = await getSessionKeyAuthCode(code);
-      if (issuanceSessionId) {
-        codeFlowSessionForWua = await getCodeFlowSession(issuanceSessionId);
+      codeFlowSessionKeyForWua = await getSessionKeyAuthCode(code);
+      if (codeFlowSessionKeyForWua) {
+        codeFlowSessionForWua = await getCodeFlowSession(codeFlowSessionKeyForWua);
       }
     } else if (grant_type === PRE_AUTHORIZED_GRANT_TYPE && preAuthorizedCode) {
       preAuthSessionForWua = await getPreAuthSession(preAuthorizedCode);
@@ -1079,6 +1103,33 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
     if (tokenRequiresWua && attestationResult.ok && attestationResult.wiaWarnings?.length && slog) {
       for (const w of attestationResult.wiaWarnings) {
         try { slog("[TOKEN] [WARN] WIA validation warning", { warning: w }); } catch {}
+      }
+    }
+    if (tokenRequiresWua && attestationResult.ok) {
+      const evidence = {
+        ...(attestationResult.wiaStatusList || {}),
+        wiaCnfJkt: attestationResult.wiaCnfJkt,
+      };
+      if (codeFlowSessionForWua && codeFlowSessionKeyForWua) {
+        applyWiaStatusEvidenceToSession(codeFlowSessionForWua, evidence);
+        codeFlowSessionForWua.wiaCnfJkt = attestationResult.wiaCnfJkt || codeFlowSessionForWua.wiaCnfJkt || null;
+        await storeCodeFlowSession(codeFlowSessionKeyForWua, codeFlowSessionForWua);
+      }
+      if (preAuthSessionForWua && preAuthorizedCode) {
+        applyWiaStatusEvidenceToSession(preAuthSessionForWua, evidence);
+        preAuthSessionForWua.wiaCnfJkt = attestationResult.wiaCnfJkt || preAuthSessionForWua.wiaCnfJkt || null;
+        await storePreAuthSession(preAuthorizedCode, preAuthSessionForWua);
+      }
+      if (slog && attestationResult.wiaStatusList) {
+        try {
+          slog("[TOKEN] WIA status-list validated", statusListLogDetails({
+            ok: true,
+            kind: "wia",
+            uri: attestationResult.wiaStatusList.uri,
+            idx: attestationResult.wiaStatusList.idx,
+            status: 0,
+          }));
+        } catch {}
       }
     }
     if (!attestationResult.skip && !attestationResult.ok) {
@@ -1516,6 +1567,33 @@ sharedRouter.post("/credential", async (req, res) => {
       credentialConfigRequiresKeyAttestation(credConfigForWua) ||
       isTrustFrameworkSession(sessionObject);
 
+    if (credentialRequiresWua) {
+      const wiaEvidence = sessionObject.wiaStatusList;
+      if (!wiaEvidence?.uri || !Number.isInteger(wiaEvidence.idx) || !wiaEvidence.verificationJwk) {
+        if (slog) {
+          try { slog("[CREDENTIAL] [ERROR] Required WIA status-list evidence missing from issuance session"); } catch {}
+        }
+        return res.status(400).json({
+          error: "invalid_proof",
+          error_description: "Wallet Instance Attestation status list was not validated for this issuance session",
+        });
+      }
+      const wiaStatus = await evaluateRequiredIssuanceStatusList({
+        uri: wiaEvidence.uri,
+        idx: wiaEvidence.idx,
+        verificationJwk: wiaEvidence.verificationJwk,
+        kind: "wia",
+        slog,
+        logPrefix: "[CREDENTIAL] WIA",
+      });
+      if (!wiaStatus.ok) {
+        return res.status(400).json({
+          error: "invalid_proof",
+          error_description: wiaStatus.error?.message || "Wallet Instance Attestation status-list validation failed",
+        });
+      }
+    }
+
     if (credentialRequiresWua && !wuaJwt) {
       if (isTrustFrameworkSession(sessionObject)) {
         const store = flowType === "code" ? storeCodeFlowSession : storePreAuthSession;
@@ -1588,6 +1666,35 @@ sharedRouter.post("/credential", async (req, res) => {
     }
 
     if (credentialRequiresWua && wuaValidationResult?.valid) {
+      let kaReference;
+      try {
+        kaReference = parseReferencedTokenStatus(wuaValidationResult.payload?.key_storage_status, {
+          required: true,
+          kind: "ka",
+        });
+      } catch (error) {
+        if (slog) {
+          try { slog("[CREDENTIAL] [ERROR] KA status-list reference invalid", { error: error.message }); } catch {}
+        }
+        return res.status(400).json({
+          error: "invalid_proof",
+          error_description: error.message || "Key Attestation status-list reference is invalid",
+        });
+      }
+      const kaStatus = await evaluateRequiredIssuanceStatusList({
+        uri: kaReference.uri,
+        idx: kaReference.idx,
+        verificationJwk: wuaValidationResult.jwk,
+        kind: "ka",
+        slog,
+        logPrefix: "[CREDENTIAL] KA",
+      });
+      if (!kaStatus.ok) {
+        return res.status(400).json({
+          error: "invalid_proof",
+          error_description: kaStatus.error?.message || "Key Attestation status-list validation failed",
+        });
+      }
       const levelCheck = validateKaLevelsAgainstMetadata(
         wuaValidationResult.payload,
         credConfigForWua

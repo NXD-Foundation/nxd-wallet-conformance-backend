@@ -23,6 +23,14 @@ import {
   computeWiaCnfJkt,
 } from "../utils/oauthClientAttestation.js";
 import { createPreAuthSessionData, validateWUA } from "../utils/routeUtils.js";
+import {
+  applyWiaStatusEvidenceToSession,
+} from "../utils/wuaStatusListVerifier.js";
+import {
+  installValidStatusListForKey,
+  resetStatusListTestHooks,
+  WIA_STATUS_LIST_URI,
+} from "./helpers/wuaStatusListFixtures.js";
 
 const AS_ISSUER = "http://localhost:3000";
 const ALG = "ES256";
@@ -35,7 +43,7 @@ async function signSelfContainedWia({ privateKey, publicJwk, clientId = "wua-tes
     exp: now + 3600,
     cnf: { jwk: publicJwk },
     client_status: {
-      status: { status_list: { uri: "https://example.com/wia-status", idx: 1 } },
+      status: { status_list: { uri: WIA_STATUS_LIST_URI, idx: 0 } },
       exp: now + clientStatusExpOffsetSeconds,
     },
   })
@@ -157,6 +165,10 @@ describe("WUA enforcement policy", () => {
 });
 
 describe("strict WIA validation (oauthClientAttestation)", () => {
+  afterEach(() => {
+    resetStatusListTestHooks();
+  });
+
   it("requireAttestation rejects missing headers", async () => {
     const r = await validateOAuthClientAttestationFromRequest({
       headers: {},
@@ -174,6 +186,11 @@ describe("strict WIA validation (oauthClientAttestation)", () => {
     const wallet = await jose.generateKeyPair(ALG, { extractable: true });
     const walletPub = await jose.exportJWK(wallet.publicKey);
     const clientId = "wua-wallet-1";
+    await installValidStatusListForKey({
+      privateKey: wallet.privateKey,
+      uri: WIA_STATUS_LIST_URI,
+      statuses: [0],
+    });
     const att = await signSelfContainedWia({
       privateKey: wallet.privateKey,
       publicJwk: walletPub,
@@ -196,6 +213,43 @@ describe("strict WIA validation (oauthClientAttestation)", () => {
     const expected = await computeWiaCnfJkt(walletPub);
     expect(r.wiaCnfJkt).to.equal(expected);
     expect(r.wiaWarnings || []).to.have.length(0);
+    expect(r.wiaStatusList).to.include({ uri: WIA_STATUS_LIST_URI, idx: 0 });
+    expect(r.wiaStatusList.verificationJwk).to.include({ kty: "EC", crv: "P-256" });
+    const session = { requiresWua: true };
+    applyWiaStatusEvidenceToSession(session, { ...r.wiaStatusList, wiaCnfJkt: r.wiaCnfJkt });
+    expect(session.wiaStatusList.uri).to.equal(WIA_STATUS_LIST_URI);
+    expect(session.wiaCnfJkt).to.equal(expected);
+  });
+
+  it("requireAttestation rejects a revoked WIA status bit", async () => {
+    const wallet = await jose.generateKeyPair(ALG, { extractable: true });
+    const walletPub = await jose.exportJWK(wallet.publicKey);
+    const clientId = "wua-wallet-revoked";
+    await installValidStatusListForKey({
+      privateKey: wallet.privateKey,
+      uri: WIA_STATUS_LIST_URI,
+      statuses: [1],
+    });
+    const att = await signSelfContainedWia({
+      privateKey: wallet.privateKey,
+      publicJwk: walletPub,
+      clientId,
+    });
+    const pop = await signPop({ walletPrivateKey: wallet.privateKey, clientId });
+    const r = await validateOAuthClientAttestationFromRequest({
+      headers: {
+        "oauth-client-attestation": att,
+        "oauth-client-attestation-pop": pop,
+      },
+      clientId,
+      authorizationServerIssuer: AS_ISSUER,
+      trustedJwks: { keys: [] },
+      requireAttestation: true,
+      strictWiaSignature: true,
+    });
+    expect(r.ok).to.equal(false);
+    expect(r.oauthError).to.equal("invalid_client");
+    expect(r.errorDescription).to.match(/revoked/i);
   });
 
   it("validateWiaStructureClaims rejects expired client_status", () => {
@@ -227,6 +281,20 @@ describe("strict WIA validation (oauthClientAttestation)", () => {
       exp: now + 3600,
       cnf: { jwk: { kty: "EC", crv: "P-256", x: "abc", y: "def" } },
     }, { requireClientStatus: true })).to.throw(/client_status/i);
+  });
+
+  it("validateWiaStructureClaims rejects incomplete status_list when required", () => {
+    const now = Math.floor(Date.now() / 1000);
+    expect(() => validateWiaStructureClaims({
+      sub: "client-1",
+      iat: now,
+      exp: now + 3600,
+      cnf: { jwk: { kty: "EC", crv: "P-256", x: "abc", y: "def" } },
+      client_status: {
+        status: { status_list: { uri: WIA_STATUS_LIST_URI } },
+        exp: now + 86400,
+      },
+    }, { requireClientStatus: true })).to.throw(/status_list/i);
   });
 });
 
@@ -292,5 +360,29 @@ describe("KA validation (validateWUA)", () => {
     expect(result.error).to.match(/key-attestation\+jwt/);
     expect(result.error).to.match(/OpenID4VCI 1\.0 Appendix D\.1/);
     expect(result.error).to.match(/CS-04 Annex A\.2/);
+  });
+
+  it("rejects CS-04 KA with incomplete key_storage_status.status_list", async () => {
+    const { privateKey, publicKey } = await jose.generateKeyPair(ALG, { extractable: true });
+    const pubJwk = await jose.exportJWK(publicKey);
+    const holderJwk = await jose.exportJWK(publicKey);
+    const now = Math.floor(Date.now() / 1000);
+    const ka = await new jose.SignJWT({
+      iat: now,
+      exp: now + 3600,
+      attested_keys: [holderJwk],
+      key_storage: ["iso_18045_high"],
+      user_authentication: ["iso_18045_high"],
+      certification: { scheme: "test" },
+      key_storage_status: {
+        status: { status_list: { uri: "https://example.com/ka-status" } },
+        exp: now + 86400,
+      },
+    })
+      .setProtectedHeader({ alg: ALG, typ: "key-attestation+jwt", jwk: pubJwk })
+      .sign(privateKey);
+    const result = await validateWUA(ka, null, {});
+    expect(result.valid).to.equal(false);
+    expect(result.error).to.match(/status_list/i);
   });
 });

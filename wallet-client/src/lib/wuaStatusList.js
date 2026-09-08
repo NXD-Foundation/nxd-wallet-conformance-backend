@@ -118,9 +118,21 @@ function trimTrailingSlash(value) {
   return String(value || "").replace(/\/+$/, "");
 }
 
+export function normalizeWalletProviderUrlValue(value) {
+  if (value == null) return "";
+  let normalized = String(value).trim();
+  if (
+    (normalized.startsWith('"') && normalized.endsWith('"')) ||
+    (normalized.startsWith("'") && normalized.endsWith("'"))
+  ) {
+    normalized = normalized.slice(1, -1).trim();
+  }
+  return trimTrailingSlash(normalized);
+}
+
 export function resolveWalletProviderUrl(env = process.env) {
-  const configured = env.WALLET_PROVIDER_URL;
-  if (configured) return trimTrailingSlash(configured);
+  const configured = normalizeWalletProviderUrlValue(env.WALLET_PROVIDER_URL);
+  if (configured) return configured;
   if (isTestEnv(env)) return TEST_PROVIDER_URL;
   return null;
 }
@@ -184,7 +196,7 @@ export function resolveStatusMaintenanceSeconds(env = process.env) {
 
 export function assertWuaStatusListPublisherConfig(profile, env = process.env) {
   if (profile !== "webuild-cs01") return;
-  const raw = env.WALLET_PROVIDER_URL;
+  const raw = normalizeWalletProviderUrlValue(env.WALLET_PROVIDER_URL);
   if (!raw) {
     throw new WuaStatusListError(
       "WALLET_PROVIDER_URL is required in webuild-cs01 mode so issuers can fetch WIA/KA status lists",
@@ -195,10 +207,10 @@ export function assertWuaStatusListPublisherConfig(profile, env = process.env) {
   try {
     parsed = new URL(raw);
   } catch {
-    throw new WuaStatusListError("WALLET_PROVIDER_URL must be an absolute URL", {
-      status: 500,
-      errorCode: "invalid_configuration",
-    });
+    throw new WuaStatusListError(
+      `WALLET_PROVIDER_URL must be an absolute URL (got ${JSON.stringify(env.WALLET_PROVIDER_URL)})`,
+      { status: 500, errorCode: "invalid_configuration" },
+    );
   }
   if (parsed.protocol !== "https:") {
     throw new WuaStatusListError("WALLET_PROVIDER_URL must use HTTPS in webuild-cs01 mode", {
@@ -206,7 +218,8 @@ export function assertWuaStatusListPublisherConfig(profile, env = process.env) {
       errorCode: "invalid_configuration",
     });
   }
-  if (!env.WALLET_STATUS_ADMIN_TOKEN) {
+  const adminToken = String(env.WALLET_STATUS_ADMIN_TOKEN || "").trim();
+  if (!adminToken) {
     throw new WuaStatusListError(
       "WALLET_STATUS_ADMIN_TOKEN is required in webuild-cs01 mode to protect status-list revocation",
       { status: 500, errorCode: "invalid_configuration" },
@@ -218,7 +231,7 @@ export function describeWuaStatusListPublisher(env = process.env) {
   const base = resolveWalletProviderUrl(env);
   return {
     draft: WUA_STATUS_LIST_DRAFT,
-    configured: Boolean(env.WALLET_PROVIDER_URL),
+    configured: Boolean(normalizeWalletProviderUrlValue(env.WALLET_PROVIDER_URL)),
     mediaType: STATUS_LIST_MEDIA_TYPE,
     wia: base ? `${base}/status-lists/wia/${DEFAULT_STATUS_LIST_ID}` : null,
     ka: base ? `${base}/status-lists/ka/${DEFAULT_STATUS_LIST_ID}` : null,

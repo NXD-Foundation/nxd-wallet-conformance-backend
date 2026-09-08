@@ -1923,7 +1923,7 @@ export const validateWUA = async (wuaJwt, sessionId = null, issuerMetadata = nul
       }
     }
 
-    return { valid: true, payload, header: sigResult.header, warnings: sigResult.warnings, verificationKeySource: sigResult.verificationKeySource };
+    return { valid: true, payload, header: sigResult.header, warnings: sigResult.warnings, verificationKeySource: sigResult.verificationKeySource, jwk: sigResult.jwk };
   } catch (error) {
     const errorMsg = `WUA validation error: ${error.message}`;
     if (sessionId) {

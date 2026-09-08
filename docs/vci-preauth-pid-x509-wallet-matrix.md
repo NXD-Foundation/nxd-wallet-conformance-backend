@@ -40,7 +40,7 @@ The PID configuration is advertised here:
 | Credential Signing Alg | `ES256` | Same | `ES256` for JWT-based credentials, `-7` and `-9` for advertised `mso_mdoc` signing |
 | Issuer Signature Reference in Credential | `x5c` JOSE header | Same validation expectations | `jwk`, `kid`, `did:web` also implemented for issuer-side signing |
 | Access Token Type | `bearer` by default in compatibility mode | **DPoP only** — sender-constrained; DPoP generation failure is fatal | `DPoP` when wallet sends valid DPoP at `/token_endpoint` |
-| Client Authentication at Token Endpoint | `public` works | **WUA headers required** (`OAuth-Client-Attestation` + PoP); no body `client_assertion` | Issuer logs WUA non-compliance on pre-auth without hard-fail |
+| Client Authentication at Token Endpoint | `public` works | **WUA headers required** (`OAuth-Client-Attestation` + PoP); no body `client_assertion` | WUA-required pre-auth fails closed; compatibility logs `[CS01_NON_COMPLIANCE]` |
 | Token-request `authorization_details` | Often sent in compatibility flows | Omitted for single-config offers; required when offer lists multiple `credential_configuration_ids` | VCI v1.0 pre-auth grant does not carry `scope` |
 | Issuance Mode | `Immediate` by default | Same; deferred polls honor issuer `interval` from 202 responses | `Deferred` via `/credential_deferred` with Bearer + DPoP |
 | Nonce Model | `c_nonce` from `/token_endpoint`, proof must echo it | Same | `/nonce` endpoint also exists for fresh nonce retrieval |
@@ -105,7 +105,7 @@ These are the main places where a wallet implementer should distinguish spec int
 - PAR is not part of this pre-authorized flow; it applies only to the authorization-code endpoints.
 - In **compatibility** mode (`WALLET_PROFILE` unset), DPoP and WUA remain optional at the issuer; bearer tokens are still issued without DPoP.
 - In **CS-01** mode (`WALLET_PROFILE=webuild-cs01`), the wallet always sends DPoP + WUA on pre-auth; bearer fallback is unreachable client-side.
-- Issuer WUA validation on pre-auth is observability-only (`[CS01_NON_COMPLIANCE]` logs); issuance is not hard-failed for missing/invalid WUA.
+- Issuer WUA validation on WUA-required pre-auth sessions is fail-closed (WIA headers, DPoP binding, and WIA/KA Token Status List bits). Compatibility-mode pre-auth still logs `[CS01_NON_COMPLIANCE]` without hard-failing optional/missing WUA.
 - When `HAIP_PROFILE_REQUIRE_DPOP_FOR_TOKEN=true`, the issuer rejects pre-auth token requests without DPoP.
 - `tx_code` is validated when the pre-auth session was created with `txCodeRequired` (see `createPreAuthSessionData()` in [utils/routeUtils.js](/home/ni/code/js/rfc-issuer-v1/utils/routeUtils.js)).
 - The broader codebase supports multiple issuer signing references (`x5c`, embedded `jwk`, `kid`, `did:web`), but the exact test case here sets the session to `x509`.

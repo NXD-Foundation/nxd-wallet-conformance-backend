@@ -8,6 +8,12 @@
 import fs from "fs";
 import path from "path";
 import * as jose from "jose";
+import {
+  buildWiaStatusListEvidence,
+  evaluateWuaStatusList,
+  parseReferencedTokenStatus,
+  publicJwkOnly,
+} from "./wuaStatusListVerifier.js";
 
 export const CLIENT_ATTESTATION_JWT_TYP = "oauth-client-attestation+jwt";
 export const CLIENT_ATTESTATION_POP_TYP = "oauth-client-attestation-pop+jwt";
@@ -229,6 +235,38 @@ function base64DerToPem(b64) {
   return `-----BEGIN CERTIFICATE-----\n${lines.join("\n")}\n-----END CERTIFICATE-----`;
 }
 
+async function matchingTrustedAttesterJwk(attestationJwt, trustedJwks, alg) {
+  const header = jose.decodeProtectedHeader(attestationJwt);
+  const keys = trustedJwks?.keys || [];
+  if (header?.kid) {
+    const matched = keys.find((key) => key.kid === header.kid);
+    if (!matched) {
+      throw new Error(
+        withSpecRef(
+          `Cannot verify WIA signature: no trusted attester key matches kid '${header.kid}'`,
+          SPEC_REFS.OAUTH_CLIENT_ATTESTATION
+        )
+      );
+    }
+    return publicJwkOnly(matched);
+  }
+  for (const candidate of keys) {
+    try {
+      const key = await jose.importJWK(candidate, alg);
+      await jose.jwtVerify(attestationJwt, key, { algorithms: [alg], typ: CLIENT_ATTESTATION_JWT_TYP });
+      return publicJwkOnly(candidate);
+    } catch {
+      continue;
+    }
+  }
+  throw new Error(
+    withSpecRef(
+      "Cannot verify WIA signature: no configured attester key verified the attestation",
+      SPEC_REFS.OAUTH_CLIENT_ATTESTATION
+    )
+  );
+}
+
 /**
  * Resolve verification key for WIA JWS: trusted JWKS, x5c chain, or header.jwk (dev).
  */
@@ -242,19 +280,21 @@ export async function resolveWiaVerificationKey(attestationJwt, trustedJwks, pro
       typ: CLIENT_ATTESTATION_JWT_TYP,
       algorithms: [alg],
     });
-    return { verified: true, protectedHeader: verifiedHeader, alg };
+    const verificationJwk = await matchingTrustedAttesterJwk(attestationJwt, trustedJwks, alg);
+    return { verified: true, protectedHeader: verifiedHeader, alg, verificationJwk };
   }
 
   if (Array.isArray(header?.x5c) && header.x5c.length > 0) {
     const key = await jose.importX509(base64DerToPem(header.x5c[0]), alg);
     await jose.jwtVerify(attestationJwt, key, { algorithms: [alg], typ: CLIENT_ATTESTATION_JWT_TYP });
-    return { verified: true, protectedHeader: header, alg };
+    const verificationJwk = publicJwkOnly(await jose.exportJWK(key));
+    return { verified: true, protectedHeader: header, alg, verificationJwk };
   }
 
   if (header?.jwk) {
     const key = await jose.importJWK(header.jwk, alg);
     await jose.jwtVerify(attestationJwt, key, { algorithms: [alg], typ: CLIENT_ATTESTATION_JWT_TYP });
-    return { verified: true, protectedHeader: header, alg };
+    return { verified: true, protectedHeader: header, alg, verificationJwk: publicJwkOnly(header.jwk) };
   }
 
   throw new Error(
@@ -308,10 +348,14 @@ export function validateWiaStructureClaims(payload, { requireClientStatus = fals
     warnings.push("WIA missing client_status; revocation maintenance not asserted (warning only)");
   } else {
     const cs = payload.client_status;
-    if (!cs.status?.status_list?.uri || typeof cs.status?.status_list?.idx !== "number") {
+    const parsed = parseReferencedTokenStatus(cs, { required: requireClientStatus, kind: "wia" });
+    if (!requireClientStatus && parsed?.incomplete) {
       warnings.push("WIA client_status.status_list incomplete (warning only)");
     }
     if (typeof cs.exp !== "number") {
+      if (requireClientStatus) {
+        throw new Error(withSpecRef("WIA client_status.exp is missing", SPEC_REFS.OAUTH_CLIENT_ATTESTATION));
+      }
       warnings.push("WIA client_status.exp missing (warning only)");
     } else if (cs.exp < now) {
       throw new Error(withSpecRef("WIA client_status.exp is expired", SPEC_REFS.OAUTH_CLIENT_ATTESTATION));
@@ -353,6 +397,7 @@ export async function validateOAuthClientAttestationFromRequest({
   maxPopIatAgeSeconds = 600,
   requireAttestation = false,
   strictWiaSignature = false,
+  statusList = {},
 }) {
   const { attestationJwt, popJwt } = getOAuthClientAttestationHeaders(headers);
 
@@ -396,21 +441,30 @@ export async function validateOAuthClientAttestationFromRequest({
   try {
     let attestationPayload;
     let protectedHeader;
+    let verificationJwk = null;
     const useStrictSig = strictWiaSignature || requireAttestation;
 
     if (useStrictSig) {
       const sig = await resolveWiaVerificationKey(attestationJwt, jwks?.keys?.length ? jwks : null, null);
       protectedHeader = sig.protectedHeader;
       attestationPayload = jose.decodeJwt(attestationJwt);
+      verificationJwk = sig.verificationJwk || null;
       assertAsymmetricJwtAlg(protectedHeader.alg);
     } else if (jwks?.keys?.length) {
       const verified = await verifyClientAttestationJwt(attestationJwt, jwks, { clockTolerance });
       attestationPayload = verified.payload;
       protectedHeader = verified.protectedHeader;
+      verificationJwk = await matchingTrustedAttesterJwk(attestationJwt, jwks, protectedHeader.alg);
     } else {
       const decoded = decodeClientAttestationJwtPayloadUnverified(attestationJwt);
       attestationPayload = decoded.payload;
       protectedHeader = decoded.protectedHeader;
+      if (protectedHeader.jwk) {
+        verificationJwk = publicJwkOnly(protectedHeader.jwk);
+      } else if (Array.isArray(protectedHeader.x5c) && protectedHeader.x5c.length) {
+        const key = await jose.importX509(base64DerToPem(protectedHeader.x5c[0]), protectedHeader.alg || "ES256");
+        verificationJwk = publicJwkOnly(await jose.exportJWK(key));
+      }
     }
 
     const { warnings: wiaWarnings } = validateWiaStructureClaims(attestationPayload, {
@@ -436,6 +490,35 @@ export async function validateOAuthClientAttestationFromRequest({
     assertPopIssMatchesAttestationSub(popPayload.iss, attestationPayload.sub);
 
     const wiaCnfJkt = await computeWiaCnfJkt(cnfJwk);
+    let wiaStatusList = null;
+    if (requireAttestation) {
+      const parsed = parseReferencedTokenStatus(attestationPayload.client_status, {
+        required: true,
+        kind: "wia",
+      });
+      const statusVerificationJwk = publicJwkOnly(verificationJwk);
+      if (!statusVerificationJwk) {
+        throw new Error(
+          withSpecRef(
+            "WIA Status List Token cannot be verified without the Wallet Provider public key",
+            SPEC_REFS.OAUTH_CLIENT_ATTESTATION
+          )
+        );
+      }
+      await evaluateWuaStatusList({
+        uri: parsed.uri,
+        idx: parsed.idx,
+        verificationJwk: statusVerificationJwk,
+        kind: "wia",
+        ...statusList,
+      });
+      wiaStatusList = buildWiaStatusListEvidence({
+        uri: parsed.uri,
+        idx: parsed.idx,
+        exp: parsed.exp,
+        verificationJwk: statusVerificationJwk,
+      });
+    }
 
     return {
       skip: false,
@@ -446,6 +529,8 @@ export async function validateOAuthClientAttestationFromRequest({
       wiaCnfJkt,
       wiaWarnings,
       clientStatusPresent: Boolean(attestationPayload.client_status),
+      verificationJwk: publicJwkOnly(verificationJwk),
+      wiaStatusList,
     };
   } catch (err) {
     return {

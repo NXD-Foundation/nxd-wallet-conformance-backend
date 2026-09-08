@@ -157,7 +157,7 @@ Relevant code:
 These are the main cases where the wallet should distinguish VCI intent from current implementation details:
 
 - OAuth metadata advertises `require_pushed_authorization_requests = true`, but `/authorize` still accepts non-PAR requests in current code, so PAR is supported but not currently enforced.
-- WIA is accepted at `/par` and `/token_endpoint`, but validation failure does not currently block the flow.
+- WIA is required at `/par` and `/token_endpoint` for WUA-required credentials (`VerifiablePIDSDJWTWUA`); missing or invalid WIA, including a revoked or unverifiable Token Status List bit, is `invalid_client`.
 - Dynamic PID issuance can generate `id_token`-only request URIs, but the callback endpoint [routes/issue/codeFlowSdJwtRoutes.js](/home/ni/code/js/rfc-issuer-v1/routes/issue/codeFlowSdJwtRoutes.js#L867) currently only reads `req.body.vp_token`.
 - `/offer-code-defered` is the actual route spelling in code.
 - The dynamic callback path mints an authorization code after wallet callback, but it does not perform deep validation of the returned VP or ID Token in this route itself.
@@ -176,7 +176,7 @@ If you want to turn the authorization-code family into wallet test cases, the mi
 | Credential Format | `dc+sd-jwt`, `jwt_vc_json`, `mso_mdoc` |
 | Issuance Timing | immediate, deferred |
 | Issuer Signature Reference | `x5c`, embedded `jwk`, `kid`, `did:web` |
-| Failure Handling | missing PKCE, bad PKCE, expired code, invalid proof, invalid nonce, invalid DPoP (also: invalid key-attestation JWT -> `invalid_proof`; WUA validation failure does not currently block issuance) |
+| Failure Handling | missing PKCE, bad PKCE, expired code, invalid proof, invalid nonce, invalid DPoP (also: invalid key-attestation JWT or revoked/unverified WIA/KA status list -> `invalid_proof`; WUA-required WIA failure at PAR/token -> `invalid_client`) |
 
 ## Recommended Single-Line Test Case Description
 

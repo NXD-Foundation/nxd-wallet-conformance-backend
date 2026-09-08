@@ -27,7 +27,7 @@ async function assertSafeTarget(parsed, { resolveHostname = lookup, allowedHosts
   }
 }
 
-export async function fetchDocument(url, { fetchImpl = globalThis.fetch, timeoutMs = 10_000, maxBytes = 2_000_000, allowInsecureHttp = false, resolveHostname = lookup, allowedHosts = null, allowPrivateAddresses = false } = {}) {
+export async function fetchDocument(url, { fetchImpl = globalThis.fetch, timeoutMs = 10_000, maxBytes = 2_000_000, allowInsecureHttp = false, resolveHostname = lookup, allowedHosts = null, allowPrivateAddresses = false, headers = null } = {}) {
   let parsed;
   try {
     parsed = new URL(url);
@@ -41,7 +41,9 @@ export async function fetchDocument(url, { fetchImpl = globalThis.fetch, timeout
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetchImpl(url, { signal: controller.signal, redirect: "error" });
+    const requestInit = { signal: controller.signal, redirect: "error" };
+    if (headers && typeof headers === "object") requestInit.headers = headers;
+    const response = await fetchImpl(url, requestInit);
     if (!response.ok) {
       throw new TrustListError(`Trust-list fetch failed with HTTP ${response.status}`, TRUST_REASON_CODES.REFERENCED_LIST_UNAVAILABLE, { url, status: response.status });
     }

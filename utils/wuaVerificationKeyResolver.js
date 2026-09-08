@@ -2,6 +2,7 @@
 import { X509Certificate } from "crypto";
 import jwt from "jsonwebtoken";
 import * as jose from "jose";
+import { parseReferencedTokenStatus, publicJwkOnly } from "./wuaStatusListVerifier.js";
 
 export const KEY_ATTESTATION_JWT_TYP = "key-attestation+jwt";
 const DEFAULT_REFS = ["TS3 Wallet Unit Attestation", "OpenID4VCI 1.0 Appendix D.1"];
@@ -66,16 +67,30 @@ export function validateWalletUnitAttestationClaims(payload, options = {}) {
   if (!Array.isArray(payload.attested_keys) || payload.attested_keys.length === 0 || payload.attested_keys.some((key) => !key || typeof key !== "object" || !key.kty)) {
     throw new Error(withSpecRef("WUA JWT attested_keys must be a non-empty array of JWK objects", ...refs));
   }
-  const hasStatus = Boolean(payload.status?.status_list || payload.key_storage_status?.status);
-  if (!hasStatus) throw new Error(withSpecRef("Key Attestation missing required key_storage_status", ...refs));
   const warnings = [];
-  const kss = payload.key_storage_status;
-  if (kss) {
-    if (!kss.status?.status_list?.uri || typeof kss.status?.status_list?.idx !== "number") warnings.push("KA key_storage_status.status_list incomplete (warning only)");
-    if (typeof kss.exp !== "number") warnings.push("KA key_storage_status.exp missing (warning only)");
-    else if (kss.exp < Math.floor(Date.now() / 1000)) throw new Error(withSpecRef("Key Attestation key_storage_status.exp is expired", ...refs));
+  if (isLegacy) {
+    const hasStatus = Boolean(payload.status?.status_list || payload.key_storage_status?.status);
+    if (!hasStatus) throw new Error(withSpecRef("Key Attestation missing required key_storage_status", ...refs));
+    const kss = payload.key_storage_status;
+    if (kss) {
+      const parsed = parseReferencedTokenStatus(kss, { required: false, kind: "ka" });
+      if (parsed?.incomplete) warnings.push("KA key_storage_status.status_list incomplete (warning only)");
+      if (typeof kss.exp !== "number") warnings.push("KA key_storage_status.exp missing (warning only)");
+      else if (kss.exp < Math.floor(Date.now() / 1000)) throw new Error(withSpecRef("Key Attestation key_storage_status.exp is expired", ...refs));
+    }
+    return { isLegacy, isCs04, hasStatus: true, warnings };
   }
-  return { isLegacy, isCs04, hasStatus, warnings };
+  const kss = payload.key_storage_status;
+  if (!kss || typeof kss !== "object") {
+    throw new Error(withSpecRef("Key Attestation missing required key_storage_status", ...refs));
+  }
+  parseReferencedTokenStatus(kss, { required: true, kind: "ka" });
+  if (typeof kss.exp !== "number") {
+    warnings.push("KA key_storage_status.exp missing (warning only)");
+  } else if (kss.exp < Math.floor(Date.now() / 1000)) {
+    throw new Error(withSpecRef("Key Attestation key_storage_status.exp is expired", ...refs));
+  }
+  return { isLegacy, isCs04, hasStatus: true, warnings };
 }
 
 /** Shared trust hook; trust-framework sessions retain their existing route-level decision. */
@@ -107,5 +122,5 @@ export async function verifyWalletProviderAttestation(wuaJwt, metadata = {}, opt
   }
   const claims = validateWalletUnitAttestationClaims(payload, { specRefs: refs });
   if (!isWalletProviderAttestationTrustedByPolicy(payload, decoded.header, metadata)) throw new Error(withSpecRef("WUA rejected: Wallet Provider is not trusted by issuer policy", ...refs));
-  return { header: decoded.header, payload, ...claims, ...resolved };
+  return { header: decoded.header, payload, ...claims, ...resolved, jwk: publicJwkOnly(resolved.jwk) };
 }

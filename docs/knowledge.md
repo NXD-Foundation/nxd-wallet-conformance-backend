@@ -117,8 +117,10 @@ binding to `attested_keys[0]`.
   for that wire format (`typ: statuslist+jwt`, `bits: 1`, ZLIB/DEFLATE,
   LSB-first packing). CS-01 attestations advertise those URIs from
   `WALLET_PROVIDER_URL`, keep status maintenance at least 31 days ahead of
-  presentation, and retain list entries until that `exp`. Issuer-side fetch
-  and bit evaluation of those lists is still out of scope.
+  presentation, and retain list entries until that `exp`. On WUA-required
+  issuance the issuer fetches each advertised `status_list.uri`, verifies the
+  Status List JWT with the same Wallet Provider key that authenticated the
+  WIA or KA, and rejects a non-zero bit at `idx`.
 - When an issuer supplies `c_nonce`, the KA carried in a JWT proof includes the
 same `nonce`; the proof JWT and KA nonce are checked together before dispatch.
 - The CS-04 `certification` example is currently tracked as an open
@@ -318,13 +320,17 @@ Section 3.6 and Section 4.2.
 
 ### Wallet Attestation And Trust
 
-- Current WUA-required issuance rejects missing or expired core WIA and key
-attestation status fields, but incomplete status-list detail is currently
-warning-only. The wallet-client now hosts resolvable WIA/KA Token Status
-Lists per [draft-ietf-oauth-status-list-20](./rfc/draft-ietf-oauth-status-list-20.txt);
-issuers that fetch `status_list.uri` can retrieve a signed
-`application/statuslist+jwt`. This repository's issuer still does not fetch
-or evaluate those bits.
+- WUA-required issuance (and `trustFramework=true` issuance sessions) fetch
+  and evaluate the WIA and KA Token Status Lists at issuance time. Incomplete
+  `status_list.uri`/`idx` values fail closed. The issuer `GET`s each
+  `status_list.uri` with `Accept: application/statuslist+jwt`, verifies the
+  compact Status List JWT (`typ: statuslist+jwt`) using the Wallet Provider
+  public key that already authenticated the WIA or KA, inflates the
+  ZLIB/LSB-first bitstring, and requires the bit at `idx` to be VALID (0).
+  Revoked, unavailable, or unverifiable lists fail PAR/token as
+  `invalid_client` and the Credential endpoint as `invalid_proof`.
+  Compatibility-mode optional attestations remain warning-only. The
+  post-issuance 24-hour re-check cadence from CS-04 §7.2 is not implemented.
 - WUA/key-attestation signature validation is shared by `proofs.jwt` protected
   header `key_attestation` and `proofs.attestation`. In compatibility mode,
   configured Wallet Provider keys are preferred, then a protected-header `jwk`
@@ -414,8 +420,8 @@ or evaluate those bits.
   infrastructure and must be replaced by signed TL/registrar scope before a
   production trust decision.
 - Production/conformance hardening still needs trusted Wallet Provider material
-and complete status-list validation; keep any self-contained-key fallback
-development-only when that work lands.
+  beyond issuance-time Status List bit evaluation; keep any self-contained-key
+  fallback development-only when that work lands.
 
 Source: [future WUA enforcement](./futureWUAstricterEnforcements.md).
 

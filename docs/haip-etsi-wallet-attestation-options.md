@@ -784,7 +784,7 @@ Implementation (delivered):
 - `runPreAuthorizedIssuance()` applies CS-01 DPoP (fatal), WUA headers (no body `client_assertion`), and DPoP-bound token checks
 - grant-route-aware credential identification: auth-code uses scope; pre-auth uses `credential_configuration_ids` and optional token-request `authorization_details`
 - optional `CS01_DISABLE_PRE_AUTHORIZED=true` blocks only pre-auth; auth-code remains available
-- issuer pre-auth hardening: `tx_code` validation, deferred session lookup, WUA observability without hard-fail
+- issuer pre-auth hardening: `tx_code` validation, deferred session lookup, WUA-required fail-closed status-list checks (compatibility remains observability-only)
 - deferred issuance: `/credential_deferred` returns 202 + `interval` while pending; wallet honors issuer interval
 
 Code areas:
@@ -868,7 +868,7 @@ CS-01 mode supports both authorization_code and pre-authorized_code grant types
 Pre-auth opt-out (CS01_DISABLE_PRE_AUTHORIZED) blocks only pre-auth; auth-code remains available
 Auth-code CS-01 path (PAR, PKCE, WUA, DPoP, scope, JWT proof) remains unchanged and tested
 CS-01 pre-auth token requests send Wallet Unit Attestation (header-based, no body client_assertion)
-Issuers log/report WUA non-compliance on pre-auth token requests without hard-failing for now
+WUA-required pre-auth issuance fails closed on missing/invalid WIA and Status List bits; compatibility-mode pre-auth still logs non-compliance
 CS-01 pre-auth access tokens are sender-constrained (DPoP); no bearer fallback
 Credential requests on both paths use JWT proof + WUA key_attestation binding
 Credential identification is route-aware: auth-code uses scope; pre-auth uses credential_configuration_ids

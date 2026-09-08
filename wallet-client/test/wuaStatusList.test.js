@@ -311,6 +311,18 @@ describe("WUA Token Status List publisher", () => {
           WALLET_PROVIDER_URL: "https://host.example/wallet-client",
         }),
       ).to.throw(/WALLET_STATUS_ADMIN_TOKEN/);
+      expect(() =>
+        assertWuaStatusListPublisherConfig("webuild-cs01", {
+          WALLET_PROVIDER_URL: '"https://host.example/wallet-client"',
+          WALLET_STATUS_ADMIN_TOKEN: "secret",
+        }),
+      ).to.not.throw();
+      expect(() =>
+        assertWuaStatusListPublisherConfig("webuild-cs01", {
+          WALLET_PROVIDER_URL: "not-a-url",
+          WALLET_STATUS_ADMIN_TOKEN: "secret",
+        }),
+      ).to.throw(/absolute URL/);
       expect(() => assertWuaStatusListPublisherConfig("compatibility", {})).to.not.throw();
     });
   });
