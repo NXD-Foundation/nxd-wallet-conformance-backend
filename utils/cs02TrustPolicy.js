@@ -250,8 +250,8 @@ export async function validateX509SanDnsTrustAnchor(_clientId, _header, _leafCer
   // TODO(CS-02 x509 trust framework): load CS02_X509_TRUST_ANCHORS_PATH.
   // TODO(CS-02 x509 trust framework): parse full x5c chain and validate against trust anchors.
   // TODO(CS-02 x509 trust framework): verify certificate validity period and P-256/ES256 leaf key.
-  // TODO(CS-02 x509 trust framework): require SAN DNS match to x509_san_dns client_id host.
-  // TODO(CS-02 x509 trust framework): reject wildcard or missing SAN DNS unless policy allows it.
+  // Leaf dNSName SAN vs x509_san_dns client_id is enforced in utils/cs02ClientIdBinding.js.
+  // TODO(CS-02 x509 trust framework): reject remaining wildcard SAN policy cases.
   const result = {
     trusted: true,
     placeholder: true,
@@ -417,21 +417,6 @@ export function validateCs02ClientMetadata(
     }
   }
 
-  if (strict && metadata.redirect_uris != null) {
-    if (!Array.isArray(metadata.redirect_uris) || metadata.redirect_uris.length === 0) {
-      throw new Cs02TrustPolicyError("client_metadata.redirect_uris must be a non-empty array", "invalid_request");
-    }
-    for (const redirectUri of metadata.redirect_uris) {
-      let parsed;
-      try { parsed = new URL(redirectUri); } catch {
-        throw new Cs02TrustPolicyError("client_metadata.redirect_uris entries must be absolute HTTPS URIs", "invalid_request");
-      }
-      if (parsed.protocol !== "https:") {
-        throw new Cs02TrustPolicyError("client_metadata.redirect_uris entries must use HTTPS", "invalid_request");
-      }
-    }
-  }
-
   if (responseMode === "direct_post" && strict) {
     if (
       metadata.authorization_encrypted_response_alg ||
@@ -550,6 +535,8 @@ export function filterClientMetadataForCs02Enforcement(
     delete metadata.authorization_encrypted_response_alg;
     delete metadata.authorization_encrypted_response_enc;
   }
+
+  delete metadata.redirect_uris;
 
   return metadata;
 }

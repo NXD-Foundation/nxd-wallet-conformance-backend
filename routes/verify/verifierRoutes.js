@@ -2768,7 +2768,6 @@ verifierRouter.get("/vpRequestJwt/:id", async (req, res) => {
 
   clientMetadata.presentation_definition_uri =
     serverURL + "/presentation-definition/1";
-  clientMetadata.redirect_uris = [response_uri];
   clientMetadata.client_id = clientId;
 
   let vpRequest = {

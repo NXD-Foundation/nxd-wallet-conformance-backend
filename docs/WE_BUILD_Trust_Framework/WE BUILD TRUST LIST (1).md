@@ -108,8 +108,8 @@ enforce WP4 trust anchors. In particular:
 
 - `docs/knowledge.md` is the orientation document and records the current
 trust-enforcement limitation;
-- `utils/cs02TrustPolicy.js` and the wallet equivalent validate policy shape,
-but do not resolve a WP4 trust registry;
+- `utils/cs02TrustPolicy.js` is shared by wallet and verifier to validate policy
+shape, but does not resolve a WP4 trust registry;
 - `tests/cs02TrustPolicy.test.js` explicitly covers the current placeholder
 behaviour; and
 - current WUA and credential checks must not be described as WP4 trust-list

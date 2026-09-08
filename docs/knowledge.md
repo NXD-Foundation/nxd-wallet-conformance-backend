@@ -77,9 +77,9 @@ When documents disagree, use this order of authority:
   deployment actually does.
 4. Project decision, matrix, plan, and interop documents in `docs/`.
 
-The four top-level `cs-0*.md` files duplicate the corresponding files in
-`docs/core/`. Treat `docs/core/` as canonical and avoid updating both copies
-unless retaining that duplication is intentional.
+WE BUILD conformance specifications live only in `docs/core/`. Do not keep
+parallel top-level `cs-0*.md` copies; a previous CS-02 duplicate had already
+drifted (`openid4vp://present` vs the approved empty-authority form).
 
 ## Architectural Decisions And Constraints
 
@@ -207,6 +207,10 @@ both `kid` and `alg`, uses that exact `alg`, prefers `A256GCM`, and returns a
   decryption must use this same registry rather than a separate hard-coded key.
 - Verifier metadata should use the OpenID4VP 1.0 verifier-metadata model, not
 older `client_metadata` representations.
+- CS-02 wallet invocation is the empty-authority form
+  `openid4vp://?request_uri=...` (CS-02 §6.1.2 and §8.1). The host `present` is
+  not part of the approved CS-02 text; treat `openid4vp://present?...` as
+  implementation or compatibility-only.
 
 Sources: [CS-02](./core/cs-02-credential-presentation%20%281%29.md),
 [verifier metadata model](./openid4vp-cs02-verifier-metadata-model.md), and

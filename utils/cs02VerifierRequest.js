@@ -10,6 +10,10 @@ import {
   validateX509SanDnsTrustAnchor as validateX509SanDnsTrustForRequestGeneration,
   validateVerifierAttestationTrust as validateVerifierAttestationForRequestGeneration,
 } from "./cs02TrustPolicy.js";
+import {
+  Cs02ClientIdBindingError,
+  assertX509SanDnsResponseUriFqdn,
+} from "./cs02ClientIdBinding.js";
 
 export const CS02_JAR_TYP = "oauth-authz-req+jwt";
 export const CS02_JAR_ALG = "ES256";
@@ -265,6 +269,16 @@ export function validateCs02JarGenerationInput({
     if (parsed.protocol !== "https:") {
       throw new Cs02VerifierRequestError("CS-02 response_uri must use HTTPS", "invalid_request");
     }
+    if (scheme === "x509_san_dns") {
+      try {
+        assertX509SanDnsResponseUriFqdn(client_id, response_uri);
+      } catch (error) {
+        if (error instanceof Cs02ClientIdBindingError) {
+          throw new Cs02VerifierRequestError(error.message, error.errorCode);
+        }
+        throw error;
+      }
+    }
   }
   if (nonce != null) validateCs02Nonce(nonce);
 
@@ -390,6 +404,17 @@ export function validateCs02SignedJar(requestJwt, options = { strict: true }) {
 
   validateCs02DcqlQuery(payload.dcql_query, options);
   validateCs02TransactionDataEntries(payload.transaction_data, payload.dcql_query, options);
+
+  if (!isCs07DcApiRequest && parseVerifierClientIdScheme(payload.client_id).scheme === "x509_san_dns") {
+    try {
+      assertX509SanDnsResponseUriFqdn(payload.client_id, payload.response_uri);
+    } catch (error) {
+      if (error instanceof Cs02ClientIdBindingError) {
+        throw new Cs02VerifierRequestError(error.message, error.errorCode);
+      }
+      throw error;
+    }
+  }
 }
 
 export function filterClientMetadataForCs02(clientMetadata, responseMode) {
@@ -441,15 +466,15 @@ export function resolveCs02JarSigningPolicy({
 }
 
 export function createCs02OpenId4VpRequestUrl(requestUri, clientId, usePostMethod = false) {
-  const base = `openid4vp://present?request_uri=${encodeURIComponent(requestUri)}&client_id=${encodeURIComponent(clientId)}`;
+  const base = `openid4vp://?request_uri=${encodeURIComponent(requestUri)}&client_id=${encodeURIComponent(clientId)}`;
   return usePostMethod ? `${base}&request_uri_method=post` : base;
 }
 
 export function createOpenId4VpRequestUrl(requestUri, clientId, usePostMethod = false, env = process.env) {
   const options = resolveVerifierCs02Options(env);
-  if (options.strict && !options.allowLegacyOpenId4VpInvocation) {
-    return createCs02OpenId4VpRequestUrl(requestUri, clientId, usePostMethod);
+  if (!options.strict && options.allowLegacyOpenId4VpInvocation) {
+    const base = `openid4vp://present?request_uri=${encodeURIComponent(requestUri)}&client_id=${encodeURIComponent(clientId)}`;
+    return usePostMethod ? `${base}&request_uri_method=post` : base;
   }
-  const base = `openid4vp://?request_uri=${encodeURIComponent(requestUri)}&client_id=${encodeURIComponent(clientId)}`;
-  return usePostMethod ? `${base}&request_uri_method=post` : base;
+  return createCs02OpenId4VpRequestUrl(requestUri, clientId, usePostMethod);
 }

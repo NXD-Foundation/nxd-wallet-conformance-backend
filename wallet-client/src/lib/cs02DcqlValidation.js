@@ -4,7 +4,7 @@
  */
 
 import { Cs02ValidationError } from "./cs02RequestValidation.js";
-import { validateCs02TrustedAuthoritiesPolicy } from "../../utils/cs02TrustPolicy.js";
+import { validateCs02TrustedAuthoritiesPolicy } from "../../../utils/cs02TrustPolicy.js";
 import {
   isSupportedCs02ClaimPathSegment,
   validateSupportedCs02ClaimPath,

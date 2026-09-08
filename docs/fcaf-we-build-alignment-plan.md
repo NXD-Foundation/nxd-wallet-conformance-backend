@@ -53,7 +53,7 @@ Consolidate strict-profile selection at the public wallet and verifier entry
 points. The same rules must apply to `/vp/request`, request URI retrieval,
 wallet presentation, direct-post handlers, and metadata publication.
 
-- Keep signed ES256/P-256 JAR, DCQL, `openid4vp://present`, SD-JWT selective
+- Keep signed ES256/P-256 JAR, DCQL, `openid4vp://?`, SD-JWT selective
   disclosure, KB-JWT, nonce/audience binding, and response validation as the
   strict CS-02 baseline.
 - Keep all legacy Presentation Exchange, bare `openid4vp://`, unsigned JAR,
@@ -125,7 +125,7 @@ case is negative.
 Use small end-to-end flows to prove the protocol joins, rather than replicating
 each FCAF negative row.
 
-- Cover same-device and cross-device `openid4vp://present` invocation with
+- Cover same-device and cross-device `openid4vp://?` invocation with
   request URI GET and POST.
 - Cover strict DCQL request-to-selection-to-submission for one SD-JWT VC, one
   multi-credential `multiple=true` response, and one supported mdoc response.
@@ -247,7 +247,7 @@ ad-hoc hash, JWK comparison, or base64url logic remains in strict flows.
 
 The repository has completed a useful first pass of strict CS-02 enforcement:
 
-- strict ES256 JAR, DCQL-only request, `openid4vp://present`, base64url nonce,
+- strict ES256 JAR, DCQL-only request, `openid4vp://?`, base64url nonce,
   required state, request-URI, metadata-URI, and response-mode checks exist;
 - wallet and verifier validate DCQL IDs, formats, claim/credential sets,
   `multiple`, selected transaction-data structure, and SD-JWT/mdoc request

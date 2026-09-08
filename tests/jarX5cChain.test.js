@@ -19,7 +19,7 @@ ${String(x5cEntry)
 async function buildEs256X509Jar() {
   return buildVpRequestJWT(
     "x509_san_dns:dev-i4mlab.aegean.gr",
-    "https://example.com/callback",
+    "https://dev-i4mlab.aegean.gr/callback",
     null,
     null,
     { client_name: "Test Verifier" },

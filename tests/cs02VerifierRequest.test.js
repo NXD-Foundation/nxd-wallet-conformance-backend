@@ -29,7 +29,7 @@ async function buildStandardCs02Jar(overrides = {}) {
   try {
     return await buildVpRequestJWT(
       overrides.client_id || "x509_san_dns:dev-i4mlab.aegean.gr",
-      "https://example.com/direct_post/session-1",
+      "https://dev-i4mlab.aegean.gr/direct_post/session-1",
       null,
       null,
       overrides.client_metadata || { client_name: "Test Verifier" },
@@ -70,6 +70,17 @@ describe("CS-02 verifier request generation (Phase 3)", () => {
       nonce: "nonce-1",
       options: { strict: true },
     })).to.throw(Cs02VerifierRequestError, /HTTPS/);
+  });
+
+  it("rejects generated x509_san_dns requests whose response_uri FQDN does not match client_id", () => {
+    expect(() => validateCs02JarGenerationInput({
+      client_id: "x509_san_dns:verifier.example",
+      response_uri: "https://other.example/response",
+      dcql_query: validDcqlQuery(),
+      response_mode: "direct_post",
+      nonce: "nonce-1",
+      options: { strict: true },
+    })).to.throw(Cs02VerifierRequestError, /FQDN/);
   });
 
   const originalCompatibility = process.env.VERIFIER_CS02_COMPATIBILITY;
@@ -274,6 +285,7 @@ describe("CS-02 verifier request generation (Phase 3)", () => {
     expect(filtered.vp_formats_supported["dc+sd-jwt"]["kb-jwt_alg_values"]).to.deep.equal(["ES256"]);
     expect(filtered).to.not.have.property("encrypted_response_alg_values_supported");
     expect(filtered).to.not.have.property("encrypted_response_enc_values_supported");
+    expect(filtered).to.not.have.property("redirect_uris");
   });
 
   it("keeps broad verifier-config capabilities out of strict CS-02 metadata", () => {
@@ -328,7 +340,7 @@ describe("CS-02 verifier request generation (Phase 3)", () => {
     ).to.throw(Cs02VerifierRequestError);
   });
 
-  it("emits openid4vp://present deep links in strict mode", () => {
+  it("emits empty-authority openid4vp:// deep links in strict mode", () => {
     delete process.env.VERIFIER_CS02_COMPATIBILITY;
     const url = createOpenId4VpRequestUrl(
       "https://verifier.example/request/1",
@@ -336,7 +348,18 @@ describe("CS-02 verifier request generation (Phase 3)", () => {
       true,
       {},
     );
-    expect(url.startsWith("openid4vp://present?")).to.equal(true);
+    expect(url.startsWith("openid4vp://?")).to.equal(true);
+    expect(url.startsWith("openid4vp://present?")).to.equal(false);
     expect(url).to.include("request_uri_method=post");
+  });
+
+  it("emits openid4vp://present deep links only in compatibility mode", () => {
+    const url = createOpenId4VpRequestUrl(
+      "https://verifier.example/request/1",
+      "x509_san_dns:verifier.example.org",
+      false,
+      { VERIFIER_CS02_COMPATIBILITY: "true" },
+    );
+    expect(url.startsWith("openid4vp://present?")).to.equal(true);
   });
 });

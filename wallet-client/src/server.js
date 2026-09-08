@@ -69,7 +69,7 @@ import {
   shouldRetryWithAttestationChallenge,
 } from "./lib/attestationChallenge.js";
 import {
-  OPENID4VP_PRESENT_URI,
+  OPENID4VP_CS02_URI,
   isOpenId4VpDeepLink,
 } from "./lib/openid4vpUri.js";
 import {
@@ -754,7 +754,12 @@ export async function discoverIssuerMetadata(credentialIssuerBase, logSessionId,
   return meta;
 }
 
-async function discoverAuthorizationServerMetadata(authorizationServerBase, logSessionId) {
+export async function discoverAuthorizationServerMetadata(
+  authorizationServerBase,
+  logSessionId,
+  fetchImpl = fetch,
+  { grant } = {},
+) {
   const slog = logSessionId ? makeSessionLogger(logSessionId) : (() => {});
   // RFC 8414: If issuer has path component, well-known is host + '/.well-known/oauth-authorization-server' + path
   const baseStr = authorizationServerBase.replace(/\/$/, "");
@@ -777,51 +782,59 @@ async function discoverAuthorizationServerMetadata(authorizationServerBase, logS
     `${origin}/.well-known/openid-configuration${path}`,
   ];
 
-  let lastErr = null;
+  let firstDocumentError = null;
+  let lastFetchError = null;
   console.log("[as-meta] trying candidates:", candidates); try { slog("[as-meta] candidates", { candidates }); } catch {}
   for (const url of candidates) {
     try {
-      const res = await fetch(url,
-        {
-          headers: { Accept: "application/json" },
-        }
-      );
+      const res = await fetchImpl(url, {
+        headers: { Accept: "application/json" },
+      });
       console.log("[as-meta]", url, "->", res.status); try { slog("[as-meta] fetch", { url, status: res.status }); } catch {}
-      if (res.ok) { 
-        console.log("[as-meta] selected:", url); 
+      if (res.ok) {
+        console.log("[as-meta] selected:", url);
         let meta;
         try {
           meta = await res.json();
         } catch (e) {
-          lastErr = "invalid_json: " + (e?.message || String(e));
+          const message = "invalid_json: " + (e?.message || String(e));
+          if (!firstDocumentError) firstDocumentError = message;
           continue;
         }
         try {
-          validateAuthorizationServerMetadata(meta);
+          validateAuthorizationServerMetadata(meta, { grant });
         } catch (e) {
           console.error("[as-meta] metadata validation failed:", e?.message || e);
           try { slog("[as-meta] validation_failed", { error: e?.message || String(e), meta }); } catch {}
-          lastErr = e?.message || String(e);
+          if (!firstDocumentError) firstDocumentError = e?.message || String(e);
           continue;
         }
         try { slog("[as-meta] selected", { url }); } catch {}
-        return meta; 
+        return meta;
       }
-      lastErr = res.status;
+      lastFetchError = res.status;
     } catch (e) {
-      lastErr = e.message || String(e);
+      lastFetchError = e.message || String(e);
     }
   }
-  try { slog("[as-meta] failed", { lastErr }); } catch {}
-  throw new Error(`AS metadata fetch error ${lastErr}`);
+  try { slog("[as-meta] failed", { firstDocumentError, lastFetchError }); } catch {}
+  if (firstDocumentError) throw new Error(firstDocumentError);
+  throw new Error(`AS metadata fetch error ${lastFetchError}`);
 }
 
 /**
  * Basic HAIP-aligned sanity checks on the Authorization Server metadata.
  * This is intentionally strict so the wallet-client will catch regressions
  * similar to the ones that broke interoperability with the EUDI Wallet.
+ *
+ * `grant` is `authorization_code` (default) or `pre-authorized_code`. Pre-auth
+ * does not require `authorization_code` in grant_types_supported or
+ * `attest_jwt_client_auth` in token_endpoint_auth_methods_supported.
  */
-export function validateAuthorizationServerMetadata(meta) {
+export function validateAuthorizationServerMetadata(meta, { grant } = {}) {
+  const effectiveGrant = grant || "authorization_code";
+  const isAuthorizationCode = effectiveGrant === "authorization_code";
+
   if (!meta || typeof meta !== "object") {
     throw new Error("invalid_as_metadata: metadata must be a JSON object");
   }
@@ -832,34 +845,34 @@ export function validateAuthorizationServerMetadata(meta) {
   }
 
   const methods = meta.token_endpoint_auth_methods_supported;
-  // if (!Array.isArray(methods) || methods.length === 0) {
-  //   throw new Error("invalid_as_metadata: 'token_endpoint_auth_methods_supported' must be a non-empty array. received "
-  //     + JSON.stringify(meta.token_endpoint_auth_methods_supported));
-  // }
-
-  // For EUDI Wallet ARF-aligned Wallet Instance Attestation, the AS must
-  // advertise support for attest_jwt_client_auth (see EUDI Wallet ARF,
-  // Wallet Instance Attestation requirements: https://eudi.dev/2.7.3/ and
-  // OAuth 2.0 Attestation-Based Client Authentication metadata requirements:
-  // https://www.ietf.org/archive/id/draft-ietf-oauth-attestation-based-client-auth-07.html#section-10.1).
-  // If it's missing, we treat the AS metadata as incompatible and abort
-  // the flow early.
-  if (!methods.includes("attest_jwt_client_auth")) {
-    try {
-      console.error(
-        "[as-meta] missing required 'attest_jwt_client_auth' in token_endpoint_auth_methods_supported; " +
-        "required by EUDI Wallet ARF Wallet Instance Attestation requirements (https://eudi.dev/2.7.3/) " +
-        "and OAuth 2.0 Attestation-Based Client Authentication metadata rules " +
-        "(https://www.ietf.org/archive/id/draft-ietf-oauth-attestation-based-client-auth-07.html#section-10.1)",
-        { methods }
+  if (isAuthorizationCode) {
+    // For EUDI Wallet ARF-aligned Wallet Instance Attestation, the AS must
+    // advertise support for attest_jwt_client_auth (see EUDI Wallet ARF,
+    // Wallet Instance Attestation requirements: https://eudi.dev/2.7.3/ and
+    // OAuth 2.0 Attestation-Based Client Authentication metadata requirements:
+    // https://www.ietf.org/archive/id/draft-ietf-oauth-attestation-based-client-auth-07.html#section-10.1).
+    if (!Array.isArray(methods)) {
+      throw new Error(
+        "invalid_as_metadata: 'token_endpoint_auth_methods_supported' must be an array including 'attest_jwt_client_auth' for authorization code flows",
       );
-    } catch {}
-    throw new Error(
-      "invalid_as_metadata: 'token_endpoint_auth_methods_supported' must include 'attest_jwt_client_auth' for " +
-      "EUDI Wallet ARF-compliant attestation-based client authentication (https://eudi.dev/2.7.3/) and to satisfy " +
-      "OAuth 2.0 Attestation-Based Client Authentication metadata requirements " +
-      "(https://www.ietf.org/archive/id/draft-ietf-oauth-attestation-based-client-auth-07.html#section-10.1)"
-    );
+    }
+    if (!methods.includes("attest_jwt_client_auth")) {
+      try {
+        console.error(
+          "[as-meta] missing required 'attest_jwt_client_auth' in token_endpoint_auth_methods_supported; " +
+          "required by EUDI Wallet ARF Wallet Instance Attestation requirements (https://eudi.dev/2.7.3/) " +
+          "and OAuth 2.0 Attestation-Based Client Authentication metadata rules " +
+          "(https://www.ietf.org/archive/id/draft-ietf-oauth-attestation-based-client-auth-07.html#section-10.1)",
+          { methods }
+        );
+      } catch {}
+      throw new Error(
+        "invalid_as_metadata: 'token_endpoint_auth_methods_supported' must include 'attest_jwt_client_auth' for " +
+        "EUDI Wallet ARF-compliant attestation-based client authentication (https://eudi.dev/2.7.3/) and to satisfy " +
+        "OAuth 2.0 Attestation-Based Client Authentication metadata requirements " +
+        "(https://www.ietf.org/archive/id/draft-ietf-oauth-attestation-based-client-auth-07.html#section-10.1)"
+      );
+    }
   }
 
   if (
@@ -904,9 +917,8 @@ export function validateAuthorizationServerMetadata(meta) {
     );
   }
 
-  // Authorization Code grant is required for code flow tests.
   const grants = meta.grant_types_supported;
-  if (Array.isArray(grants) && !grants.includes("authorization_code")) {
+  if (isAuthorizationCode && Array.isArray(grants) && !grants.includes("authorization_code")) {
     throw new Error(
       "invalid_as_metadata: 'grant_types_supported' must include 'authorization_code' for authorization code flows"
     );
@@ -1341,7 +1353,9 @@ async function runPreAuthorizedIssuance({ profile = activeWalletProfile, walletC
     }
     
     try {
-      const asMeta = await discoverAuthorizationServerMetadata(asBase, logSessionId);
+      const asMeta = await discoverAuthorizationServerMetadata(asBase, logSessionId, fetch, {
+        grant: "pre-authorized_code",
+      });
       tokenEndpoint = asMeta.token_endpoint;
       authorizationServerIssuer = deriveAuthorizationServerIssuer(tokenEndpoint, asMeta.issuer || asBase);
       issuerMeta._authorizationServerMeta = asMeta;
@@ -1375,7 +1389,9 @@ async function runPreAuthorizedIssuance({ profile = activeWalletProfile, walletC
   if (!asMetaForAttestation) {
     try {
       const asBase = resolveAuthorizationServerBase(issuerMeta, apiBase, authorizationServer);
-      asMetaForAttestation = await discoverAuthorizationServerMetadata(asBase, logSessionId);
+      asMetaForAttestation = await discoverAuthorizationServerMetadata(asBase, logSessionId, fetch, {
+        grant: "pre-authorized_code",
+      });
       issuerMeta._authorizationServerMeta = asMetaForAttestation;
     } catch (e) {
       console.warn("[preauth] AS metadata discovery for attestation challenge skipped:", e?.message || e);
@@ -1795,7 +1811,9 @@ async function runAuthorizationCodeIssuance({ profile = activeWalletProfile, wal
   let authorizationServerMetaForScope = null;
   let attestationChallengeState = createAttestationChallengeState();
   try {
-    const asMeta = await discoverAuthorizationServerMetadata(asBase, logSessionId);
+    const asMeta = await discoverAuthorizationServerMetadata(asBase, logSessionId, fetch, {
+      grant: "authorization_code",
+    });
     authorizationServerMetaForScope = asMeta;
     authorizeEndpoint = authorizeEndpoint || asMeta.authorization_endpoint;
     tokenEndpointFromAS = asMeta.token_endpoint || null;
@@ -1819,7 +1837,7 @@ async function runAuthorizationCodeIssuance({ profile = activeWalletProfile, wal
   const authorizeUrl = new URL((authorizeEndpoint || apiBase + "/authorize"));
   const { codeVerifier, codeChallenge, codeChallengeMethod } = createPkcePair();
   const state = randomState();
-  const redirectUri = OPENID4VP_PRESENT_URI;
+  const redirectUri = OPENID4VP_CS02_URI;
 
   const scopeResolution = runGuardedSync(
     slog,

@@ -23,9 +23,9 @@ import {
   parseCs02ClientIdScheme,
   decodeJarParts,
 } from "../src/lib/cs02RequestValidation.js";
-import { OPENID4VP_PRESENT_URI } from "../src/lib/openid4vpUri.js";
+import { OPENID4VP_CS02_URI, OPENID4VP_PRESENT_URI } from "../src/lib/openid4vpUri.js";
 import { WALLET_PROFILES } from "../src/lib/profile.js";
-import { setCs02TrustPlaceholderRecorder } from "../utils/cs02TrustPolicy.js";
+import { setCs02TrustPlaceholderRecorder } from "../../utils/cs02TrustPolicy.js";
 
 const ecKeyPath = path.join(process.cwd(), "x509EC", "ec_private_pkcs8.key");
 const ecCertPath = path.join(process.cwd(), "x509EC", "client_certificate.crt");
@@ -34,7 +34,9 @@ function strictOptions(overrides = {}) {
   return {
     strict: true,
     allowHttp: false,
+    allowPresentInvocation: false,
     allowLegacyInvocation: false,
+    trustedX509ClientIds: [],
     walletAudiences: ["https://self-issued.me/v2"],
     requestMaxLifetimeSec: 300,
     clockSkewSec: 300,
@@ -45,9 +47,9 @@ function strictOptions(overrides = {}) {
 function baseJarPayload(overrides = {}) {
   const now = Math.floor(Date.now() / 1000);
   return {
-    client_id: "x509_san_dns:verifier.example.org",
+    client_id: "x509_san_dns:dss.aegean.gr",
     nonce: "nonce-123",
-    response_uri: "https://verifier.example/response",
+    response_uri: "https://dss.aegean.gr/response",
     response_type: "vp_token",
     response_mode: "direct_post",
     state: "state-123",
@@ -96,6 +98,7 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
       const options = resolveCs02ValidationOptions({});
       expect(options.strict).to.equal(true);
       expect(options.allowHttp).to.equal(false);
+      expect(options.allowPresentInvocation).to.equal(false);
       expect(options.allowLegacyInvocation).to.equal(false);
     });
 
@@ -114,8 +117,8 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
   });
 
   describe("deep link validation", () => {
-    it("accepts CS-02 openid4vp://present with HTTPS request_uri", () => {
-      const deepLink = `${OPENID4VP_PRESENT_URI}?request_uri=${encodeURIComponent(
+    it("accepts CS-02 empty-authority openid4vp:// with HTTPS request_uri", () => {
+      const deepLink = `${OPENID4VP_CS02_URI}?request_uri=${encodeURIComponent(
         "https://verifier.example/request",
       )}`;
       const parsed = validateCs02DeepLink(deepLink, strictOptions());
@@ -123,27 +126,28 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
       expect(parsed.method).to.equal("get");
     });
 
-    it("rejects legacy bare openid4vp:// without override", () => {
-      const deepLink = `openid4vp://?request_uri=${encodeURIComponent("https://verifier.example/request")}`;
+    it("rejects openid4vp://present without override", () => {
+      const deepLink = `${OPENID4VP_PRESENT_URI}?request_uri=${encodeURIComponent("https://verifier.example/request")}`;
       expect(() => validateCs02DeepLink(deepLink, strictOptions())).to.throw(Cs02ValidationError);
       try {
         validateCs02DeepLink(deepLink, strictOptions());
       } catch (error) {
         expect(error.errorCode).to.equal("invalid_request");
+        expect(error.message).to.match(/present/);
       }
     });
 
-    it("allows legacy invocation when CS02_ALLOW_LEGACY_INVOCATION is set", () => {
-      const deepLink = `openid4vp://?request_uri=${encodeURIComponent("https://verifier.example/request")}`;
+    it("allows present invocation when CS02_ALLOW_PRESENT_INVOCATION is set", () => {
+      const deepLink = `${OPENID4VP_PRESENT_URI}?request_uri=${encodeURIComponent("https://verifier.example/request")}`;
       const parsed = validateCs02DeepLink(
         deepLink,
-        strictOptions({ allowLegacyInvocation: true }),
+        strictOptions({ allowPresentInvocation: true }),
       );
       expect(parsed.requestUri).to.equal("https://verifier.example/request");
     });
 
     it("rejects missing request_uri", () => {
-      expect(() => validateCs02DeepLink(`${OPENID4VP_PRESENT_URI}?client_id=test`, strictOptions())).to.throw(
+      expect(() => validateCs02DeepLink(`${OPENID4VP_CS02_URI}?client_id=test`, strictOptions())).to.throw(
         Cs02ValidationError,
       );
     });
@@ -827,16 +831,52 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
     }
   });
 
-  it("requires response_uri to match strict redirect_uris metadata", async () => {
+  it("ignores client_metadata.redirect_uris and uses x509_san_dns FQDN matching", async () => {
     const requestJwt = await signJar(baseJarPayload({
       client_metadata: { redirect_uris: ["https://other.example/response"] },
     }));
+    const verified = await validateAndVerifyCs02AuthorizationRequest(requestJwt, {
+      options: strictOptions(),
+    });
+    expect(verified.payload.response_uri).to.equal("https://dss.aegean.gr/response");
+  });
+
+  it("rejects x509_san_dns response_uri whose FQDN does not match client_id", async () => {
+    const requestJwt = await signJar(baseJarPayload({
+      response_uri: "https://other.example/response",
+    }));
     try {
       await validateAndVerifyCs02AuthorizationRequest(requestJwt, { options: strictOptions() });
-      expect.fail("expected redirect URI mismatch");
+      expect.fail("expected FQDN mismatch rejection");
     } catch (error) {
       expect(error).to.be.instanceOf(Cs02ValidationError);
-      expect(error.message).to.match(/redirect_uris/);
+      expect(error.message).to.match(/FQDN/);
+    }
+  });
+
+  it("skips x509_san_dns FQDN matching for an explicit trusted client_id", async () => {
+    const requestJwt = await signJar(baseJarPayload({
+      response_uri: "https://other.example/response",
+    }));
+    const verified = await validateAndVerifyCs02AuthorizationRequest(requestJwt, {
+      options: strictOptions({
+        trustedX509ClientIds: ["x509_san_dns:dss.aegean.gr"],
+      }),
+    });
+    expect(verified.payload.response_uri).to.equal("https://other.example/response");
+  });
+
+  it("rejects x509_san_dns client_id that is not a leaf certificate dNSName SAN", async () => {
+    const requestJwt = await signJar(baseJarPayload({
+      client_id: "x509_san_dns:verifier.example.org",
+      response_uri: "https://verifier.example.org/response",
+    }));
+    try {
+      await validateAndVerifyCs02AuthorizationRequest(requestJwt, { options: strictOptions() });
+      expect.fail("expected SAN mismatch rejection");
+    } catch (error) {
+      expect(error).to.be.instanceOf(Cs02ValidationError);
+      expect(error.message).to.match(/dNSName SAN/);
     }
   });
 

@@ -119,6 +119,7 @@ describe("CS-02 trust and metadata policy (Phase 5)", () => {
         },
         encrypted_response_alg_values_supported: ["ECDH-ES+A256KW", "RSA-OAEP-999"],
         encrypted_response_enc_values_supported: ["A256GCM", "A999GCM"],
+        redirect_uris: ["https://verifier.example/response"],
       },
       "direct_post.jwt",
       { strict: true },
@@ -129,6 +130,7 @@ describe("CS-02 trust and metadata policy (Phase 5)", () => {
     expect(filtered.vp_formats_supported["dc+sd-jwt"]["kb-jwt_alg_values"]).to.deep.equal(["ES256"]);
     expect(filtered.encrypted_response_alg_values_supported).to.deep.equal(["ECDH-ES+A256KW"]);
     expect(filtered.encrypted_response_enc_values_supported).to.deep.equal(["A256GCM"]);
+    expect(filtered).to.not.have.property("redirect_uris");
   });
 
   it("builds strict CS-02 metadata from broad verifier capabilities", () => {
@@ -168,7 +170,7 @@ describe("CS-02 trust and metadata policy (Phase 5)", () => {
 
   it("rejects deep-link query parameters that contradict signed JAR values", () => {
     const deepLink =
-      "openid4vp://present?client_id=x509_san_dns:a.example&request_uri=https%3A%2F%2Fverifier.example%2Fjar";
+      "openid4vp://?client_id=x509_san_dns:a.example&request_uri=https%3A%2F%2Fverifier.example%2Fjar";
     expect(() =>
       validateCs02RequestUriQueryPrecedence(
         deepLink,
@@ -179,7 +181,7 @@ describe("CS-02 trust and metadata policy (Phase 5)", () => {
 
   it("accepts matching deep-link query and signed JAR values", () => {
     const deepLink =
-      "openid4vp://present?client_id=x509_san_dns:a.example&request_uri=https%3A%2F%2Fverifier.example%2Fjar";
+      "openid4vp://?client_id=x509_san_dns:a.example&request_uri=https%3A%2F%2Fverifier.example%2Fjar";
     const result = validateCs02RequestUriQueryPrecedence(deepLink, {
       client_id: "x509_san_dns:a.example",
       request_uri: "https://verifier.example/jar",
@@ -526,11 +528,11 @@ describe("CS-02 client_metadata_uri policy (Phase B)", () => {
     }, { responseMode: "direct_post.jwt", strict: true })).to.throw(/encrypted response encoding/);
   });
 
-  it("validates strict redirect_uris metadata structure", () => {
+  it("ignores client_metadata.redirect_uris under OpenID4VP §5.1", () => {
     expect(() => validateCs02ClientMetadata({ redirect_uris: ["http://verifier.example/response"] }, { strict: true }))
-      .to.throw(/HTTPS/);
+      .not.to.throw();
     expect(() => validateCs02ClientMetadata({ redirect_uris: [] }, { strict: true }))
-      .to.throw(/non-empty/);
+      .not.to.throw();
   });
 
   it("allows omitted redirect_uris under the explicit strict optional-field policy", () => {

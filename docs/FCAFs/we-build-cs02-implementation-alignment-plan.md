@@ -8,7 +8,7 @@ The CS-02-critical target is narrower than the full FCAF MessageStructure catalo
 
 - signed OpenID4VP authorization requests using JAR
 - DCQL-only credential queries
-- `openid4vp://present?request_uri=...` wallet invocation
+- `openid4vp://?request_uri=...` wallet invocation
 - SD-JWT-VC selective disclosure
 - mandatory KB-JWT holder binding
 - nonce and audience binding
@@ -23,7 +23,7 @@ Add a dedicated CS-02 request validation layer around the wallet presentation fl
 
 Required wallet checks:
 
-- Treat `openid4vp://present?request_uri=...` as the canonical invocation form. Keep legacy bare `openid4vp://?...` only as explicit compatibility behavior.
+- Treat `openid4vp://?request_uri=...` as the canonical CS-02 invocation form. Keep `openid4vp://present?...` only as explicit compatibility behavior.
 - Require `request_uri` to be present and absolute.
 - Require HTTPS `request_uri` in CS-02 mode. Allow HTTP only through an explicit local-development override.
 - Allow only `request_uri_method=get` and `request_uri_method=post`; reject any other method before network fetch.
@@ -277,7 +277,7 @@ Required negative scenarios:
 Required positive scenario:
 
 - Accept a CS-02 happy path with:
-  - `openid4vp://present?request_uri=...`
+  - `openid4vp://?request_uri=...`
   - HTTPS request-uri retrieval
   - ES256/P-256 signed JAR
   - `typ: oauth-authz-req+jwt`

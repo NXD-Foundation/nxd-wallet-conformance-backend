@@ -2,7 +2,7 @@
 
 This report cross-references the FCAFS MessageStructure analysis in `/home/ni/code/fcafs/message-structure-analysis` with the WE BUILD CS-02 constrained presentation profile in `docs/core/cs-02-credential-presentation (1).md`.
 
-The source FCAFS report is broad: it evaluates verifier and wallet behavior against 236 EC FCAF MessageStructure specs. CS-02 is narrower. It makes OpenID4VP, signed JAR, DCQL, `openid4vp://present`, SD-JWT-VC selective disclosure, ES256/P-256, nonce/audience binding, and Presentation Response validation the relevant target. ISO mdoc remains supported in this repo for practical compatibility. CWT, JSON serialization, OpenID Federation, and broader client identifier variants remain useful interoperability work, but they are not the first WE BUILD CS-02 alignment target.
+The source FCAFS report is broad: it evaluates verifier and wallet behavior against 236 EC FCAF MessageStructure specs. CS-02 is narrower. It makes OpenID4VP, signed JAR, DCQL, `openid4vp://?` invocation, SD-JWT-VC selective disclosure, ES256/P-256, nonce/audience binding, and Presentation Response validation the relevant target. ISO mdoc remains supported in this repo for practical compatibility. CWT, JSON serialization, OpenID Federation, and broader client identifier variants remain useful interoperability work, but they are not the first WE BUILD CS-02 alignment target.
 
 ## WE BUILD CS-02 Target Profile
 
@@ -10,7 +10,7 @@ The source FCAFS report is broad: it evaluates verifier and wallet behavior agai
 |---|---|---|
 | Request protection | All authorization requests must be signed JARs. | Mostly covered by `wallet-client/src/lib/cs02RequestValidation.js` and `utils/cs02VerifierRequest.js`. |
 | Credential query | DCQL must be used. | Covered for strict CS-02 paths by `wallet-client/src/lib/cs02DcqlValidation.js`; verifier generation also validates DCQL. |
-| Invocation | Wallet invocation uses `openid4vp://present?request_uri=<URL>`. | Covered; legacy invocation can be gated by compatibility flags. |
+| Invocation | Wallet invocation uses `openid4vp://?request_uri=<URL>`. | Covered; `openid4vp://present` remains compatibility-only. |
 | Wallet validation | Wallet validates request signature, nonce freshness, audience, expiry, credential types, disclosure constraints, and integrity. | Much improved; `did:web` exact `kid` enforcement and strict `client_metadata_uri` wiring are covered. Remaining gaps are narrower disclosure/request-integrity edge cases and future remote-metadata fetch hardening. |
 | Credential format | SD-JWT-VC selective disclosure is mandatory. | Covered/partial for `dc+sd-jwt` and `vc+sd-jwt`; `mso_mdoc` remains allowed; other formats are compatibility-mode only. |
 | Holder binding | KB-JWT is mandatory for SD-JWT VCs and must bind proof to nonce and audience. | Covered for generated wallet responses and verifier checks. |
@@ -22,7 +22,7 @@ The source FCAFS report is broad: it evaluates verifier and wallet behavior agai
 ```text
 Verifier -> Wallet (OpenID4VP / CS-02)
   Verifier creates ES256 signed JAR with DCQL, nonce, state, exp, client_id, response_uri
-  -> Wallet is invoked through openid4vp://present?request_uri=...
+  -> Wallet is invoked through openid4vp://?request_uri=...
   -> Wallet fetches request object by GET or POST
   -> Wallet validates JAR header/payload/signature and DCQL before selection
   -> Wallet selects one or more matching credentials, filters SD-JWT disclosures, and creates KB-JWT
@@ -35,7 +35,7 @@ Verifier -> Wallet (OpenID4VP / CS-02)
 
 | Capability | Status | Evidence |
 |---|---|---|
-| `openid4vp://present` invocation | Covered | `parseOpenId4VpDeepLink` is used before request fetch in `wallet-client/src/lib/presentation.js`; strict options come from `resolveCs02ValidationOptions`. |
+| `openid4vp://?` invocation | Covered | `parseOpenId4VpDeepLink` is used before request fetch in `wallet-client/src/lib/presentation.js`; strict options come from `resolveCs02ValidationOptions`. |
 | Signed request requirement | Mostly covered | `validateCs02JarHeader`, `validateCs02JarPayload`, and `verifyCs02JarSignature` enforce signed JAR behavior in `wallet-client/src/lib/cs02RequestValidation.js`. |
 | JAR `typ` and `alg` | Covered for strict CS-02 | `CS02_JAR_TYP` and `CS02_ALLOWED_ALGS` enforce `oauth-authz-req+jwt` and `ES256`. |
 | Request URI GET/POST | Covered | `fetchCs02AuthorizationRequestJwt` supports allowed request URI methods and strict content-type policy. |
@@ -71,7 +71,7 @@ Legend:
 |---|---:|---|---|
 | Plain unsigned request (PM 002) | CS-02 forbids unsigned requests | Yes | Strict wallet validation rejects unsigned/malformed JARs and `alg=none`. |
 | `typ=oauth-authz-req+jwt` handling (PM 004, 006-007) | Required in practice | Yes | `validateCs02JarHeader` requires the CS-02 JAR typ. |
-| Request object by reference (PM 005) | Required | Yes | `openid4vp://present?request_uri=...` and GET/POST retrieval are supported. |
+| Request object by reference (PM 005) | Required | Yes | `openid4vp://?request_uri=...` and GET/POST retrieval are supported. |
 | `client_id` present and request/JAR consistency (PM 008-010) | Required | Yes | Payload requires `client_id`; deep-link `client_id`, when present, must match the signed JAR. |
 | `request_uri_method=post` (PM 011) | Useful and supported | Yes | Wallet sends form-encoded POST and rejects unsupported methods in strict mode. |
 
@@ -183,7 +183,7 @@ Legend:
 |---|---|---|
 | Signed JAR request creation | Required | Mostly covered: ES256/P-256 request generation exists for CS-02 paths; trust-anchor-backed x509 policy is placeholder. |
 | Wallet JAR validation | Required | Mostly covered: strict `typ`, `alg`, required fields, lifetime, audience policy, HTTPS request URI, signature verification, query precedence, exact `did:web` `kid` binding, and strict `client_metadata_uri` policy are in place. |
-| `openid4vp://present` request URI invocation | Required | Covered. |
+| `openid4vp://?` request URI invocation | Required | Covered. |
 | DCQL query and response shape | Required | Mostly covered: structure, ids, formats, claim paths, claim_sets, credential_sets, multiple, and response object shape are validated. |
 | SD-JWT-VC selective disclosure | Required | Partial/covered for the supported subsets; current SD-JWT string-segment claim-path presence, dotted disclosure-key matching, `claim_sets`, and exact string `values` constraints are now enforced, and nested mdoc claim-path / `claim_sets` / exact string `values` constraints are also enforced. Broader path/value semantics remain follow-up work. |
 | KB-JWT holder binding | Required | Covered for generated wallet responses and verifier checks. |

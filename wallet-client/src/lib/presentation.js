@@ -83,13 +83,13 @@ function parseOpenId4VpDeepLink(deepLink, { cs02Options, log } = {}) {
     throw new Error("Unsupported request scheme");
   if (url.hostname && url.hostname !== OPENID4VP_PRESENT_HOST) {
     throw new Error(
-      `Unsupported openid4vp authority "${url.hostname}"; expected "${OPENID4VP_PRESENT_HOST}" (CS-02) or bare openid4vp://`,
+      `Unsupported openid4vp authority "${url.hostname}"; expected empty-authority openid4vp:// or compatibility openid4vp://present`,
     );
   }
   if (isOpenId4VpPresentInvocation(url)) {
-    console.log("[present] CS-02 openid4vp://present invocation");
+    console.log("[present] Compatibility openid4vp://present invocation");
   } else {
-    console.log("[present] Legacy bare openid4vp:// invocation (empty authority)");
+    console.log("[present] CS-02 empty-authority openid4vp:// invocation");
   }
   const requestUri = url.searchParams.get("request_uri");
   const clientId = url.searchParams.get("client_id");

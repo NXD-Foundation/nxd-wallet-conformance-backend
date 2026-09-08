@@ -15,7 +15,7 @@ import {
 } from "jose";
 import { X509Certificate } from "@peculiar/x509";
 import {
-  OPENID4VP_PRESENT_HOST,
+  isOpenId4VpEmptyAuthorityInvocation,
   isOpenId4VpPresentInvocation,
 } from "./openid4vpUri.js";
 import { isWebuildCs02Profile, resolveWalletProfile } from "./profile.js";
@@ -28,14 +28,20 @@ import {
   validateDidWebKidResolution,
   resolveCs02EffectiveClientMetadata,
   Cs02TrustPolicyError,
-} from "../../utils/cs02TrustPolicy.js";
+} from "../../../utils/cs02TrustPolicy.js";
+import {
+  Cs02ClientIdBindingError,
+  assertX509SanDnsLeafMatchesClientId,
+  assertX509SanDnsResponseUriFqdn,
+  parseTrustedX509ClientIds,
+} from "../../../utils/cs02ClientIdBinding.js";
 import { isStrictCs02Base64Url, decodeStrictCs02Base64Url, isStrictCs02EcP256Jwk } from "../../utils/cs02Encoding.js";
 import { isCompactJwe, TS12_PAYMENT_TRANSACTION_TYPE, isTs12PaymentRequestUri } from "../../utils/ts12PaymentUtils.js";
 
 export {
   validateX509SanDnsTrustAnchor,
   validateVerifierAttestationTrust,
-} from "../../utils/cs02TrustPolicy.js";
+} from "../../../utils/cs02TrustPolicy.js";
 
 export const CS02_JAR_TYP = "oauth-authz-req+jwt";
 export const CS02_ALLOWED_ALGS = new Set(["ES256"]);
@@ -92,12 +98,17 @@ export function resolveCs02ValidationOptions(env = process.env) {
   const cs03Compatibility = truthyEnv(
     env.WALLET_CS03_COMPATIBILITY ?? env.CS03_COMPATIBILITY,
   );
+  const allowPresentInvocation =
+    truthyEnv(env.CS02_ALLOW_PRESENT_INVOCATION) ||
+    truthyEnv(env.CS02_ALLOW_LEGACY_INVOCATION);
   return {
     strict: isWebuildCs02Profile(profile) || !compatibility,
     allowCs03CredentialFormat: cs03Compatibility,
     cs03Compatibility,
     allowHttp: truthyEnv(env.CS02_ALLOW_HTTP),
-    allowLegacyInvocation: truthyEnv(env.CS02_ALLOW_LEGACY_INVOCATION),
+    allowPresentInvocation,
+    allowLegacyInvocation: allowPresentInvocation,
+    trustedX509ClientIds: parseTrustedX509ClientIds(env.CS02_TRUSTED_X509_CLIENT_IDS),
     walletAudiences: parseWalletAudiences(env.CS02_WALLET_AUDIENCES),
     requestMaxLifetimeSec:
       Number(env.CS02_REQUEST_MAX_LIFETIME_SEC) || CS02_DEFAULT_REQUEST_MAX_LIFETIME_SEC,
@@ -226,14 +237,17 @@ export function validateCs02DeepLink(deepLink, options, log = () => {}) {
     throw new Cs02ValidationError("Unsupported request scheme", "invalid_request");
   }
 
-  if (!isOpenId4VpPresentInvocation(url)) {
-    if (!options.allowLegacyInvocation) {
-      logValidationFailure(log, "deep_link_authority", { authority: url.hostname || "(empty)" });
-      throw new Cs02ValidationError(
-        `Unsupported openid4vp authority "${url.hostname || ""}"; CS-02 requires "${OPENID4VP_PRESENT_HOST}"`,
-        "invalid_request",
-      );
-    }
+  const emptyAuthority = isOpenId4VpEmptyAuthorityInvocation(url);
+  const presentAuthority = isOpenId4VpPresentInvocation(url);
+  const allowPresent = options.allowPresentInvocation || options.allowLegacyInvocation;
+  if (!emptyAuthority && !(presentAuthority && allowPresent)) {
+    logValidationFailure(log, "deep_link_authority", { authority: url.hostname || "(empty)" });
+    throw new Cs02ValidationError(
+      presentAuthority
+        ? 'Unsupported openid4vp authority "present"; CS-02 requires empty-authority openid4vp://?'
+        : `Unsupported openid4vp authority "${url.hostname || ""}"; CS-02 requires empty-authority openid4vp://?`,
+      "invalid_request",
+    );
   }
 
   const requestUri = url.searchParams.get("request_uri");
@@ -619,6 +633,16 @@ async function verifyJarWithX5cLeaf(requestJwt, header, clientId, context) {
   assertEs256P256Certificate(pem, context);
   const key = await importX509(pem, "ES256");
   const verified = await jwtVerify(requestJwt, key, { clockTolerance: 0 });
+  if (parseCs02ClientIdScheme(clientId).scheme === "x509_san_dns") {
+    try {
+      assertX509SanDnsLeafMatchesClientId(clientId, pem);
+    } catch (error) {
+      if (error instanceof Cs02ClientIdBindingError) {
+        throw new Cs02ValidationError(error.message, error.errorCode);
+      }
+      throw error;
+    }
+  }
   await validateX509SanDnsTrustAnchor(clientId, header, pem);
   return verified;
 }
@@ -768,6 +792,29 @@ export async function validateAndVerifyCs02AuthorizationRequest(
 
   const verified = await verifyCs02JarSignature(requestJwt, header, payload, options, log);
 
+  const isCs07DcApiRequest =
+    payload?.response_mode === "dc_api.jwt" &&
+    Array.isArray(payload?.expected_origins) &&
+    payload?.state == null &&
+    payload?.response_uri == null;
+  if (
+    options.strict &&
+    !isCs07DcApiRequest &&
+    parseCs02ClientIdScheme(payload.client_id).scheme === "x509_san_dns"
+  ) {
+    try {
+      assertX509SanDnsResponseUriFqdn(payload.client_id, payload.response_uri, {
+        trustedClientIds: options.trustedX509ClientIds,
+      });
+    } catch (error) {
+      if (error instanceof Cs02ClientIdBindingError) {
+        logValidationFailure(log, "x509_san_dns_response_uri_fqdn", { message: error.message });
+        throw new Cs02ValidationError(error.message, error.errorCode);
+      }
+      throw error;
+    }
+  }
+
   let effectiveClientMetadata = null;
   if (
     options.strict &&
@@ -780,13 +827,6 @@ export async function validateAndVerifyCs02AuthorizationRequest(
         log,
       });
       effectiveClientMetadata = resolved.effectiveMetadata;
-      if (Array.isArray(effectiveClientMetadata?.redirect_uris) &&
-          !effectiveClientMetadata.redirect_uris.includes(payload.response_uri)) {
-        throw new Cs02ValidationError(
-          "response_uri is not listed in client_metadata.redirect_uris",
-          "invalid_client",
-        );
-      }
     } catch (error) {
       if (error instanceof Cs02TrustPolicyError) {
         logValidationFailure(log, "client_metadata_uri", { message: error.message });

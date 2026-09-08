@@ -25,7 +25,7 @@ and tests.
 When sources disagree:
 
 1. Published normative specifications and RFCs (`docs/rfc/`, linked specs).
-2. WE BUILD conformance specs in `docs/core/` (not duplicate top-level `cs-0*.md`).
+2. WE BUILD conformance specs in `docs/core/` (no parallel top-level `cs-0*.md` copies).
 3. Current code, configuration, and automated tests.
 4. Project matrices, plans, and interop notes in `docs/`.
 

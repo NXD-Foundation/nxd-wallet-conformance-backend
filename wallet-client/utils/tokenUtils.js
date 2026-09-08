@@ -3,7 +3,7 @@ import jwt from "jsonwebtoken";
 import crypto from "crypto";
 import { error } from "console";
 import { generateNonce } from "../utils/cryptoUtils.js";
-import { OPENID4VP_PRESENT_QUERY_PREFIX } from "../src/lib/openid4vpUri.js";
+import { OPENID4VP_CS02_QUERY_PREFIX } from "../src/lib/openid4vpUri.js";
 
 export function buildAccessToken(issuerURL, privateKey) {
   const payload = {
@@ -69,7 +69,7 @@ export function buildVPbyValue(
   if (!nonce) nonce = generateNonce(16);
   if (!state) state = generateNonce(16);
 
-  let vpRequest = OPENID4VP_PRESENT_QUERY_PREFIX;
+  let vpRequest = OPENID4VP_CS02_QUERY_PREFIX;
   vpRequest += `client_id=${encodeURIComponent(client_id)}`;
   vpRequest += `&client_id_scheme=${encodeURIComponent(client_id_scheme)}`;
   vpRequest += `&response_type=${encodeURIComponent(response_type)}`;
