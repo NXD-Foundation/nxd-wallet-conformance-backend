@@ -81,6 +81,14 @@ WE BUILD conformance specifications live only in `docs/core/`. Do not keep
 parallel top-level `cs-0*.md` copies; a previous CS-02 duplicate had already
 drifted (`openid4vp://present` vs the approved empty-authority form).
 
+WE BUILD trust-framework documentation is snapshotted in
+[`docs/trust/`](./trust/SOURCE.md) from
+[webuild-consortium/wp4-trust-group](https://github.com/webuild-consortium/wp4-trust-group).
+Treat ETSI/eIDAS texts as normative (item 1). Treat WP4 task documents as
+WE BUILD design guidance that this deployment implements through `trust/`
+when a session opts in with `trustFramework=true`. The snapshot is not live
+LoTL content; runtime still fetches the published LoTL and referenced lists.
+
 ## Architectural Decisions And Constraints
 
 
@@ -443,8 +451,25 @@ Section 3.6 and Section 4.2.
 - Production/conformance hardening still needs trusted Wallet Provider material
   beyond issuance-time Status List bit evaluation; keep any self-contained-key
   fallback development-only when that work lands.
+- The WE BUILD trust framework lives upstream at
+  [wp4-trust-group](https://github.com/webuild-consortium/wp4-trust-group)
+  and locally in [`docs/trust/`](./trust/SOURCE.md). Issuer evaluation of a
+  Wallet Unit is UC-TE-03; LoTL/LoTE fetch and signature checks are UC-TE-06.
+  The Wallet Provider LoTE profile is TS 119 602 Annex E (JSON preferred,
+  Compact JAdES; `ServiceStatus` shall not be used). The pilot IDunion
+  pointer is [`lotl/tl_entries/wallet-provider/idunion.json`](./trust/lotl/tl_entries/wallet-provider/idunion.json).
+- As of the 2026-09-10 snapshot, that IDunion `trust_anchor` is a list-signer
+  certificate valid only 2026-03-17 to 2026-04-16, while the published XML
+  LoTE is signed with a later certificate and uses XPath Filter 2.0 rather
+  than the WP4/ETSI enveloped-signature transform. The XML consumer now
+  parses TS 119 602 `TrustedEntity` LoTEs as well as TS 119 612 `TSPService`
+  lists. Signature verification still requires the profile's enveloped
+  XAdES (or JAdES JSON). Opted-in issuance therefore fail-closes at `/token`
+  with `TRUST_EVALUATION_INDETERMINATE` until the LoTL pointer matches and
+  the list signature verifies.
 
-Source: [future WUA enforcement](./futureWUAstricterEnforcements.md).
+Source: [WP4 trust snapshot](./trust/SOURCE.md),
+[future WUA enforcement](./futureWUAstricterEnforcements.md).
 
 ### Certificate Chains For X.509 JAR
 
@@ -500,6 +525,7 @@ re-entering active protocol directories.
 | [CS-12 SCA payments](./core/cs-12-sca-payments%20(1).md)                                             | WE BUILD profile of TS-12 for `sca-iban`, `sca-user`, and `sca-card-dpc` payment presentations                              | Normative pre-flight profile |
 | [TS-12 SCA with wallet](./ts12/ts12-electronic-payments-SCA-implementation-with-wallet%20(1).md)     | Wallet-based strong customer authentication and transaction data                                                            | External specification       |
 | `[docs/rfc/](./rfc/)`                                                                                | Local copies of OpenID4VCI 1.0, OpenID4VP 1.0, the CS-07-pinned W3C DC API draft, HAIP 1.0 draft 03, RFC 7591, RFC 9449, and Token Status List draft-20 | Reference copies             |
+| [WP4 Trust Group snapshot](./trust/SOURCE.md)                                                        | WE BUILD LoTL/LoTE, onboarding, UC-TE-03/06, Annex E Wallet Provider profile; refresh from upstream `main` | Local snapshot (`c1b94bb`, 2026-09-03) |
 
 
 
@@ -509,6 +535,7 @@ re-entering active protocol directories.
 
 | Document                                                                         | Primary question answered                                                           |
 | -------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| [WP4 trust snapshot index](./trust/SOURCE.md)                                    | Where is the local WE BUILD trust-framework documentation, and which UC/profile to read first? |
 | [Wallet attestation options](./haip-etsi-wallet-attestation-options.md)          | What is CS-01-conformant WUA, PAR, proof binding, and deferred issuance behaviour?  |
 | [OpenID4VP CS-02 verifier metadata](./openid4vp-cs02-verifier-metadata-model.md) | Which verifier metadata model and endpoints should new work use?                    |
 | [CS-03 verifier flow summary](./cs03-verifier-flow-summary.md)                   | How do inline and OOB signature flows work, including PAdES/CAdES payloads?         |
@@ -565,6 +592,7 @@ profile interpretation, protocol support claim, or documentation location.
 | ----------------------------------------------------------- | ------------------------------------------------------------------------- |
 | Credential offers, PAR, token, proofs, or deferred issuance | CS-01, attestation options, relevant VCI matrix                           |
 | WUA/WIA/KA validation, trust, or status-list publication    | CS-04, Token Status List draft-20, wallet-client publisher, future WUA enforcement |
+| Trust framework, LoTL/LoTE, or `trustFramework=true`        | [`docs/trust/SOURCE.md`](./trust/SOURCE.md), UC-TE-03/06, Annex E profile; runtime in `trust/` |
 | VP requests, metadata, response modes, or DCQL              | CS-02, verifier metadata model, VP matrix                                 |
 | Browser-mediated DC API presentation                        | CS-07, pinned W3C DC API draft, OpenID4VP Appendix A, CS-07 verifier plan |
 | Remote qualified signing                                    | CS-03 and CS-03 verifier flow summary                                     |

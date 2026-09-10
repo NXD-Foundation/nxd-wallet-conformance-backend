@@ -49,7 +49,7 @@ read for the area you are changing. Common entry points:
 | WUA / WIA / KA | CS-04, `docs/issues/cs04-key-attestation-interoperability.md`, future WUA enforcement |
 | VP / DCQL / verifier metadata | CS-02, verifier metadata model, VP matrix |
 | DC API presentation | CS-07, pinned W3C DC API draft, CS-07 plan |
-| Trust framework | `trust/`, WE BUILD trust docs linked from `knowledge.md` |
+| Trust framework | `docs/trust/SOURCE.md`, then UC-TE-03/06 and Annex E; runtime in `trust/` |
 | mdoc / SD-JWT binding | mdoc generation, mdoc interop fixes, SD-JWT key-binding fixes |
 
 Follow links from `knowledge.md` into companion docs for examples, matrices,

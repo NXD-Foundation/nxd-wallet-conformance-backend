@@ -78,15 +78,77 @@ export function parseJsonDocument(unsigned, { listType = null } = {}) {
 }
 
 function textAt(node, name) {
+  if (!node) return null;
   return xpath.select(`.//*[local-name(.)='${name}']`, node)[0]?.textContent?.trim() || null;
 }
 
 function nodesAt(node, name) {
+  if (!node) return [];
   return xpath.select(`.//*[local-name(.)='${name}']`, node);
 }
 
+function firstLocal(document, names) {
+  for (const name of names) {
+    const node = xpath.select(`//*[local-name(.)='${name}']`, document)[0];
+    if (node) return node;
+  }
+  return null;
+}
+
+function parseXmlCertificates(node) {
+  const certificates = [];
+  const certificatePems = [];
+  for (const certNode of nodesAt(node, "X509Certificate")) {
+    const value = certNode.textContent.replace(/\s+/g, "");
+    if (!value) continue;
+    try {
+      const pem = derToPem(Buffer.from(value, "base64"));
+      certificatePems.push(pem);
+      certificates.push(certificateFingerprint(pem));
+    } catch {
+      // Skip malformed certificates; remaining identities may still match.
+    }
+  }
+  return { certificates, certificatePems };
+}
+
+function parseTspServiceEntities(root) {
+  return nodesAt(root, "TSPService").map((service) => {
+    const { certificates, certificatePems } = parseXmlCertificates(service);
+    const id = textAt(service, "TSPName") || textAt(service, "Name");
+    return {
+      id,
+      name: id,
+      services: [{
+        name: textAt(service, "ServiceName") || textAt(service, "Name"),
+        type: textAt(service, "ServiceTypeIdentifier"),
+        status: textAt(service, "ServiceStatus"),
+        certificates,
+        certificatePems,
+      }],
+    };
+  });
+}
+
+function parseTrustedEntityEntities(root) {
+  return nodesAt(root, "TrustedEntity").map((entity) => {
+    const id = textAt(entity, "TEName") || textAt(entity, "EntityName") || textAt(entity, "Name");
+    const services = nodesAt(entity, "TrustedEntityService").map((service) => {
+      const { certificates, certificatePems } = parseXmlCertificates(service);
+      return {
+        name: textAt(service, "ServiceName") || textAt(service, "Name"),
+        type: textAt(service, "ServiceTypeIdentifier"),
+        status: textAt(service, "ServiceStatus"),
+        certificates,
+        certificatePems,
+      };
+    });
+    return { id, name: id, services };
+  });
+}
+
 export function parseXmlDocument(document, { listType = null } = {}) {
-  const info = xpath.select("//*[local-name(.)='SchemeInformation']", document)[0];
+  const info = firstLocal(document, ["SchemeInformation", "ListAndSchemeInformation"]);
   const issueValue = textAt(info, "ListIssueDateTime");
   const nextValue = textAt(info, "NextUpdate");
   const issue = Date.parse(issueValue || "");
@@ -109,24 +171,8 @@ export function parseXmlDocument(document, { listType = null } = {}) {
     listTypeUri: textAt(pointer, "TSLType") || textAt(pointer, "LoTEType"),
     anchorCertificates: nodesAt(pointer, "X509Certificate").map((node) => node.textContent.trim()).filter(Boolean),
   })).filter((pointer) => pointer.url);
-  const serviceNodes = nodesAt(root, "TSPService");
-  const entities = serviceNodes.map((service) => ({
-    id: textAt(service, "TSPName") || textAt(service, "Name"),
-    name: textAt(service, "TSPName") || textAt(service, "Name"),
-    services: [{
-      name: textAt(service, "ServiceName") || textAt(service, "Name"),
-      type: textAt(service, "ServiceTypeIdentifier"),
-      status: textAt(service, "ServiceStatus"),
-      certificates: nodesAt(service, "X509Certificate").map((node) => {
-        try {
-          return certificateFingerprint(derToPem(Buffer.from(node.textContent.trim(), "base64")));
-        } catch {
-          return null;
-        }
-      }).filter(Boolean),
-      certificatePems: nodesAt(service, "X509Certificate").map((node) => derToPem(Buffer.from(node.textContent.trim(), "base64"))),
-    }],
-  }));
+  const trustedEntities = parseTrustedEntityEntities(root);
+  const entities = trustedEntities.length ? trustedEntities : parseTspServiceEntities(root);
   return { format: "xml", listType, scheme, pointers, entities, raw: root.toString() };
 }
 

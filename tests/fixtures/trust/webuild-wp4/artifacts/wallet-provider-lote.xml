@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TrustedEntitiesList xmlns="http://uri.etsi.org/019602/v1#" xmlns:ds="http://www.w3.org/2000/09/xmldsig#">
+  <ListAndSchemeInformation>
+    <LoTEVersionIdentifier>1</LoTEVersionIdentifier>
+    <LoTESequenceNumber>1</LoTESequenceNumber>
+    <LoTEType>http://uri.etsi.org/19602/LoTEType/EUWalletProvidersList</LoTEType>
+    <SchemeOperatorName>
+      <Name xml:lang="en"><NonEmptyNormalizedString>WE BUILD Test TLP</NonEmptyNormalizedString></Name>
+    </SchemeOperatorName>
+    <SchemeName>
+      <Name xml:lang="en"><NonEmptyNormalizedString>EU:EN_WEBUILD - Wallet Providers</NonEmptyNormalizedString></Name>
+    </SchemeName>
+    <ListIssueDateTime>2026-01-01T00:00:00Z</ListIssueDateTime>
+    <NextUpdate><dateTime>2027-01-01T00:00:00Z</dateTime></NextUpdate>
+  </ListAndSchemeInformation>
+  <TrustedEntitiesList>
+    <TrustedEntity>
+      <TrustedEntityInformation>
+        <TEName>
+          <Name xml:lang="en"><NonEmptyNormalizedString>LUTRA LABS, racunalnisko programiranje, d.o.o.</NonEmptyNormalizedString></Name>
+        </TEName>
+      </TrustedEntityInformation>
+      <TrustedEntityServices>
+        <TrustedEntityService>
+          <ServiceInformation>
+            <ServiceTypeIdentifier>http://uri.etsi.org/19602/SvcType/WalletSolution/Issuance</ServiceTypeIdentifier>
+            <ServiceName>
+              <Name xml:lang="en"><NonEmptyNormalizedString>LutraID European Business Wallet</NonEmptyNormalizedString></Name>
+            </ServiceName>
+            <ServiceDigitalIdentity>
+              <DigitalId>
+                <X509Certificate>MIIDYzCCAkugAwIBAgIUNwaQ0AxANtnI28+jemjQTXSMWH4wDQYJKoZIhvcNAQELBQAwQTELMAkGA1UEBhMCRVUxFjAUBgNVBAoMDVdFIEJVSUxEIFRlc3QxGjAYBgNVBAMMEVRlc3QgUElEIFByb3ZpZGVyMB4XDTI2MDcyNzEwNTI1OFoXDTM2MDcyNDEwNTI1OFowQTELMAkGA1UEBhMCRVUxFjAUBgNVBAoMDVdFIEJVSUxEIFRlc3QxGjAYBgNVBAMMEVRlc3QgUElEIFByb3ZpZGVyMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAnB0IEI/83sdrrQcPLOSCeSri1Eml7Cit8vvo5WRWTYATjzbyudSm0+qIGoRVRQDIhDRDVu9Uk+ycGAgR+6Z1ipn2dH/PLvnPvINRNYQEnXwl0QF7r7BpLem+DG72MJcpmJEyvc6WHfQy2X90Em8HLvG/9gw/rrz5ehvhIl8ZYEUMIcTK3BESkvUMOTT1w42wdLBYlJvvNMUf5hFo2h6YR3YlqsWgbZyg3BdXByObbzB+Z8dkztgTNTPiT0YD9P6CC3UtyDsenmvnrRsyViM5C1x6gzWjAVLDhqy+IVw+aZ96qboDstFjlKXsSdNEdQLfhLU1x6sg9DnQVFG+GBvWvQIDAQABo1MwUTAdBgNVHQ4EFgQURGcaef56b8cXFUJbussIUXKwNnEwHwYDVR0jBBgwFoAURGcaef56b8cXFUJbussIUXKwNnEwDwYDVR0TAQH/BAUwAwEB/zANBgkqhkiG9w0BAQsFAAOCAQEAB2R2Ds9WgJI7yBp7SmTTk7vcw2Wpnfwrm26mejIHerfNNnBirL9JQPIZSCJjwJyN+q7N1LJaMwfWH9kL8hmhlN02UBYkMiWEXPEFUYTuqJuW7uAFs1FkCNXJXhGI5WNiq16T6fw9AAb9gX20Rlvdc9BQWHunxUoGlQjKrcxCrnFkYUpuRHa8zl+C3XtBWUJyvbJOF0sJaHTGaSN+zSW8k0+w3pT7CJS3nQ030T9Bk2GjQ4YfOeBk4wpi0GWOR1SsSDkoNO4LsIrgL8cB81xgGtGp52tzob01u0+pvxI5t9TVXzJPaYo9b8vWjZUJFUFsLjcWbDMyhLXvrYFdFDVASw==</X509Certificate>
+              </DigitalId>
+            </ServiceDigitalIdentity>
+          </ServiceInformation>
+        </TrustedEntityService>
+      </TrustedEntityServices>
+    </TrustedEntity>
+  </TrustedEntitiesList>
+</TrustedEntitiesList>
