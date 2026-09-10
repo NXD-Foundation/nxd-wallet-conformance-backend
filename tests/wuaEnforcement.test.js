@@ -14,6 +14,7 @@ import {
   credentialConfigRequiresKeyAttestation,
   validateKaLevelsAgainstMetadata,
   extractRequestedCredentialConfigurationIds,
+  sessionRequiresWua,
 } from "../utils/wuaEnforcementPolicy.js";
 import {
   CLIENT_ATTESTATION_JWT_TYP,
@@ -26,6 +27,11 @@ import { createPreAuthSessionData, validateWUA } from "../utils/routeUtils.js";
 import {
   applyWiaStatusEvidenceToSession,
 } from "../utils/wuaStatusListVerifier.js";
+import {
+  TS12_SCA_IBAN_VCT,
+  TS12_SCA_USER_VCT,
+  TS12_SCA_CARD_DPC_VCT,
+} from "../utils/ts12PaymentUtils.js";
 import {
   installValidStatusListForKey,
   resetStatusListTestHooks,
@@ -91,6 +97,22 @@ describe("WUA enforcement policy", () => {
     expect(isWuaRequiredCredentialId("VerifiablePIDSDJWT")).to.equal(false);
   });
 
+  it("identifies all three CS-12 SCA credentials as WUA-required", () => {
+    for (const credentialId of [
+      TS12_SCA_IBAN_VCT,
+      TS12_SCA_USER_VCT,
+      TS12_SCA_CARD_DPC_VCT,
+    ]) {
+      expect(isWuaRequiredCredentialId(credentialId), credentialId).to.equal(true);
+      expect(
+        issuanceRequestRequiresWua({
+          authorization_details: [{ credential_configuration_id: credentialId }],
+        }),
+        credentialId,
+      ).to.equal(true);
+    }
+  });
+
   it("detects WUA requirement from scope and authorization_details", () => {
     expect(
       issuanceRequestRequiresWua({ scope: "VerifiablePIDSDJWTWUA openid" })
@@ -103,6 +125,9 @@ describe("WUA enforcement policy", () => {
       })
     ).to.equal(true);
     expect(issuanceRequestRequiresWua({ scope: "PID" })).to.equal(false);
+    expect(
+      issuanceRequestRequiresWua({ scope: "urn:eu.europa.ec.eudi:pid:1" })
+    ).to.equal(false);
   });
 
   it("extracts credential configuration IDs from mixed inputs", () => {
@@ -150,6 +175,19 @@ describe("WUA enforcement policy", () => {
     expect(regularSession.requiresWua).to.not.equal(true);
   });
 
+  it("marks pre-auth sessions for all three CS-12 SCA credential types", () => {
+    for (const credentialType of [
+      TS12_SCA_IBAN_VCT,
+      TS12_SCA_USER_VCT,
+      TS12_SCA_CARD_DPC_VCT,
+    ]) {
+      const session = createPreAuthSessionData({ credentialType });
+      expect(session.requiresWua, credentialType).to.equal(true);
+      expect(session.credentialConfigurationId).to.equal(credentialType);
+      expect(session.requestedCredentialConfigurationIds).to.include(credentialType);
+    }
+  });
+
   it("issuer metadata advertises VerifiablePIDSDJWTWUA with key_attestations_required", () => {
     const cfg = JSON.parse(
       fs.readFileSync(path.join(process.cwd(), "data/issuer-config.json"), "utf8")
@@ -160,6 +198,36 @@ describe("WUA enforcement policy", () => {
     expect(credentialConfigRequiresKeyAttestation(wuaCfg)).to.equal(true);
     expect(wuaCfg.proof_types_supported.jwt.key_attestations_required.key_storage).to.include(
       "iso_18045_high"
+    );
+  });
+
+  it("does not treat empty key_attestations_required as a KA requirement", () => {
+    expect(
+      credentialConfigRequiresKeyAttestation({
+        proof_types_supported: { jwt: { key_attestations_required: {} } },
+      })
+    ).to.equal(false);
+    expect(
+      credentialConfigRequiresKeyAttestation({
+        proof_types_supported: {
+          jwt: {
+            key_attestations_required: {
+              key_storage: ["iso_18045_high"],
+              user_authentication: ["iso_18045_high"],
+            },
+          },
+        },
+      })
+    ).to.equal(true);
+
+    const cfg = JSON.parse(
+      fs.readFileSync(path.join(process.cwd(), "data/issuer-config.json"), "utf8")
+    );
+    const pidCfg = cfg.credential_configurations_supported["urn:eu.europa.ec.eudi:pid:1"];
+    expect(pidCfg).to.be.an("object");
+    expect(credentialConfigRequiresKeyAttestation(pidCfg)).to.equal(false);
+    expect(sessionRequiresWua({ credentialConfigurationId: "urn:eu.europa.ec.eudi:pid:1" })).to.equal(
+      false
     );
   });
 });
@@ -219,6 +287,59 @@ describe("strict WIA validation (oauthClientAttestation)", () => {
     applyWiaStatusEvidenceToSession(session, { ...r.wiaStatusList, wiaCnfJkt: r.wiaCnfJkt });
     expect(session.wiaStatusList.uri).to.equal(WIA_STATUS_LIST_URI);
     expect(session.wiaCnfJkt).to.equal(expected);
+  });
+
+  it("validates and persists WIA status evidence for a CS-12 code-flow PAR", async () => {
+    const credentialId = TS12_SCA_IBAN_VCT;
+    const requiresWua = issuanceRequestRequiresWua({
+      authorization_details: [{ credential_configuration_id: credentialId }],
+    });
+    expect(requiresWua).to.equal(true);
+
+    const wallet = await jose.generateKeyPair(ALG, { extractable: true });
+    const walletPub = await jose.exportJWK(wallet.publicKey);
+    const clientId = "ts12-wallet";
+    await installValidStatusListForKey({
+      privateKey: wallet.privateKey,
+      uri: WIA_STATUS_LIST_URI,
+      statuses: [0],
+    });
+    const attestation = await signSelfContainedWia({
+      privateKey: wallet.privateKey,
+      publicJwk: walletPub,
+      clientId,
+    });
+    const pop = await signPop({ walletPrivateKey: wallet.privateKey, clientId });
+
+    const result = await validateOAuthClientAttestationFromRequest({
+      headers: {
+        "oauth-client-attestation": attestation,
+        "oauth-client-attestation-pop": pop,
+      },
+      clientId,
+      authorizationServerIssuer: AS_ISSUER,
+      trustedJwks: { keys: [] },
+      requireAttestation: requiresWua,
+      strictWiaSignature: requiresWua,
+    });
+    expect(result.ok).to.equal(true);
+    expect(result.wiaStatusList).to.include({ uri: WIA_STATUS_LIST_URI, idx: 0 });
+
+    const codeFlowSession = {
+      requestedCredentialConfigurationIds: [credentialId],
+      requiresWua,
+    };
+    applyWiaStatusEvidenceToSession(codeFlowSession, {
+      ...result.wiaStatusList,
+      wiaCnfJkt: result.wiaCnfJkt,
+    });
+    expect(codeFlowSession.wiaStatusList.uri).to.equal(WIA_STATUS_LIST_URI);
+    expect(codeFlowSession.wiaStatusList.idx).to.equal(0);
+    expect(codeFlowSession.wiaStatusList.verificationJwk).to.include({
+      kty: "EC",
+      crv: "P-256",
+    });
+    expect(codeFlowSession.wiaCnfJkt).to.equal(result.wiaCnfJkt);
   });
 
   it("requireAttestation rejects a revoked WIA status bit", async () => {

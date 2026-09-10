@@ -426,6 +426,10 @@ describe("TS12 issuer metadata", () => {
       expect(config.transaction_data_types["urn:eudi:sca:payment:1"].schema).to.equal(
         "urn:eudi:sca:payment:1",
       );
+      expect(
+        config.proof_types_supported?.jwt,
+        `${vct} JWT proof metadata`,
+      ).to.have.property("key_attestations_required");
     }
     const iban = issuerConfig.credential_configurations_supported[TS12_SCA_IBAN_VCT];
     const txType = iban.transaction_data_types["urn:eudi:sca:payment:1"];

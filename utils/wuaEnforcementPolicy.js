@@ -3,9 +3,20 @@
  * Enforcement is scoped to explicit credential IDs (not global).
  */
 
+import {
+  TS12_SCA_IBAN_VCT,
+  TS12_SCA_USER_VCT,
+  TS12_SCA_CARD_DPC_VCT,
+} from "./ts12PaymentUtils.js";
+
 export const WUA_REQUIRED_CREDENTIAL_ID = "VerifiablePIDSDJWTWUA";
 
-export const WUA_REQUIRED_CREDENTIAL_IDS = new Set([WUA_REQUIRED_CREDENTIAL_ID]);
+export const WUA_REQUIRED_CREDENTIAL_IDS = new Set([
+  WUA_REQUIRED_CREDENTIAL_ID,
+  TS12_SCA_IBAN_VCT,
+  TS12_SCA_USER_VCT,
+  TS12_SCA_CARD_DPC_VCT,
+]);
 
 /** ISO 18045 AVA_VAN levels advertised for the WUA-required PID credential. */
 export const WUA_REQUIRED_KEY_STORAGE_LEVELS = ["iso_18045_high"];
@@ -20,13 +31,20 @@ export function isWuaRequiredCredentialId(credentialId) {
   return WUA_REQUIRED_CREDENTIAL_IDS.has(credentialId.trim());
 }
 
+function hasNonEmptyLevelList(value) {
+  return Array.isArray(value) && value.length > 0;
+}
+
 /**
+ * True when jwt.key_attestations_required advertises specific key_storage or
+ * user_authentication levels. Empty `{}` is treated as no KA constraint.
  * @param {object|null|undefined} credConfig - credential_configurations_supported entry
  * @returns {boolean}
  */
 export function credentialConfigRequiresKeyAttestation(credConfig) {
   const req = credConfig?.proof_types_supported?.jwt?.key_attestations_required;
-  return req != null && typeof req === "object";
+  if (!req || typeof req !== "object") return false;
+  return hasNonEmptyLevelList(req.key_storage) || hasNonEmptyLevelList(req.user_authentication);
 }
 
 /**

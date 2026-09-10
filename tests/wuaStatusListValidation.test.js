@@ -12,6 +12,7 @@ import {
   readStatusBit,
   STATUS_INVALID,
   STATUS_LIST_MEDIA_TYPE,
+  STATUS_SUSPENDED,
   STATUS_VALID,
   WuaStatusListValidationError,
   resetWuaStatusListVerifierForTests,
@@ -45,6 +46,19 @@ describe("WUA status-list verifier", () => {
       expect(readStatusBit(bytes, 1)).to.equal(STATUS_VALID);
       expect(readStatusBit(bytes, 15)).to.equal(STATUS_INVALID);
       expect(readStatusBit(bytes, 16)).to.equal(null);
+    });
+
+    it("packs LSB-first matching the draft-20 bits=2 example", () => {
+      const statuses = [0x01, 0x02, 0x00, 0x03, 0x00, 0x01, 0x00, 0x01, 0x01, 0x02, 0x03, 0x03];
+      const bytes = encodeStatusListBytes(statuses, { bits: 2 });
+      expect(bytes[0]).to.equal(0xc9);
+      expect(bytes[1]).to.equal(0x44);
+      expect(bytes[2]).to.equal(0xf9);
+      expect(readStatusBit(bytes, 0, 2)).to.equal(STATUS_INVALID);
+      expect(readStatusBit(bytes, 1, 2)).to.equal(STATUS_SUSPENDED);
+      expect(readStatusBit(bytes, 2, 2)).to.equal(STATUS_VALID);
+      expect(readStatusBit(bytes, 11, 2)).to.equal(0x03);
+      expect(readStatusBit(bytes, 12, 2)).to.equal(null);
     });
 
     it("round-trips ZLIB lst compression", () => {
@@ -153,6 +167,28 @@ describe("WUA status-list verifier", () => {
       }
     });
 
+    it("accepts a Status List Token signed by a header jwk distinct from the WIA key", async () => {
+      const { publicJwk } = await signer();
+      const statusSigner = await jose.generateKeyPair(ALG, { extractable: true });
+      const statusPublicJwk = await jose.exportJWK(statusSigner.publicKey);
+      const jwt = await signStatusListToken({
+        privateKey: statusSigner.privateKey,
+        uri: WIA_STATUS_LIST_URI,
+        statuses: [STATUS_VALID],
+        header: { jwk: { kty: statusPublicJwk.kty, crv: statusPublicJwk.crv, x: statusPublicJwk.x, y: statusPublicJwk.y } },
+      });
+      installStatusListTestHooks({ fetchImpl: stubStatusListFetch(jwt) });
+      const result = await evaluateWuaStatusList({
+        uri: WIA_STATUS_LIST_URI,
+        idx: 0,
+        verificationJwk: publicJwk,
+        kind: "wia",
+      });
+      expect(result.ok).to.equal(true);
+      expect(result.status).to.equal(STATUS_VALID);
+      expect(result.verificationJwk.x).to.equal(statusPublicJwk.x);
+    });
+
     it("rejects wrong typ", async () => {
       const { privateKey, publicJwk } = await signer();
       const jwt = await signStatusListToken({
@@ -195,6 +231,26 @@ describe("WUA status-list verifier", () => {
       } catch (error) {
         expect(error.reason).to.equal("sub_mismatch");
       }
+    });
+
+    it("accepts a Status List Token without exp (draft-20 RECOMMENDED)", async () => {
+      const { privateKey, publicJwk } = await signer();
+      const jwt = await signStatusListToken({
+        privateKey,
+        uri: WIA_STATUS_LIST_URI,
+        statuses: [STATUS_VALID],
+        omitExp: true,
+      });
+      installStatusListTestHooks({ fetchImpl: stubStatusListFetch(jwt) });
+      const result = await evaluateWuaStatusList({
+        uri: WIA_STATUS_LIST_URI,
+        idx: 0,
+        verificationJwk: publicJwk,
+        kind: "wia",
+      });
+      expect(result.ok).to.equal(true);
+      expect(result.status).to.equal(STATUS_VALID);
+      expect(result.exp).to.equal(undefined);
     });
 
     it("rejects an expired Status List Token", async () => {
@@ -245,12 +301,76 @@ describe("WUA status-list verifier", () => {
       }
     });
 
-    it("rejects unsupported bits", async () => {
+    it("accepts a bits=2 Status List Token when the indexed value is VALID", async () => {
       const { privateKey, publicJwk } = await signer();
       const jwt = await signStatusListToken({
         privateKey,
         uri: WIA_STATUS_LIST_URI,
         bits: 2,
+        statuses: [STATUS_VALID],
+      });
+      installStatusListTestHooks({ fetchImpl: stubStatusListFetch(jwt) });
+      const result = await evaluateWuaStatusList({
+        uri: WIA_STATUS_LIST_URI,
+        idx: 0,
+        verificationJwk: publicJwk,
+        kind: "wia",
+      });
+      expect(result.ok).to.equal(true);
+      expect(result.status).to.equal(STATUS_VALID);
+    });
+
+    it("rejects a bits=2 INVALID value as revoked", async () => {
+      const { privateKey, publicJwk } = await signer();
+      const jwt = await signStatusListToken({
+        privateKey,
+        uri: WIA_STATUS_LIST_URI,
+        bits: 2,
+        statuses: [STATUS_INVALID],
+      });
+      installStatusListTestHooks({ fetchImpl: stubStatusListFetch(jwt) });
+      try {
+        await evaluateWuaStatusList({
+          uri: WIA_STATUS_LIST_URI,
+          idx: 0,
+          verificationJwk: publicJwk,
+          kind: "wia",
+        });
+        expect.fail("expected revoked rejection");
+      } catch (error) {
+        expect(error.reason).to.equal("revoked");
+      }
+    });
+
+    it("rejects a bits=2 SUSPENDED value as not VALID", async () => {
+      const { privateKey, publicJwk } = await signer();
+      const jwt = await signStatusListToken({
+        privateKey,
+        uri: WIA_STATUS_LIST_URI,
+        bits: 2,
+        statuses: [STATUS_SUSPENDED],
+      });
+      installStatusListTestHooks({ fetchImpl: stubStatusListFetch(jwt) });
+      try {
+        await evaluateWuaStatusList({
+          uri: WIA_STATUS_LIST_URI,
+          idx: 0,
+          verificationJwk: publicJwk,
+          kind: "wia",
+        });
+        expect.fail("expected unexpected_status rejection");
+      } catch (error) {
+        expect(error.reason).to.equal("unexpected_status");
+      }
+    });
+
+    it("rejects unsupported bits", async () => {
+      const { privateKey, publicJwk } = await signer();
+      const jwt = await signStatusListToken({
+        privateKey,
+        uri: WIA_STATUS_LIST_URI,
+        bits: 3,
+        lst: encodeStatusListLst([STATUS_VALID]),
         statuses: [STATUS_VALID],
       });
       installStatusListTestHooks({ fetchImpl: stubStatusListFetch(jwt) });
@@ -355,13 +475,54 @@ describe("WUA status-list verifier", () => {
       }
     });
 
-    it("rejects redirects", async () => {
+    it("follows an HTTPS redirect to the Status List Token", async () => {
+      const { privateKey, publicJwk } = await signer();
+      const jwt = await signStatusListToken({
+        privateKey,
+        uri: WIA_STATUS_LIST_URI,
+        statuses: [STATUS_VALID],
+      });
+      const redirected = "https://cdn.wallet-provider.example/status-lists/wia/1";
+      installStatusListTestHooks({
+        fetchImpl: async (url) => {
+          if (String(url) === WIA_STATUS_LIST_URI) {
+            return {
+              ok: false,
+              status: 302,
+              headers: { get: (name) => (String(name).toLowerCase() === "location" ? redirected : null) },
+              arrayBuffer: async () => Buffer.from(""),
+            };
+          }
+          expect(String(url)).to.equal(redirected);
+          return {
+            ok: true,
+            status: 200,
+            headers: { get: (name) => (String(name).toLowerCase() === "content-type" ? STATUS_LIST_MEDIA_TYPE : null) },
+            arrayBuffer: async () => Buffer.from(jwt, "utf8"),
+          };
+        },
+      });
+      const result = await evaluateWuaStatusList({
+        uri: WIA_STATUS_LIST_URI,
+        idx: 0,
+        verificationJwk: publicJwk,
+        kind: "wia",
+      });
+      expect(result.ok).to.equal(true);
+      expect(result.status).to.equal(STATUS_VALID);
+    });
+
+    it("rejects an HTTPS redirect to a private address", async () => {
       const { publicJwk } = await signer();
       installStatusListTestHooks({
-        fetchImpl: async (_url, init) => {
-          expect(init.redirect).to.equal("error");
-          const err = new Error("redirect not allowed");
-          throw err;
+        fetchImpl: async () => ({
+          ok: false,
+          status: 302,
+          headers: { get: (name) => (String(name).toLowerCase() === "location" ? "https://evil.example/list" : null) },
+        }),
+        resolveHostname: async (hostname) => {
+          if (String(hostname) === "evil.example") return [{ address: "127.0.0.1" }];
+          return [{ address: "1.1.1.1" }];
         },
       });
       try {
@@ -371,9 +532,33 @@ describe("WUA status-list verifier", () => {
           verificationJwk: publicJwk,
           kind: "wia",
         });
-        expect.fail("expected redirect rejection");
+        expect.fail("expected private redirect rejection");
       } catch (error) {
         expect(error.reason).to.equal("fetch_failed");
+        expect(error.message).to.match(/private|reserved/i);
+      }
+    });
+
+    it("rejects an HTTP redirect target", async () => {
+      const { publicJwk } = await signer();
+      installStatusListTestHooks({
+        fetchImpl: async () => ({
+          ok: false,
+          status: 302,
+          headers: { get: (name) => (String(name).toLowerCase() === "location" ? "http://wallet-provider.example/list" : null) },
+        }),
+      });
+      try {
+        await evaluateWuaStatusList({
+          uri: WIA_STATUS_LIST_URI,
+          idx: 0,
+          verificationJwk: publicJwk,
+          kind: "wia",
+        });
+        expect.fail("expected http redirect rejection");
+      } catch (error) {
+        expect(error.reason).to.equal("fetch_failed");
+        expect(error.message).to.match(/HTTP\(S\)/);
       }
     });
   });

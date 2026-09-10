@@ -114,13 +114,18 @@ binding to `attested_keys[0]`.
   JWTs for WIA (`client_status.status`) and KA (`key_storage_status.status`)
   at `GET /status-lists/wia/1` and `GET /status-lists/ka/1`. CS-04 pins
   [draft-ietf-oauth-status-list-20](./rfc/draft-ietf-oauth-status-list-20.txt)
-  for that wire format (`typ: statuslist+jwt`, `bits: 1`, ZLIB/DEFLATE,
-  LSB-first packing). CS-01 attestations advertise those URIs from
+  for that wire format (`typ: statuslist+jwt`, `bits` 1/2/4/8, ZLIB/DEFLATE,
+  LSB-first packing). The wallet-client publisher still emits `bits: 1`.
+  CS-01 attestations advertise those URIs from
   `WALLET_PROVIDER_URL`, keep status maintenance at least 31 days ahead of
   presentation, and retain list entries until that `exp`. On WUA-required
-  issuance the issuer fetches each advertised `status_list.uri`, verifies the
-  Status List JWT with the same Wallet Provider key that authenticated the
-  WIA or KA, and rejects a non-zero bit at `idx`.
+  issuance the issuer fetches each advertised `status_list.uri` and verifies the
+  Status List JWT first with the Wallet Provider key that authenticated the
+  WIA or KA, then with the Status List Token's protected-header `x5c` or `jwk`
+  when that WP key does not match (IETF Status List issuer keys; the EUDI
+  reference wallet publishes lists from a distinct host). A status value other
+  than VALID (`0x00`) at `idx` is rejected. Status-list fetch follows a bounded
+  number of HTTPS redirects and re-checks private/reserved addresses on each hop.
 - When an issuer supplies `c_nonce`, the KA carried in a JWT proof includes the
 same `nonce`; the proof JWT and KA nonce are checked together before dispatch.
 - The CS-04 `certification` example is currently tracked as an open
@@ -329,12 +334,24 @@ Section 3.6 and Section 4.2.
   `status_list.uri`/`idx` values fail closed. The issuer `GET`s each
   `status_list.uri` with `Accept: application/statuslist+jwt`, verifies the
   compact Status List JWT (`typ: statuslist+jwt`) using the Wallet Provider
-  public key that already authenticated the WIA or KA, inflates the
-  ZLIB/LSB-first bitstring, and requires the bit at `idx` to be VALID (0).
+  public key that already authenticated the WIA or KA when it verifies, or the
+  Status List Token's own protected-header `x5c` or `jwk` otherwise, inflates the
+  ZLIB/LSB-first bitstring (`bits` 1, 2, 4, or 8), and requires the value at
+  `idx` to be VALID (0). Status-list fetch follows a bounded number of HTTPS
+  redirects with per-hop SSRF checks. Content-Type must be
+  `application/statuslist+jwt`.
+  Status List Token `exp` is draft-20 RECOMMENDED and is checked only when
+  present; CS-04 still requires WIA `client_status.exp` / KA `key_storage_status.exp`.
   Revoked, unavailable, or unverifiable lists fail PAR/token as
   `invalid_client` and the Credential endpoint as `invalid_proof`.
-  Compatibility-mode optional attestations remain warning-only. The
-  post-issuance 24-hour re-check cadence from CS-04 §7.2 is not implemented.
+  Compatibility-mode optional attestations remain warning-only. Empty
+  `key_attestations_required` objects do not trigger WUA status-list
+  enforcement; `/credential` uses the same credential-ID allowlist as PAR/token.
+  A DPoP `jkt` that does not match the WIA `cnf` thumbprint is logged as a
+  warning and does not fail the token request. TS-03 v1.5.2 rolled back that
+  binding; CS-04 §7.3 / CS-01 §7.4 still describe it. The issuer continues to
+  require Client Attestation PoP under WIA `cnf`.
+  The post-issuance 24-hour re-check cadence from CS-04 §7.2 is not implemented.
 - WUA/key-attestation signature validation is shared by `proofs.jwt` protected
   header `key_attestation` and `proofs.attestation`. In compatibility mode,
   configured Wallet Provider keys are preferred, then a protected-header `jwk`

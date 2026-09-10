@@ -505,7 +505,7 @@ export async function validateOAuthClientAttestationFromRequest({
           )
         );
       }
-      await evaluateWuaStatusList({
+      const statusResult = await evaluateWuaStatusList({
         uri: parsed.uri,
         idx: parsed.idx,
         verificationJwk: statusVerificationJwk,
@@ -516,7 +516,7 @@ export async function validateOAuthClientAttestationFromRequest({
         uri: parsed.uri,
         idx: parsed.idx,
         exp: parsed.exp,
-        verificationJwk: statusVerificationJwk,
+        verificationJwk: statusResult.verificationJwk || statusVerificationJwk,
       });
     }
 

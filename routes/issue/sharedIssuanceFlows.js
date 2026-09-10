@@ -83,7 +83,6 @@ import {
 } from "../../utils/wuaStatusListVerifier.js";
 import {
   isWuaRequiredCredentialId,
-  credentialConfigRequiresKeyAttestation,
   validateKaLevelsAgainstMetadata,
   sessionRequiresWua,
 } from "../../utils/wuaEnforcementPolicy.js";
@@ -766,13 +765,6 @@ const handleAuthorizationCodeFlow = async (
       err.errorCode = "invalid_dpop_proof";
       throw err;
     }
-    if (existingCodeSession.wiaCnfJkt && dpopCnf.jkt !== existingCodeSession.wiaCnfJkt) {
-      const err = new Error(
-        "DPoP key thumbprint does not match WIA cnf.jwk from the same issuance session"
-      );
-      err.errorCode = "invalid_dpop_proof";
-      throw err;
-    }
   }
 
   // HAIP profile: when enabled and an expected DPoP thumbprint is stored on the session,
@@ -1383,16 +1375,12 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
     ) {
       if (slog) {
         try {
-          slog("[TOKEN] [ERROR] DPoP jkt does not match WIA cnf.jkt from issuance session", {
+          slog("[TOKEN] [WARN] DPoP jkt does not match WIA cnf.jkt from issuance session", {
             expected: codeFlowSessionForWua?.wiaCnfJkt || attestationResult.wiaCnfJkt,
             received: dpopCnf.jkt,
           });
         } catch {}
       }
-      return res.status(400).json({
-        error: "invalid_dpop_proof",
-        error_description: "DPoP key thumbprint must match WIA cnf.jwk from the same issuance session",
-      });
     }
 
     let tokenResponse;
@@ -1563,8 +1551,8 @@ sharedRouter.post("/credential", async (req, res) => {
     const credConfigForWua =
       issuerConfigForWua.credential_configurations_supported[effectiveConfigurationId];
     const credentialRequiresWua =
+      sessionRequiresWua(sessionObject) ||
       isWuaRequiredCredentialId(effectiveConfigurationId) ||
-      credentialConfigRequiresKeyAttestation(credConfigForWua) ||
       isTrustFrameworkSession(sessionObject);
 
     if (credentialRequiresWua) {

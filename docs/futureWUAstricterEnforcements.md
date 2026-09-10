@@ -11,11 +11,15 @@ Current behavior:
 - Missing KA `key_storage_status` fails KA/WUA validation.
 - Expired KA `key_storage_status.exp` fails KA/WUA validation.
 - Incomplete KA `key_storage_status.status.status_list` fails CS-04 KA validation.
-- WUA-required issuance fetches each Status List Token, verifies it with the Wallet Provider key that authenticated the WIA or KA, and requires the referenced bit to be VALID.
+- WUA-required issuance fetches each Status List Token, verifies it with the Wallet Provider key that authenticated the WIA or KA when that key matches, otherwise with the Status List Token protected-header `x5c` or `jwk`, and requires the referenced value to be VALID (`0x00`). `bits` may be 1, 2, 4, or 8 (draft-20 §4.2); INVALID is revoked and other types including SUSPENDED fail closed.
+- Status List Token `exp` is checked only when present (draft-20 §5.1 RECOMMENDED / §8.3). Missing `exp` is accepted; a present, past `exp` still fails. This is distinct from the required WIA `client_status.exp` / KA `key_storage_status.exp` claims.
+- Status-list fetch follows a bounded number of HTTPS redirects and re-validates each hop (draft-20 §8.2 SHOULD follow; §11.4). Trust-list `fetchDocument` still defaults to rejecting redirects. Response `Content-Type` must be `application/statuslist+jwt` (draft-20 §8.2 MUST).
+- DPoP `jkt` vs WIA `cnf` thumbprint mismatch is warning-only on WUA-required token requests. Current TS-03 v1.5.2 rolled back the 1.5.1 requirement that DPoP use the WIA `cnf` key; the issuer still requires OAuth Client Attestation PoP under `cnf`. Missing DPoP on a WUA-required session still fails.
 
 Future stricter enforcement:
 - Enforce preferred remaining status maintenance periods where advertised.
 - Re-check WIA and KA revocation at least every 24 hours for the validity period of a longer-lived PID (CS-04 §7.2). Issuance-time checking is sufficient when credential validity is under 24 hours.
+- Fail the token request when DPoP `jkt` does not match WIA `cnf.jwk`. That is CS-04 §7.3 / CS-01 §7.4 (copied from TS-03 1.5.1), not current TS-03 1.5.2.
 
 ## Wallet Provider Trust Material
 

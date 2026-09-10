@@ -27,27 +27,31 @@ export async function signStatusListToken({
   sub,
   iat,
   exp,
+  omitExp = false,
   ttl = 3600,
   alg = "ES256",
   extraClaims = {},
   lst,
+  header = {},
 } = {}) {
   const now = Math.floor(Date.now() / 1000);
   const payload = {
     sub: sub === undefined ? uri : sub,
     iat: iat ?? now,
-    exp: exp ?? now + ttl,
     ttl,
     status_list: {
       bits,
-      lst: lst ?? encodeStatusListLst(statuses, { bits: bits === 1 ? 1 : 1 }),
+      lst: lst ?? encodeStatusListLst(statuses, { bits }),
     },
     ...extraClaims,
   };
+  if (!omitExp) {
+    payload.exp = exp ?? now + ttl;
+  }
   if (bits !== 1) payload.status_list.bits = bits;
   if (lst !== undefined) payload.status_list.lst = lst;
   return new jose.SignJWT(payload)
-    .setProtectedHeader({ alg, typ })
+    .setProtectedHeader({ alg, typ, ...header })
     .sign(privateKey);
 }
 

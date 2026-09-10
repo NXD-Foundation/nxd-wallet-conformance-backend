@@ -27,34 +27,59 @@ async function assertSafeTarget(parsed, { resolveHostname = lookup, allowedHosts
   }
 }
 
-export async function fetchDocument(url, { fetchImpl = globalThis.fetch, timeoutMs = 10_000, maxBytes = 2_000_000, allowInsecureHttp = false, resolveHostname = lookup, allowedHosts = null, allowPrivateAddresses = false, headers = null } = {}) {
-  let parsed;
-  try {
-    parsed = new URL(url);
-  } catch {
-    throw new TrustListError(`Invalid document URL: ${url}`, TRUST_REASON_CODES.REFERENCED_LIST_UNAVAILABLE);
-  }
-  if (parsed.protocol !== "https:" && !(allowInsecureHttp && parsed.protocol === "http:")) {
-    throw new TrustListError("Trust-list URLs must use HTTP(S)", TRUST_REASON_CODES.REFERENCED_LIST_UNAVAILABLE);
-  }
-  await assertSafeTarget(parsed, { resolveHostname, allowedHosts, allowPrivateAddresses });
+function headerValue(headers, name) {
+  if (!headers || typeof headers.get !== "function") return "";
+  return headers.get(name) || headers.get(name.toLowerCase()) || "";
+}
+
+export async function fetchDocument(url, { fetchImpl = globalThis.fetch, timeoutMs = 10_000, maxBytes = 2_000_000, allowInsecureHttp = false, resolveHostname = lookup, allowedHosts = null, allowPrivateAddresses = false, headers = null, followRedirects = false, maxRedirects = 5 } = {}) {
+  const hopLimit = Number.isInteger(maxRedirects) && maxRedirects >= 0 ? maxRedirects : 5;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let currentUrl = String(url);
   try {
-    const requestInit = { signal: controller.signal, redirect: "error" };
-    if (headers && typeof headers === "object") requestInit.headers = headers;
-    const response = await fetchImpl(url, requestInit);
-    if (!response.ok) {
-      throw new TrustListError(`Trust-list fetch failed with HTTP ${response.status}`, TRUST_REASON_CODES.REFERENCED_LIST_UNAVAILABLE, { url, status: response.status });
+    for (let hops = 0; ; hops += 1) {
+      let parsed;
+      try {
+        parsed = new URL(currentUrl);
+      } catch {
+        throw new TrustListError(`Invalid document URL: ${currentUrl}`, TRUST_REASON_CODES.REFERENCED_LIST_UNAVAILABLE);
+      }
+      if (parsed.protocol !== "https:" && !(allowInsecureHttp && parsed.protocol === "http:")) {
+        throw new TrustListError("Trust-list URLs must use HTTP(S)", TRUST_REASON_CODES.REFERENCED_LIST_UNAVAILABLE);
+      }
+      await assertSafeTarget(parsed, { resolveHostname, allowedHosts, allowPrivateAddresses });
+      const requestInit = { signal: controller.signal, redirect: "error" };
+      if (headers && typeof headers === "object") requestInit.headers = headers;
+      const response = await fetchImpl(currentUrl, requestInit);
+      const status = Number(response.status);
+      if (followRedirects && status >= 300 && status < 400) {
+        if (hops >= hopLimit) {
+          throw new TrustListError("Trust-list fetch exceeded redirect limit", TRUST_REASON_CODES.REFERENCED_LIST_UNAVAILABLE, { url: currentUrl });
+        }
+        const location = headerValue(response.headers, "location");
+        if (!location) {
+          throw new TrustListError("Trust-list redirect is missing Location", TRUST_REASON_CODES.REFERENCED_LIST_UNAVAILABLE, { url: currentUrl, status });
+        }
+        try {
+          currentUrl = new URL(location, parsed).href;
+        } catch {
+          throw new TrustListError("Trust-list redirect Location is invalid", TRUST_REASON_CODES.REFERENCED_LIST_UNAVAILABLE, { url: currentUrl, status, location });
+        }
+        continue;
+      }
+      if (!response.ok) {
+        throw new TrustListError(`Trust-list fetch failed with HTTP ${response.status}`, TRUST_REASON_CODES.REFERENCED_LIST_UNAVAILABLE, { url: currentUrl, status: response.status });
+      }
+      const buffer = Buffer.from(await response.arrayBuffer());
+      if (buffer.length > maxBytes) {
+        throw new TrustListError("Trust-list response exceeds configured size limit", TRUST_REASON_CODES.REFERENCED_LIST_UNAVAILABLE, { url: currentUrl, maxBytes });
+      }
+      return { url: currentUrl, bytes: buffer, contentType: headerValue(response.headers, "content-type") };
     }
-    const buffer = Buffer.from(await response.arrayBuffer());
-    if (buffer.length > maxBytes) {
-      throw new TrustListError("Trust-list response exceeds configured size limit", TRUST_REASON_CODES.REFERENCED_LIST_UNAVAILABLE, { url, maxBytes });
-    }
-    return { url, bytes: buffer, contentType: response.headers?.get?.("content-type") || "" };
   } catch (error) {
     if (error instanceof TrustListError) throw error;
-    throw new TrustListError(`Trust-list fetch failed: ${error.message}`, TRUST_REASON_CODES.REFERENCED_LIST_UNAVAILABLE, { url });
+    throw new TrustListError(`Trust-list fetch failed: ${error.message}`, TRUST_REASON_CODES.REFERENCED_LIST_UNAVAILABLE, { url: currentUrl });
   } finally {
     clearTimeout(timer);
   }

@@ -57,4 +57,48 @@ describe("Phase 1 trust-list fetch policy", () => {
       }
     }
   });
+
+  it("does not follow redirects by default", async () => {
+    try {
+      await fetchDocument("https://trust.example/list.json", {
+        resolveHostname: async () => [{ address: "1.1.1.1" }],
+        fetchImpl: async () => ({
+          ok: false,
+          status: 302,
+          headers: { get: (name) => (String(name).toLowerCase() === "location" ? "https://cdn.example/list.json" : null) },
+        }),
+      });
+      expect.fail("expected redirect rejection");
+    } catch (error) {
+      expect(error.reasonCode).to.equal("REFERENCED_LIST_UNAVAILABLE");
+      expect(error.message).to.match(/HTTP 302/);
+    }
+  });
+
+  it("follows HTTPS redirects when enabled and re-checks the hop", async () => {
+    const seen = [];
+    const result = await fetchDocument("https://trust.example/list.json", {
+      followRedirects: true,
+      resolveHostname: async () => [{ address: "1.1.1.1" }],
+      fetchImpl: async (url) => {
+        seen.push(String(url));
+        if (String(url) === "https://trust.example/list.json") {
+          return {
+            ok: false,
+            status: 302,
+            headers: { get: (name) => (String(name).toLowerCase() === "location" ? "https://cdn.example/list.json" : null) },
+          };
+        }
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => "application/json" },
+          arrayBuffer: async () => Buffer.from("ok"),
+        };
+      },
+    });
+    expect(seen).to.deep.equal(["https://trust.example/list.json", "https://cdn.example/list.json"]);
+    expect(result.bytes.toString()).to.equal("ok");
+    expect(result.url).to.equal("https://cdn.example/list.json");
+  });
 });
