@@ -62,8 +62,36 @@ describe("PID Rulebook 1.7 data model", () => {
 
     expect(sdJwt.vct).to.equal("urn:eu.europa.ec.eudi:pid:1");
     expect(sdJwt.format).to.equal("dc+sd-jwt");
+
+    const sdJwtClaimNames = sdJwt.credential_metadata.claims.map(
+      (claim) => claim.path[0]
+    );
+    expect(sdJwtClaimNames).to.include.members([
+      "birthdate",
+      "nationalities",
+      "date_of_issuance",
+      "date_of_expiry",
+    ]);
+    expect(sdJwtClaimNames).to.not.include.members([
+      "age_over_18",
+      "birth_date",
+      "issuance_date",
+      "expiry_date",
+    ]);
+
     expect(mdoc.doctype).to.equal("urn:eu.europa.ec.eudi:pid:1");
     expect(mdoc.credential_metadata.claims[0].path[0])
       .to.equal("urn:eu.europa.ec.eudi:pid:1");
+
+    const mdocClaimNames = mdoc.credential_metadata.claims.map(
+      (claim) => claim.path[1]
+    );
+    expect(mdocClaimNames).to.include("nationality");
+    expect(mdocClaimNames).to.not.include("age_over_18");
+
+    const nationalityClaim = mdoc.credential_metadata.claims.find(
+      (claim) => claim.path[1] === "nationality"
+    );
+    expect(nationalityClaim.display[0].name).to.equal("Nationality");
   });
 });

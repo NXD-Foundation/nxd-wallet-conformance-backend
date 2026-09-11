@@ -556,7 +556,7 @@ export const DEFAULT_MDL_DCQL_QUERY = {
           path: ["urn:eu.europa.ec.eudi:pid:1", "given_name"],
         },
         {
-          path: ["urn:eu.europa.ec.eudi:pid:1", "age_over_18"],
+          path: ["urn:eu.europa.ec.eudi:pid:1", "nationality"],
         },
       ],
       format: "mso_mdoc",

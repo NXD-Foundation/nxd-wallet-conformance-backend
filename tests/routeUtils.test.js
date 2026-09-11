@@ -175,5 +175,18 @@ describe('Route Utils', () => {
         expect(path[0]).to.not.equal('urn:eu.europa.ec.eudi:pid:1:mso_mdoc');
       });
     });
+
+    it('requests PID Rulebook attributes present on issued mso_mdoc PIDs', () => {
+      const claimNames = DEFAULT_MDL_DCQL_QUERY.credentials[0].claims.map(
+        ({ path }) => path[1]
+      );
+
+      expect(claimNames).to.deep.equal([
+        'family_name',
+        'given_name',
+        'nationality',
+      ]);
+      expect(claimNames).to.not.include('age_over_18');
+    });
   });
 }); 

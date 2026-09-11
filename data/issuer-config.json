@@ -1764,7 +1764,7 @@
           },
           {
             "path": [
-              "birth_date"
+              "birthdate"
             ],
             "display": [
               {
@@ -1775,18 +1775,18 @@
           },
           {
             "path": [
-              "age_over_18"
+              "nationalities"
             ],
             "display": [
               {
-                "name": "Age Over 18",
+                "name": "Nationalities",
                 "locale": "en-GB"
               }
             ]
           },
           {
             "path": [
-              "issuance_date"
+              "date_of_issuance"
             ],
             "display": [
               {
@@ -1797,7 +1797,7 @@
           },
           {
             "path": [
-              "expiry_date"
+              "date_of_expiry"
             ],
             "display": [
               {
@@ -1912,7 +1912,7 @@
             ],
             "display": [
               {
-                "name": "Age Over 18",
+                "name": "Nationality",
                 "locale": "en-GB"
               }
             ]
