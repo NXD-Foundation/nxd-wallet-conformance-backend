@@ -78,7 +78,7 @@ async function buildMinimalKa({ privateKey, publicJwk, attestedKeys, includeStat
     attested_keys: attestedKeys,
     key_storage: ["iso_18045_high"],
     user_authentication: ["iso_18045_high"],
-    certification: { scheme: "test" },
+    certification: "https://wallet-provider.example/certification/wscd/GlobalPlatform/",
   };
   if (includeStatus) {
     payload.key_storage_status = {
@@ -465,6 +465,32 @@ describe("KA validation (validateWUA)", () => {
     expect(result.error).to.match(/signature/i);
   });
 
+  it("rejects CS-04 KA when certification is a JSON object instead of a string URL", async () => {
+    const { privateKey, publicKey } = await jose.generateKeyPair(ALG, { extractable: true });
+    const pubJwk = await jose.exportJWK(publicKey);
+    const holderJwk = await jose.exportJWK(publicKey);
+    const now = Math.floor(Date.now() / 1000);
+    const ka = await new jose.SignJWT({
+      iat: now,
+      exp: now + 3600,
+      attested_keys: [holderJwk],
+      key_storage: ["iso_18045_high"],
+      user_authentication: ["iso_18045_high"],
+      certification: { scheme: "test" },
+      key_storage_status: {
+        status: { status_list: { uri: "https://example.com/ka-status", idx: 1 } },
+        exp: now + 86400,
+      },
+    })
+      .setProtectedHeader({ alg: ALG, typ: "key-attestation+jwt", jwk: pubJwk })
+      .sign(privateKey);
+    const result = await validateWUA(ka, null, {});
+    expect(result.valid).to.equal(false);
+    expect(result.error).to.match(/certification must be a string URL/i);
+    expect(result.error).to.match(/CS-04 section 7\.1/);
+    expect(result.error).to.match(/OpenID4VCI 1\.0 Appendix D\.1/);
+  });
+
   it("rejects KA with unhyphenated typ keyattestation+jwt", async () => {
     const { privateKey, publicKey } = await jose.generateKeyPair(ALG, { extractable: true });
     const pubJwk = await jose.exportJWK(publicKey);
@@ -494,7 +520,7 @@ describe("KA validation (validateWUA)", () => {
       attested_keys: [holderJwk],
       key_storage: ["iso_18045_high"],
       user_authentication: ["iso_18045_high"],
-      certification: { scheme: "test" },
+      certification: "https://wallet-provider.example/certification/wscd/GlobalPlatform/",
       key_storage_status: {
         status: { status_list: { uri: "https://example.com/ka-status" } },
         exp: now + 86400,

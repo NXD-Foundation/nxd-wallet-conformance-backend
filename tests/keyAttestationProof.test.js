@@ -175,7 +175,7 @@ describe("keyAttestationProof", () => {
         nonce: "test-nonce-xyz",
         key_storage: ["iso_18045_high"],
         user_authentication: ["iso_18045_high"],
-        certification: { scheme: "test" },
+        certification: "https://wallet-provider.example/certification/wscd/GlobalPlatform/",
         key_storage_status: {
           status: { status_list: { uri: "https://example.com/status", idx: 0 } },
           exp: now + 3600,
@@ -248,7 +248,7 @@ describe("keyAttestationProof", () => {
         attested_keys: [holderPub],
         key_storage: ["iso_18045_high"],
         user_authentication: ["iso_18045_high"],
-        certification: { scheme: "test" },
+        certification: "https://wallet-provider.example/certification/wscd/GlobalPlatform/",
         key_storage_status: {
           status: { status_list: { uri: "https://example.com/status", idx: 0 } },
           exp: Math.floor(Date.now() / 1000) + 3600,

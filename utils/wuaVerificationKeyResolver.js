@@ -13,6 +13,29 @@ function withSpecRef(message, ...refs) {
   return present.length ? `${message}${message.endsWith(".") ? "" : "."} See ${present.join(" and ")}.` : message;
 }
 
+function assertCertificationUrl(certification, refs) {
+  if (typeof certification !== "string" || certification.trim() === "") {
+    const detail =
+      certification != null && typeof certification === "object"
+        ? "Key Attestation certification must be a string URL, not a JSON object"
+        : "Key Attestation certification must be a non-empty string URL";
+    throw new Error(withSpecRef(detail, "CS-04 section 7.1", "OpenID4VCI 1.0 Appendix D.1", ...refs));
+  }
+  let parsed;
+  try {
+    parsed = new URL(certification);
+  } catch {
+    throw new Error(
+      withSpecRef("Key Attestation certification must be a valid absolute URL", "CS-04 section 7.1", "OpenID4VCI 1.0 Appendix D.1", ...refs),
+    );
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(
+      withSpecRef("Key Attestation certification URL must use http or https", "CS-04 section 7.1", "OpenID4VCI 1.0 Appendix D.1", ...refs),
+    );
+  }
+}
+
 export function isWuaTrustFrameworkEnforced() {
   return ["1", "true", "yes", "on"].includes(String(process.env.ENFORCE_WUA_TRUST_FRAMEWORK || "").trim().toLowerCase());
 }
@@ -58,11 +81,19 @@ export function validateWalletUnitAttestationClaims(payload, options = {}) {
   if (!payload || typeof payload !== "object") throw new Error(withSpecRef("WUA JWT payload is missing or invalid", ...refs));
   const legacy = payload.eudi_wallet_info;
   const isLegacy = Boolean(legacy);
-  const isCs04 = Array.isArray(payload.key_storage) && payload.key_storage.length > 0 && Array.isArray(payload.user_authentication) && payload.user_authentication.length > 0 && Boolean(payload.certification);
+  const hasCs04Structure =
+    Array.isArray(payload.key_storage) &&
+    payload.key_storage.length > 0 &&
+    Array.isArray(payload.user_authentication) &&
+    payload.user_authentication.length > 0 &&
+    Object.prototype.hasOwnProperty.call(payload, "certification");
+  const isCs04 = hasCs04Structure && typeof payload.certification === "string";
   if (isLegacy) {
     if (!legacy.general_info || !legacy.key_storage_info) throw new Error(withSpecRef("WUA JWT missing eudi_wallet_info.general_info or eudi_wallet_info.key_storage_info", ...refs));
-  } else if (!isCs04) {
+  } else if (!hasCs04Structure) {
     throw new Error(withSpecRef("Key Attestation missing TS03 claims key_storage, user_authentication, or certification", ...refs));
+  } else if (!isCs04) {
+    assertCertificationUrl(payload.certification, refs);
   }
   if (!Array.isArray(payload.attested_keys) || payload.attested_keys.length === 0 || payload.attested_keys.some((key) => !key || typeof key !== "object" || !key.kty)) {
     throw new Error(withSpecRef("WUA JWT attested_keys must be a non-empty array of JWK objects", ...refs));
@@ -80,6 +111,7 @@ export function validateWalletUnitAttestationClaims(payload, options = {}) {
     }
     return { isLegacy, isCs04, hasStatus: true, warnings };
   }
+  assertCertificationUrl(payload.certification, refs);
   const kss = payload.key_storage_status;
   if (!kss || typeof kss !== "object") {
     throw new Error(withSpecRef("Key Attestation missing required key_storage_status", ...refs));

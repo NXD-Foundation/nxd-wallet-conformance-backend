@@ -8,6 +8,7 @@ import {
   allowsLegacyBodyClientAssertion,
   createWalletUnitAttestationClientAuth,
   createWalletUnitCredentialKeyAttestation,
+  CS04_KA_CERTIFICATION_URL,
   validateWalletUnitKeyAttestation,
   getWalletUnitAttestationLifecycleStateForTests,
   resetWalletUnitAttestationLifecycleForTests,
@@ -133,7 +134,8 @@ describe("wallet-client walletUnitAttestation (Phase 7)", () => {
     expect(payload.attested_keys[0]).to.include({ kty: proofKey.publicJwk.kty, crv: proofKey.publicJwk.crv });
     expect(payload).to.have.property("key_storage").that.deep.equals(["iso_18045_high"]);
     expect(payload).to.have.property("user_authentication").that.deep.equals(["iso_18045_high"]);
-    expect(payload).to.have.property("certification");
+    expect(payload).to.have.property("certification", CS04_KA_CERTIFICATION_URL);
+    expect(payload.certification).to.be.a("string");
     expect(payload).to.have.property("nonce", "issuer-c_nonce");
     expect(payload).to.have.nested.property("key_storage_status.status.status_list.uri");
     expect(payload.key_storage_status.status.status_list.uri).to.match(/\/status-lists\/ka\/1$/);
@@ -145,6 +147,26 @@ describe("wallet-client walletUnitAttestation (Phase 7)", () => {
       proofPublicJwk: proofKey.publicJwk,
       expectedNonce: "issuer-c_nonce",
     })).to.not.throw();
+  });
+
+  it("rejects a KA whose certification is an object instead of a string URL", async () => {
+    const proofKey = await ensureOrCreateEcKeyPair(undefined, "ES256");
+    const result = await createWalletUnitCredentialKeyAttestation({
+      profile: CS01,
+      keyPath: undefined,
+      proofPublicJwk: proofKey.publicJwk,
+      credentialEndpoint: "https://issuer.example.com/credential",
+      subjectPrivateJwk: proofKey.privateJwk,
+      subjectPublicJwk: proofKey.publicJwk,
+    });
+    const header = decodeProtectedHeader(result.attestationJwt);
+    const payload = decodeJwt(result.attestationJwt);
+    payload.certification = { scheme: "local-dev-fixture", assurance: "software-test-key" };
+    const tamperedJwt = `${Buffer.from(JSON.stringify(header)).toString("base64url")}.${Buffer.from(JSON.stringify(payload)).toString("base64url")}.sig`;
+    expect(() => validateWalletUnitKeyAttestation({
+      attestationJwt: tamperedJwt,
+      proofPublicJwk: proofKey.publicJwk,
+    })).to.throw(/certification.*string URL/i);
   });
 
   it("rejects a KA whose nonce or attested key is inconsistent", async () => {

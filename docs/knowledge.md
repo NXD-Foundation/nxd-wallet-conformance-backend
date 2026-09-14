@@ -136,10 +136,9 @@ binding to `attested_keys[0]`.
   number of HTTPS redirects and re-checks private/reserved addresses on each hop.
 - When an issuer supplies `c_nonce`, the KA carried in a JWT proof includes the
 same `nonce`; the proof JWT and KA nonce are checked together before dispatch.
-- The CS-04 `certification` example is currently tracked as an open
-interoperability clarification because OpenID4VCI 1.0 describes that field as
-a URL string while the CS-04 example uses an object. The implementation does
-not silently override CS-04 for a Keycloak-specific shape.
+- CS-04 §7.1 and Annex A.2 require KA `certification` as a string URL (OpenID4VCI
+1.0 Appendix D.1). The wallet-client emits the Annex A.2 fixture URL; the issuer
+rejects object-shaped `certification` values with an explicit error.
 - The KA JOSE type is `key-attestation+jwt`, as cited by CS-04 Annex A.2 from
 OpenID4VCI 1.0 Appendix D.1. Shared KA validation rejects the unhyphenated
 `keyattestation+jwt` spelling.

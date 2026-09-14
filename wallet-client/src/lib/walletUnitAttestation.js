@@ -31,7 +31,27 @@ const WALLET_PROVIDER_KEY_PATH = path.resolve(__dirname, "../../x509EC/ec_privat
 const WALLET_PROVIDER_CERT_PATH = path.resolve(__dirname, "../../x509EC/client_certificate.crt");
 const CS01_WIA_TTL_SECONDS = 23 * 60 * 60;
 const CS01_KA_TTL_HOURS = 23;
+/** CS-04 Annex A.2 fixture URL for WSCD/keystore certification. */
+export const CS04_KA_CERTIFICATION_URL =
+  "https://wallet-provider.example/certification/wscd/GlobalPlatform/";
 const issuedAttestationIds = new Set();
+
+function assertCertificationUrl(certification, label = "KA payload") {
+  if (typeof certification !== "string" || certification.trim() === "") {
+    throw new AttestationSourceError(
+      `${label} requires certification as a non-empty string URL, not a JSON object`,
+    );
+  }
+  let parsed;
+  try {
+    parsed = new URL(certification);
+  } catch {
+    throw new AttestationSourceError(`${label} requires certification to be a valid absolute URL`);
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new AttestationSourceError(`${label} requires certification URL to use http or https`);
+  }
+}
 
 export const ATTESTATION_SOURCES = Object.freeze({
   LOCAL_KEY: "local-key",
@@ -74,6 +94,7 @@ export function validateWalletUnitKeyAttestation({ attestationJwt, proofPublicJw
   if (!Object.prototype.hasOwnProperty.call(payload, "certification")) {
     throw new AttestationSourceError("KA payload requires certification");
   }
+  assertCertificationUrl(payload.certification);
   if (!payload?.key_storage_status?.status || !Number.isInteger(payload?.key_storage_status?.exp)) {
     throw new AttestationSourceError("KA payload requires key_storage_status with status and exp");
   }
@@ -360,10 +381,7 @@ export async function createWalletUnitCredentialKeyAttestation({
           ...(nonce ? { nonce } : {}),
           key_storage: ["iso_18045_high"],
           user_authentication: ["iso_18045_high"],
-          certification: {
-            scheme: "local-dev-fixture",
-            assurance: "software-test-key",
-          },
+          certification: CS04_KA_CERTIFICATION_URL,
           key_storage_status: {
             status: keyStorageStatus.status,
             exp: keyStorageStatus.exp,

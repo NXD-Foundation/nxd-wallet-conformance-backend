@@ -14,7 +14,7 @@
     "test:cs02-flow": "mocha tests/cs02SuccessfulFlowMatrix.test.js --exit",
     "test:cs07": "mocha tests/cs07DcApi.test.js tests/cs07SuccessfulFlow.test.js tests/verifierEncryptionKeys.test.js --exit",
     "fcaf:disposition-template": "node scripts/fcafDispositionRegister.js",
-    "dev": "SERVER_URL=https://1c2c-212-205-248-245.ngrok-free.app node server.js",
+    "dev": "SERVER_URL=https://4cde-2001-648-2800-1911-4b8d-ca17-9423-460b.ngrok-free.app node server.js",
     "dc-api:demo": "node clients/dc-api/serve.js"
   },
   "author": "",
