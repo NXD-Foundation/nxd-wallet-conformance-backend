@@ -67,6 +67,7 @@ import {
   validateCs02ResponseSubmission,
   validateCs02SdJwtEntriesInVpToken,
   verifyCs02OuterResponseJwt,
+  unwrapOpenid4VpAuthorizationResponse,
 } from "../../utils/cs02VerifierResponse.js";
 
 const getSessionTranscriptBytes = (
@@ -501,11 +502,33 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
       throw error;
     }
 
+    let unwrappedResponse;
+    try {
+      unwrappedResponse = await unwrapOpenid4VpAuthorizationResponse(
+        req.body,
+        vpSession,
+        {
+          strict: cs02ResponseOptions.strict,
+          clientMetadata,
+        },
+      );
+    } catch (error) {
+      if (error instanceof Cs02VerifierResponseError) {
+        await logError(sessionId, "Authorization response unwrap failed", {
+          error: error.message,
+          errorCode: error.errorCode,
+          responseMode: vpSession.response_mode,
+        }).catch(() => {});
+        return failVpSessionAndRespond(res, sessionId, vpSession, error.errorCode, error.message);
+      }
+      throw error;
+    }
+
     // Check if this is an MDL presentation in multiple ways:
     // 1. From presentation definition format (PEX - explicit format declaration)
     // 2. From DCQL query format (DCQL - credentials format field)
     // 3. From the actual VP token structure (fallback detection)
-    const vpToken = req.body["vp_token"];
+    let vpToken = unwrappedResponse.vp_token;
     const isMdocFromDef = vpSession.presentation_definition?.format?.mso_mdoc;
     const isMdocFromDcql = vpSession.dcql_query?.credentials?.some(cred => cred.format === "mso_mdoc");
     const isMdoc = isMdocFromDef || isMdocFromDcql 
@@ -514,6 +537,9 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
       isMdocFromDef,
       isMdocFromDcql,
       isMdoc,
+      responseMode: vpSession.response_mode,
+      hasResponse: req.body?.response != null && req.body.response !== "",
+      bodyKeys: req.body && typeof req.body === "object" ? Object.keys(req.body) : [],
       hasVpToken: !!vpToken,
       vpTokenType: typeof vpToken,
       dcqlCredentialsCount: vpSession.dcql_query?.credentials?.length || 0
@@ -679,9 +705,8 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
         isMdoc: true
       });
       try {
-        let vpToken = req.body["vp_token"];
         if (!vpToken) {
-          const received = req.body["vp_token"] === undefined ? "vp_token missing" : `vp_token is ${typeof req.body["vp_token"]}`;
+          const received = vpToken === undefined ? "vp_token missing" : `vp_token is ${typeof vpToken}`;
           await logError(sessionId, "No vp_token found in mDL request body", {
             received,
             expected: "vp_token string in request body"
@@ -895,88 +920,23 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
         responseMode: "dc_api.jwt"
       });
       try {
-        // For Response Mode dc_api.jwt, the Wallet includes 
-        // the response parameter, which contains an encrypted JWT encapsulating the Authorization Response, as defined in Section 8.3.
-        
-        // Extract encrypted JWT from request body
-        const encryptedJWT = req.body.response;
-        
-        await logDebug(sessionId, "HAIP dc_api.jwt encrypted JWT received", {
-          hasEncryptedJWT: !!encryptedJWT,
-          encryptedJWTLength: encryptedJWT?.length
+        await logDebug(sessionId, "HAIP dc_api.jwt authorization response unwrapped", {
+          hasVpToken: !!vpToken,
+          vpTokenType: typeof vpToken,
         });
-        
-        if (!encryptedJWT) {
-          const received = req.body.response === undefined ? "response parameter missing" : `response is ${typeof req.body.response}`;
-          await logError(sessionId, "No encrypted JWT found in HAIP dc_api.jwt response", {
-            received,
-            expected: "encrypted JWT string in response parameter"
-          });
-          return res.status(400).json({ 
-            error: withSpecRef(
-              `No encrypted JWT found in HAIP dc_api.jwt response. Received: ${received}, expected: encrypted JWT string in response parameter`,
-              SPEC_REFS.VP_DC_API_JWT,
-              SPEC_REFS.VP_RESPONSE_PARAMS
-            ), 
-            note: "In HAIP dc_api.jwt, the response parameter should contain an encrypted JWT"
-          });
-        }
-
-        // Decrypt the JWT using X509 EC private key
-        await logDebug(sessionId, "Starting HAIP dc_api.jwt decryption");
-        const privateKeyForDecryption = loadVerifierEncryptionKey().privateKeyPem;
-
-        let decryptedResponse;
-        try {
-          decryptedResponse = await decryptJWE(encryptedJWT, privateKeyForDecryption, "dc_api.jwt");
-          await logDebug(sessionId, "HAIP dc_api.jwt decryption successful", {
-            decryptedLength: decryptedResponse?.length
-          });
-          await logInfo(sessionId, "HAIP dc_api.jwt decryption successful", {
-            decryptedResponseType: typeof decryptedResponse
-          });
-        } catch (decryptError) {
-          await logError(sessionId, "Failed to decrypt HAIP dc_api.jwt response", {
-            error: decryptError.message,
-            stack: decryptError.stack
-          });
-          return res.status(400).json({ 
-            error: withSpecRef(
-              "Failed to decrypt HAIP dc_api.jwt response",
-              SPEC_REFS.VP_DC_API_JWT
-            ), 
-            details: decryptError.message 
-          });
-        }
-
-        // Extract VP token from decrypted response
-        let vpToken;
-        if (typeof decryptedResponse === 'string') {
-          try {
-            const parsedResponse = JSON.parse(decryptedResponse);
-            vpToken = parsedResponse.vp_token || parsedResponse.response || decryptedResponse;
-          } catch (parseError) {
-            // If it's not JSON, treat the entire decrypted response as the VP token
-            vpToken = decryptedResponse;
-          }
-        } else if (decryptedResponse && typeof decryptedResponse === 'object') {
-          vpToken = decryptedResponse.vp_token || decryptedResponse.response || JSON.stringify(decryptedResponse);
-        }
 
         if (!vpToken) {
-          const received = decryptedResponse === null ? "null" : decryptedResponse === undefined ? "undefined" : typeof decryptedResponse;
+          const received = vpToken === undefined ? "vp_token missing after unwrap" : `vp_token is ${typeof vpToken}`;
           await logError(sessionId, "No VP token found in decrypted HAIP dc_api.jwt response", {
             received,
             expected: "object/string with vp_token or response property",
-            decryptedResponse: decryptedResponse
           });
           return res.status(400).json({ 
             error: withSpecRef(
               `No VP token found in decrypted HAIP dc_api.jwt response. Received: ${received}, expected: object/string with vp_token or response property`,
               SPEC_REFS.VP_DC_API_JWT,
               SPEC_REFS.VP_CREDENTIAL_RESPONSE
-            ), 
-            decryptedResponse: decryptedResponse
+            ),
           });
         }
 
@@ -1134,468 +1094,63 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
         );
       }
 
-      // According to OpenID4VP spec, direct_post.jwt sends response in 'response' parameter
-      const jwtResponse = req.body.response;
-      
-      if (!jwtResponse) {
-        const received = req.body.response === undefined ? "response parameter missing" : `response is ${typeof req.body.response}`;
-        await logError(sessionId, "No 'response' parameter in direct_post.jwt response", {
+      if (!vpToken) {
+        const received = vpToken === undefined ? "vp_token missing after unwrap" : `vp_token is ${typeof vpToken}`;
+        await logError(sessionId, "No VP token found in direct_post.jwt response", {
           received,
-          expected: "response parameter with JWT string"
+          expected: "vp_token in authorization response payload",
         });
         return res.status(400).json({
           error: withSpecRef(
-            `No 'response' parameter in direct_post.jwt response. Received: ${received}, expected: response parameter with JWT string`,
+            `No VP token in direct_post.jwt response. Received: ${received}, expected: vp_token in authorization response payload`,
             SPEC_REFS.VP_RESPONSE_MODE_DIRECT_POST_JWT,
-            SPEC_REFS.VP_RESPONSE_PARAMS
+            SPEC_REFS.VP_CREDENTIAL_RESPONSE
           ),
         });
       }
-      
-      await logDebug(sessionId, "JWT response received", {
-        hasJwtResponse: !!jwtResponse,
-        jwtParts: jwtResponse?.split('.').length
-      });
-      
+
       try {
-        let vpToken;
         let decodedVpToken;
         let primaryVpJwt;
-        let decryptedResponseNonce; // Nonce from decrypted response payload (VP 1.0)
-        let outerJwtPayload; // The outer Authorization Response JWT payload
+        let decryptedResponseNonce = unwrappedResponse.nonce;
+        let outerJwtPayload = unwrappedResponse.outerJwtPayload;
 
-        // Check if it's encrypted (JWE has 5 parts)
-        if (jwtResponse.split('.').length === 5) {
-          await logInfo(sessionId, "Processing encrypted JWE response for direct_post.jwt");
+        await logInfo(sessionId, "Using unwrapped direct_post.jwt authorization response", {
+          vpTokenType: typeof vpToken,
+          hasNonce: !!decryptedResponseNonce,
+          hasOuterJwtPayload: !!outerJwtPayload,
+        });
 
-          if (cs02ResponseOptions.strict) {
-            validateCs02JweResponseHeader(
-              decodeProtectedHeader(jwtResponse),
-              clientMetadata,
-              vpSession.encryption_key || null,
-            );
-          }
+        await logDebug(sessionId, "VP token full structure", {
+          type: typeof vpToken,
+          isObject: typeof vpToken === 'object' && vpToken !== null,
+          isArray: Array.isArray(vpToken),
+          isString: typeof vpToken === 'string',
+          stringLength: typeof vpToken === 'string' ? vpToken.length : 'N/A',
+          keys: typeof vpToken === 'object' && vpToken !== null ? Object.keys(vpToken) : 'N/A',
+          valueTypes: typeof vpToken === 'object' && vpToken !== null
+            ? Object.fromEntries(Object.entries(vpToken).map(([k, v]) => [k, Array.isArray(v) ? `array[${v.length}]` : typeof v]))
+            : 'N/A',
+        });
 
-          // Decrypt with the verifier response-encryption key advertised in
-          // client_metadata. `privateKey` is the verifier signing key and is
-          // deliberately different from the EC key used for direct_post.jwt.
-          const privateKeyForDecryption = loadVerifierEncryptionKey().privateKeyPem;
-          const decrypted = await decryptJWE(
-            jwtResponse,
-            privateKeyForDecryption,
-            "direct_post.jwt",
-          );
-          await logDebug(sessionId, "JWE decryption completed", {
-            decryptedType: typeof decrypted
-          });
-          
-          if (typeof decrypted === 'string') {
-            // OpenID4VP spec compliant: JWE decrypted to JWT string
-            await logInfo(sessionId, "Processing JWT string from JWE (per OpenID4VP spec)");
-            let decodedPayload;
-            if (cs02ResponseOptions.strict) {
-              const verified = await verifyCs02OuterResponseJwt(decrypted, {
-                clientId: vpSession.client_id,
-                state: vpSession.state,
-              });
-              decodedPayload = verified.payload;
-              outerJwtPayload = verified.payload;
-            } else {
-              decodedPayload = jwt.decode(decrypted);
-              outerJwtPayload = decodedPayload;
-            }
-            vpToken = decodedPayload?.vp_token;
-            
-            // In VP 1.0, nonce may be in the decoded JWT payload itself
-            if (decodedPayload?.nonce && typeof decodedPayload.nonce === 'string') {
-              await logDebug(sessionId, "Found nonce in decoded JWT payload", {
-                nonce: decodedPayload.nonce
-              });
-              decryptedResponseNonce = decodedPayload.nonce;
-            }
-            
-            if (!vpToken) {
-              const received = decodedPayload?.vp_token === undefined ? "vp_token missing in payload" : `vp_token is ${typeof decodedPayload?.vp_token}`;
-              console.log(`No VP token in decrypted JWT response. Received: ${received}, expected: vp_token string in JWT payload`);
-              return res.status(400).json({
-                error: withSpecRef(
-                  `No VP token in decrypted JWT response. Received: ${received}, expected: vp_token string in JWT payload`,
-                  SPEC_REFS.VP_RESPONSE_MODE_DIRECT_POST_JWT,
-                  SPEC_REFS.VP_CREDENTIAL_RESPONSE
-                ),
-              });
-            }
-            
-            // Validate vp_token format when DCQL is used (for direct_post.jwt with JWE)
-            const hasDcqlQuery = vpSession.dcql_query && 
-                                 Array.isArray(vpSession.dcql_query.credentials) && 
-                                 vpSession.dcql_query.credentials.length > 0;
-            if (hasDcqlQuery && !isCs03X509SigningSession(vpSession)) {
-              if (typeof vpToken !== 'object' || vpToken === null || Array.isArray(vpToken)) {
-                const specRef = SPEC_REFS.VP_RESPONSE_PARAMS;
-                const received = typeof vpToken === 'object' && Array.isArray(vpToken) 
-                  ? "vp_token is an array" 
-                  : typeof vpToken === 'object' && vpToken === null
-                  ? "vp_token is null"
-                  : `vp_token is ${typeof vpToken}`;
-                
-                await logError(sessionId, "Invalid vp_token format for DCQL query in direct_post.jwt JWE", {
-                  received,
-                  expected: "vp_token must be a JSON object mapping credential query IDs to presentations when DCQL is used",
-                  specRef,
-                  dcqlCredentialIds: vpSession.dcql_query.credentials.map(c => c.id).filter(Boolean)
-                });
-                
-                return res.status(400).json({ 
-                  error: "invalid_request",
-                  error_description: `Invalid vp_token format for DCQL query. When DCQL is used, vp_token MUST be a JSON object mapping credential query IDs to presentations. Received: ${received}. See ${specRef}`
-                });
-              }
-              try {
-                vpToken = validateCs02DcqlVpTokenResponse(
-                  vpToken,
-                  vpSession.dcql_query,
-                  cs02ResponseOptions,
-                );
-                await runCs02SdJwtVpTokenChecks(sessionId, vpSession, vpToken, cs02ResponseOptions);
-              } catch (error) {
-                if (error instanceof Cs02VerifierResponseError) {
-                  return failVpSessionAndRespond(
-                    res,
-                    sessionId,
-                    vpSession,
-                    error.errorCode,
-                    error.message,
-                  );
-                }
-                throw error;
-              }
-            }
-            
-            if (typeof vpToken === 'string') {
-              primaryVpJwt = vpToken;
-            }
-          } else if (decrypted && typeof decrypted === 'object') {
-            // OpenID4VP 1.0 Section 8.3: JWE plaintext is the Authorization
-            // Response JSON object, not a nested signed JWT.
-            try {
-              validateCs02EncryptedAuthorizationResponse(decrypted, vpSession);
-            } catch (error) {
-              if (error instanceof Cs02VerifierResponseError) {
-                return failVpSessionAndRespond(
-                  res,
-                  sessionId,
-                  vpSession,
-                  error.errorCode,
-                  error.message,
-                );
-              }
-              throw error;
-            }
-            await logInfo(sessionId, "Processing Authorization Response object from JWE");
-            await logDebug(sessionId, "Decrypted payload keys", {
-              allKeys: Object.keys(decrypted),
-              hasNonce: 'nonce' in decrypted,
-              hasVpToken: 'vp_token' in decrypted
-            });
-            vpToken = decrypted.vp_token;
-            
-            // Handle case where vp_token is JSON-stringified (wallet quirk)
-            if (typeof vpToken === 'string' && (vpToken.trim().startsWith('{') || vpToken.trim().startsWith('['))) {
-              try {
-                const parsed = JSON.parse(vpToken);
-                await logDebug(sessionId, "VP token was JSON-stringified, parsed successfully", {
-                  originalType: 'string',
-                  parsedType: typeof parsed,
-                  isArray: Array.isArray(parsed),
-                  keys: typeof parsed === 'object' && parsed !== null ? Object.keys(parsed) : 'N/A'
-                });
-                vpToken = parsed;
-              } catch (parseError) {
-                await logWarn(sessionId, "Failed to parse JSON-stringified vp_token", {
-                  error: parseError.message
-                });
-                // Keep as string, maybe it's actually an SD-JWT
-              }
-            }
-            
-            // Validate vp_token format when DCQL is used (for direct_post.jwt with JWE payload object)
-            const hasDcqlQuery = vpSession.dcql_query && 
-                                 Array.isArray(vpSession.dcql_query.credentials) && 
-                                 vpSession.dcql_query.credentials.length > 0;
-            if (hasDcqlQuery && !isCs03X509SigningSession(vpSession)) {
-              if (typeof vpToken !== 'object' || vpToken === null || Array.isArray(vpToken)) {
-                const specRef = SPEC_REFS.VP_RESPONSE_PARAMS;
-                const received = typeof vpToken === 'object' && Array.isArray(vpToken) 
-                  ? "vp_token is an array" 
-                  : typeof vpToken === 'object' && vpToken === null
-                  ? "vp_token is null"
-                  : `vp_token is ${typeof vpToken}`;
-                
-                await logError(sessionId, "Invalid vp_token format for DCQL query in direct_post.jwt JWE payload", {
-                  received,
-                  expected: "vp_token must be a JSON object mapping credential query IDs to presentations when DCQL is used",
-                  specRef,
-                  dcqlCredentialIds: vpSession.dcql_query.credentials.map(c => c.id).filter(Boolean)
-                });
-                
-                return res.status(400).json({ 
-                  error: "invalid_request",
-                  error_description: `Invalid vp_token format for DCQL query. When DCQL is used, vp_token MUST be a JSON object mapping credential query IDs to presentations. Received: ${received}. See ${specRef}`
-                });
-              }
-              try {
-                vpToken = validateCs02DcqlVpTokenResponse(
-                  vpToken,
-                  vpSession.dcql_query,
-                  cs02ResponseOptions,
-                );
-                await runCs02SdJwtVpTokenChecks(sessionId, vpSession, vpToken, cs02ResponseOptions);
-              } catch (error) {
-                if (error instanceof Cs02VerifierResponseError) {
-                  return failVpSessionAndRespond(
-                    res,
-                    sessionId,
-                    vpSession,
-                    error.errorCode,
-                    error.message,
-                  );
-                }
-                throw error;
-              }
-            }
-            // await logDebug(sessionId, "vp_token object received", {
-            //   keys: Object.keys(vpToken),
-            //   types: Object.fromEntries(
-            //     Object.entries(vpToken).map(([key, value]) => [key, Array.isArray(value) ? 'array' : typeof value])
-            //   )
-            // });
-            
-            // In VP 1.0, nonce may be in the decrypted response payload itself
-            if (decrypted.nonce && typeof decrypted.nonce === 'string') {
-              await logDebug(sessionId, "Found nonce in decrypted response payload", {
-                nonce: decrypted.nonce
-              });
-              // Store for later nonce verification
-              decryptedResponseNonce = decrypted.nonce;
-            }
-            
-            // VP 1.0: For encrypted responses, state acts as the correlation mechanism
-            // The wallet includes state in the encrypted payload for verification
-            if (vpSession.state && (typeof decrypted.state !== "string" || decrypted.state.length === 0)) {
-              await logError(sessionId, "State missing in encrypted response", {
-                expected: vpSession.state,
-              });
-              return res.status(400).json({
-                error: withSpecRef(
-                  "Encrypted authorization response must include state",
-                  SPEC_REFS.VP_STATE,
-                  SPEC_REFS.VP_RESPONSE_MODE_DIRECT_POST_JWT,
-                ),
-              });
-            }
-            if (decrypted.state && typeof decrypted.state === 'string') {
-              await logDebug(sessionId, "Found state in decrypted response payload (VP 1.0)", {
-                state: decrypted.state
-              });
-              // Verify state matches the session
-              if (vpSession.state && decrypted.state !== vpSession.state) {
-                await logError(sessionId, "State mismatch in encrypted response", {
-                  received: decrypted.state,
-                  expected: vpSession.state
-                });
-                return res.status(400).json({
-                  error: withSpecRef(
-                    `State mismatch in encrypted response. Received: '${decrypted.state}', expected: '${vpSession.state}'`,
-                    SPEC_REFS.VP_STATE,
-                    SPEC_REFS.VP_RESPONSE_MODE_DIRECT_POST_JWT
-                  ),
-                });
-              }
-            }
-          } else {
-            const received = decrypted ? `decrypted object without vp_token (keys: ${Object.keys(decrypted).join(', ')})` : "decryption failed";
-            return res.status(400).json({
-              error: withSpecRef(
-                `Failed to decrypt JWE response or no vp_token found. Received: ${received}, expected: decrypted object with vp_token property`,
-                SPEC_REFS.VP_RESPONSE_MODE_DIRECT_POST_JWT,
-                SPEC_REFS.VP_CREDENTIAL_RESPONSE
-              ),
-            });
-          }
-
-          await logInfo(sessionId, "Extracted vp_token for processing");
-
-          // Debug: Log the actual VP token structure before processing
-          await logDebug(sessionId, "VP token full structure", {
-            type: typeof vpToken,
-            isObject: typeof vpToken === 'object' && vpToken !== null,
-            isArray: Array.isArray(vpToken),
-            isString: typeof vpToken === 'string',
-            stringLength: typeof vpToken === 'string' ? vpToken.length : 'N/A',
-            keys: typeof vpToken === 'object' && vpToken !== null ? Object.keys(vpToken) : 'N/A',
-            valueTypes: typeof vpToken === 'object' && vpToken !== null 
-              ? Object.fromEntries(Object.entries(vpToken).map(([k, v]) => [k, Array.isArray(v) ? `array[${v.length}]` : typeof v]))
-              : 'N/A'
-          });
-          
-          // If vpToken is a string, analyze it
-          if (typeof vpToken === 'string') {
-            const tildeCount = (vpToken.match(/~/g) || []).length;
-            const lastTildeIndex = vpToken.lastIndexOf('~');
-            const hasKeyBinding = lastTildeIndex > 0 && lastTildeIndex < vpToken.length - 1;
-            await logDebug(sessionId, "VP token string analysis", {
-              length: vpToken.length,
-              tildeCount,
-              hasKeyBinding,
-              startsWithEyJ: vpToken.startsWith('eyJ'),
-              preview: vpToken.substring(0, 150) + '...',
-              lastSegmentPreview: hasKeyBinding 
-                ? vpToken.substring(lastTildeIndex + 1, Math.min(lastTildeIndex + 151, vpToken.length))
-                : 'No key-binding segment found',
-              tokenEnd: vpToken.substring(Math.max(0, vpToken.length - 200))
-            });
-          }
-          
-          if (typeof vpToken === 'object' && vpToken !== null) {
-            for (const [key, value] of Object.entries(vpToken)) {
-              if (typeof value === 'string') {
-                const tildeCount = (value.match(/~/g) || []).length;
-                await logDebug(sessionId, `VP token credential [${key}]`, {
-                  length: value.length,
-                  tildeCount,
-                  hasKeyBinding: tildeCount >= 1, // SD-JWT format: issuer-signed~disclosure1~...~keyBindingJWT
-                  preview: value.substring(0, 200) + '...' + value.substring(value.length - 100)
-                });
-              } else if (Array.isArray(value)) {
-                await logDebug(sessionId, `VP token credential [${key}] is array`, {
-                  arrayLength: value.length,
-                  firstItemType: value.length > 0 ? typeof value[0] : 'N/A',
-                  firstItemPreview: value.length > 0 && typeof value[0] === 'string' 
-                    ? value[0].substring(0, 100) + '...'
-                    : 'N/A'
-                });
-                // Check each item in the array for SD-JWT key-binding
-                for (let i = 0; i < value.length; i++) {
-                  if (typeof value[i] === 'string') {
-                    const tildeCount = (value[i].match(/~/g) || []).length;
-                    const lastTildeIndex = value[i].lastIndexOf('~');
-                    const hasKeyBinding = lastTildeIndex > 0 && lastTildeIndex < value[i].length - 1;
-                    await logDebug(sessionId, `VP token credential [${key}][${i}] analysis`, {
-                      length: value[i].length,
-                      tildeCount,
-                      hasKeyBinding,
-                      lastSegmentPreview: hasKeyBinding 
-                        ? value[i].substring(lastTildeIndex + 1, Math.min(lastTildeIndex + 101, value[i].length)) + '...'
-                        : 'No key-binding segment found',
-                      fullTokenEnd: value[i].substring(Math.max(0, value[i].length - 150))
-                    });
-                  }
-                }
-              } else {
-                await logDebug(sessionId, `VP token credential [${key}] unexpected type`, {
-                  type: typeof value
-                });
-              }
-            }
-          }
-          
-          // Process the VP token as before
-          const result = await extractClaimsFromRequest(
-            { body: { vp_token: vpToken }, params: { id: sessionId } },
-            digest
-          );
-          claimsFromExtraction = result.extractedClaims;
-        jwtFromKeybind = result.keybindJwt;
-        sdJwtForKeybind = result.sdJwtForKeybind || sdJwtForKeybind;
-          
-          await logDebug(sessionId, "After extractClaimsFromRequest", {
-            resultKeys: Object.keys(result),
-            hasKeybindJwt: 'keybindJwt' in result,
-            keybindJwtValue: result.keybindJwt,
-            keybindJwtType: typeof result.keybindJwt,
-            keybindJwtAvailable: !!result.keybindJwt,
-            keybindJwtKeys: result.keybindJwt && typeof result.keybindJwt === 'object' ? Object.keys(result.keybindJwt) : 'N/A',
-            keybindJwtPayload: result.keybindJwt && result.keybindJwt.payload ? Object.keys(result.keybindJwt.payload) : 'N/A',
-            claimsCount: result.extractedClaims ? result.extractedClaims.length : 0
-          });
-        } else {
-          await logInfo(sessionId, "Processing unencrypted JWT response for direct_post.jwt");
-          let decodedJWT;
-          if (cs02ResponseOptions.strict) {
-            const verified = await verifyCs02OuterResponseJwt(jwtResponse, {
-              clientId: vpSession.client_id,
-              state: vpSession.state,
-            });
-            decodedJWT = verified.payload;
-            outerJwtPayload = verified.payload;
-          } else {
-            decodedJWT = jwt.decode(jwtResponse);
-            outerJwtPayload = decodedJWT;
-          }
-
-          // Extract VP token from the JWT payload
-          vpToken = decodedJWT?.vp_token;
-          if (!vpToken) {
-            const received = decodedJWT?.vp_token === undefined ? "vp_token missing in payload" : `vp_token is ${typeof decodedJWT?.vp_token}`;
-            await logError(sessionId, "No VP token found in unencrypted JWT response", {
-              received,
-              expected: "vp_token string in JWT payload"
-            });
-            return res.status(400).json({
-              error: withSpecRef(
-                `No VP token in JWT response. Received: ${received}, expected: vp_token string in JWT payload`,
-                SPEC_REFS.VP_RESPONSE_MODE_DIRECT_POST_JWT,
-                SPEC_REFS.VP_CREDENTIAL_RESPONSE
-              ),
-            });
-          }
-          const hasDcqlQueryUnencrypted =
-            vpSession.dcql_query &&
-            Array.isArray(vpSession.dcql_query.credentials) &&
-            vpSession.dcql_query.credentials.length > 0;
-          if (hasDcqlQueryUnencrypted && !isCs03X509SigningSession(vpSession)) {
-            try {
-              vpToken = validateCs02DcqlVpTokenResponse(
-                vpToken,
-                vpSession.dcql_query,
-                cs02ResponseOptions,
-              );
-              await runCs02SdJwtVpTokenChecks(sessionId, vpSession, vpToken, cs02ResponseOptions);
-            } catch (error) {
-              if (error instanceof Cs02VerifierResponseError) {
-                return failVpSessionAndRespond(
-                  res,
-                  sessionId,
-                  vpSession,
-                  error.errorCode,
-                  error.message,
-                );
-              }
-              throw error;
-            }
-          }
-          if (typeof vpToken === 'string') {
-            primaryVpJwt = vpToken;
-          }
-          
-          // In VP 1.0, nonce may be in the response JWT payload itself
-          if (decodedJWT?.nonce && typeof decodedJWT.nonce === 'string') {
-            await logDebug(sessionId, "Found nonce in response JWT payload", {
-              nonce: decodedJWT.nonce
-            });
-            decryptedResponseNonce = decodedJWT.nonce;
-          }
-          
-          // Process the VP token as before
-          const result = await extractClaimsFromRequest(
-            { body: { vp_token: vpToken }, params: { id: sessionId } },
-            digest
-          );
-          claimsFromExtraction = result.extractedClaims;
-        jwtFromKeybind = result.keybindJwt;
-        sdJwtForKeybind = result.sdJwtForKeybind || sdJwtForKeybind;
+        if (typeof vpToken === 'string') {
+          primaryVpJwt = vpToken;
         }
+
+        const result = await extractClaimsFromRequest(
+          { body: { vp_token: vpToken }, params: { id: sessionId } },
+          digest,
+        );
+        claimsFromExtraction = result.extractedClaims;
+        jwtFromKeybind = result.keybindJwt;
+        sdJwtForKeybind = result.sdJwtForKeybind || sdJwtForKeybind;
+
+        await logDebug(sessionId, "After extractClaimsFromRequest", {
+          resultKeys: Object.keys(result),
+          hasKeybindJwt: 'keybindJwt' in result,
+          keybindJwtAvailable: !!result.keybindJwt,
+          claimsCount: result.extractedClaims ? result.extractedClaims.length : 0,
+        });
 
         // Verify nonce
         let submittedNonce;

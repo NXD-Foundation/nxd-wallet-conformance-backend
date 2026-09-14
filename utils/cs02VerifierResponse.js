@@ -37,6 +37,8 @@ import {
 import { isSupportedCs02ClaimPathSegment, validateSupportedCs02ClaimPath, evaluateCs02CredentialSets } from "./cs02DcqlCore.js";
 import { checkVerifierCredentialTrust, isTrustFrameworkSession } from "./trustFrameworkPolicy.js";
 import { sessionContextFor } from "./sessionContext.js";
+import { decryptJWE } from "./cryptoUtils.js";
+import { loadVerifierEncryptionKey } from "./verifierEncryptionKeys.js";
 
 export { resolveVerifierCs02Options, isVerifierCs02StrictMode } from "./cs02VerifierRequest.js";
 
@@ -203,6 +205,173 @@ export function validateCs02ResponseSubmission(body, session, options = { strict
   }
 
   return null;
+}
+
+function parseJsonStringifiedVpToken(vpToken) {
+  if (typeof vpToken !== "string") return vpToken;
+  if (!vpToken.trim().startsWith("{") && !vpToken.trim().startsWith("[")) return vpToken;
+  try {
+    return JSON.parse(vpToken);
+  } catch {
+    return vpToken;
+  }
+}
+
+function extractVpTokenFromDecryptedPayload(decrypted, responseMode, session) {
+  if (typeof decrypted === "string") {
+    if (responseMode === "dc_api.jwt") {
+      try {
+        const parsed = JSON.parse(decrypted);
+        return {
+          vp_token: parsed.vp_token || parsed.response || decrypted,
+          state: parsed.state,
+          nonce: parsed.nonce,
+          outerJwtPayload: parsed,
+        };
+      } catch {
+        return { vp_token: decrypted };
+      }
+    }
+    return { vp_token: decrypted, requiresSignedJwtVerification: true };
+  }
+
+  if (decrypted && typeof decrypted === "object") {
+    if (responseMode === "direct_post.jwt") {
+      const payload = validateCs02EncryptedAuthorizationResponse(decrypted, session);
+      return {
+        vp_token: parseJsonStringifiedVpToken(payload.vp_token),
+        state: payload.state,
+        nonce: payload.nonce,
+        outerJwtPayload: payload,
+      };
+    }
+    return {
+      vp_token: decrypted.vp_token || decrypted.response || decrypted,
+      state: decrypted.state,
+      nonce: decrypted.nonce,
+      outerJwtPayload: decrypted,
+    };
+  }
+
+  throw new Cs02VerifierResponseError(
+    "Failed to decrypt JWE response or no vp_token found",
+    "invalid_request",
+  );
+}
+
+/**
+ * Unwrap an OpenID4VP authorization response body into vp_token/state/nonce.
+ * For direct_post.jwt and dc_api.jwt this decrypts the response JWE when present.
+ */
+export async function unwrapOpenid4VpAuthorizationResponse(body, session, options = {}) {
+  const {
+    strict = true,
+    clientMetadata = {},
+    loadDecryptionKey = () => loadVerifierEncryptionKey().privateKeyPem,
+    decrypt = decryptJWE,
+  } = options;
+
+  const responseMode = session?.response_mode || "direct_post";
+
+  if (responseMode === "direct_post") {
+    return {
+      vp_token: body?.vp_token,
+      state: body?.state,
+      nonce: body?.nonce,
+    };
+  }
+
+  if (responseMode !== "direct_post.jwt" && responseMode !== "dc_api.jwt") {
+    return {
+      vp_token: body?.vp_token,
+      state: body?.state,
+      nonce: body?.nonce,
+    };
+  }
+
+  const jwtResponse = body?.response;
+  if (!jwtResponse) {
+    throw new Cs02VerifierResponseError(
+      "Authorization response requires a response parameter",
+      "invalid_request",
+    );
+  }
+
+  const jwtParts = typeof jwtResponse === "string" ? jwtResponse.split(".") : [];
+
+  if (jwtParts.length === 5) {
+    if (strict) {
+      validateCs02JweResponseHeader(
+        decodeProtectedHeader(jwtResponse),
+        clientMetadata,
+        session?.encryption_key || null,
+      );
+    }
+
+    let decrypted;
+    try {
+      decrypted = await decrypt(jwtResponse, loadDecryptionKey(), responseMode);
+    } catch (error) {
+      throw new Cs02VerifierResponseError(
+        `Failed to decrypt JWE response: ${error.message}`,
+        "invalid_request",
+      );
+    }
+
+    const extracted = extractVpTokenFromDecryptedPayload(decrypted, responseMode, session);
+
+    if (extracted.requiresSignedJwtVerification) {
+      let decodedPayload;
+      if (strict) {
+        const verified = await verifyCs02OuterResponseJwt(decrypted, {
+          clientId: session?.client_id,
+          state: session?.state,
+        });
+        decodedPayload = verified.payload;
+      } else {
+        decodedPayload = decodeJwt(decrypted);
+      }
+      return {
+        vp_token: parseJsonStringifiedVpToken(decodedPayload?.vp_token),
+        state: decodedPayload?.state,
+        nonce: decodedPayload?.nonce,
+        outerJwtPayload: decodedPayload,
+      };
+    }
+
+    if (extracted.vp_token == null || extracted.vp_token === "") {
+      throw new Cs02VerifierResponseError(
+        "Encrypted authorization response must include vp_token",
+        "invalid_request",
+      );
+    }
+
+    return extracted;
+  }
+
+  if (responseMode === "direct_post.jwt" && jwtParts.length === 3) {
+    let decodedPayload;
+    if (strict) {
+      const verified = await verifyCs02OuterResponseJwt(jwtResponse, {
+        clientId: session?.client_id,
+        state: session?.state,
+      });
+      decodedPayload = verified.payload;
+    } else {
+      decodedPayload = decodeJwt(jwtResponse);
+    }
+    return {
+      vp_token: parseJsonStringifiedVpToken(decodedPayload?.vp_token),
+      state: decodedPayload?.state,
+      nonce: decodedPayload?.nonce,
+      outerJwtPayload: decodedPayload,
+    };
+  }
+
+  throw new Cs02VerifierResponseError(
+    "Authorization response parameter must be a compact JWE or signed JWT",
+    "invalid_request",
+  );
 }
 
 function credentialQueryById(dcqlQuery, id) {

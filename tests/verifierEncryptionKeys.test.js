@@ -47,14 +47,12 @@ describe("verifier response-encryption key", () => {
     expect(error.message).to.match(/decryption operation failed|no suitable key/i);
   });
 
-  it("wires direct_post.jwt to the response-encryption key loader", () => {
+  it("wires direct_post.jwt unwrap to the response-encryption key loader", () => {
     const verifierRoute = fs.readFileSync("./routes/verify/verifierRoutes.js", "utf8");
-    expect(verifierRoute).to.include(
-      "const privateKeyForDecryption = loadVerifierEncryptionKey().privateKeyPem;",
-    );
-    expect(verifierRoute).to.not.include(
-      'decryptJWE(jwtResponse, privateKey, "direct_post.jwt")',
-    );
+    const unwrapHelper = fs.readFileSync("./utils/cs02VerifierResponse.js", "utf8");
+    expect(verifierRoute).to.include("unwrapOpenid4VpAuthorizationResponse(");
+    expect(unwrapHelper).to.include("loadVerifierEncryptionKey");
+    expect(unwrapHelper).to.include('decrypt(jwtResponse, loadDecryptionKey(), responseMode)');
   });
 });
 import {

@@ -101,6 +101,7 @@ The main runtime checks currently enforced are:
 Key enforcement points:
 
 - DCQL response object validation: [routes/verify/verifierRoutes.js](/home/ni/code/js/rfc-issuer-v1/routes/verify/verifierRoutes.js#L282)
+- Authorization response unwrap (direct_post / direct_post.jwt / dc_api.jwt) before format-specific verification: [utils/cs02VerifierResponse.js](/home/ni/code/js/rfc-issuer-v1/utils/cs02VerifierResponse.js) (`unwrapOpenid4VpAuthorizationResponse`)
 - mdoc verification and claim matching: [routes/verify/verifierRoutes.js](/home/ni/code/js/rfc-issuer-v1/routes/verify/verifierRoutes.js#L405)
 - `direct_post.jwt` response extraction, nonce, audience, and `sd_hash`: [routes/verify/verifierRoutes.js](/home/ni/code/js/rfc-issuer-v1/routes/verify/verifierRoutes.js#L782)
 - `direct_post` state, nonce, and audience checks: [routes/verify/verifierRoutes.js](/home/ni/code/js/rfc-issuer-v1/routes/verify/verifierRoutes.js#L1371)
@@ -130,6 +131,7 @@ These are the main repo-specific gaps and inconsistencies:
 
 - The standardized endpoint in [routes/verify/vpStandardRoutes.js](/home/ni/code/js/rfc-issuer-v1/routes/verify/vpStandardRoutes.js#L75) still tries to load `presentation_definition` files for some profiles, but the actual JWT builder rejects `presentation_definition` and says to use DCQL only ([utils/cryptoUtils.js](/home/ni/code/js/rfc-issuer-v1/utils/cryptoUtils.js#L325)).
 - DCQL object keys are only warned about when expected credential ids are missing; that condition is not currently fatal ([routes/verify/verifierRoutes.js](/home/ni/code/js/rfc-issuer-v1/routes/verify/verifierRoutes.js#L373)).
+- Encrypted mdoc `direct_post.jwt` responses are unwrapped before mdoc verification; do not read `req.body.vp_token` directly when the session expects a JWE `response` parameter.
 - For `direct_post.jwt`, the code decodes payloads and decrypts JWE, but it does not appear to perform full cryptographic verification of the outer response JWT signature before extracting claims.
 - The verifier supports wallet metadata driven encryption, but whether it is used depends on the wallet supplying `wallet_metadata.jwks` at the request URI step.
 - Legacy verifier route families and verifier attestation routes coexist with the standardized endpoint, so “supported” is broader than the standardized V1.0 path alone.
@@ -144,7 +146,7 @@ If you want to turn verifier behavior into a wallet interoperability matrix, the
 | Query Model | DCQL PID, DCQL mdoc, transaction-data DCQL |
 | Response Mode | `direct_post`, `direct_post.jwt`, `dc_api.jwt` |
 | Request URI Method | GET, POST |
-| Credential Format | `dc+sd-jwt`, `jwt_vc_json`, `mso_mdoc` |
+| Credential Format | `dc+sd-jwt`, `jwt_vc_json`, `mso_mdoc` (including encrypted `direct_post.jwt` mdoc) |
 | Response Protection | plaintext JWT, encrypted JWE |
 | SD-JWT Binding | with valid KB-JWT, missing nonce, wrong `aud`, wrong `sd_hash` |
 | Correlation | correct `state`, missing `state`, wrong `state`, wrong `nonce` |

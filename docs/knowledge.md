@@ -209,7 +209,9 @@ bindings, mdoc claim matching, and SD-JWT key binding each have explicit
 enforcement paths.
 - For strict `direct_post.jwt`, OpenID4VP encrypted-response processing uses
 an unsigned encrypted JWT whose plaintext is the top-level Authorization
-Response JSON object. The Wallet selects an `EC`/`P-256`, `use=enc` JWK with
+Response JSON object. Format-specific verification (mdoc, SD-JWT, JWT VC) runs only after
+unwrapping `direct_post`, `direct_post.jwt`, or `dc_api.jwt` into the inner
+`vp_token`. The Wallet selects an `EC`/`P-256`, `use=enc` JWK with
 both `kid` and `alg`, uses that exact `alg`, prefers `A256GCM`, and returns a
   protocol error rather than downgrading a successful response if encryption
   cannot be created.
