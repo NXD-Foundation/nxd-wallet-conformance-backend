@@ -2,7 +2,7 @@ import fs from "fs";
 import { resolveCs07VerifierOrigin } from "./cs07DcApi.js";
 
 const DEFAULT_PATH = "./data/dc-api-config.json";
-const WORKFLOWS = new Set(["presentation", "cs03-inline-signing"]);
+const WORKFLOWS = new Set(["presentation", "cs03-inline-signing", "ts12-payment"]);
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));

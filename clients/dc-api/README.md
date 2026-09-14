@@ -45,6 +45,25 @@ const prepared = await client.prepare({
 The verifier accepts 1–128 safe path characters (`A-Z`, `a-z`, digits, `.`,
 `_`, `:`, `-`). If omitted, it generates a UUID.
 
+For a CS-12 SCA payment presentation, pass `profile: "ts12-dpc"` (DPC only)
+or `profile: "ts12-dpc-pid"` (DPC plus the default PID
+`urn:eu.europa.ec.eudi:pid:1`) and a `payment` object. The adapter flattens
+those fields onto the request body (`amount`, `currency`, payee,
+`transaction_id`):
+
+```js
+const prepared = await client.prepare({
+  profile: "ts12-dpc",
+  payment: {
+    amount: "12.34",
+    currency: "EUR",
+    merchant: "Demo Merchant",
+    payee_id: "merchant-001",
+    transaction_id: "tx-12345",
+  },
+});
+```
+
 ## Local phone demo
 
 A fake RP page lives at `demo/index.html`. Serve it with the zero-dependency
@@ -61,14 +80,18 @@ Then tunnel that port separately:
 ngrok http 4173
 ```
 
-1. Authorize the **RP** ngrok HTTPS origin on the verifier and restart it.
-   For local ngrok URLs, set `DC_API_RP_ORIGINS` (comma-separated) when starting
-   the verifier; optional `DC_API_RP_PROFILES` defaults to `pid-basic`:
+1. Authorize the **RP** origin on the verifier and restart it.
+   For a single ngrok tunnel (verifier + demo page), set `DC_API_RP_ORIGINS` to
+   that verifier HTTPS origin and open `/payment` or `/demo` on it:
    ```bash
-   DC_API_RP_ORIGINS=https://rp-xxxx.ngrok-free.app npm run dev
+   DC_API_RP_ORIGINS=https://verifier-xxxx.ngrok-free.app \
+     DC_API_RP_PROFILES=pid-basic,ts12-dpc,ts12-dpc-pid npm run dev
    ```
+   For a **separate** RP origin, serve `npm run dc-api:demo`, tunnel port 4173,
+   and authorize *that* HTTPS origin instead.
    Stable origins can stay in `data/dc-api-config.json` → `relying_parties`.
-2. Open the RP ngrok URL on your phone (`/` redirects to the demo).
-3. Paste your **verifier** ngrok base URL into the form (or use
-   `?verifier=https://…&profile=pid-basic`).
-4. Tap **Present credential** (user activation is required for DC API).
+2. Open `/payment` (SCA payment) or `/demo` (PID) on the authorized origin.
+3. If the page is not on the verifier, paste your **verifier** ngrok base URL
+   into the form (or use `?verifier=https://…`).
+4. Tap **Present credential** or **Authorize payment** (user activation is
+   required for DC API).

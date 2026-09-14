@@ -25,6 +25,63 @@
           }
         ]
       }
+    },
+    "ts12-dpc": {
+      "workflow": "ts12-payment",
+      "dcql_query": {
+        "credentials": [
+          {
+            "id": "sca_card_dpc",
+            "format": "dc+sd-jwt",
+            "meta": { "vct_values": ["https://webuildconsortium.eu/sca/sca-card-dpc/1.0"] },
+            "claims": [
+              { "path": ["credential_id"] },
+              { "path": ["network"] },
+              { "path": ["card_id"] }
+            ]
+          }
+        ]
+      }
+    },
+    "ts12-dpc-pid": {
+      "workflow": "ts12-payment",
+      "dcql_query": {
+        "credentials": [
+          {
+            "id": "sca_card_dpc",
+            "format": "dc+sd-jwt",
+            "meta": { "vct_values": ["https://webuildconsortium.eu/sca/sca-card-dpc/1.0"] },
+            "claims": [
+              { "path": ["credential_id"] },
+              { "path": ["network"] },
+              { "path": ["card_id"] }
+            ]
+          },
+          {
+            "id": "cmwallet",
+            "format": "dc+sd-jwt",
+            "meta": { "vct_values": ["urn:eu.europa.ec.eudi:pid:1"] },
+            "claims": [{ "path": ["family_name"] }]
+          }
+        ]
+      }
+    },
+    "ts12-payment": {
+      "workflow": "ts12-payment",
+      "dcql_query": {
+        "credentials": [
+          {
+            "id": "sca_card_dpc",
+            "format": "dc+sd-jwt",
+            "meta": { "vct_values": ["https://webuildconsortium.eu/sca/sca-card-dpc/1.0"] },
+            "claims": [
+              { "path": ["credential_id"] },
+              { "path": ["network"] },
+              { "path": ["card_id"] }
+            ]
+          }
+        ]
+      }
     }
   },
   "relying_parties": {}

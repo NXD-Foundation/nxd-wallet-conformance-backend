@@ -61,6 +61,7 @@ const server = http.createServer((req, res) => {
 
   let urlPath = new URL(req.url || "/", `http://${req.headers.host}`).pathname;
   if (urlPath === "/") urlPath = "/demo/index.html";
+  if (urlPath === "/payment" || urlPath === "/payment/") urlPath = "/demo/payment.html";
 
   const filePath = safeJoin(root, urlPath);
   if (!filePath) return send(res, 403, "Forbidden");
@@ -84,12 +85,13 @@ const server = http.createServer((req, res) => {
 server.listen(port, host, () => {
   const local = `http://127.0.0.1:${port}/`;
   console.log(`CS-07 RP demo listening on ${local}`);
-  console.log(`Open ${local}demo/ (or ${local}) on a secure origin.`);
+  console.log(`PID demo:     ${local} (or ${local}demo/)`);
+  console.log(`Payment demo: ${local}payment`);
   console.log("");
   console.log("Phone / ngrok:");
   console.log(`  ngrok http ${port}`);
   console.log("Then authorize that HTTPS origin on the verifier, e.g.:");
-  console.log("  DC_API_RP_ORIGINS=https://abcd.ngrok-free.app npm run dev");
-  console.log("Optional: DC_API_RP_PROFILES=pid-basic (defaults to default_profile)");
+  console.log("  DC_API_RP_ORIGINS=https://abcd.ngrok-free.app DC_API_RP_PROFILES=pid-basic,ts12-dpc,ts12-dpc-pid npm run dev");
+  console.log("Optional: DC_API_RP_PROFILES defaults to default_profile (pid-basic).");
   console.log("Paste the verifier ngrok URL into the demo page.");
 });

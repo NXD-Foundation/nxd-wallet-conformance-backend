@@ -23,6 +23,38 @@ function classifyBrowserError(error) {
   return "api_failure";
 }
 
+const PAYMENT_BODY_KEYS = [
+  "amount",
+  "value",
+  "currency",
+  "merchant",
+  "payee_name",
+  "payee_id",
+  "payeeId",
+  "payee",
+  "transaction_id",
+  "transactionId",
+  "attestation_type",
+  "vct",
+  "pisp",
+  "execution_date",
+  "executionDate",
+  "recurrence",
+  "purpose",
+  "amount_estimated",
+  "amount_earmarked",
+  "sct_inst",
+];
+
+function paymentBodyFields(payment) {
+  if (!payment || typeof payment !== "object" || Array.isArray(payment)) return {};
+  const body = {};
+  for (const key of PAYMENT_BODY_KEYS) {
+    if (payment[key] !== undefined && payment[key] !== "") body[key] = payment[key];
+  }
+  return body;
+}
+
 export function createDcApiVerifierClient({
   verifierBaseUrl,
   fetchImpl = globalThis.fetch,
@@ -60,7 +92,7 @@ export function createDcApiVerifierClient({
     return body;
   }
 
-  async function prepare({ profile, sessionId, signal } = {}) {
+  async function prepare({ profile, sessionId, payment, signal } = {}) {
     if (!isSupported()) throw new DcApiClientError("Digital Credentials API is unavailable", "unsupported");
     const descriptor = await jsonRequest(endpoint(base, "/vp/dc-api/request"), {
       method: "POST",
@@ -68,6 +100,7 @@ export function createDcApiVerifierClient({
       body: JSON.stringify({
         ...(profile ? { profile } : {}),
         ...(sessionId ? { sessionId } : {}),
+        ...paymentBodyFields(payment),
       }),
       signal,
     });

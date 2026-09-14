@@ -27,6 +27,16 @@ import { loadCs07Config, resolveCs07Profile } from "../../utils/cs07Config.js";
 import { validateCs07CredentialPresentations } from "../../utils/cs07ResponseValidation.js";
 import { loadVerifierEncryptionKey } from "../../utils/verifierEncryptionKeys.js";
 import { trustFrameworkSessionProps } from "../../utils/trustFrameworkPolicy.js";
+import {
+  Ts12PaymentValidationError,
+} from "../../utils/ts12PaymentUtils.js";
+import { validateTs12PaymentPresentationResponse } from "../../utils/ts12Validation.js";
+import {
+  assertCs07DcApiRequestBodyKeys,
+  buildCs07Ts12PaymentRequest,
+  extractTs12PresentationArtifactsFromVpToken,
+} from "../../utils/cs07Ts12Payment.js";
+import TimedArray from "../../utils/timedArray.js";
 
 const dcApiRouter = express.Router();
 // Load and validate once at startup. Profile mappings and DCQL are immutable
@@ -34,6 +44,7 @@ const dcApiRouter = express.Router();
 const CS07_CONFIG = loadCs07Config();
 const MAX_REQUEST_BODY_BYTES = 16 * 1024;
 const MAX_RESPONSE_BODY_BYTES = 2 * 1024 * 1024;
+const ts12JtiCache = new TimedArray(5 * 60 * 1000);
 
 function enforceBodyLimit(limit) {
   return (req, res, next) => {
@@ -131,18 +142,19 @@ dcApiRouter.post("/vp/dc-api/request", enforceBodyLimit(MAX_REQUEST_BODY_BYTES),
   try {
     verifierOrigin = requestOrigin(req);
     applyCors(res, verifierOrigin);
-    const bodyKeys = Object.keys(req.body || {});
-    if (bodyKeys.some((key) => !["profile", "sessionId"].includes(key))) {
-      return res.status(400).json({ error: "invalid_request", error_description: "Only profile and sessionId may be supplied" });
-    }
     sessionId = resolveDcApiSessionId(req.body?.sessionId);
     const profile = resolveCs07Profile(CS07_CONFIG, {
       profileId: req.body?.profile,
       origin: verifierOrigin,
     });
+    assertCs07DcApiRequestBodyKeys(req.body, profile.workflow);
     const encryptionKey = loadVerifierEncryptionKey();
     const clientMetadata = JSON.parse(fs.readFileSync("./data/verifier-config.json", "utf8"));
     const cs03Signing = profile.workflow === "cs03-inline-signing";
+    const ts12Payment = profile.workflow === "ts12-payment";
+    const ts12Request = ts12Payment
+      ? buildCs07Ts12PaymentRequest(req.body, profile.dcql_query)
+      : null;
     const qesRequest = cs03Signing
       ? buildCs03QesRequestPayload(CONFIG.SERVER_URL, sessionId, { oob: false })
       : null;
@@ -156,11 +168,14 @@ dcApiRouter.post("/vp/dc-api/request", enforceBodyLimit(MAX_REQUEST_BODY_BYTES),
       clientMetadata,
       kid: null,
       serverURL: CONFIG.SERVER_URL,
-      dcqlQuery: profile.dcql_query,
+      dcqlQuery: ts12Request?.dcqlQuery || profile.dcql_query,
       transactionData: cs03Signing
         ? encodeCs03TransactionData(qesRequest)
-        : (req.body?.transactionData || null),
+        : (ts12Request?.encodedTransactionData || null),
       cs03Signing,
+      ts12Payment,
+      ts12PaymentPayload: ts12Request?.paymentPayload || null,
+      ts12ExpectedVct: ts12Request?.attestationType?.vct || null,
       cs07DcApi: true,
       cs07VerifierOrigin: verifierOrigin,
       cs07ProfileId: profile.id,
@@ -194,6 +209,7 @@ dcApiRouter.post("/vp/dc-api/request", enforceBodyLimit(MAX_REQUEST_BODY_BYTES),
     const message = error.message || "";
     const forbidden = /Origin header|Origin is not authorized/.test(message);
     const clientError = error instanceof Cs07DcApiResponseError ||
+      error instanceof Ts12PaymentValidationError ||
       /^(Unknown CS-07 profile|CS-07 configuration)/.test(message);
     const status = forbidden ? 403 : (clientError ? 400 : 500);
     logHttpResponse(slog, requestId, "/vp/dc-api/request", status, status === 400 ? "Bad Request" : "Internal Server Error", res.getHeaders(), {
@@ -337,6 +353,30 @@ dcApiRouter.post("/vp/dc-api/response/:sessionId", enforceBodyLimit(MAX_RESPONSE
         return res.status(400).json({ error: error.errorCode, error_description: error.message });
       }
       throw error;
+    }
+
+    if (session.ts12_payment) {
+      const { kbPayload, extractedClaims } = extractTs12PresentationArtifactsFromVpToken(parsed.vpToken);
+      const ts12Result = validateTs12PaymentPresentationResponse({
+        kbPayload,
+        extractedClaims,
+        vpSession: session,
+        seenJti: new Set(ts12JtiCache.getCurrentArray()),
+        rpClientId: session.client_id || null,
+      });
+      if (!ts12Result.ok) {
+        session.status = "failed";
+        session.error = ts12Result.code || "ts12_validation_failed";
+        session.error_description = ts12Result.error;
+        await storeVPSession(sessionId, session);
+        return res.status(400).json({
+          error: session.error,
+          error_description: ts12Result.error,
+        });
+      }
+      ts12JtiCache.addElement(ts12Result.jti);
+      session.ts12_authentication_code = ts12Result.jti;
+      session.ts12_credential = ts12Result.credential;
     }
 
     session.status = "success";

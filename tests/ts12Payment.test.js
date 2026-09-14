@@ -19,6 +19,7 @@ import {
   TS12_SCA_CARD_DPC_VCT,
   applyScaWuaExpiryHint,
   buildTs12DcqlQuery,
+  buildTs12DpcWithPidDcqlQuery,
   buildTs12PaymentTransactionData,
   computeTs12TransactionDataHash,
   encodeTs12TransactionData,
@@ -53,6 +54,14 @@ describe("TS12 payment helpers", () => {
     const cardQuery = buildTs12DcqlQuery("sca-card-dpc");
     expect(cardQuery.credentials[0].id).to.equal("sca_card_dpc");
     expect(cardQuery.credentials[0].meta.vct_values).to.deep.equal([TS12_SCA_CARD_DPC_VCT]);
+  });
+
+  it("builds DPC plus default PID DCQL without a second SCA attestation", () => {
+    const query = buildTs12DpcWithPidDcqlQuery();
+    expect(query.credentials).to.have.length(2);
+    expect(query.credentials[0].meta.vct_values).to.deep.equal([TS12_SCA_CARD_DPC_VCT]);
+    expect(query.credentials[1].meta.vct_values).to.deep.equal(["urn:eu.europa.ec.eudi:pid:1"]);
+    expect(query.credentials[1].id).to.equal("cmwallet");
   });
 
   it("resolves attestation_type from ids and base VCT URLs", () => {

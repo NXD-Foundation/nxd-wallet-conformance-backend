@@ -11,8 +11,27 @@ import {
 } from "../utils/cs07DcApi.js";
 import { DEFAULT_DCQL_QUERY } from "../utils/routeUtils.js";
 import { createDcApiVerifierClient, DcApiClientError } from "../clients/dc-api/rp-client.js";
-import { validateCs07Config, resolveCs07Profile, mergeEnvRelyingParties } from "../utils/cs07Config.js";
+import { validateCs07Config, resolveCs07Profile, mergeEnvRelyingParties, loadCs07Config } from "../utils/cs07Config.js";
 import { validateCs07CredentialPresentations } from "../utils/cs07ResponseValidation.js";
+import {
+  assertCs07DcApiRequestBodyKeys,
+  buildCs07Ts12PaymentRequest,
+  extractTs12PresentationArtifactsFromVpToken,
+} from "../utils/cs07Ts12Payment.js";
+import { Cs07DcApiResponseError } from "../utils/cs07DcApi.js";
+import {
+  TS12_PAYMENT_TRANSACTION_TYPE,
+  TS12_PID_VCT,
+  TS12_SCA_CARD_DPC_VCT,
+  TS12_SCA_IBAN_VCT,
+  TS12_SCA_USER_VCT,
+  buildTs12DcqlQuery,
+  buildTs12DpcWithPidDcqlQuery,
+  computeTs12TransactionDataHash,
+} from "../utils/ts12PaymentUtils.js";
+import {
+  validateTs12PaymentPresentationResponse,
+} from "../utils/ts12Validation.js";
 
 describe("CS-07 Digital Credentials API request profile", () => {
   it("canonicalizes a configured HTTPS origin and derives the origin audience", () => {
@@ -110,6 +129,43 @@ describe("CS-07 Digital Credentials API request profile", () => {
     expect(requestBody).to.deep.equal({ profile: "pid-basic", sessionId: "booking-12345" });
   });
 
+  it("forwards CS-12 payment fields when preparing a ts12-payment request", async () => {
+    let requestBody;
+    const client = createDcApiVerifierClient({
+      verifierBaseUrl: "https://verifier.example",
+      secureContext: true,
+      navigatorImpl: { credentials: { get: async () => ({ protocol: "openid4vp-v1-signed", data: { response: "a.b.c" } }) } },
+      digitalCredential: { userAgentAllowsProtocol: () => true },
+      fetchImpl: async (url, options) => {
+        if (String(url).endsWith("/vp/dc-api/request")) requestBody = JSON.parse(options.body);
+        return { ok: true, json: async () => ({
+          sessionId: "pay-1",
+          request: { protocol: "openid4vp-v1-signed", data: { request: "a.b.c" } },
+        }) };
+      },
+    });
+
+    await client.prepare({
+      profile: "ts12-dpc",
+      payment: {
+        amount: "12.34",
+        currency: "EUR",
+        merchant: "Demo Merchant",
+        payee_id: "merchant-001",
+        transaction_id: "tx-12345",
+        ignored: "nope",
+      },
+    });
+    expect(requestBody).to.deep.equal({
+      profile: "ts12-dpc",
+      amount: "12.34",
+      currency: "EUR",
+      merchant: "Demo Merchant",
+      payee_id: "merchant-001",
+      transaction_id: "tx-12345",
+    });
+  });
+
   it("prepares a descriptor and presents it through the user-activation API", async () => {
     const calls = [];
     let credentialCalls = 0;
@@ -188,6 +244,14 @@ describe("CS-07 Digital Credentials API request profile", () => {
       profiles: { "pid-basic": { workflow: "unknown", dcql_query: DEFAULT_DCQL_QUERY } },
       relying_parties: {},
     }, { env: {} })).to.throw(/Unknown CS-07 workflow/);
+    expect(() => validateCs07Config({
+      default_profile: "pid-basic",
+      profiles: {
+        "pid-basic": { workflow: "presentation", dcql_query: DEFAULT_DCQL_QUERY },
+        "ts12-payment": { workflow: "ts12-payment", dcql_query: DEFAULT_DCQL_QUERY },
+      },
+      relying_parties: {},
+    }, { env: {} })).not.to.throw();
   });
 
   it("merges relying-party origins from environment variables", () => {
@@ -396,5 +460,166 @@ describe("CS-07 Digital Credentials API request profile", () => {
     } finally {
       process.env = previous;
     }
+  });
+});
+
+describe("CS-07 TS12 payment DC API requests", () => {
+  const paymentInput = {
+    profile: "ts12-dpc",
+    amount: "12.34",
+    currency: "EUR",
+    merchant: "Demo Merchant",
+    payee_id: "merchant-001",
+    transaction_id: "tx-dc-api-1",
+  };
+  const dpcDcql = buildTs12DcqlQuery("sca-card-dpc");
+  const dpcPidDcql = buildTs12DpcWithPidDcqlQuery();
+
+  it("loads the checked-in DPC payment profiles", () => {
+    const config = loadCs07Config({ env: {} });
+    expect(config.profiles["ts12-dpc"].workflow).to.equal("ts12-payment");
+    expect(config.profiles["ts12-dpc"].dcql_query).to.deep.equal(dpcDcql);
+    expect(config.profiles["ts12-dpc-pid"].dcql_query).to.deep.equal(dpcPidDcql);
+    expect(config.profiles["ts12-payment"].dcql_query).to.deep.equal(dpcDcql);
+    expect(dpcPidDcql.credentials.map((c) => c.meta.vct_values[0])).to.deep.equal([
+      TS12_SCA_CARD_DPC_VCT,
+      TS12_PID_VCT,
+    ]);
+  });
+
+  it("rejects payment fields on presentation profiles", () => {
+    expect(() => assertCs07DcApiRequestBodyKeys({ profile: "pid-basic", amount: "12.34" }, "presentation"))
+      .to.throw(Cs07DcApiResponseError, /Only profile and sessionId/);
+    expect(() => assertCs07DcApiRequestBodyKeys({ profile: "ts12-payment", amount: "12.34" }, "ts12-payment"))
+      .to.not.throw();
+    expect(() => assertCs07DcApiRequestBodyKeys({ profile: "ts12-payment", extra: true }, "ts12-payment"))
+      .to.throw(Cs07DcApiResponseError, /Unsupported CS-07 request field/);
+  });
+
+  it("builds SCA DCQL and encoded payment transaction_data for a specific amount", () => {
+    const built = buildCs07Ts12PaymentRequest(paymentInput, dpcDcql);
+    expect(built.attestationType.id).to.equal("sca-card-dpc");
+    expect(built.attestationType.vct).to.equal(TS12_SCA_CARD_DPC_VCT);
+    expect(built.dcqlQuery).to.deep.equal(dpcDcql);
+    expect(built.paymentPayload.amount).to.equal(12.34);
+    expect(built.paymentPayload.currency).to.equal("EUR");
+    expect(built.transactionDataObj.type).to.equal(TS12_PAYMENT_TRANSACTION_TYPE);
+    expect(built.transactionDataObj.credential_ids).to.deep.equal(["sca_card_dpc"]);
+    const decoded = JSON.parse(Buffer.from(built.encodedTransactionData, "base64url").toString("utf8"));
+    expect(decoded.payload.amount).to.equal(12.34);
+    expect(decoded.payload.transaction_id).to.equal("tx-dc-api-1");
+  });
+
+  it("keeps DPC plus default PID when the combined profile DCQL is supplied", () => {
+    const built = buildCs07Ts12PaymentRequest(paymentInput, dpcPidDcql);
+    expect(built.attestationType.vct).to.equal(TS12_SCA_CARD_DPC_VCT);
+    expect(built.dcqlQuery.credentials).to.have.length(2);
+    expect(built.dcqlQuery.credentials[1].meta.vct_values).to.deep.equal([TS12_PID_VCT]);
+    expect(built.transactionDataObj.credential_ids).to.deep.equal(["sca_card_dpc"]);
+  });
+
+  it("falls back to attestation_type DCQL when no profile query is supplied", () => {
+    const iban = buildCs07Ts12PaymentRequest({ ...paymentInput, attestation_type: "sca-iban" });
+    expect(iban.attestationType.vct).to.equal(TS12_SCA_IBAN_VCT);
+    expect(iban.dcqlQuery).to.deep.equal(buildTs12DcqlQuery("sca-iban"));
+    const user = buildCs07Ts12PaymentRequest({ ...paymentInput, attestation_type: "sca-user" });
+    expect(user.attestationType.vct).to.equal(TS12_SCA_USER_VCT);
+  });
+
+  it("embeds the payment transaction_data in a dc_api.jwt request JWT", async () => {
+    const previous = { ...process.env };
+    process.env.CS03_COMPATIBILITY = "false";
+    process.env.DC_API_VERIFIER_ORIGIN = "https://verifier.example";
+    try {
+      const built = buildCs07Ts12PaymentRequest(paymentInput, dpcDcql);
+      const requestJwt = await buildVpRequestJWT(
+        "x509_san_dns:verifier.example",
+        null,
+        null,
+        null,
+        { client_name: "Verifier" },
+        null,
+        "https://verifier.example",
+        "vp_token",
+        "nonce-ts12-dc-api",
+        built.dcqlQuery,
+        [built.encodedTransactionData],
+        "dc_api.jwt",
+        undefined,
+        undefined,
+        null,
+        null,
+        null,
+        "ES256",
+        true,
+        "https://rp.example",
+      );
+      const payload = jose.decodeJwt(requestJwt);
+      expect(payload.response_mode).to.equal("dc_api.jwt");
+      expect(payload.dcql_query).to.deep.equal(built.dcqlQuery);
+      expect(payload.transaction_data).to.deep.equal([built.encodedTransactionData]);
+      const decodedTx = JSON.parse(Buffer.from(payload.transaction_data[0], "base64url").toString("utf8"));
+      expect(decodedTx.payload.amount).to.equal(12.34);
+      expect(decodedTx.type).to.equal(TS12_PAYMENT_TRANSACTION_TYPE);
+    } finally {
+      process.env = previous;
+    }
+  });
+
+  it("rejects a DC API TS12 presentation when the transaction_data hash does not match", () => {
+    const built = buildCs07Ts12PaymentRequest(paymentInput, dpcDcql);
+    const result = validateTs12PaymentPresentationResponse({
+      kbPayload: {
+        jti: "auth-code-dc-api",
+        response_mode: "dc_api.jwt",
+        amr: [{ knowledge: "pin_6_or_more_digits" }, { possession: "key_in_local_native_wscd" }],
+        transaction_data_hashes: ["wrong-hash"],
+        transaction_data_hashes_alg: "sha-256",
+      },
+      extractedClaims: [{ vct: TS12_SCA_CARD_DPC_VCT, card_id: "****" }],
+      vpSession: {
+        ts12_payment: true,
+        response_mode: "dc_api.jwt",
+        transaction_data: [built.encodedTransactionData],
+        ts12_expected_vct: TS12_SCA_CARD_DPC_VCT,
+        client_id: "x509_san_dns:verifier.example",
+      },
+    });
+    expect(result.ok).to.equal(false);
+    expect(result.code).to.equal("transaction_data_hash_mismatch");
+  });
+
+  it("rejects a DC API TS12 presentation of the wrong SCA attestation type", () => {
+    const built = buildCs07Ts12PaymentRequest(paymentInput, dpcDcql);
+    const hash = computeTs12TransactionDataHash(built.encodedTransactionData);
+    const result = validateTs12PaymentPresentationResponse({
+      kbPayload: {
+        jti: "auth-code-wrong-vct",
+        response_mode: "dc_api.jwt",
+        amr: [{ knowledge: "pin_6_or_more_digits" }, { possession: "key_in_local_native_wscd" }],
+        transaction_data_hashes: [hash],
+        transaction_data_hashes_alg: "sha-256",
+      },
+      extractedClaims: [{ vct: TS12_SCA_USER_VCT, masked_psu_id: "psu-*" }],
+      vpSession: {
+        ts12_payment: true,
+        response_mode: "dc_api.jwt",
+        transaction_data: [built.encodedTransactionData],
+        ts12_expected_vct: TS12_SCA_CARD_DPC_VCT,
+        client_id: "x509_san_dns:verifier.example",
+      },
+    });
+    expect(result.ok).to.equal(false);
+    expect(result.code).to.equal("missing_sca_credential");
+  });
+
+  it("extracts KB-JWT claims from a CS-07 vp_token for TS12 checks", () => {
+    const issuer = `header.${Buffer.from(JSON.stringify({ vct: "test" })).toString("base64url")}.sig`;
+    const kbPayload = { jti: "auth-1", response_mode: "dc_api.jwt" };
+    const kb = `header.${Buffer.from(JSON.stringify(kbPayload)).toString("base64url")}.sig`;
+    const artifacts = extractTs12PresentationArtifactsFromVpToken({
+      sca_iban: `${issuer}~${kb}`,
+    });
+    expect(artifacts.kbPayload).to.include(kbPayload);
   });
 });

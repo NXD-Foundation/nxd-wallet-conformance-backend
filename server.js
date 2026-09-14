@@ -19,6 +19,7 @@ import loggingRouter from "./routes/loggingRoutes.js";
 import vciStandardRouter from "./routes/issue/vciStandardRoutes.js";
 import vpStandardRouter from "./routes/verify/vpStandardRoutes.js";
 import dcApiRouter from "./routes/verify/dcApiRoutes.js";
+import dcApiDemoRouter from "./routes/verify/dcApiDemoRoutes.js";
 import ts12PaymentRouter from "./routes/verify/ts12PaymentRoutes.js";
 import vAttestationRouter from "./routes/verify/verifierAttestationRoutes.js";
 import bodyParser from "body-parser"; // Body parser middleware
@@ -180,6 +181,7 @@ app.use("/", loggingRouter);
 app.use("/", vciStandardRouter);
 app.use("/", vpStandardRouter);
 app.use("/", dcApiRouter);
+app.use("/", dcApiDemoRouter);
 app.use("/", ts12PaymentRouter);
 app.use("/", vAttestationRouter);
 // Error handler for validation errors

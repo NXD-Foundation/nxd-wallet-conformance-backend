@@ -141,6 +141,26 @@ export function buildTs12DcqlQuery(attestationType = TS12_DEFAULT_ATTESTATION_TY
   };
 }
 
+/** Default SD-JWT PID VCT used by `pid-basic` / `DEFAULT_DCQL_QUERY`. */
+export const TS12_PID_VCT = "urn:eu.europa.ec.eudi:pid:1";
+export const TS12_PID_CREDENTIAL_ID = "cmwallet";
+
+/** CS-12 payment DCQL for DPC plus the default PID (non-SCA combined presentation). */
+export function buildTs12DpcWithPidDcqlQuery() {
+  const dpc = buildTs12DcqlQuery("sca-card-dpc");
+  return {
+    credentials: [
+      ...dpc.credentials,
+      {
+        id: TS12_PID_CREDENTIAL_ID,
+        format: "dc+sd-jwt",
+        meta: { vct_values: [TS12_PID_VCT] },
+        claims: [{ path: ["family_name"] }],
+      },
+    ],
+  };
+}
+
 export const TS12_DCQL_QUERY = buildTs12DcqlQuery(TS12_DEFAULT_ATTESTATION_TYPE);
 
 export function listScaVctsInDcql(dcqlQuery) {

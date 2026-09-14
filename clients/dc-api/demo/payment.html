@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>CS-07 DC API RP demo</title>
+  <title>CS-12 TS12 payment DC API demo</title>
   <style>
     :root {
       --bg: #0f1419;
@@ -50,7 +50,7 @@
       color: var(--muted);
       margin-bottom: 0.35rem;
     }
-    input {
+    input, select {
       width: 100%;
       padding: 0.65rem 0.75rem;
       border: 1px solid var(--border);
@@ -61,9 +61,17 @@
       font-size: 0.85rem;
       margin-bottom: 1rem;
     }
-    input:focus {
+    input:focus, select:focus {
       outline: 2px solid #3d6a9a;
       outline-offset: 1px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0 0.75rem;
+    }
+    @media (max-width: 36rem) {
+      .grid { grid-template-columns: 1fr; }
     }
     .row {
       display: flex;
@@ -141,18 +149,44 @@
 </head>
 <body>
   <main>
-    <h1>CS-07 DC API RP demo</h1>
+    <h1>CS-12 payment DC API demo</h1>
     <p class="lede">
-      Fake relying-party page for phone testing. Calls the verifier over HTTPS,
-      then <code>navigator.credentials.get()</code> from the button click.
+      Fake merchant page for SCA payment presentation. Requests an
+      <code>urn:eudi:sca:payment:1</code> transaction for a Digital Payment
+      Card (<code>sca-card-dpc</code>), optionally together with the default PID
+      <code>urn:eu.europa.ec.eudi:pid:1</code>, then calls
+      <code>navigator.credentials.get()</code> from the button click.
     </p>
 
     <label for="verifierBaseUrl">Verifier base URL (ngrok)</label>
     <input id="verifierBaseUrl" type="url" autocomplete="off"
       placeholder="https://xxxx.ngrok-free.app" />
 
-    <label for="profile">Profile id</label>
-    <input id="profile" type="text" autocomplete="off" value="pid-basic" />
+    <div class="grid">
+      <div>
+        <label for="amount">Amount</label>
+        <input id="amount" type="text" inputmode="decimal" autocomplete="off" value="12.34" />
+      </div>
+      <div>
+        <label for="currency">Currency</label>
+        <input id="currency" type="text" maxlength="3" autocomplete="off" value="EUR" />
+      </div>
+    </div>
+
+    <label for="merchant">Payee name</label>
+    <input id="merchant" type="text" autocomplete="off" value="Demo Merchant" />
+
+    <label for="payeeId">Payee id</label>
+    <input id="payeeId" type="text" autocomplete="off" value="merchant-001" />
+
+    <label for="transactionId">Transaction id</label>
+    <input id="transactionId" type="text" autocomplete="off" placeholder="generated if empty" />
+
+    <label for="profile">Presentation profile</label>
+    <select id="profile">
+      <option value="ts12-dpc" selected>Payment authorization (DPC)</option>
+      <option value="ts12-dpc-pid">Payment authorization (DPC + PID)</option>
+    </select>
 
     <div class="row">
       <span id="supportBadge" class="badge">checking…</span>
@@ -160,18 +194,19 @@
     </div>
 
     <div class="row">
-      <button id="present" type="button" disabled>Present credential</button>
+      <button id="present" type="button" disabled>Authorize payment</button>
       <button id="prepare" type="button" class="secondary">Re-prepare</button>
     </div>
 
     <div id="log">Idle.</div>
 
     <p class="hint">
-      Serve this folder with <code>npm run dc-api:demo</code>, tunnel that port
-      with ngrok, and authorize this page’s origin in
-      <code>data/dc-api-config.json</code> under <code>relying_parties</code>.
-      Query params: <code>?verifier=…&amp;profile=…</code>.
-      Payment SCA demo: <a href="/payment">/payment</a>
+      Serve with <code>npm run dc-api:demo</code>, open <code>/payment</code>,
+      and authorize this origin for <code>ts12-dpc</code> and
+      <code>ts12-dpc-pid</code>:
+      <code>DC_API_RP_PROFILES=pid-basic,ts12-dpc,ts12-dpc-pid</code>.
+      Query params: <code>?verifier=…&amp;amount=…&amp;currency=…&amp;profile=ts12-dpc-pid</code>.
+      PID demo: <a href="/demo">/demo</a>
     </p>
   </main>
 
@@ -181,6 +216,11 @@
     const STORAGE_KEY = "cs07-dc-api-demo-verifier";
     const params = new URLSearchParams(location.search);
     const verifierInput = document.querySelector("#verifierBaseUrl");
+    const amountInput = document.querySelector("#amount");
+    const currencyInput = document.querySelector("#currency");
+    const merchantInput = document.querySelector("#merchant");
+    const payeeIdInput = document.querySelector("#payeeId");
+    const transactionIdInput = document.querySelector("#transactionId");
     const profileInput = document.querySelector("#profile");
     const presentBtn = document.querySelector("#present");
     const prepareBtn = document.querySelector("#prepare");
@@ -193,7 +233,16 @@
     const fromQuery = params.get("verifier");
     const stored = localStorage.getItem(STORAGE_KEY);
     verifierInput.value = fromQuery || stored || "";
-    if (params.get("profile")) profileInput.value = params.get("profile");
+    if (params.get("amount")) amountInput.value = params.get("amount");
+    if (params.get("currency")) currencyInput.value = params.get("currency").toUpperCase();
+    if (params.get("merchant") || params.get("payee_name")) {
+      merchantInput.value = params.get("merchant") || params.get("payee_name");
+    }
+    if (params.get("payee_id")) payeeIdInput.value = params.get("payee_id");
+    if (params.get("transaction_id")) transactionIdInput.value = params.get("transaction_id");
+    if (params.get("profile") === "ts12-dpc-pid" || params.get("profile") === "ts12-dpc") {
+      profileInput.value = params.get("profile");
+    }
 
     let client = null;
     let prepared = null;
@@ -223,20 +272,37 @@
       return supported;
     }
 
+    function paymentFields() {
+      const transactionId = transactionIdInput.value.trim() || crypto.randomUUID();
+      transactionIdInput.value = transactionId;
+      return {
+        amount: amountInput.value.trim(),
+        currency: currencyInput.value.trim().toUpperCase(),
+        merchant: merchantInput.value.trim(),
+        payee_id: payeeIdInput.value.trim(),
+        transaction_id: transactionId,
+      };
+    }
+
     async function prepareRequest() {
       try {
         if (!refreshSupport()) {
           log("Digital Credentials API is unavailable in this browser/context.", "error");
           return;
         }
-        log("Preparing request…");
-        prepared = await client.prepare({ profile: profileInput.value.trim() || undefined });
+        log("Preparing SCA payment request…");
+        prepared = await client.prepare({
+          profile: profileInput.value,
+          payment: paymentFields(),
+        });
         presentBtn.disabled = false;
         log({
           status: "prepared",
           sessionId: prepared.sessionId,
           expiresAt: prepared.expiresAt,
           protocol: prepared.request?.protocol,
+          profile: profileInput.value,
+          payment: paymentFields(),
         });
       } catch (error) {
         prepared = null;
@@ -249,6 +315,10 @@
       prepared = null;
       presentBtn.disabled = true;
       refreshSupport();
+    });
+    profileInput.addEventListener("change", () => {
+      prepared = null;
+      presentBtn.disabled = true;
     });
     prepareBtn.addEventListener("click", () => prepareRequest());
 
@@ -272,7 +342,7 @@
     if (verifierInput.value.trim()) {
       prepareRequest();
     } else {
-      log("Enter your verifier ngrok URL, then Present (or Re-prepare).");
+      log("Enter your verifier ngrok URL, then Authorize payment (or Re-prepare).");
     }
   </script>
 </body>
