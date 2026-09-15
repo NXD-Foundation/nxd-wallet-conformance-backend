@@ -257,18 +257,21 @@ The browser flow must use
 of `origin:<verifier-origin>` for response proofs.
 - Profile and RP authorization are configured in `data/dc-api-config.json`
 (or `DC_API_CONFIG_PATH`); ephemeral RP origins can be merged at startup via
-`DC_API_RP_ORIGINS` (and optional `DC_API_RP_PROFILES`). The checked-in file
+`DC_API_RP_ORIGINS` (and optional `DC_API_RP_PROFILES`). Both env vars accept
+comma-separated values or a JSON array of strings; multiple origins are
+authorized with the same profile list. The checked-in file
 intentionally has no relying parties enabled and must be populated for a deployment.
-- Profile `ts12-dpc` (workflow `ts12-payment`) originates a CS-12 SCA
-payment presentation over DC API for Digital Payment Card
-`https://webuildconsortium.eu/sca/sca-card-dpc/1.0`. Profile `ts12-dpc-pid`
-adds the default SD-JWT PID `urn:eu.europa.ec.eudi:pid:1` (same VCT as
-`pid-basic`) in the same DCQL query. `ts12-payment` remains as an alias of
-`ts12-dpc`. `POST /vp/dc-api/request` accepts payment payload fields for that
+- CS-12 SCA payment profiles over DC API (workflow `ts12-payment`) are
+`ts12-dpc`, `ts12-iban`, and `ts12-user` for the three in-scope VCTs, plus
+`ts12-dpc-pid`, `ts12-iban-pid`, and `ts12-user-pid` which add the default
+SD-JWT PID `urn:eu.europa.ec.eudi:pid:1` (same VCT as `pid-basic`) in the
+same DCQL query. `ts12-payment` remains as an alias of `ts12-dpc`.
+`POST /vp/dc-api/request` accepts payment payload fields for that
 workflow only; other profiles still allow only `profile` and `sessionId`. The
 RP demo page is `clients/dc-api/demo/payment.html` (`GET /payment` on the
 verifier, or `npm run dc-api:demo`). Authorize the RP origin with
-`DC_API_RP_PROFILES=pid-basic,ts12-dpc,ts12-dpc-pid`. The response path runs the same
+`DC_API_RP_PROFILES=pid-basic,qualified-signing,ts12-dpc,ts12-dpc-pid,ts12-iban,ts12-iban-pid,ts12-user,ts12-user-pid,ts12-payment`.
+The response path runs the same
 TS-12 KB-JWT / attestation checks as `/ts12/payment/request` sessions.
 - DC API transport must remain a thin adapter over the CS-02 DCQL and
 credential-verification core. It must distinguish wallet protocol errors in
@@ -329,8 +332,10 @@ Sources: [SD-JWT key-binding fixes](./sd-jwt-key-binding-interop.md),
   is encrypted with Wallet Unit `wallet_metadata` JWKs that advertise
   `use=enc`. GET on `/ts12/payment/x509VPrequest/:id` is always rejected.
   The same payment `transaction_data` can be originated over Digital
-  Credentials API via CS-07 profiles `ts12-dpc` (DPC only) and `ts12-dpc-pid`
-  (DPC plus `urn:eu.europa.ec.eudi:pid:1`) using `dc_api.jwt` and no encrypted
+  Credentials API via CS-07 profiles `ts12-dpc`, `ts12-iban`, and
+  `ts12-user` (one SCA attestation each) and `ts12-dpc-pid`,
+  `ts12-iban-pid`, and `ts12-user-pid` (that SCA attestation plus
+  `urn:eu.europa.ec.eudi:pid:1`) using `dc_api.jwt` and no encrypted
   JAR POST.
   Optional TS12 payment payload fields (`purpose`, `amount_estimated`,
   `amount_earmarked`, `sct_inst`) are accepted. The CLI wallet does not

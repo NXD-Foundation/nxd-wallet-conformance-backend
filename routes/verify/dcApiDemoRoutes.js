@@ -26,6 +26,14 @@ dcApiDemoRouter.get("/demo/payment.html", (_req, res) => {
   return sendDemoFile(res, "demo/payment.html", "text/html; charset=utf-8");
 });
 
+dcApiDemoRouter.get(["/issuance", "/issuance/", "/demo/issuance.html"], (_req, res) => {
+  return sendDemoFile(res, "demo/issuance.html", "text/html; charset=utf-8");
+});
+
+dcApiDemoRouter.get("/issuer-client.js", (_req, res) => {
+  return sendDemoFile(res, "issuer-client.js", "text/javascript; charset=utf-8");
+});
+
 dcApiDemoRouter.get("/rp-client.js", (_req, res) => {
   return sendDemoFile(res, "rp-client.js", "text/javascript; charset=utf-8");
 });

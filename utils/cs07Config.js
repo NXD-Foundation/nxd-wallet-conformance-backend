@@ -12,16 +12,32 @@ function assertObject(value, message) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(message);
 }
 
-function parseCsv(value) {
+function parseEnvList(value, label) {
+  if (Array.isArray(value)) {
+    if (value.some((item) => typeof item !== "string")) {
+      throw new Error(`${label} must be an array of strings`);
+    }
+    return value.map((part) => part.trim()).filter(Boolean);
+  }
   if (typeof value !== "string" || !value.trim()) return [];
-  return value.split(",").map((part) => part.trim()).filter(Boolean);
+  const trimmed = value.trim();
+  if (trimmed.startsWith("[")) {
+    let parsed;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      throw new Error(`${label} must be comma-separated or a JSON array of strings`);
+    }
+    return parseEnvList(parsed, label);
+  }
+  return trimmed.split(",").map((part) => part.trim()).filter(Boolean);
 }
 
 export function mergeEnvRelyingParties(config, { env = process.env } = {}) {
-  const origins = parseCsv(env.DC_API_RP_ORIGINS);
+  const origins = parseEnvList(env.DC_API_RP_ORIGINS, "DC_API_RP_ORIGINS");
   if (origins.length === 0) return config;
 
-  const profileIds = parseCsv(env.DC_API_RP_PROFILES);
+  const profileIds = parseEnvList(env.DC_API_RP_PROFILES, "DC_API_RP_PROFILES");
   const profiles = profileIds.length > 0 ? profileIds : [config.default_profile];
 
   if (!config.relying_parties || typeof config.relying_parties !== "object" || Array.isArray(config.relying_parties)) {

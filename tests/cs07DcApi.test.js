@@ -27,6 +27,7 @@ import {
   TS12_SCA_USER_VCT,
   buildTs12DcqlQuery,
   buildTs12DpcWithPidDcqlQuery,
+  buildTs12ScaWithPidDcqlQuery,
   computeTs12TransactionDataHash,
 } from "../utils/ts12PaymentUtils.js";
 import {
@@ -295,6 +296,28 @@ describe("CS-07 Digital Credentials API request profile", () => {
         DC_API_RP_PROFILES: "missing-profile",
       },
     }), { env: {} })).to.throw(/references unknown profile/);
+
+    const withJsonArray = validateCs07Config(mergeEnvRelyingParties(structuredClone(base), {
+      env: {
+        DC_API_RP_ORIGINS: '["https://rp.example","https://rp3.example"]',
+        DC_API_RP_PROFILES: '["pid-basic","qualified-signing"]',
+      },
+    }), { env: {} });
+    expect(withJsonArray.relying_parties).to.deep.equal({
+      "https://rp.example": { profiles: ["pid-basic", "qualified-signing"] },
+      "https://rp3.example": { profiles: ["pid-basic", "qualified-signing"] },
+    });
+
+    const withNativeArray = validateCs07Config(mergeEnvRelyingParties(structuredClone(base), {
+      env: {
+        DC_API_RP_ORIGINS: ["https://rp.example", "https://rp4.example"],
+        DC_API_RP_PROFILES: ["qualified-signing"],
+      },
+    }), { env: {} });
+    expect(withNativeArray.relying_parties).to.deep.equal({
+      "https://rp.example": { profiles: ["qualified-signing"] },
+      "https://rp4.example": { profiles: ["qualified-signing"] },
+    });
   });
 
   it("rejects expired descriptors and classifies wallet protocol errors", async () => {
@@ -474,15 +497,31 @@ describe("CS-07 TS12 payment DC API requests", () => {
   };
   const dpcDcql = buildTs12DcqlQuery("sca-card-dpc");
   const dpcPidDcql = buildTs12DpcWithPidDcqlQuery();
+  const ibanDcql = buildTs12DcqlQuery("sca-iban");
+  const ibanPidDcql = buildTs12ScaWithPidDcqlQuery("sca-iban");
+  const userDcql = buildTs12DcqlQuery("sca-user");
+  const userPidDcql = buildTs12ScaWithPidDcqlQuery("sca-user");
 
-  it("loads the checked-in DPC payment profiles", () => {
+  it("loads the checked-in SCA payment profiles", () => {
     const config = loadCs07Config({ env: {} });
     expect(config.profiles["ts12-dpc"].workflow).to.equal("ts12-payment");
     expect(config.profiles["ts12-dpc"].dcql_query).to.deep.equal(dpcDcql);
     expect(config.profiles["ts12-dpc-pid"].dcql_query).to.deep.equal(dpcPidDcql);
+    expect(config.profiles["ts12-iban"].dcql_query).to.deep.equal(ibanDcql);
+    expect(config.profiles["ts12-iban-pid"].dcql_query).to.deep.equal(ibanPidDcql);
+    expect(config.profiles["ts12-user"].dcql_query).to.deep.equal(userDcql);
+    expect(config.profiles["ts12-user-pid"].dcql_query).to.deep.equal(userPidDcql);
     expect(config.profiles["ts12-payment"].dcql_query).to.deep.equal(dpcDcql);
     expect(dpcPidDcql.credentials.map((c) => c.meta.vct_values[0])).to.deep.equal([
       TS12_SCA_CARD_DPC_VCT,
+      TS12_PID_VCT,
+    ]);
+    expect(ibanPidDcql.credentials.map((c) => c.meta.vct_values[0])).to.deep.equal([
+      TS12_SCA_IBAN_VCT,
+      TS12_PID_VCT,
+    ]);
+    expect(userPidDcql.credentials.map((c) => c.meta.vct_values[0])).to.deep.equal([
+      TS12_SCA_USER_VCT,
       TS12_PID_VCT,
     ]);
   });
@@ -516,6 +555,19 @@ describe("CS-07 TS12 payment DC API requests", () => {
     expect(built.dcqlQuery.credentials).to.have.length(2);
     expect(built.dcqlQuery.credentials[1].meta.vct_values).to.deep.equal([TS12_PID_VCT]);
     expect(built.transactionDataObj.credential_ids).to.deep.equal(["sca_card_dpc"]);
+  });
+
+  it("uses the profile DCQL for IBAN and user payment presentations", () => {
+    const iban = buildCs07Ts12PaymentRequest({ ...paymentInput, profile: "ts12-iban" }, ibanDcql);
+    expect(iban.attestationType.id).to.equal("sca-iban");
+    expect(iban.attestationType.vct).to.equal(TS12_SCA_IBAN_VCT);
+    expect(iban.dcqlQuery).to.deep.equal(ibanDcql);
+    expect(iban.transactionDataObj.credential_ids).to.deep.equal(["sca_iban"]);
+
+    const userPid = buildCs07Ts12PaymentRequest({ ...paymentInput, profile: "ts12-user-pid" }, userPidDcql);
+    expect(userPid.attestationType.vct).to.equal(TS12_SCA_USER_VCT);
+    expect(userPid.dcqlQuery.credentials).to.have.length(2);
+    expect(userPid.transactionDataObj.credential_ids).to.deep.equal(["sca_user"]);
   });
 
   it("falls back to attestation_type DCQL when no profile query is supplied", () => {

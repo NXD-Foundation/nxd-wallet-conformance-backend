@@ -20,6 +20,7 @@ import {
   applyScaWuaExpiryHint,
   buildTs12DcqlQuery,
   buildTs12DpcWithPidDcqlQuery,
+  buildTs12ScaWithPidDcqlQuery,
   buildTs12PaymentTransactionData,
   computeTs12TransactionDataHash,
   encodeTs12TransactionData,
@@ -62,6 +63,18 @@ describe("TS12 payment helpers", () => {
     expect(query.credentials[0].meta.vct_values).to.deep.equal([TS12_SCA_CARD_DPC_VCT]);
     expect(query.credentials[1].meta.vct_values).to.deep.equal(["urn:eu.europa.ec.eudi:pid:1"]);
     expect(query.credentials[1].id).to.equal("cmwallet");
+  });
+
+  it("builds IBAN and user plus default PID DCQL without a second SCA attestation", () => {
+    const iban = buildTs12ScaWithPidDcqlQuery("sca-iban");
+    expect(iban.credentials).to.have.length(2);
+    expect(iban.credentials[0].id).to.equal("sca_iban");
+    expect(iban.credentials[0].meta.vct_values).to.deep.equal([TS12_SCA_IBAN_VCT]);
+    expect(iban.credentials[1].meta.vct_values).to.deep.equal(["urn:eu.europa.ec.eudi:pid:1"]);
+
+    const user = buildTs12ScaWithPidDcqlQuery("sca-user");
+    expect(user.credentials[0].id).to.equal("sca_user");
+    expect(user.credentials[0].meta.vct_values).to.deep.equal([TS12_SCA_USER_VCT]);
   });
 
   it("resolves attestation_type from ids and base VCT URLs", () => {

@@ -49,6 +49,8 @@ describe("CS-07 local RP demo pages", () => {
     expect(page.status).to.equal(200);
     expect(page.type).to.match(/html/);
     expect(page.text).to.include("ts12-dpc");
+    expect(page.text).to.include("ts12-iban");
+    expect(page.text).to.include("ts12-user");
     const script = await request(demoApp).get("/rp-client.js");
     expect(script.status).to.equal(200);
     expect(script.text).to.include("createDcApiVerifierClient");

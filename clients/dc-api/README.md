@@ -45,11 +45,11 @@ const prepared = await client.prepare({
 The verifier accepts 1–128 safe path characters (`A-Z`, `a-z`, digits, `.`,
 `_`, `:`, `-`). If omitted, it generates a UUID.
 
-For a CS-12 SCA payment presentation, pass `profile: "ts12-dpc"` (DPC only)
-or `profile: "ts12-dpc-pid"` (DPC plus the default PID
-`urn:eu.europa.ec.eudi:pid:1`) and a `payment` object. The adapter flattens
-those fields onto the request body (`amount`, `currency`, payee,
-`transaction_id`):
+For a CS-12 SCA payment presentation, pass one of `ts12-dpc`, `ts12-iban`,
+or `ts12-user` (one SCA attestation) or the matching `*-pid` profile (that
+attestation plus the default PID `urn:eu.europa.ec.eudi:pid:1`) and a
+`payment` object. The adapter flattens those fields onto the request body
+(`amount`, `currency`, payee, `transaction_id`):
 
 ```js
 const prepared = await client.prepare({
@@ -74,6 +74,20 @@ npm run dc-api:demo
 # or: DC_API_DEMO_PORT=4173 node clients/dc-api/serve.js
 ```
 
+The issuer-side pre-flight page is available at `/issuance`. It prepares an
+OID4VCI offer and invokes `navigator.credentials.create()` with
+`openid4vci-v1` when the browser supports it. The page also shows the
+equivalent QR/deep-link fallback. Browser handoff does not prove that a wallet
+stored the credential; inspect the returned session status and normal issuer
+flow.
+
+When the page is served by the separate static demo server, point its Issuer
+URL field at the issuer and allow the demo origin on the issuer, for example:
+
+```bash
+DC_API_ISSUER_ORIGINS=https://demo.example node server.js
+```
+
 Then tunnel that port separately:
 
 ```bash
@@ -85,7 +99,7 @@ ngrok http 4173
    that verifier HTTPS origin and open `/payment` or `/demo` on it:
    ```bash
    DC_API_RP_ORIGINS=https://verifier-xxxx.ngrok-free.app \
-     DC_API_RP_PROFILES=pid-basic,ts12-dpc,ts12-dpc-pid npm run dev
+     DC_API_RP_PROFILES=pid-basic,qualified-signing,ts12-dpc,ts12-dpc-pid,ts12-iban,ts12-iban-pid,ts12-user,ts12-user-pid,ts12-payment npm run dev
    ```
    For a **separate** RP origin, serve `npm run dc-api:demo`, tunnel port 4173,
    and authorize *that* HTTPS origin instead.

@@ -1,0 +1,43 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CS-07 DC API issuance</title>
+<h1>Add a credential</h1>
+<p>This test page sends an OID4VCI offer through the browser Digital Credentials API.</p>
+<label>Scenario
+  <select id="scenario">
+    <option value="pid-pre-authorized">PID, pre-authorized</option>
+    <option value="pid-pre-authorized-tx-code">PID, pre-authorized with PIN</option>
+    <option value="pid-authorization-code">PID, authorization code</option>
+  </select>
+</label>
+<label>Issuer URL <input id="issuer" size="38"></label>
+<button id="prepare">Prepare offer</button>
+<button id="create" disabled>Add to wallet</button>
+<button id="cancel" disabled>Cancel</button>
+<pre id="status">Choose a scenario and prepare an offer.</pre>
+<p id="fallback" hidden>Fallback: <a id="deepLink"></a> <img id="qr" alt="Credential offer QR code" width="220"></p>
+<script type="module">
+  import { createDcApiIssuerClient } from "../issuer-client.js";
+  let client;
+  let descriptor; let controller;
+  const $ = id => document.getElementById(id);
+  const say = value => $("status").textContent = value;
+  $("prepare").onclick = async () => {
+    try {
+      client = createDcApiIssuerClient({ issuerBaseUrl: $("issuer").value || location.origin });
+      descriptor = await client.prepare({ scenario: $("scenario").value });
+      $("create").disabled = !client.isSupported(); $("cancel").disabled = false;
+      const link = descriptor.fallback?.deepLink; $("fallback").hidden = !link;
+      if (link) { $("deepLink").href = link; $("deepLink").textContent = "Open wallet link"; $("qr").src = descriptor.fallback.qr; }
+      say(client.isSupported() ? "Ready. Click Add to wallet." : "DC API unavailable; use the fallback link.");
+    } catch (error) { say(`${error.code || "error"}: ${error.message}`); }
+  };
+  $("create").onclick = async () => {
+    controller = new AbortController(); $("create").disabled = true;
+    try { await client.create(descriptor, { signal: controller.signal }); say("Browser handoff completed. Check issuer status and wallet for final issuance outcome."); }
+    catch (error) { say(`${error.code || "error"}: ${error.message}`); $("create").disabled = false; }
+  };
+  $("cancel").onclick = () => { controller?.abort(); say("Cancelled."); };
+  $("issuer").value = new URLSearchParams(location.search).get("issuer") || location.origin;
+</script>

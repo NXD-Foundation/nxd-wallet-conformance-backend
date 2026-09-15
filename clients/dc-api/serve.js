@@ -62,6 +62,7 @@ const server = http.createServer((req, res) => {
   let urlPath = new URL(req.url || "/", `http://${req.headers.host}`).pathname;
   if (urlPath === "/") urlPath = "/demo/index.html";
   if (urlPath === "/payment" || urlPath === "/payment/") urlPath = "/demo/payment.html";
+  if (urlPath === "/issuance" || urlPath === "/issuance/") urlPath = "/demo/issuance.html";
 
   const filePath = safeJoin(root, urlPath);
   if (!filePath) return send(res, 403, "Forbidden");
@@ -91,7 +92,7 @@ server.listen(port, host, () => {
   console.log("Phone / ngrok:");
   console.log(`  ngrok http ${port}`);
   console.log("Then authorize that HTTPS origin on the verifier, e.g.:");
-  console.log("  DC_API_RP_ORIGINS=https://abcd.ngrok-free.app DC_API_RP_PROFILES=pid-basic,ts12-dpc,ts12-dpc-pid npm run dev");
-  console.log("Optional: DC_API_RP_PROFILES defaults to default_profile (pid-basic).");
+  console.log("  DC_API_RP_ORIGINS=https://abcd.ngrok-free.app,https://rp2.example DC_API_RP_PROFILES=pid-basic,qualified-signing,ts12-dpc,ts12-dpc-pid,ts12-iban,ts12-iban-pid,ts12-user,ts12-user-pid,ts12-payment npm run dev");
+  console.log("Optional: DC_API_RP_PROFILES defaults to default_profile (pid-basic). Origins may also be a JSON array.");
   console.log("Paste the verifier ngrok URL into the demo page.");
 });

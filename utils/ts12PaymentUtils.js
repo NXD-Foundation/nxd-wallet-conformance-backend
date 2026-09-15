@@ -145,12 +145,12 @@ export function buildTs12DcqlQuery(attestationType = TS12_DEFAULT_ATTESTATION_TY
 export const TS12_PID_VCT = "urn:eu.europa.ec.eudi:pid:1";
 export const TS12_PID_CREDENTIAL_ID = "cmwallet";
 
-/** CS-12 payment DCQL for DPC plus the default PID (non-SCA combined presentation). */
-export function buildTs12DpcWithPidDcqlQuery() {
-  const dpc = buildTs12DcqlQuery("sca-card-dpc");
+/** CS-12 payment DCQL for one SCA attestation plus the default PID. */
+export function buildTs12ScaWithPidDcqlQuery(attestationType) {
+  const sca = buildTs12DcqlQuery(attestationType);
   return {
     credentials: [
-      ...dpc.credentials,
+      ...sca.credentials,
       {
         id: TS12_PID_CREDENTIAL_ID,
         format: "dc+sd-jwt",
@@ -159,6 +159,11 @@ export function buildTs12DpcWithPidDcqlQuery() {
       },
     ],
   };
+}
+
+/** CS-12 payment DCQL for DPC plus the default PID (non-SCA combined presentation). */
+export function buildTs12DpcWithPidDcqlQuery() {
+  return buildTs12ScaWithPidDcqlQuery("sca-card-dpc");
 }
 
 export const TS12_DCQL_QUERY = buildTs12DcqlQuery(TS12_DEFAULT_ATTESTATION_TYPE);

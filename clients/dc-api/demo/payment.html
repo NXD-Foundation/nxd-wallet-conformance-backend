@@ -186,6 +186,10 @@
     <select id="profile">
       <option value="ts12-dpc" selected>Payment authorization (DPC)</option>
       <option value="ts12-dpc-pid">Payment authorization (DPC + PID)</option>
+      <option value="ts12-iban">Payment authorization (IBAN)</option>
+      <option value="ts12-iban-pid">Payment authorization (IBAN + PID)</option>
+      <option value="ts12-user">Payment authorization (User)</option>
+      <option value="ts12-user-pid">Payment authorization (User + PID)</option>
     </select>
 
     <div class="row">
@@ -202,10 +206,9 @@
 
     <p class="hint">
       Serve with <code>npm run dc-api:demo</code>, open <code>/payment</code>,
-      and authorize this origin for <code>ts12-dpc</code> and
-      <code>ts12-dpc-pid</code>:
-      <code>DC_API_RP_PROFILES=pid-basic,ts12-dpc,ts12-dpc-pid</code>.
-      Query params: <code>?verifier=…&amp;amount=…&amp;currency=…&amp;profile=ts12-dpc-pid</code>.
+      and authorize this origin for the payment profiles:
+      <code>DC_API_RP_PROFILES=pid-basic,qualified-signing,ts12-dpc,ts12-dpc-pid,ts12-iban,ts12-iban-pid,ts12-user,ts12-user-pid,ts12-payment</code>.
+      Query params: <code>?verifier=…&amp;amount=…&amp;currency=…&amp;profile=ts12-iban</code>.
       PID demo: <a href="/demo">/demo</a>
     </p>
   </main>
@@ -240,8 +243,18 @@
     }
     if (params.get("payee_id")) payeeIdInput.value = params.get("payee_id");
     if (params.get("transaction_id")) transactionIdInput.value = params.get("transaction_id");
-    if (params.get("profile") === "ts12-dpc-pid" || params.get("profile") === "ts12-dpc") {
-      profileInput.value = params.get("profile");
+    const paymentProfiles = new Set([
+      "ts12-dpc",
+      "ts12-dpc-pid",
+      "ts12-iban",
+      "ts12-iban-pid",
+      "ts12-user",
+      "ts12-user-pid",
+      "ts12-payment",
+    ]);
+    const requestedProfile = params.get("profile");
+    if (paymentProfiles.has(requestedProfile)) {
+      profileInput.value = requestedProfile === "ts12-payment" ? "ts12-dpc" : requestedProfile;
     }
 
     let client = null;

@@ -1,10 +1,11 @@
 # WE BUILD - Pre-flight Conformance Specification: SCA Attestations for Payment Transactions (TS12 Profile)
 
-Version 0.8 (Draft)
-Date: 31 August 2026
+Version 1.0
+Date: 10 September 2026
 
 **Revision history**
 
+* Version 0.9 (10 September 2026): Returned encrypted request delivery outside the Digital Credentials API to the RECOMMENDED level of TS12 section 3.5 for RPs, keeping WU support mandatory and fixing the negotiation through `request_uri_method` `post`; stated that the response mode is inherited from CS-02; changed the payment schema reference in the VC Type Metadata example from `schema` to `schema_uri` per TS12 section 4.1.
 * Version 0.8 (31 August 2026): Made the document an explicit profile of CS-01 and CS-02, aligned the signed-request rule with CS-02, made encrypted request delivery mandatory outside the Digital Credentials API, corrected TS12 and CS-02 section references and the `sca-user` VCT, labelled the requirement sections by lifecycle phase (issuance vs presentation), verified and expanded the examples against TS12, and applied editorial cleanup.
 * Version 0.7 (31 August 2026): Initial draft, profiling TS12 [1] for use within WE BUILD.
 
@@ -15,6 +16,7 @@ Date: 31 August 2026
 * Filip Hladky, BankID, Czech Republic
 * Lal Chandran, iGrant.io, Sweden
 * George J Padayatti, iGrant.io, Sweden
+* Michele Massetti, Lissi, Germany
 
 Table of Contents
 
@@ -50,11 +52,13 @@ TS12 [1] is itself a profile of SD-JWT-VC [9] and OpenID4VP [10], consistent wit
 3. **Single-attestation presentation**: only one SCA Attestation is presented to the RP per Authorization Request. Combined presentations across the three in-scope types are not used in WE BUILD.
 4. **Embedded Disclosure Policy**: WE BUILD does **not** use the Embedded Disclosure Policy feature of TS12 [1] section 3.1.
 5. **Signed requests**: TS12 [1] section 3.1 recommends signed Authorization Requests and permits unsigned requests after a Holder warning. CS-02 [6] requires all Authorization Requests to be signed and requires WUs to reject unsigned requests. This CS follows CS-02: the unsigned-request path of TS12 [1] is not available in WE BUILD (section 7.3, item 3 and section 7.4, item 1).
-6. **Encrypted requests**: TS12 [1] section 3.5 only recommends encrypted presentation requests. This CS requires them for every request delivered outside the Digital Credentials API: the RP delivers the Request Object by reference with the POST method, the WU provides its encryption keys in that POST exchange, and the RP sends the Request Object encrypted (section 7.3, item 9 and section 7.4, item 2).
-
 Separately, this CS relaxes one TS12 [1] requirement from a mandatory to an optional level:
 
 1. **Transaction Log Inclusion**: TS12 [1] section 5.3 requires Wallet Units to log defined transaction data for every SCA presentation. This CS treats it as an optional Wallet Unit capability (section 2 and section 7.3, item 11).
+
+This CS keeps one TS12 [1] level unchanged and only fixes how it is negotiated:
+
+1. **Encrypted requests**: TS12 [1] section 3.5 recommends encrypted presentation requests for RPs and requires WUs to support them. This CS keeps both levels. So that any RP and WU pair interoperates, an RP that encrypts delivers the Request Object by reference with `request_uri_method` `post`, the WU provides its encryption keys in the `wallet_metadata` of that POST exchange, and the RP sends the Request Object encrypted. A WU accepts signed Request Objects with or without encryption (section 7.3, item 9 and section 7.4, item 2).
 
 This document supports the Interoperability Test Bed (ITB). It does not define the SCA Attestation types, their claims, or their trust and revocation mechanisms. These are defined in the respective Rulebooks (`rb-sca-card-dpc`, `rb-sca-iban`, `rb-sca-user`) in the Rulebooks Catalog [2].
 
@@ -67,7 +71,7 @@ This CS defines conformance requirements for **Attestation Providers**, **Wallet
 * Detection and processing of SCA Attestations of the three named types, including their `extends` chain to the base SCA VCT.
 * Construction, transmission and validation of a `payment` (`urn:eudi:sca:payment:1`) transaction data object, including Dynamic Linking and consent-screen rendering.
 * Signed Request Verification (authenticity and integrity of the Authorization Request) for all in-scope SCA presentations. All requests are signed (section 1, item 5).
-* Encrypted delivery of the Authorization Request outside the Digital Credentials API, with POST delivery of the Request Object and WU-provided encryption keys (section 1, item 6).
+* Encrypted delivery of the Authorization Request outside the Digital Credentials API, at the RECOMMENDED level of TS12 [1] section 3.5, with POST delivery of the Request Object and WU-provided encryption keys where used (section 1).
 * The `aud` claim as the only attestation-level RP-permission control available. It applies solely to `sca-user` presentations in the Issuer-requested flow (section 6.1).
 * Key Binding JWT (KB-JWT) requirements (`jti`, `amr`, `response_mode`, `transaction_data_hashes`) for SCA presentations.
 
@@ -135,7 +139,7 @@ Applicable when the RP is the Attestation Provider itself (the Holder's own ASPS
 
 Applicable when the RP is not the Attestation Provider (for example a Merchant, or a TPP performing an embedded SCA flow), typically using `sca-card-dpc` or `sca-iban`.
 
-1. **Request creation**: The third-party RP creates a signed and encrypted Authorization Request for `urn:eudi:sca:payment:1` that targets an `sca-card-dpc` or `sca-iban` attestation (section 7.4, items 1 and 2).
+1. **Request creation**: The third-party RP creates a signed Authorization Request for `urn:eudi:sca:payment:1` that targets an `sca-card-dpc` or `sca-iban` attestation, encrypted where the RP supports encryption (section 7.4, items 1 and 2).
 2. **Invocation**: Same as section 6.1, step 2.
 3. **Request authenticity**: The WU performs Signed Request Verification (section 7.3, item 3) as the only check on the request (section 7.1, item 3). No Embedded Disclosure Policy applies to either attestation type (section 2). No `aud` claim is defined for `sca-card-dpc`. For `sca-iban`, an `aud` claim exists but is not evaluated for payment use, regardless of flow (section 6.1, step 3).
 4. **Validation, consent, generation, submission**: Same as section 6.1, steps 4 to 7.
@@ -171,7 +175,7 @@ All requirements in this section apply at issuance time. The Attestation Provide
   "category": "urn:eu:europa:ec:eudi:sua:sca",
   "transaction_data_types": {
     "urn:eudi:sca:payment:1": {
-      "schema": "urn:eudi:sca:payment:1",
+      "schema_uri": "urn:eudi:sca:payment:1",
       "claims": [
         {
           "path": ["payload", "amount"],
@@ -211,6 +215,8 @@ All requirements in this section apply at issuance time. The Attestation Provide
 
 In this profile, the key of each `transaction_data_types` entry is the transaction type itself (`urn:eudi:sca:payment:1`), so the value that the RP sends as `transaction_data.type` is also the key that the WU looks up (TS12 [1] section 3.2).
 
+The payment schema is referenced by its URN in `schema_uri`, which TS12 [1] section 4.1 defines for references, whereas `schema` is defined for an embedded JSON Schema. The WU recognises `urn:eudi:sca:payment:1` as the built-in payment schema of TS12 [1] section 4.3.1 and does not resolve it. The non-normative example in TS12 [1] section 2.3 uses `schema` for the same URN; this inconsistency is reported upstream in eudi-doc-standards-and-technical-specifications issue 651.
+
 ## 7.3 Wallet Unit Requirements (Presentation)
 
 All requirements in this section apply at presentation time. The WU obtains SCA Attestations under CS-01 [5] and presents them under CS-02 [6]. In addition, the WU:
@@ -227,7 +233,7 @@ All requirements in this section apply at presentation time. The WU obtains SCA 
    * a `response_mode` claim that echoes the request's `response_mode`;
    * an `amr` array with **at least two** entries from different categories (`knowledge`, `possession`, `inherence`), where each entry is an object that pairs the category with the specific method used, for example `{"knowledge": "pin_6_or_more_digits"}`;
    * `transaction_data_hashes`, calculated over the presented `transaction_data`, together with the `transaction_data_hashes_alg` that identifies the algorithm used.
-9. **SHALL** support processing of encrypted Authorization Requests per TS12 [1] section 3.5 and JAR [11]. For requests delivered outside the Digital Credentials API, the WU **SHALL** support POST delivery of the Request Object (`request_uri_method` `post`, OpenID4VP [10] section 5.10), **SHALL** provide its encryption keys to the RP in the `wallet_metadata` of that POST exchange, and **SHALL** reject unencrypted requests.
+9. **SHALL** support processing of encrypted Authorization Requests per TS12 [1] section 3.5 and JAR [11]. For requests delivered outside the Digital Credentials API, the WU **SHALL** support POST delivery of the Request Object (`request_uri_method` `post`, OpenID4VP [10] section 5.10), **SHALL** provide its encryption keys to the RP in the `wallet_metadata` of that POST exchange, and **SHALL** accept signed Request Objects delivered with or without encryption.
 10. **MAY** reject any request declaring a transaction type other than `urn:eudi:sca:payment:1` (section 7.1, item 1).
 11. **MAY**, for every SCA presentation (successful or not), log at least the `transaction_data.payload.transaction_id`, the `payee.name` and, where available, the `pisp.legal_name`, consistent with the Transaction Log Inclusion requirement of TS12 [1] section 5.3. WE BUILD relaxes this from a mandatory to an optional requirement: Wallet Providers are not required to implement this logging capability to conform to this CS.
 
@@ -236,7 +242,7 @@ All requirements in this section apply at presentation time. The WU obtains SCA 
 All requirements in this section apply at presentation time. The RP acts as a Verifier under CS-02 [6]. In addition, the RP:
 
 1. **SHALL** send signed Authorization Requests (JAR [11], OpenID4VP [10] section 5) for SCA presentations, as required by CS-02 [6] sections 5 and 7.2. This CS tightens TS12 [1] section 3.1, which recommends signing (section 1, item 5).
-2. **SHALL**, for requests delivered outside the Digital Credentials API (the `openid4vp://` flows of CS-02 [6] section 6), deliver the Authorization Request by reference with `request_uri_method` `post` (OpenID4VP [10] section 5.10), obtain the WU's encryption keys from the `wallet_metadata` that the WU sends in that POST exchange, and send the Request Object encrypted (JAR [11]). This CS tightens TS12 [1] section 3.5, which recommends encryption (section 1, item 6).
+2. **SHOULD**, for requests delivered outside the Digital Credentials API (the `openid4vp://` flows of CS-02 [6] section 6), deliver the Authorization Request encrypted, as recommended by TS12 [1] section 3.5. An RP that encrypts **SHALL** deliver the Request Object by reference with `request_uri_method` `post` (OpenID4VP [10] section 5.10), **SHALL** obtain the WU's encryption keys from the `wallet_metadata` that the WU sends in that POST exchange, and **SHALL** send the Request Object encrypted (JAR [11]). An RP that does not encrypt delivers the signed Request Object per CS-02 [6] section 8. This CS keeps the RECOMMENDED level of TS12 [1] section 3.5 (section 1).
 3. **SHALL**, where the RP is the Attestation Provider (Issuer-requested flow, section 6.1) and requests an `sca-user` attestation, ensure that its identifier is present in the attestation's `aud` claim, per the `rb-sca-user` Rulebook.
 4. **SHALL** treat the `jti` of a validated KB-JWT as the PSD2 Authentication Code for the corresponding transaction.
 5. **SHALL** verify that the `amr` array of each validated KB-JWT contains at least two entries from different categories before treating SCA as satisfied.
@@ -250,7 +256,8 @@ All requirements in this section apply at presentation time. The RP acts as a Ve
 **Direction**: RP (Verifier) to WU (Wallet)
 **Method**: OpenID4VP [10] Authorization Request, delivered per CS-02 [6] sections 8.1 (Wallet invocation) and 8.2 (Presentation Request Object), in the same-device or cross-device flow of CS-02 [6] section 6, **profiled as follows**:
 
-* **Transport**: a signed Request Object (JAR [11]) is REQUIRED (section 7.4, item 1). Outside the Digital Credentials API, the Request Object is delivered by reference with `request_uri_method` `post` and is encrypted with the keys that the WU provides in the `wallet_metadata` of the POST exchange (section 7.4, item 2). This tightens TS12 [1] section 3.5, which recommends encryption.
+* **Transport**: a signed Request Object (JAR [11]) is REQUIRED (section 7.4, item 1). Outside the Digital Credentials API, encryption of the Request Object is RECOMMENDED (section 7.4, item 2); where used, the Request Object is delivered by reference with `request_uri_method` `post` and is encrypted with a key that the WU provides in the `wallet_metadata` of the POST exchange. This keeps the level of TS12 [1] section 3.5.
+* **`response_mode`** and **`response_uri`**: per CS-02 [6]. This CS defines no response mode of its own; the value the RP uses is echoed in the KB-JWT (section 8.2).
 * **DCQL query**: matches exactly one of the following `vct` values (or its issuer-specific `extends` chain) per Authorization Request, consistent with the single-attestation constraint (section 2 and section 7.4, item 7):
   - `https://webuildconsortium.eu/sca/sca-card-dpc/1.0`
   - `https://webuildconsortium.eu/sca/sca-iban/1.0`
@@ -333,7 +340,7 @@ All requirements in this section apply at presentation time. The RP acts as a Ve
 }
 ```
 
-> **Note**: TS12 [1] section 3.6 defines `response_mode` as REQUIRED in the KB-JWT; the non-normative example in TS12 [1] omits it. This CS follows the normative text and includes it.
+> **Note**: TS12 [1] section 3.6 defines `response_mode` as REQUIRED in the KB-JWT; the non-normative example in TS12 [1] omits it. This CS follows the normative text and includes it. The value `direct_post.jwt` shown above is illustrative; the response mode used in WE BUILD is defined by CS-02 [6], not by this CS.
 
 **Error handling**: RPs reject responses where the `amr` array fails the check in section 7.4, item 5, where `transaction_data_hashes` does not match the originally sent payload, or where attestation or status-list validation (section 7.4, item 6) fails.
 
@@ -352,7 +359,7 @@ An implementation **conforms to this specification as a Wallet Unit** if it:
 
 1. Conforms to CS-01 [5] and CS-02 [6] as a Wallet Provider.
 2. Restricts SCA processing to the `sca-card-dpc`, `sca-iban` and `sca-user` attestation types and the `urn:eudi:sca:payment:1` transaction type (sections 2 and 7.1).
-3. Implements Signed Request Verification for all in-scope SCA presentations, rejects unsigned requests and, outside the Digital Credentials API, unencrypted requests, and does not implement or require Disclosure Policy Verification for these attestation types (section 7.3).
+3. Implements Signed Request Verification for all in-scope SCA presentations, rejects unsigned requests, supports encrypted requests with POST delivery of the Request Object outside the Digital Credentials API, and does not implement or require Disclosure Policy Verification for these attestation types (section 7.3).
 4. Implements transaction data discovery, validation and rendering per sections 5, 6 and 7.3.
 5. Generates Key Binding JWTs meeting the `jti`, `amr`, `response_mode` and `transaction_data_hashes` requirements of section 7.3.
 6. Never presents more than one SCA Attestation, across `sca-card-dpc`, `sca-iban` and `sca-user`, in response to a single Authorization Request (section 7.3, item 7).
@@ -361,7 +368,7 @@ An implementation **conforms to this specification as a Relying Party** if it:
 
 1. Conforms to CS-02 [6] as a Verifier.
 2. Issues only `urn:eudi:sca:payment:1` transaction data requests for SCA presentations (section 7.1).
-3. Sends signed Authorization Requests for all SCA presentations and, outside the Digital Credentials API, delivers them encrypted with POST delivery of the Request Object (section 7.4).
+3. Sends signed Authorization Requests for all SCA presentations and, where it encrypts them outside the Digital Credentials API, does so with POST delivery of the Request Object and the WU-provided keys (section 7.4).
 4. Treats the KB-JWT `jti` per the requirements of section 7.4.
 5. Constructs Authorization Requests querying for at most one of `sca-card-dpc`, `sca-iban` or `sca-user` per request (section 7.4).
 

@@ -13,9 +13,28 @@ verifier startup:
 
 ```bash
 DC_API_RP_ORIGINS=https://rp.example,https://rp2.example npm run dev
-# optional; defaults to default_profile
-DC_API_RP_PROFILES=pid-basic
+# optional; defaults to default_profile (pid-basic)
+DC_API_RP_PROFILES=pid-basic,qualified-signing,ts12-dpc,ts12-dpc-pid,ts12-iban,ts12-iban-pid,ts12-user,ts12-user-pid,ts12-payment
 ```
+
+`DC_API_RP_ORIGINS` and `DC_API_RP_PROFILES` both accept multiple values as
+comma-separated strings or as a JSON array of strings (quote the JSON in the
+shell). Every listed origin is authorized for the same profile list. A JSON
+`relying_parties` map can give different origins different profiles.
+
+Checked-in CS-07 profile identifiers:
+
+| Profile | Workflow | Requested credentials |
+| --- | --- | --- |
+| `pid-basic` | presentation | PID `urn:eu.europa.ec.eudi:pid:1` |
+| `qualified-signing` | cs03-inline-signing | CSC X.509 signing certificate |
+| `ts12-dpc` | ts12-payment | DPC `https://webuildconsortium.eu/sca/sca-card-dpc/1.0` |
+| `ts12-dpc-pid` | ts12-payment | DPC plus PID |
+| `ts12-iban` | ts12-payment | IBAN `https://webuildconsortium.eu/sca/sca-iban/1.0` |
+| `ts12-iban-pid` | ts12-payment | IBAN plus PID |
+| `ts12-user` | ts12-payment | User `https://webuildconsortium.eu/sca/sca-user/1.0` |
+| `ts12-user-pid` | ts12-payment | User plus PID |
+| `ts12-payment` | ts12-payment | Alias of `ts12-dpc` |
 
 JSON example:
 

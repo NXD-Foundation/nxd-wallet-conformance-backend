@@ -66,6 +66,80 @@
         ]
       }
     },
+    "ts12-iban": {
+      "workflow": "ts12-payment",
+      "dcql_query": {
+        "credentials": [
+          {
+            "id": "sca_iban",
+            "format": "dc+sd-jwt",
+            "meta": { "vct_values": ["https://webuildconsortium.eu/sca/sca-iban/1.0"] },
+            "claims": [
+              { "path": ["masked_iban"] },
+              { "path": ["iban"] },
+              { "path": ["bic"] },
+              { "path": ["currency"] }
+            ]
+          }
+        ]
+      }
+    },
+    "ts12-iban-pid": {
+      "workflow": "ts12-payment",
+      "dcql_query": {
+        "credentials": [
+          {
+            "id": "sca_iban",
+            "format": "dc+sd-jwt",
+            "meta": { "vct_values": ["https://webuildconsortium.eu/sca/sca-iban/1.0"] },
+            "claims": [
+              { "path": ["masked_iban"] },
+              { "path": ["iban"] },
+              { "path": ["bic"] },
+              { "path": ["currency"] }
+            ]
+          },
+          {
+            "id": "cmwallet",
+            "format": "dc+sd-jwt",
+            "meta": { "vct_values": ["urn:eu.europa.ec.eudi:pid:1"] },
+            "claims": [{ "path": ["family_name"] }]
+          }
+        ]
+      }
+    },
+    "ts12-user": {
+      "workflow": "ts12-payment",
+      "dcql_query": {
+        "credentials": [
+          {
+            "id": "sca_user",
+            "format": "dc+sd-jwt",
+            "meta": { "vct_values": ["https://webuildconsortium.eu/sca/sca-user/1.0"] },
+            "claims": [{ "path": ["masked_psu_id"] }]
+          }
+        ]
+      }
+    },
+    "ts12-user-pid": {
+      "workflow": "ts12-payment",
+      "dcql_query": {
+        "credentials": [
+          {
+            "id": "sca_user",
+            "format": "dc+sd-jwt",
+            "meta": { "vct_values": ["https://webuildconsortium.eu/sca/sca-user/1.0"] },
+            "claims": [{ "path": ["masked_psu_id"] }]
+          },
+          {
+            "id": "cmwallet",
+            "format": "dc+sd-jwt",
+            "meta": { "vct_values": ["urn:eu.europa.ec.eudi:pid:1"] },
+            "claims": [{ "path": ["family_name"] }]
+          }
+        ]
+      }
+    },
     "ts12-payment": {
       "workflow": "ts12-payment",
       "dcql_query": {
