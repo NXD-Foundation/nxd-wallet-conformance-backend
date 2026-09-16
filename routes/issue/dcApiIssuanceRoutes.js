@@ -113,7 +113,7 @@ export async function sessionHandler(req, res) {
 }
 
 const allowedOrigins = new Set((process.env.DC_API_ISSUER_ORIGINS || process.env.DC_API_DEMO_ORIGINS || "http://localhost:4173").split(",").map((origin) => origin.trim()).filter(Boolean));
-router.use((req, res, next) => {
+router.use("/vci/dc-api", (req, res, next) => {
   const origin = req.get("Origin");
   if (origin && allowedOrigins.has(origin)) {
     res.set({ "Access-Control-Allow-Origin": origin, "Access-Control-Allow-Methods": "POST, GET, OPTIONS", "Access-Control-Allow-Headers": "Content-Type", Vary: "Origin" });

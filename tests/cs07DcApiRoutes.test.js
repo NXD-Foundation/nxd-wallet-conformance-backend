@@ -1,12 +1,17 @@
 import express from "express";
 import request from "supertest";
 import { expect } from "chai";
+import dcApiIssuanceRouter from "../routes/issue/dcApiIssuanceRoutes.js";
 import dcApiRouter from "../routes/verify/dcApiRoutes.js";
 import dcApiDemoRouter from "../routes/verify/dcApiDemoRoutes.js";
 
 const app = express();
 app.use(express.json({ limit: "10mb" }));
 app.use(dcApiRouter);
+
+const issuanceApp = express();
+issuanceApp.use(express.json({ limit: "10mb" }));
+issuanceApp.use(dcApiIssuanceRouter);
 
 const demoApp = express();
 demoApp.use(dcApiDemoRouter);
@@ -40,6 +45,14 @@ describe("CS-07 verifier API route boundary", () => {
   it("does not expose a CS-07 API-hosted RP page or browser script", async () => {
     expect((await request(app).get("/vp/dc-api")).status).to.equal(404);
     expect((await request(app).get("/vp/dc-api/browser.js")).status).to.equal(404);
+  });
+
+  it("does not block VP preflight in the issuance CORS middleware", async () => {
+    const response = await request(issuanceApp)
+      .options("/vp/dc-api/request")
+      .set("Origin", "https://rp.example")
+      .set("Access-Control-Request-Method", "POST");
+    expect(response.status).to.equal(404);
   });
 });
 
