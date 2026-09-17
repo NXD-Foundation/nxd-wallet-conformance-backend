@@ -386,7 +386,7 @@ Section 3.6 and Section 4.2.
   present; CS-04 still requires WIA `client_status.exp` / KA `key_storage_status.exp`.
   Revoked, unavailable, or unverifiable lists fail PAR/token as
   `invalid_client` and the Credential endpoint as `invalid_proof`.
-  Compatibility-mode optional attestations remain warning-only. Empty
+  Compatibility-mode optional attestations remain warning-only.   Empty
   `key_attestations_required` objects do not trigger WUA status-list
   enforcement; `/credential` uses the same credential-ID allowlist as PAR/token.
   A DPoP `jkt` that does not match the WIA `cnf` thumbprint is logged as a
@@ -394,6 +394,13 @@ Section 3.6 and Section 4.2.
   binding; CS-04 §7.3 / CS-01 §7.4 still describe it. The issuer continues to
   require Client Attestation PoP under WIA `cnf`.
   The post-issuance 24-hour re-check cadence from CS-04 §7.2 is not implemented.
+- For CS-12 SCA payment credentials (`sca-iban`, `sca-user`, `sca-card-dpc`),
+  set `DISABLE_SCA_WIA_KA_CHECKS=true` (default when unset) to skip WIA client
+  attestation, required KA on credential proofs, and WIA/KA Token Status List
+  fail-closed checks for SCA-only issuance. Set
+  `DISABLE_SCA_WIA_KA_CHECKS=false` to restore CS-04 enforcement for those
+  credentials. Mixed issuance that also requests `VerifiablePIDSDJWTWUA` still
+  enforces WIA/KA. `trustFramework=true` sessions still require WIA.
 - WUA/key-attestation signature validation is shared by `proofs.jwt` protected
   header `key_attestation` and `proofs.attestation`. In compatibility mode,
   configured Wallet Provider keys are preferred, then a protected-header `jwk`

@@ -6,5 +6,7 @@ services:
     build: .
     environment:
       SERVER_URL: https://dss.aegean.gr/rfc-issuer
+      # DISABLE_SCA_WIA_KA_CHECKS: "true"   # default when unset — skip WIA/KA for SCA payment credentials
+      # DISABLE_SCA_WIA_KA_CHECKS: "false"  # restore CS-04 WIA/KA enforcement for sca-iban/user/card-dpc
     ports:
       - "3000:3000"

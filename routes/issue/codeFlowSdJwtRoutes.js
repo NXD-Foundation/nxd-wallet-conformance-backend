@@ -83,6 +83,8 @@ import {
   issuanceRequestRequiresWua,
   extractRequestedCredentialConfigurationIds,
   shouldEnforceWuaStatusLists,
+  shouldRequireWiaClientAttestation,
+  isScaOnlyWuaIssuance,
 } from "../../utils/wuaEnforcementPolicy.js";
 import { trustFrameworkSessionProps } from "../../utils/trustFrameworkPolicy.js";
 
@@ -154,6 +156,18 @@ function parseAuthorizationDetails(authorizationDetails) {
   }
 }
 
+function isPidCredentialId(cred) {
+  if (!cred || typeof cred !== "string") return false;
+  return (
+    cred.includes("urn:eu.europa.ec.eudi:pid:1") ||
+    cred.includes("urn:eudi:pid:1") ||
+    cred.includes("urn:eudi:pid:lsp:1") ||
+    cred === "VerifiablePIDSDJWT" ||
+    cred === "VerifiablePIDSDJWTWUA" ||
+    cred === "VerifiablePIDSDJWTAttestation"
+  );
+}
+
 function extractCredentialsFromAuthorizationDetails(authorizationDetails) {
   const credentials = [];
   let isPIDIssuanceFlow = false;
@@ -162,11 +176,11 @@ function extractCredentialsFromAuthorizationDetails(authorizationDetails) {
     authorizationDetails.forEach((item) => {
       const cred = fetchVCTorCredentialConfigId(item);
       credentials.push(cred);
-      
-      if (cred === "urn:eu.europa.ec.eudi:pid:1" || cred.indexOf("urn:eu.europa.ec.eudi:pid:1") >= 0) {
+
+      if (isPidCredentialId(cred)) {
         isPIDIssuanceFlow = true;
       }
-      
+
       console.log("requested credentials: " + cred);
     });
   }
@@ -181,7 +195,7 @@ function extractCredentialsFromScope(scope) {
   if (scope) {
     console.log("requested credentials: " + scope);
     credentials.push(scope);
-    if (scope.indexOf("urn:eu.europa.ec.eudi:pid:1") >= 0) {
+    if (isPidCredentialId(scope)) {
       isPIDIssuanceFlow = true;
     }
   }
@@ -292,7 +306,7 @@ function handleRedirectUriScheme(existingCodeSession, requestData) {
     nonce
   );
 
-  if (credentialsRequested.indexOf("urn:eu.europa.ec.eudi:pid:1") >= 0) {
+  if (credentialsRequested.some(isPidCredentialId)) {
     console.log("passing id_token!!");
     redirectUrl = buildVPbyValue(
       response_uri,
@@ -314,7 +328,7 @@ function handleX509Scheme(existingCodeSession, requestData) {
   
   console.log("client_id_scheme x509_san_dns");
   
-  if (credentialsRequested.indexOf("urn:eu.europa.ec.eudi:pid:1") >= 0) {
+  if (credentialsRequested.some(isPidCredentialId)) {
     return handleX509PIDFlow(existingCodeSession, requestData);
   }
 
@@ -345,7 +359,7 @@ function handleDidScheme(existingCodeSession, requestData) {
   console.log("client_id_scheme did");
   
   let request_uri = `${SERVER_URL}/didJwksVPrequest_dynamic/${issuerState}`;
-  if (credentialsRequested.indexOf("urn:eu.europa.ec.eudi:pid:1") >= 0) {
+  if (credentialsRequested.some(isPidCredentialId)) {
     request_uri = `${SERVER_URL}/id_token_did_request_dynamic/${issuerState}`;
   }
 
@@ -623,17 +637,29 @@ codeFlowRouterSDJWT.post(["/par", "/authorize/par"], async (req, res) => {
       try { slog("[ISSUER] [PAR] [START] Processing PAR request", { hasIssuerState: !!issuerState, hasState: !!requestData.state }); } catch {}
     }
 
-    const requiresWua = issuanceRequestRequiresWua({
-      scope: req.body.scope,
-      authorization_details: req.body.authorization_details,
-    });
     const requestedCredentialConfigurationIds = extractRequestedCredentialConfigurationIds({
       scope: req.body.scope,
       authorization_details: req.body.authorization_details,
     });
-    const enforceStatusLists = shouldEnforceWuaStatusLists({
-      requestedCredentialConfigurationIds,
+    const scaPolicyParams = { requestedCredentialConfigurationIds };
+    const wuaCredentialRequested = issuanceRequestRequiresWua({
+      scope: req.body.scope,
+      authorization_details: req.body.authorization_details,
     });
+    const requiresWua = shouldRequireWiaClientAttestation({
+      ...scaPolicyParams,
+      scope: req.body.scope,
+      authorization_details: req.body.authorization_details,
+    });
+    const enforceStatusLists = shouldEnforceWuaStatusLists(scaPolicyParams);
+
+    if (wuaCredentialRequested && !requiresWua && isScaOnlyWuaIssuance(scaPolicyParams) && slog) {
+      try {
+        slog("[ISSUER] [PAR] Skipping WIA requirement for SCA issuance (DISABLE_SCA_WIA_KA_CHECKS)", {
+          requestedCredentialConfigurationIds,
+        });
+      } catch {}
+    }
 
     const attestationResult = await validateOAuthClientAttestationFromRequest({
       headers: req.headers,

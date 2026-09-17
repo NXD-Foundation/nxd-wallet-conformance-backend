@@ -25,13 +25,45 @@ export const SCA_WUA_CREDENTIAL_IDS = new Set([
   TS12_SCA_CARD_DPC_VCT,
 ]);
 
+/** Env var that disables WIA + KA fail-closed checks for SCA-only issuance. */
+export const DISABLE_SCA_WIA_KA_CHECKS_ENV = "DISABLE_SCA_WIA_KA_CHECKS";
+
 /**
- * TEMP: skip WIA/KA fail-closed checks for SCA-only issuance
- * (SCA-DPC / SCA-IBAN / SCA-User): Token Status Lists, required KA header,
- * and proof↔attested_keys binding. Flip to false to restore CS-04 enforcement.
+ * @param {string|undefined|null} raw
+ * @param {boolean} defaultValue
+ * @returns {boolean}
  */
-export const SKIP_SCA_WUA_STATUS_LIST_CHECKS = true;
-/** @deprecated Use SKIP_SCA_WUA_STATUS_LIST_CHECKS (same flag; covers KA as well). */
+function envFlagEnabled(raw, defaultValue) {
+  if (raw === undefined || raw === null || String(raw).trim() === "") {
+    return defaultValue;
+  }
+  return ["1", "true", "yes", "on"].includes(String(raw).trim().toLowerCase());
+}
+
+/**
+ * When true, SCA-only issuance skips WIA client attestation, required KA on
+ * credential proofs, and WIA/KA Token Status List fail-closed checks.
+ * Controlled by `DISABLE_SCA_WIA_KA_CHECKS` (default true for ITB payment demos).
+ * Set `DISABLE_SCA_WIA_KA_CHECKS=false` to restore CS-04 enforcement for SCA.
+ *
+ * @param {NodeJS.ProcessEnv} [env=process.env]
+ * @returns {boolean}
+ */
+export function isScaWiaKaChecksDisabled(env = process.env) {
+  return envFlagEnabled(env?.[DISABLE_SCA_WIA_KA_CHECKS_ENV], true);
+}
+
+/** @deprecated Prefer isScaWiaKaChecksDisabled(); kept for call-site compatibility. */
+export function getSkipScaWuaChecks(env = process.env) {
+  return isScaWiaKaChecksDisabled(env);
+}
+
+/**
+ * @deprecated Snapshot at module load — prefer isScaWiaKaChecksDisabled().
+ * Same meaning as DISABLE_SCA_WIA_KA_CHECKS (covers WIA, KA, and status lists).
+ */
+export const SKIP_SCA_WUA_STATUS_LIST_CHECKS = isScaWiaKaChecksDisabled();
+/** @deprecated Use isScaWiaKaChecksDisabled() / SKIP_SCA_WUA_STATUS_LIST_CHECKS. */
 export const SKIP_SCA_WUA_CHECKS = SKIP_SCA_WUA_STATUS_LIST_CHECKS;
 
 /** ISO 18045 AVA_VAN levels advertised for the WUA-required PID credential. */
@@ -82,11 +114,11 @@ function collectIssuanceCredentialIds({
 }
 
 /**
- * TEMP: true when every WUA-required credential in scope is an SCA attestation
- * and SCA WUA checks are skipped.
+ * True when every WUA-required credential in scope is an SCA attestation
+ * and DISABLE_SCA_WIA_KA_CHECKS is enabled.
  */
 export function isScaOnlyWuaIssuance(params = {}) {
-  if (!SKIP_SCA_WUA_CHECKS) return false;
+  if (!isScaWiaKaChecksDisabled(params.env)) return false;
   const wuaRequiredIds = collectIssuanceCredentialIds(params).filter((id) =>
     isWuaRequiredCredentialId(id)
   );
@@ -95,13 +127,40 @@ export function isScaOnlyWuaIssuance(params = {}) {
 }
 
 /**
- * Whether WIA/KA Token Status List evaluation must fail closed for this issuance.
- * TEMP: returns false when the WUA-required credentials in scope are SCA-only.
+ * Whether OAuth Client Attestation (WIA + PoP) must be presented for this issuance.
+ * Returns false for SCA-only issuance when DISABLE_SCA_WIA_KA_CHECKS is enabled.
  *
  * @param {{
  *   credentialConfigurationId?: string|null,
  *   requestedCredentialConfigurationIds?: string[]|null,
  *   session?: object|null,
+ *   scope?: string,
+ *   authorization_details?: unknown,
+ *   env?: NodeJS.ProcessEnv,
+ * }} [params]
+ * @returns {boolean}
+ */
+export function shouldRequireWiaClientAttestation(params = {}) {
+  if (isScaOnlyWuaIssuance(params)) return false;
+  if (isWuaRequiredCredentialId(params.credentialConfigurationId)) return true;
+  if (params.session && sessionRequiresWua(params.session)) return true;
+  return issuanceRequestRequiresWua({
+    credential_configuration_id: params.credentialConfigurationId,
+    scope: params.scope,
+    authorization_details: params.authorization_details,
+  });
+}
+
+/**
+ * Whether WIA/KA Token Status List evaluation must fail closed for this issuance.
+ * Returns false when the WUA-required credentials in scope are SCA-only and
+ * DISABLE_SCA_WIA_KA_CHECKS is enabled.
+ *
+ * @param {{
+ *   credentialConfigurationId?: string|null,
+ *   requestedCredentialConfigurationIds?: string[]|null,
+ *   session?: object|null,
+ *   env?: NodeJS.ProcessEnv,
  * }} [params]
  * @returns {boolean}
  */
@@ -111,7 +170,7 @@ export function shouldEnforceWuaStatusLists(params = {}) {
 
 /**
  * Whether Key Attestation must be present and valid on the credential request.
- * TEMP: returns false for SCA-only issuance (same bypass as status lists).
+ * Returns false for SCA-only issuance when DISABLE_SCA_WIA_KA_CHECKS is enabled.
  */
 export function shouldEnforceCredentialKeyAttestation(params = {}) {
   return !isScaOnlyWuaIssuance(params);

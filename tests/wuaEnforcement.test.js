@@ -17,6 +17,9 @@ import {
   sessionRequiresWua,
   shouldEnforceWuaStatusLists,
   shouldEnforceCredentialKeyAttestation,
+  shouldRequireWiaClientAttestation,
+  isScaWiaKaChecksDisabled,
+  DISABLE_SCA_WIA_KA_CHECKS_ENV,
 } from "../utils/wuaEnforcementPolicy.js";
 import {
   CLIENT_ATTESTATION_JWT_TYP,
@@ -178,49 +181,103 @@ describe("WUA enforcement policy", () => {
   });
 
   it("marks pre-auth sessions for all three CS-12 SCA credential types", () => {
-    for (const credentialType of [
-      TS12_SCA_IBAN_VCT,
-      TS12_SCA_USER_VCT,
-      TS12_SCA_CARD_DPC_VCT,
-    ]) {
-      const session = createPreAuthSessionData({ credentialType });
-      expect(session.requiresWua, credentialType).to.equal(true);
-      expect(session.credentialConfigurationId).to.equal(credentialType);
-      expect(session.requestedCredentialConfigurationIds).to.include(credentialType);
+    const previous = process.env[DISABLE_SCA_WIA_KA_CHECKS_ENV];
+    try {
+      process.env[DISABLE_SCA_WIA_KA_CHECKS_ENV] = "false";
+      for (const credentialType of [
+        TS12_SCA_IBAN_VCT,
+        TS12_SCA_USER_VCT,
+        TS12_SCA_CARD_DPC_VCT,
+      ]) {
+        const session = createPreAuthSessionData({ credentialType });
+        expect(session.requiresWua, credentialType).to.equal(true);
+        expect(session.credentialConfigurationId).to.equal(credentialType);
+        expect(session.requestedCredentialConfigurationIds).to.include(credentialType);
+      }
+    } finally {
+      if (previous === undefined) delete process.env[DISABLE_SCA_WIA_KA_CHECKS_ENV];
+      else process.env[DISABLE_SCA_WIA_KA_CHECKS_ENV] = previous;
     }
   });
 
-  it("temporarily skips status-list enforcement for SCA-only issuance", () => {
-    expect(
-      shouldEnforceWuaStatusLists({
-        credentialConfigurationId: TS12_SCA_CARD_DPC_VCT,
-      })
-    ).to.equal(false);
-    expect(
-      shouldEnforceCredentialKeyAttestation({
-        credentialConfigurationId: TS12_SCA_CARD_DPC_VCT,
-      })
-    ).to.equal(false);
-    expect(
-      shouldEnforceWuaStatusLists({
-        requestedCredentialConfigurationIds: [TS12_SCA_IBAN_VCT, TS12_SCA_USER_VCT],
-      })
-    ).to.equal(false);
-    expect(
-      shouldEnforceWuaStatusLists({
-        credentialConfigurationId: WUA_REQUIRED_CREDENTIAL_ID,
-      })
-    ).to.equal(true);
-    expect(
-      shouldEnforceCredentialKeyAttestation({
-        credentialConfigurationId: WUA_REQUIRED_CREDENTIAL_ID,
-      })
-    ).to.equal(true);
-    expect(
-      shouldEnforceWuaStatusLists({
-        requestedCredentialConfigurationIds: [TS12_SCA_CARD_DPC_VCT, WUA_REQUIRED_CREDENTIAL_ID],
-      })
-    ).to.equal(true);
+  it("skips WIA/KA enforcement for SCA-only issuance when DISABLE_SCA_WIA_KA_CHECKS is enabled", () => {
+    const previous = process.env[DISABLE_SCA_WIA_KA_CHECKS_ENV];
+    try {
+      process.env[DISABLE_SCA_WIA_KA_CHECKS_ENV] = "true";
+      expect(isScaWiaKaChecksDisabled()).to.equal(true);
+      expect(
+        shouldRequireWiaClientAttestation({
+          credentialConfigurationId: TS12_SCA_CARD_DPC_VCT,
+        })
+      ).to.equal(false);
+      expect(
+        shouldEnforceWuaStatusLists({
+          credentialConfigurationId: TS12_SCA_CARD_DPC_VCT,
+        })
+      ).to.equal(false);
+      expect(
+        shouldEnforceCredentialKeyAttestation({
+          credentialConfigurationId: TS12_SCA_CARD_DPC_VCT,
+        })
+      ).to.equal(false);
+      expect(
+        shouldEnforceWuaStatusLists({
+          requestedCredentialConfigurationIds: [TS12_SCA_IBAN_VCT, TS12_SCA_USER_VCT],
+        })
+      ).to.equal(false);
+      expect(
+        shouldRequireWiaClientAttestation({
+          credentialConfigurationId: WUA_REQUIRED_CREDENTIAL_ID,
+        })
+      ).to.equal(true);
+      expect(
+        shouldEnforceWuaStatusLists({
+          credentialConfigurationId: WUA_REQUIRED_CREDENTIAL_ID,
+        })
+      ).to.equal(true);
+      expect(
+        shouldEnforceCredentialKeyAttestation({
+          credentialConfigurationId: WUA_REQUIRED_CREDENTIAL_ID,
+        })
+      ).to.equal(true);
+      expect(
+        shouldEnforceWuaStatusLists({
+          requestedCredentialConfigurationIds: [TS12_SCA_CARD_DPC_VCT, WUA_REQUIRED_CREDENTIAL_ID],
+        })
+      ).to.equal(true);
+
+      const scaSession = createPreAuthSessionData({ credentialType: TS12_SCA_CARD_DPC_VCT });
+      expect(scaSession.requiresWua).to.equal(undefined);
+    } finally {
+      if (previous === undefined) delete process.env[DISABLE_SCA_WIA_KA_CHECKS_ENV];
+      else process.env[DISABLE_SCA_WIA_KA_CHECKS_ENV] = previous;
+    }
+  });
+
+  it("enforces WIA/KA for SCA issuance when DISABLE_SCA_WIA_KA_CHECKS=false", () => {
+    const previous = process.env[DISABLE_SCA_WIA_KA_CHECKS_ENV];
+    try {
+      process.env[DISABLE_SCA_WIA_KA_CHECKS_ENV] = "false";
+      expect(isScaWiaKaChecksDisabled()).to.equal(false);
+      expect(
+        shouldRequireWiaClientAttestation({
+          credentialConfigurationId: TS12_SCA_CARD_DPC_VCT,
+        })
+      ).to.equal(true);
+      expect(
+        shouldEnforceWuaStatusLists({
+          credentialConfigurationId: TS12_SCA_CARD_DPC_VCT,
+        })
+      ).to.equal(true);
+      expect(
+        shouldEnforceCredentialKeyAttestation({
+          credentialConfigurationId: TS12_SCA_CARD_DPC_VCT,
+        })
+      ).to.equal(true);
+    } finally {
+      if (previous === undefined) delete process.env[DISABLE_SCA_WIA_KA_CHECKS_ENV];
+      else process.env[DISABLE_SCA_WIA_KA_CHECKS_ENV] = previous;
+    }
   });
 
   it("issuer metadata advertises VerifiablePIDSDJWTWUA with key_attestations_required", () => {

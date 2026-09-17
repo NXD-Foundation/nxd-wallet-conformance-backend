@@ -4,6 +4,7 @@ import fs from "fs";
 import {
   CONFIG,
   DEFAULT_DCQL_QUERY,
+  ARF_PID_DCQL_QUERY,
   DEFAULT_MDL_DCQL_QUERY,
   DEFAULT_TRANSACTION_DATA,
   loadConfigurationFiles,
@@ -44,7 +45,7 @@ vpStandardRouter.use((req, res, next) => {
  * - session_id: Session identifier
  * - client_id_scheme: x509 | did:web | did:jwk | verifier_attestation
  * - profile: dcql | tx | mdl
- * - credential_profile: pid | mdl
+ * - credential_profile: pid | arf-pid | mdl
  * - request_uri_method: get | post
  * - response_mode: direct_post | direct_post.jwt | dc_api | dc_api.jwt
  * - tx_data: true | false
@@ -76,9 +77,12 @@ vpStandardRouter.get("/vp/request", async (req, res) => {
     let presentationDefinition;
     let dcqlQuery = null;
 
+    const resolvePidDcql = () =>
+      credentialProfile === "arf-pid" ? ARF_PID_DCQL_QUERY : DEFAULT_DCQL_QUERY;
+
     if (cs02Strict) {
       presentationDefinition = null;
-      dcqlQuery = credentialProfile === "mdl" ? DEFAULT_MDL_DCQL_QUERY : DEFAULT_DCQL_QUERY;
+      dcqlQuery = credentialProfile === "mdl" ? DEFAULT_MDL_DCQL_QUERY : resolvePidDcql();
     } else if (credentialProfile === "mdl") {
       // For mDL, use mDL-specific presentation definition or DCQL query
       if (profile === "mdl") {
@@ -94,6 +98,9 @@ vpStandardRouter.get("/vp/request", async (req, res) => {
       } else {
         dcqlQuery = DEFAULT_MDL_DCQL_QUERY;
       }
+    } else if (credentialProfile === "arf-pid") {
+      presentationDefinition = null;
+      dcqlQuery = ARF_PID_DCQL_QUERY;
     } else {
       // For PID, use PID presentation definition or DCQL query
       presentationDefinitionPath = "./data/presentation_definition_pid.json";
@@ -111,7 +118,7 @@ vpStandardRouter.get("/vp/request", async (req, res) => {
     if (profile === "dcql" || profile === "tx") {
       presentationDefinition = null;
       if (!dcqlQuery) {
-        dcqlQuery = credentialProfile === "mdl" ? DEFAULT_MDL_DCQL_QUERY : DEFAULT_DCQL_QUERY;
+        dcqlQuery = credentialProfile === "mdl" ? DEFAULT_MDL_DCQL_QUERY : resolvePidDcql();
       }
     }
 

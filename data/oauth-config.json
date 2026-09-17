@@ -18,6 +18,7 @@
     "ferryBoardingPassCredential",
     "vReceipt",
     "urn:eu.europa.ec.eudi:pid:1",
+    "urn:eudi:pid:1",
     "urn:eu.europa.ec.eudi:pid:1:mso_mdoc",
     "PaymentWalletAttestation",
     "https://webuildconsortium.eu/sca/sca-iban/1.0",

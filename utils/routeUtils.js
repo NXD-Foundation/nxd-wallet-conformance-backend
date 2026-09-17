@@ -32,7 +32,7 @@ import base64url from "base64url";
 import jwt from "jsonwebtoken";
 import path from "path";
 import * as jose from "jose";
-import { issuanceRequestRequiresWua } from "./wuaEnforcementPolicy.js";
+import { shouldRequireWiaClientAttestation } from "./wuaEnforcementPolicy.js";
 import { createIssuanceContext, createVerificationContext } from "./sessionContext.js";
 import {
   isWalletProviderAttestationTrustedByPolicy,
@@ -115,7 +115,10 @@ export function createPreAuthSessionData({
   trustFramework = false,
 } = {}) {
   const requestedCredentialConfigurationIds = credentialType ? [credentialType] : [];
-  const requiresWua = issuanceRequestRequiresWua({ credential_configuration_id: credentialType });
+  const requiresWua = shouldRequireWiaClientAttestation({
+    credentialConfigurationId: credentialType,
+    requestedCredentialConfigurationIds,
+  });
   const session = createBaseSession("pre-auth", isHaip, signatureType, {
     ...additionalProps,
     ...(requestedCredentialConfigurationIds.length ? { requestedCredentialConfigurationIds } : {}),
@@ -210,6 +213,37 @@ export const DEFAULT_DCQL_QUERY = {
       claims: [
         {
           path: ["family_name"],
+        },
+      ],
+    },
+  ],
+};
+
+/** ARF base PID DCQL (vct urn:eudi:pid:1) with given_name / family_name / birthdate / place_of_birth.country */
+export const ARF_PID_DCQL_QUERY = {
+  credentials: [
+    {
+      id: "sm_urn_eudi_pid_1-g1",
+      format: "dc+sd-jwt",
+      meta: {
+        vct_values: ["urn:eudi:pid:1"],
+      },
+      claims: [
+        {
+          id: "urn_eudi_pid_1-g1-c1",
+          path: ["given_name"],
+        },
+        {
+          id: "urn_eudi_pid_1-g1-c2",
+          path: ["family_name"],
+        },
+        {
+          id: "urn_eudi_pid_1-g1-c3",
+          path: ["birthdate"],
+        },
+        {
+          id: "urn_eudi_pid_1-g1-c4",
+          path: ["place_of_birth", "country"],
         },
       ],
     },

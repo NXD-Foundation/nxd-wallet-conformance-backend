@@ -1850,6 +1850,148 @@
         }
       }
     },
+    "urn:eudi:pid:1": {
+      "scope": "urn:eudi:pid:1",
+      "cryptographic_binding_methods_supported": [
+        "jwk"
+      ],
+      "credential_metadata": {
+        "display": [
+          {
+            "name": "Person Identification Data (ARF)",
+            "locale": "en-GB",
+            "description": "EUDI ARF base PID type urn:eudi:pid:1 (SD-JWT).",
+            "background_color": "#FFFFFF",
+            "text_color": "#000000",
+            "logo": {
+              "uri": "https://avatars.githubusercontent.com/u/140810559?s=400&u=ee2a7f495f540fd5f23ca59d38b7411ea56c0d6d&v=4",
+              "alt_text": "PID Logo"
+            }
+          }
+        ],
+        "claims": [
+          {
+            "path": [
+              "given_name"
+            ],
+            "display": [
+              {
+                "name": "Given Name",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "family_name"
+            ],
+            "display": [
+              {
+                "name": "Surname",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "birthdate"
+            ],
+            "display": [
+              {
+                "name": "Birth Date",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "place_of_birth",
+              "country"
+            ],
+            "display": [
+              {
+                "name": "Place of Birth (Country)",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "nationalities"
+            ],
+            "display": [
+              {
+                "name": "Nationalities",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "date_of_issuance"
+            ],
+            "display": [
+              {
+                "name": "Issuance Date",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "date_of_expiry"
+            ],
+            "display": [
+              {
+                "name": "Expiry Date",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "issuing_authority"
+            ],
+            "display": [
+              {
+                "name": "Issuing Authority",
+                "locale": "en-GB"
+              }
+            ]
+          },
+          {
+            "path": [
+              "issuing_country"
+            ],
+            "display": [
+              {
+                "name": "Issuing Country",
+                "locale": "en-GB"
+              }
+            ]
+          }
+        ]
+      },
+      "credential_signing_alg_values_supported": [
+        "ES256"
+      ],
+      "format": "dc+sd-jwt",
+      "vct": "urn:eudi:pid:1",
+      "proof_types_supported": {
+        "jwt": {
+          "proof_signing_alg_values_supported": [
+            "ES256"
+          ],
+          "key_attestations_required": {}
+        },
+        "attestation": {
+          "proof_signing_alg_values_supported": [
+            "ES256"
+          ],
+          "key_attestations_required": {}
+        }
+      }
+    },
     "urn:eu.europa.ec.eudi:pid:1:mso_mdoc": {
       "scope": "urn:eu.europa.ec.eudi:pid:1:mso_mdoc",
       "cryptographic_binding_methods_supported": [
@@ -2840,13 +2982,14 @@
       "credential_metadata": {
         "display": [
           {
-            "name": "SCA-Card (DPC) Attestation",
+            "name": "Mastercard SCA-Card (DPC)",
             "locale": "en-GB",
-            "background_color": "#0059f8",
+            "description": "Payment card token attestation for Strong Customer Authentication (DPC).",
+            "background_color": "#000000",
             "text_color": "#FFFFFF",
             "logo": {
-              "uri": "https://avatars.githubusercontent.com/u/140810559?s=400&u=ee2a7f495f540fd5f23ca59d38b7411ea56c0d6d&v=4",
-              "alt_text": "Demo ASPSP"
+              "uri": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMzIgODciIHdpZHRoPSIxMzIiIGhlaWdodD0iODciPjxjaXJjbGUgY3g9IjQ4IiBjeT0iNDMuNSIgcj0iNDAiIGZpbGw9IiNFQjAwMUIiLz48Y2lyY2xlIGN4PSI4NCIgY3k9IjQzLjUiIHI9IjQwIiBmaWxsPSIjRjc5RTFCIi8+PHBhdGggZD0iTTY2IDE0LjhjLTcuMiA1LjUtMTEuOSAxNC4yLTExLjkgMjQuMVM1OC44IDU3LjUgNjYgNjNjNy4yLTUuNSAxMS45LTE0LjIgMTEuOS0yNC4xUzczLjIgMjAuMyA2NiAxNC44eiIgZmlsbD0iI0ZGNUYwMCIvPjwvc3ZnPg==",
+              "alt_text": "Mastercard"
             }
           }
         ],

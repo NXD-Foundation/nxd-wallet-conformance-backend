@@ -87,6 +87,8 @@ import {
   sessionRequiresWua,
   shouldEnforceWuaStatusLists,
   shouldEnforceCredentialKeyAttestation,
+  shouldRequireWiaClientAttestation,
+  isScaOnlyWuaIssuance,
 } from "../../utils/wuaEnforcementPolicy.js";
 import { applyScaWuaExpiryHint } from "../../utils/ts12PaymentUtils.js";
 import {
@@ -1010,8 +1012,21 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
       preAuthSessionForWua = await getPreAuthSession(preAuthorizedCode);
     }
     const tokenTrustSession = codeFlowSessionForWua || preAuthSessionForWua;
-    const tokenRequiresWua = sessionRequiresWua(tokenTrustSession) || isTrustFrameworkSession(tokenTrustSession);
-    const tokenEnforceStatusLists = shouldEnforceWuaStatusLists({ session: tokenTrustSession });
+    const tokenScaPolicyParams = { session: tokenTrustSession };
+    const tokenRequiresWua =
+      isTrustFrameworkSession(tokenTrustSession) ||
+      shouldRequireWiaClientAttestation(tokenScaPolicyParams);
+    const tokenEnforceStatusLists = shouldEnforceWuaStatusLists(tokenScaPolicyParams);
+    if (
+      sessionRequiresWua(tokenTrustSession) &&
+      !tokenRequiresWua &&
+      isScaOnlyWuaIssuance(tokenScaPolicyParams) &&
+      slog
+    ) {
+      try {
+        slog("[TOKEN] Skipping WIA requirement for SCA issuance (DISABLE_SCA_WIA_KA_CHECKS)");
+      } catch {}
+    }
 
     // Extract and validate Wallet Instance Attestation (WIA) if present (legacy body path)
     // Based on TS3 spec: https://github.com/eu-digital-identity-wallet/eudi-doc-standards-and-technical-specifications/blob/main/docs/technical-specifications/ts3-wallet-unit-attestation.md
@@ -1594,7 +1609,7 @@ sharedRouter.post("/credential", async (req, res) => {
       }
     } else if (credentialRequiresWua && slog) {
       try {
-        slog("[CREDENTIAL] [TEMP] Skipping WIA status-list enforcement for SCA issuance", {
+        slog("[CREDENTIAL] Skipping WIA status-list enforcement for SCA issuance (DISABLE_SCA_WIA_KA_CHECKS)", {
           credential_configuration_id: effectiveConfigurationId,
         });
       } catch {}
@@ -1616,7 +1631,7 @@ sharedRouter.post("/credential", async (req, res) => {
     }
     if (credentialRequiresWua && !enforceCredentialKa && !wuaJwt && slog) {
       try {
-        slog("[CREDENTIAL] [TEMP] Skipping required KA enforcement for SCA issuance", {
+        slog("[CREDENTIAL] Skipping required KA enforcement for SCA issuance (DISABLE_SCA_WIA_KA_CHECKS)", {
           credential_configuration_id: effectiveConfigurationId,
         });
       } catch {}

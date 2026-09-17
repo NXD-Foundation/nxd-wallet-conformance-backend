@@ -37,6 +37,7 @@ describe("PID Rulebook 1.7 data model", () => {
     expect(claims.issuing_country).to.match(/^[A-Z]{2}$/);
     expect(claims.nationalities).to.deep.equal(["FI"]);
     expect(claims.place_of_birth).to.have.property("country");
+    expect(claims.place_of_birth.country).to.equal("FI");
     expect(claims.picture).to.match(/^data:image\/jpeg;base64,/);
     expect(disclosureFrame._sd).to.have.members(Object.keys(claims));
   });
@@ -58,10 +59,19 @@ describe("PID Rulebook 1.7 data model", () => {
   it("publishes wallet-compatible canonical PID configurations", () => {
     const config = JSON.parse(fs.readFileSync("./data/issuer-config.json", "utf8"));
     const sdJwt = config.credential_configurations_supported["urn:eu.europa.ec.eudi:pid:1"];
+    const arfPid = config.credential_configurations_supported["urn:eudi:pid:1"];
     const mdoc = config.credential_configurations_supported["urn:eu.europa.ec.eudi:pid:1:mso_mdoc"];
 
     expect(sdJwt.vct).to.equal("urn:eu.europa.ec.eudi:pid:1");
     expect(sdJwt.format).to.equal("dc+sd-jwt");
+
+    expect(arfPid.vct).to.equal("urn:eudi:pid:1");
+    expect(arfPid.format).to.equal("dc+sd-jwt");
+    const arfClaimPaths = arfPid.credential_metadata.claims.map((claim) => claim.path);
+    expect(arfClaimPaths).to.deep.include(["given_name"]);
+    expect(arfClaimPaths).to.deep.include(["family_name"]);
+    expect(arfClaimPaths).to.deep.include(["birthdate"]);
+    expect(arfClaimPaths).to.deep.include(["place_of_birth", "country"]);
 
     const sdJwtClaimNames = sdJwt.credential_metadata.claims.map(
       (claim) => claim.path[0]
