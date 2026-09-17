@@ -82,6 +82,7 @@ import {
 import {
   issuanceRequestRequiresWua,
   extractRequestedCredentialConfigurationIds,
+  shouldEnforceWuaStatusLists,
 } from "../../utils/wuaEnforcementPolicy.js";
 import { trustFrameworkSessionProps } from "../../utils/trustFrameworkPolicy.js";
 
@@ -630,6 +631,9 @@ codeFlowRouterSDJWT.post(["/par", "/authorize/par"], async (req, res) => {
       scope: req.body.scope,
       authorization_details: req.body.authorization_details,
     });
+    const enforceStatusLists = shouldEnforceWuaStatusLists({
+      requestedCredentialConfigurationIds,
+    });
 
     const attestationResult = await validateOAuthClientAttestationFromRequest({
       headers: req.headers,
@@ -638,6 +642,7 @@ codeFlowRouterSDJWT.post(["/par", "/authorize/par"], async (req, res) => {
       trustedJwks: getTrustedClientAttesterJwks(),
       requireAttestation: requiresWua,
       strictWiaSignature: requiresWua,
+      requireStatusList: requiresWua && enforceStatusLists,
     });
     if (!attestationResult.skip && !attestationResult.ok) {
       if (slog) {

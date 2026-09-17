@@ -397,8 +397,12 @@ export async function validateOAuthClientAttestationFromRequest({
   maxPopIatAgeSeconds = 600,
   requireAttestation = false,
   strictWiaSignature = false,
+  /** When undefined, follows requireAttestation. Set false to skip WIA status-list fetch/eval. */
+  requireStatusList,
   statusList = {},
 }) {
+  const enforceStatusList =
+    typeof requireStatusList === "boolean" ? requireStatusList : requireAttestation;
   const { attestationJwt, popJwt } = getOAuthClientAttestationHeaders(headers);
 
   const hasAtt = Boolean(attestationJwt);
@@ -468,7 +472,7 @@ export async function validateOAuthClientAttestationFromRequest({
     }
 
     const { warnings: wiaWarnings } = validateWiaStructureClaims(attestationPayload, {
-      requireClientStatus: requireAttestation,
+      requireClientStatus: enforceStatusList,
     });
 
     if (!isWalletProviderTrustedByPolicy(attestationPayload, protectedHeader)) {
@@ -491,7 +495,7 @@ export async function validateOAuthClientAttestationFromRequest({
 
     const wiaCnfJkt = await computeWiaCnfJkt(cnfJwk);
     let wiaStatusList = null;
-    if (requireAttestation) {
+    if (enforceStatusList) {
       const parsed = parseReferencedTokenStatus(attestationPayload.client_status, {
         required: true,
         kind: "wia",

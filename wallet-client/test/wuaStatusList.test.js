@@ -180,7 +180,9 @@ describe("WUA Token Status List publisher", () => {
       const payload = decodeJwt(jwt);
       expect(header.typ).to.equal(STATUS_LIST_JWT_TYP);
       expect(header.alg).to.equal("ES256");
-      expect(header.x5c).to.be.an("array").with.length.greaterThan(0);
+      const certBlocks = fs.readFileSync(CERT_PATH, "utf8")
+        .match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g) || [];
+      expect(header.x5c).to.be.an("array").with.length(certBlocks.length);
       expect(payload.sub).to.equal(statusListTokenUri("wia"));
       expect(payload.status_list.bits).to.equal(STATUS_LIST_BITS);
       expect(payload.ttl).to.equal(3600);

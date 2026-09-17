@@ -2,6 +2,22 @@ import fs from "fs";
 import { importJWK, importPKCS8, exportJWK, SignJWT, generateKeyPair } from "jose";
 import crypto from "node:crypto";
 
+const PEM_CERTIFICATE_BLOCK = /-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g;
+
+/** Map one PEM file (leaf only or leaf + intermediates) to JOSE x5c entries. */
+export function pemCertificateChainToX5c(certPem) {
+  const blocks = certPem.match(PEM_CERTIFICATE_BLOCK);
+  if (!blocks?.length) {
+    throw new Error("No certificates found in PEM data");
+  }
+  return blocks.map((cert) =>
+    cert
+      .replace(/-----BEGIN CERTIFICATE-----/g, "")
+      .replace(/-----END CERTIFICATE-----/g, "")
+      .replace(/\s+/g, ""),
+  );
+}
+
 export async function ensureOrCreateEcKeyPair(optionalPath, alg = "ES256") {
   if (optionalPath && fs.existsSync(optionalPath)) {
     const raw = JSON.parse(fs.readFileSync(optionalPath, "utf8"));

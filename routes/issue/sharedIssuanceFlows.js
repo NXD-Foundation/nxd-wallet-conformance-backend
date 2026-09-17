@@ -85,6 +85,8 @@ import {
   isWuaRequiredCredentialId,
   validateKaLevelsAgainstMetadata,
   sessionRequiresWua,
+  shouldEnforceWuaStatusLists,
+  shouldEnforceCredentialKeyAttestation,
 } from "../../utils/wuaEnforcementPolicy.js";
 import { applyScaWuaExpiryHint } from "../../utils/ts12PaymentUtils.js";
 import {
@@ -1009,6 +1011,7 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
     }
     const tokenTrustSession = codeFlowSessionForWua || preAuthSessionForWua;
     const tokenRequiresWua = sessionRequiresWua(tokenTrustSession) || isTrustFrameworkSession(tokenTrustSession);
+    const tokenEnforceStatusLists = shouldEnforceWuaStatusLists({ session: tokenTrustSession });
 
     // Extract and validate Wallet Instance Attestation (WIA) if present (legacy body path)
     // Based on TS3 spec: https://github.com/eu-digital-identity-wallet/eudi-doc-standards-and-technical-specifications/blob/main/docs/technical-specifications/ts3-wallet-unit-attestation.md
@@ -1044,6 +1047,7 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
       trustedJwks: getTrustedClientAttesterJwks(),
       requireAttestation: tokenRequiresWua,
       strictWiaSignature: tokenRequiresWua,
+      requireStatusList: tokenRequiresWua && tokenEnforceStatusLists,
     });
     const isPreAuthorizedGrant = grant_type === PRE_AUTHORIZED_GRANT_TYPE;
     if (tokenRequiresWua && attestationResult.skip) {
@@ -1554,8 +1558,16 @@ sharedRouter.post("/credential", async (req, res) => {
       sessionRequiresWua(sessionObject) ||
       isWuaRequiredCredentialId(effectiveConfigurationId) ||
       isTrustFrameworkSession(sessionObject);
+    const scaPolicyParams = {
+      credentialConfigurationId: effectiveConfigurationId,
+      session: sessionObject,
+    };
+    const enforceWuaStatusLists =
+      credentialRequiresWua && shouldEnforceWuaStatusLists(scaPolicyParams);
+    const enforceCredentialKa =
+      credentialRequiresWua && shouldEnforceCredentialKeyAttestation(scaPolicyParams);
 
-    if (credentialRequiresWua) {
+    if (enforceWuaStatusLists) {
       const wiaEvidence = sessionObject.wiaStatusList;
       if (!wiaEvidence?.uri || !Number.isInteger(wiaEvidence.idx) || !wiaEvidence.verificationJwk) {
         if (slog) {
@@ -1580,9 +1592,15 @@ sharedRouter.post("/credential", async (req, res) => {
           error_description: wiaStatus.error?.message || "Wallet Instance Attestation status-list validation failed",
         });
       }
+    } else if (credentialRequiresWua && slog) {
+      try {
+        slog("[CREDENTIAL] [TEMP] Skipping WIA status-list enforcement for SCA issuance", {
+          credential_configuration_id: effectiveConfigurationId,
+        });
+      } catch {}
     }
 
-    if (credentialRequiresWua && !wuaJwt) {
+    if (enforceCredentialKa && !wuaJwt) {
       if (isTrustFrameworkSession(sessionObject)) {
         const store = flowType === "code" ? storeCodeFlowSession : storePreAuthSession;
         await recordTrustFailure({ session: sessionObject, store, sessionKey, sessionId, slog, operation: "verify-ka", error: "Key Attestation missing" });
@@ -1595,6 +1613,13 @@ sharedRouter.post("/credential", async (req, res) => {
         error_description:
           "Key Attestation (KA) in proofs.jwt key_attestation header is required for VerifiablePIDSDJWTWUA",
       });
+    }
+    if (credentialRequiresWua && !enforceCredentialKa && !wuaJwt && slog) {
+      try {
+        slog("[CREDENTIAL] [TEMP] Skipping required KA enforcement for SCA issuance", {
+          credential_configuration_id: effectiveConfigurationId,
+        });
+      } catch {}
     }
 
     if (wuaJwt) {
@@ -1630,7 +1655,7 @@ sharedRouter.post("/credential", async (req, res) => {
           }
         }
       } else {
-        if (credentialRequiresWua) {
+        if (enforceCredentialKa) {
           if (isTrustFrameworkSession(sessionObject)) {
             const store = flowType === "code" ? storeCodeFlowSession : storePreAuthSession;
             await recordTrustFailure({ session: sessionObject, store, sessionKey, sessionId, slog, operation: "verify-ka", error: wuaValidationResult.error });
@@ -1653,7 +1678,7 @@ sharedRouter.post("/credential", async (req, res) => {
       }
     }
 
-    if (credentialRequiresWua && wuaValidationResult?.valid) {
+    if (enforceCredentialKa && wuaValidationResult?.valid && enforceWuaStatusLists) {
       let kaReference;
       try {
         kaReference = parseReferencedTokenStatus(wuaValidationResult.payload?.key_storage_status, {
@@ -1695,6 +1720,27 @@ sharedRouter.post("/credential", async (req, res) => {
           error: "invalid_proof",
           error_description: levelCheck.error,
         });
+      }
+    } else if (enforceCredentialKa && wuaValidationResult?.valid) {
+      const levelCheck = validateKaLevelsAgainstMetadata(
+        wuaValidationResult.payload,
+        credConfigForWua
+      );
+      if (!levelCheck.ok) {
+        if (slog) {
+          try { slog("[CREDENTIAL] [ERROR] KA levels do not meet metadata requirements", { error: levelCheck.error }); } catch {}
+        }
+        return res.status(400).json({
+          error: "invalid_proof",
+          error_description: levelCheck.error,
+        });
+      }
+      if (slog && !enforceWuaStatusLists) {
+        try {
+          slog("[CREDENTIAL] [TEMP] Skipping KA status-list enforcement for SCA issuance", {
+            credential_configuration_id: effectiveConfigurationId,
+          });
+        } catch {}
       }
     }
 
@@ -1801,7 +1847,7 @@ sharedRouter.post("/credential", async (req, res) => {
           // Mode (2): JWT proof + validated WUA — PoP key must match the first attested key ("possession + assurance").
           // EUDI Wallet ARF / ETSI-style binding: credential cnf aligns with the primary attested key.
           const mustBindToWua =
-            credentialRequiresWua ||
+            enforceCredentialKa ||
             (wuaJwt && wuaValidationResult?.valid && wuaValidationResult?.payload);
 
           if (mustBindToWua) {

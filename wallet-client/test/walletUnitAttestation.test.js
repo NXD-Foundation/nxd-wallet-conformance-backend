@@ -1,4 +1,7 @@
 import { expect } from "chai";
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
 import {
   ATTESTATION_SOURCES,
   AttestationSourceError,
@@ -19,6 +22,8 @@ import { decodeJwt, decodeProtectedHeader } from "jose";
 
 const CS01 = WALLET_PROFILES.WEBUILD_CS01;
 const COMPAT = WALLET_PROFILES.COMPATIBILITY;
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const WALLET_PROVIDER_CERT_PATH = path.resolve(__dirname, "../x509EC/client_certificate.crt");
 
 describe("wallet-client walletUnitAttestation (Phase 7)", () => {
   beforeEach(() => resetWalletUnitAttestationLifecycleForTests());
@@ -67,7 +72,9 @@ describe("wallet-client walletUnitAttestation (Phase 7)", () => {
     expect(result.source).to.equal(ATTESTATION_SOURCES.LOCAL_KEY);
     expect(result.trustFrameworkIntegrated).to.equal(false);
     expect(header).to.have.property("typ", "oauth-client-attestation+jwt");
-    expect(header).to.have.property("x5c").that.is.an("array").with.length.greaterThan(0);
+    const certBlocks = fs.readFileSync(WALLET_PROVIDER_CERT_PATH, "utf8")
+      .match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g) || [];
+    expect(header).to.have.property("x5c").that.is.an("array").with.length(certBlocks.length);
     expect(header).to.not.have.property("jwk");
     expect(payload).to.not.have.property("iss");
     expect(payload).to.have.property("sub", "wallet-client");
@@ -126,8 +133,10 @@ describe("wallet-client walletUnitAttestation (Phase 7)", () => {
 
     const header = decodeProtectedHeader(result.attestationJwt);
     const payload = decodeJwt(result.attestationJwt);
+    const certBlocks = fs.readFileSync(WALLET_PROVIDER_CERT_PATH, "utf8")
+      .match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g) || [];
     expect(header).to.have.property("typ", "key-attestation+jwt");
-    expect(header).to.have.property("x5c").that.is.an("array").with.length.greaterThan(0);
+    expect(header).to.have.property("x5c").that.is.an("array").with.length(certBlocks.length);
     expect(header).to.not.have.property("jwk");
     expect(payload).to.not.have.property("iss");
     expect(payload).to.not.have.property("eudi_wallet_info");

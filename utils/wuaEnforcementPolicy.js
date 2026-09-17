@@ -18,6 +18,22 @@ export const WUA_REQUIRED_CREDENTIAL_IDS = new Set([
   TS12_SCA_CARD_DPC_VCT,
 ]);
 
+/** TS12 SCA attestations that currently share the WUA-required issuance path. */
+export const SCA_WUA_CREDENTIAL_IDS = new Set([
+  TS12_SCA_IBAN_VCT,
+  TS12_SCA_USER_VCT,
+  TS12_SCA_CARD_DPC_VCT,
+]);
+
+/**
+ * TEMP: skip WIA/KA fail-closed checks for SCA-only issuance
+ * (SCA-DPC / SCA-IBAN / SCA-User): Token Status Lists, required KA header,
+ * and proof↔attested_keys binding. Flip to false to restore CS-04 enforcement.
+ */
+export const SKIP_SCA_WUA_STATUS_LIST_CHECKS = true;
+/** @deprecated Use SKIP_SCA_WUA_STATUS_LIST_CHECKS (same flag; covers KA as well). */
+export const SKIP_SCA_WUA_CHECKS = SKIP_SCA_WUA_STATUS_LIST_CHECKS;
+
 /** ISO 18045 AVA_VAN levels advertised for the WUA-required PID credential. */
 export const WUA_REQUIRED_KEY_STORAGE_LEVELS = ["iso_18045_high"];
 export const WUA_REQUIRED_USER_AUTH_LEVELS = ["iso_18045_high"];
@@ -29,6 +45,76 @@ export const WUA_REQUIRED_USER_AUTH_LEVELS = ["iso_18045_high"];
 export function isWuaRequiredCredentialId(credentialId) {
   if (!credentialId || typeof credentialId !== "string") return false;
   return WUA_REQUIRED_CREDENTIAL_IDS.has(credentialId.trim());
+}
+
+/**
+ * @param {string|null|undefined} credentialId
+ * @returns {boolean}
+ */
+export function isScaWuaCredentialId(credentialId) {
+  if (!credentialId || typeof credentialId !== "string") return false;
+  return SCA_WUA_CREDENTIAL_IDS.has(credentialId.trim());
+}
+
+/**
+ * @param {{
+ *   credentialConfigurationId?: string|null,
+ *   requestedCredentialConfigurationIds?: string[]|null,
+ *   session?: object|null,
+ * }} [params]
+ * @returns {string[]}
+ */
+function collectIssuanceCredentialIds({
+  credentialConfigurationId = null,
+  requestedCredentialConfigurationIds = null,
+  session = null,
+} = {}) {
+  return [
+    credentialConfigurationId,
+    ...(Array.isArray(requestedCredentialConfigurationIds) ? requestedCredentialConfigurationIds : []),
+    session?.credentialConfigurationId,
+    session?.credential_configuration_id,
+    ...(session?.requestedCredentialConfigurationIds || []),
+    ...(session?.credentials || []),
+  ]
+    .filter((id) => typeof id === "string" && id.trim())
+    .map((id) => id.trim());
+}
+
+/**
+ * TEMP: true when every WUA-required credential in scope is an SCA attestation
+ * and SCA WUA checks are skipped.
+ */
+export function isScaOnlyWuaIssuance(params = {}) {
+  if (!SKIP_SCA_WUA_CHECKS) return false;
+  const wuaRequiredIds = collectIssuanceCredentialIds(params).filter((id) =>
+    isWuaRequiredCredentialId(id)
+  );
+  if (wuaRequiredIds.length === 0) return false;
+  return wuaRequiredIds.every((id) => isScaWuaCredentialId(id));
+}
+
+/**
+ * Whether WIA/KA Token Status List evaluation must fail closed for this issuance.
+ * TEMP: returns false when the WUA-required credentials in scope are SCA-only.
+ *
+ * @param {{
+ *   credentialConfigurationId?: string|null,
+ *   requestedCredentialConfigurationIds?: string[]|null,
+ *   session?: object|null,
+ * }} [params]
+ * @returns {boolean}
+ */
+export function shouldEnforceWuaStatusLists(params = {}) {
+  return !isScaOnlyWuaIssuance(params);
+}
+
+/**
+ * Whether Key Attestation must be present and valid on the credential request.
+ * TEMP: returns false for SCA-only issuance (same bypass as status lists).
+ */
+export function shouldEnforceCredentialKeyAttestation(params = {}) {
+  return !isScaOnlyWuaIssuance(params);
 }
 
 function hasNonEmptyLevelList(value) {

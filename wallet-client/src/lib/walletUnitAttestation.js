@@ -17,6 +17,7 @@ import {
   createWUA,
   createOAuthClientAttestationJwt,
   createOAuthClientAttestationPopJwt,
+  pemCertificateChainToX5c,
 } from "./crypto.js";
 import { assertOutboundClientIdAligned } from "./walletClientId.js";
 import { isWebuildCs01Profile } from "./profile.js";
@@ -182,19 +183,12 @@ export async function createLegacyBodyClientAssertionJwt({
   });
 }
 
-function pemCertificateToX5c(certPem) {
-  return certPem
-    .replace(/-----BEGIN CERTIFICATE-----/g, "")
-    .replace(/-----END CERTIFICATE-----/g, "")
-    .replace(/\s+/g, "");
-}
-
 function loadWalletProviderFixtureMaterial() {
   const privateKeyPem = fs.readFileSync(WALLET_PROVIDER_KEY_PATH, "utf8");
   const certPem = fs.readFileSync(WALLET_PROVIDER_CERT_PATH, "utf8");
   return {
     privateKeyPem,
-    x5c: [pemCertificateToX5c(certPem)],
+    x5c: pemCertificateChainToX5c(certPem),
   };
 }
 

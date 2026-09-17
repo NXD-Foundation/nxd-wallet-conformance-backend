@@ -15,7 +15,7 @@
     "test:cs07": "mocha tests/cs07DcApi.test.js tests/cs07SuccessfulFlow.test.js tests/verifierEncryptionKeys.test.js --exit",
     "test:cs07-issuance": "mocha tests/cs07DcApiIssuerClient.test.js tests/cs07DcApiIssuanceRoutes.test.js --exit",
     "fcaf:disposition-template": "node scripts/fcafDispositionRegister.js",
-    "dev": "SERVER_URL=https://1b17-2a02-85f-ec74-200-e2ff-fc96-d53a-9110.ngrok-free.app node server.js",
+    "dev": "SERVER_URL=https://bdad-2a02-85f-ec74-200-d996-cb49-bd7-c623.ngrok-free.app node server.js",
     "dc-api:demo": "node clients/dc-api/serve.js"
   },
   "author": "",

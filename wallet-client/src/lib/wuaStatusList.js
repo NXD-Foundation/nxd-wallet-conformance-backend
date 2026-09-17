@@ -6,6 +6,7 @@
  */
 
 import fs from "fs";
+import { pemCertificateChainToX5c } from "./crypto.js";
 import path from "path";
 import { fileURLToPath } from "url";
 import zlib from "node:zlib";
@@ -273,20 +274,13 @@ export function readStatusBit(bytes, idx) {
   return (bytes[byteIndex] >> (idx % 8)) & 1;
 }
 
-function pemCertificateToX5c(certPem) {
-  return certPem
-    .replace(/-----BEGIN CERTIFICATE-----/g, "")
-    .replace(/-----END CERTIFICATE-----/g, "")
-    .replace(/\s+/g, "");
-}
-
 function loadWalletProviderFixtureMaterial() {
   if (signingMaterial) return signingMaterial;
   const privateKeyPem = fs.readFileSync(WALLET_PROVIDER_KEY_PATH, "utf8");
   const certPem = fs.readFileSync(WALLET_PROVIDER_CERT_PATH, "utf8");
   signingMaterial = {
     privateKeyPem,
-    x5c: [pemCertificateToX5c(certPem)],
+    x5c: pemCertificateChainToX5c(certPem),
     certPem,
   };
   return signingMaterial;

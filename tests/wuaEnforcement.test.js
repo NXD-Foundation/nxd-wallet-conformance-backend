@@ -15,6 +15,8 @@ import {
   validateKaLevelsAgainstMetadata,
   extractRequestedCredentialConfigurationIds,
   sessionRequiresWua,
+  shouldEnforceWuaStatusLists,
+  shouldEnforceCredentialKeyAttestation,
 } from "../utils/wuaEnforcementPolicy.js";
 import {
   CLIENT_ATTESTATION_JWT_TYP,
@@ -186,6 +188,39 @@ describe("WUA enforcement policy", () => {
       expect(session.credentialConfigurationId).to.equal(credentialType);
       expect(session.requestedCredentialConfigurationIds).to.include(credentialType);
     }
+  });
+
+  it("temporarily skips status-list enforcement for SCA-only issuance", () => {
+    expect(
+      shouldEnforceWuaStatusLists({
+        credentialConfigurationId: TS12_SCA_CARD_DPC_VCT,
+      })
+    ).to.equal(false);
+    expect(
+      shouldEnforceCredentialKeyAttestation({
+        credentialConfigurationId: TS12_SCA_CARD_DPC_VCT,
+      })
+    ).to.equal(false);
+    expect(
+      shouldEnforceWuaStatusLists({
+        requestedCredentialConfigurationIds: [TS12_SCA_IBAN_VCT, TS12_SCA_USER_VCT],
+      })
+    ).to.equal(false);
+    expect(
+      shouldEnforceWuaStatusLists({
+        credentialConfigurationId: WUA_REQUIRED_CREDENTIAL_ID,
+      })
+    ).to.equal(true);
+    expect(
+      shouldEnforceCredentialKeyAttestation({
+        credentialConfigurationId: WUA_REQUIRED_CREDENTIAL_ID,
+      })
+    ).to.equal(true);
+    expect(
+      shouldEnforceWuaStatusLists({
+        requestedCredentialConfigurationIds: [TS12_SCA_CARD_DPC_VCT, WUA_REQUIRED_CREDENTIAL_ID],
+      })
+    ).to.equal(true);
   });
 
   it("issuer metadata advertises VerifiablePIDSDJWTWUA with key_attestations_required", () => {

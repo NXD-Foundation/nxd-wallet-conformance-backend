@@ -1,4 +1,7 @@
 import { expect } from "chai";
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
 import {
   ensureOrCreateEcKeyPair,
   createDPoP,
@@ -6,10 +9,28 @@ import {
   createProofJwt,
   createOAuthClientAttestationJwt,
   createOAuthClientAttestationPopJwt,
+  pemCertificateChainToX5c,
 } from "../src/lib/crypto.js";
 import { decodeProtectedHeader, decodeJwt } from "jose";
+import { X509Certificate } from "node:crypto";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const WALLET_PROVIDER_CERT_PATH = path.resolve(__dirname, "../x509EC/client_certificate.crt");
 
 describe("wallet-client crypto building blocks", () => {
+  it("pemCertificateChainToX5c emits one JOSE entry per PEM certificate block", () => {
+    const certPem = fs.readFileSync(WALLET_PROVIDER_CERT_PATH, "utf8");
+    const blocks = certPem.match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g) || [];
+    const x5c = pemCertificateChainToX5c(certPem);
+
+    expect(x5c).to.have.length(blocks.length);
+    expect(x5c.length).to.be.greaterThan(0);
+    for (const entry of x5c) {
+      expect(() => new X509Certificate(Buffer.from(entry, "base64"))).to.not.throw();
+    }
+    expect(() => pemCertificateChainToX5c("not a certificate")).to.throw(/No certificates found/);
+  });
+
   it("createWUA MUST use typ key-attestation+jwt", async () => {
     const { privateJwk, publicJwk } = await ensureOrCreateEcKeyPair(undefined, "ES256");
 
