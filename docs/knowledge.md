@@ -67,6 +67,17 @@ entry points use the shared async context, and the former process-global
 fields remain intentionally as protocol compatibility fields; the versioned
 `sessionContext` is the canonical internal representation.
 
+**Wallet ITB auth handoff:** For authorization-code issuance, the headless
+wallet can suspend after PAR and return `status: "AUTHORIZATION_REQUIRED"` with
+a wallet-generated `authorizationUrl` when `WALLET_AUTH_HANDOFF=true` or
+`/session` includes `authHandoff: true`. The tester completes login/consent/MFA
+in a browser; the AS redirects to the wallet's public HTTPS
+`GET /oauth/callback`; the wallet retains PKCE/state, finishes token + credential
+issuance, and ITB polls `GET /session-status/:sessionId` for `ok` or `failed`.
+Default blocking behaviour (`redirect_uri=openid4vp://`, server-side `/authorize`
+fetch) is unchanged when handoff is off. Detail:
+[wallet-client/docs/auth-handoff-itb.md](../wallet-client/docs/auth-handoff-itb.md).
+
 ## Authority And Reading Order
 
 When documents disagree, use this order of authority:
@@ -614,6 +625,7 @@ profile interpretation, protocol support claim, or documentation location.
 | If you are changing...                                      | Read first                                                                |
 | ----------------------------------------------------------- | ------------------------------------------------------------------------- |
 | Credential offers, PAR, token, proofs, or deferred issuance | CS-01, attestation options, relevant VCI matrix                           |
+| ITB browser auth handoff (headless wallet `/session`)       | [wallet-client auth handoff](../wallet-client/docs/auth-handoff-itb.md)   |
 | WUA/WIA/KA validation, trust, or status-list publication    | CS-04, Token Status List draft-20, wallet-client publisher, future WUA enforcement |
 | Trust framework, LoTL/LoTE, or `trustFramework=true`        | [`docs/trust/SOURCE.md`](./trust/SOURCE.md), UC-TE-03/06, Annex E profile; runtime in `trust/` |
 | VP requests, metadata, response modes, or DCQL              | CS-02, verifier metadata model, VP matrix                                 |

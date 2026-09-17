@@ -56,6 +56,26 @@ Redis database for storing credentials and session data.
 | `WALLET_MDL_STRICT` | false | Enable strict MDL verification |
 | `WALLET_POLL_TIMEOUT_MS` | 30000 | Deferred credential polling timeout |
 | `WALLET_POLL_INTERVAL_MS` | 2000 | Deferred credential polling interval (fallback when issuer omits `interval`) |
+| `WALLET_AUTH_HANDOFF` | unset | Set `true` to enable ITB browser auth handoff for authorization-code `/session` flows |
+| `WALLET_OAUTH_REDIRECT_URI` | unset | Explicit HTTPS OAuth callback URL (overrides `{WALLET_PROVIDER_URL}/oauth/callback`) |
+| `WALLET_AUTH_HANDOFF_TTL` | 600 | Pending authorization TTL in seconds (capped by PAR `expires_in` when present) |
+
+### ITB auth handoff (authorization-code `/session`)
+
+When `WALLET_AUTH_HANDOFF=true` or the `/session` body includes `"authHandoff": true`, the wallet:
+
+1. Performs PAR and returns **HTTP 200** with `status: "AUTHORIZATION_REQUIRED"` and `authorizationUrl` (does not server-fetch `/authorize`).
+2. Stores PKCE verifier, OAuth `state`, and transaction context in Redis until callback or TTL expiry.
+3. Accepts the browser redirect at **`GET /oauth/callback`** on a **public HTTPS** URL.
+
+Configure the callback as either:
+
+- `WALLET_OAUTH_REDIRECT_URI=https://host.example/wallet-client/oauth/callback`, or
+- `WALLET_PROVIDER_URL=https://host.example/wallet-client` (callback defaults to `{base}/oauth/callback`).
+
+The reverse proxy must forward `/oauth/callback` to this service, same as `/status-lists/...`. ITB polls `GET /session-status/:sessionId` until `status` is `ok` or `failed`. Blocking one-shot auth-code behaviour (server-side `/authorize` fetch with `redirect_uri=openid4vp://`) remains the default when handoff is off.
+
+See [docs/auth-handoff-itb.md](./docs/auth-handoff-itb.md).
 
 ### WE BUILD CS-01 profile (`WALLET_PROFILE=webuild-cs01`)
 

@@ -72,6 +72,19 @@ import {
   OPENID4VP_CS02_URI,
   isOpenId4VpDeepLink,
 } from "./lib/openid4vpUri.js";
+import { createAuthorizationCodeIssuance, serializePendingContext } from "./lib/authorizationCodeIssuance.js";
+import {
+  isAuthHandoffEnabled,
+  resolveRedirectUriForFlow,
+  AuthHandoffConfigError,
+} from "./lib/authHandoffConfig.js";
+import {
+  savePendingAuthorization,
+  consumePendingByState,
+  updateWalletTestSession,
+  renderCallbackHtml,
+  issuersMatch,
+} from "./lib/authHandoffStore.js";
 import {
   installProcessLogHandlers,
   logError,
@@ -257,8 +270,14 @@ app.post("/issue", async (req, res) => {
   });
 });
 
-app.get("/health", (req, res) =>
-  res.json({
+app.get("/health", (req, res) => {
+  let authHandoffRedirectUri = null;
+  let authHandoffConfigured = false;
+  try {
+    authHandoffRedirectUri = resolveRedirectUriForFlow(process.env, true);
+    authHandoffConfigured = true;
+  } catch {}
+  return res.json({
     status: "ok",
     profile: activeWalletProfile,
     cs01Mode: isWebuildCs01Profile(activeWalletProfile),
@@ -266,8 +285,13 @@ app.get("/health", (req, res) =>
     walletClientId: activeWalletClientId,
     attestation: activeAttestationConfiguration,
     statusLists: describeWuaStatusListPublisher(),
-  }),
-);
+    authHandoff: {
+      enabledByDefault: isAuthHandoffEnabled(process.env, {}),
+      configured: authHandoffConfigured,
+      redirectUri: authHandoffRedirectUri,
+    },
+  });
+});
 
 // GET /logs/:sessionId
 // Returns all logs stored for a session from Redis
@@ -309,6 +333,90 @@ app.get("/log", handleGlobalLogs);
 
 // GET /session-status/:sessionId
 // Returns the current status of a session from Redis
+// GET /oauth/callback
+// Browser redirect target for ITB auth handoff (authorization code + state in query).
+app.get("/oauth/callback", async (req, res) => {
+  const { code, state, error, error_description: errorDescription, iss } = req.query || {};
+  const respondHtml = (payload) => {
+    res.status(payload.statusCode || 200);
+    res.type("html").send(renderCallbackHtml(payload));
+  };
+
+  if (!state) {
+    return respondHtml({
+      success: false,
+      statusCode: 400,
+      title: "Authentication failed",
+      message: "Missing state parameter.",
+    });
+  }
+
+  const pendingRecord = await consumePendingByState(String(state));
+  if (!pendingRecord) {
+    return respondHtml({
+      success: false,
+      statusCode: 400,
+      title: "Authentication failed",
+      message: "Authorization session expired or already used.",
+    });
+  }
+
+  const { sessionId, pendingContext } = pendingRecord;
+  return runWithLogContext(sessionId, async () => {
+    const fail = async (message) => {
+      await updateWalletTestSession(sessionId, "failed", { error: message });
+      return respondHtml({
+        success: false,
+        statusCode: 400,
+        title: "Authentication failed",
+        message,
+      });
+    };
+
+    if (error) {
+      const detail = errorDescription ? `${error}: ${errorDescription}` : String(error);
+      return fail(`Authorization server error: ${detail}`);
+    }
+
+    if (!code) {
+      return fail("Authorization code missing from callback.");
+    }
+
+    if (
+      iss &&
+      pendingContext?.authorizationServerIssuer &&
+      !issuersMatch(pendingContext.authorizationServerIssuer, String(iss))
+    ) {
+      return fail("Authorization server issuer mismatch.");
+    }
+
+    try {
+      const result = await getAuthCodeIssuance().completeAuthorization(
+        pendingContext,
+        { code: String(code), state: String(state), iss: iss ? String(iss) : undefined },
+        sessionId,
+      );
+      await updateWalletTestSession(sessionId, "ok", { result });
+      return respondHtml({
+        success: true,
+        title: "Authentication complete",
+        message: "Credential issuance finished. You can close this tab and return to the test.",
+      });
+    } catch (callbackError) {
+      await logError(sessionId, "[/oauth/callback] error:", callbackError);
+      await updateWalletTestSession(sessionId, "failed", {
+        error: callbackError.message || String(callbackError),
+      });
+      return respondHtml({
+        success: false,
+        statusCode: 500,
+        title: "Authentication failed",
+        message: "Credential issuance failed. Return to the test for details.",
+      });
+    }
+  });
+});
+
 app.get("/session-status/:sessionId", async (req, res) => {
   try {
     const { sessionId } = req.params;
@@ -455,20 +563,58 @@ app.post("/session", async (req, res) => {
         // issuer_state is optional per OIDC4VCI 1.0 - only required if provided in the offer
         try {
           const authGrant = grants.authorization_code;
-          sessionLog("[/session] invoking authorization code issuance. configurationId=", configurationId);
-          const result = await runAuthorizationCodeIssuance({
+          const authHandoff = isAuthHandoffEnabled(process.env, req.body);
+          let redirectUri;
+          try {
+            redirectUri = resolveRedirectUriForFlow(process.env, authHandoff);
+          } catch (configError) {
+            if (configError instanceof AuthHandoffConfigError) {
+              const failed = await setStatus("failed", { error: configError.message });
+              return res.status(400).json({
+                error: configError.errorCode || "invalid_configuration",
+                error_description: configError.message,
+                state: failed,
+              });
+            }
+            throw configError;
+          }
+
+          const issuanceArgs = {
             profile: activeWalletProfile,
             walletClientId: resolveWalletClientId(process.env, req.body.walletClientId || req.body.clientId),
             apiBase,
             issuerMeta,
             offerConfig: offerCfg,
             configurationId,
-            issuerState: authGrant.issuer_state, // Optional - only included if present in offer
-            authorizationServer: authGrant.authorization_server, // Optional grant-level AS identifier
+            issuerState: authGrant.issuer_state,
+            authorizationServer: authGrant.authorization_server,
             keyPath: req.body.keyPath,
             pollTimeoutMs: req.body.pollTimeoutMs,
             pollIntervalMs: req.body.pollIntervalMs,
-          }, sessionId);
+            redirectUri,
+          };
+
+          if (authHandoff) {
+            sessionLog("[/session] auth handoff: preparing authorization. configurationId=", configurationId);
+            const prepared = await getAuthCodeIssuance().prepareAuthorization(issuanceArgs, sessionId);
+            const pendingPayload = await savePendingAuthorization({
+              sessionId,
+              state: prepared.state,
+              pendingContext: serializePendingContext(prepared),
+              authorizationUrl: prepared.authorizationUrl,
+              expiresAt: prepared.expiresAt,
+              ttlSeconds: prepared.ttlSeconds,
+              trustFrameworkSessionProps: trustFrameworkSessionProps({ trustFramework }),
+              previousSession: await walletRedisClient
+                .get(`wallet:test-session:${sessionId}`)
+                .then((raw) => (raw ? JSON.parse(raw) : null))
+                .catch(() => null),
+            });
+            return res.json(pendingPayload);
+          }
+
+          sessionLog("[/session] invoking authorization code issuance. configurationId=", configurationId);
+          const result = await runAuthorizationCodeIssuance(issuanceArgs, sessionId);
           const okPayload = await setStatus("ok", { result });
           return res.json(okPayload);
         } catch (err) {
@@ -1749,584 +1895,26 @@ async function runPreAuthorizedIssuance({ profile = activeWalletProfile, walletC
   return wrapIssuanceResult(credBody, issuanceContext);
 }
 
-async function runAuthorizationCodeIssuance({ profile = activeWalletProfile, walletClientId = activeWalletClientId, apiBase, issuerMeta, offerConfig = null, configurationId, issuerState, authorizationServer, keyPath, pollTimeoutMs, pollIntervalMs }, logSessionId) {
-  const slog = logSessionId ? makeSessionLogger(logSessionId) : (() => {});
-  try {
-    slog("[codeflow] start", {
-      configurationId,
-      profile,
-      cs01Mode: isWebuildCs01Profile(profile),
-      walletClientId,
-    });
-  } catch {}
-  // Discover authorization server metadata to enable PAR when available
-  let authorizeEndpoint = issuerMeta.authorization_endpoint || null;
-  let tokenEndpointFromAS = null;
-  let parEndpoint = null;
-  let requirePushedAuthorizationRequests = false;
-  let authorizationServerIssuer = issuerMeta.credential_issuer || apiBase;
-  
-  // Check for authorization_servers array in issuer metadata
-  // Per OIDC4VCI v1.0: "If this parameter is omitted, the entity providing the Credential Issuer 
-  // is also acting as the Authorization Server, i.e., the Credential Issuer's identifier is used 
-  // to obtain the Authorization Server metadata."
-  const authorizationServers = Array.isArray(issuerMeta.authorization_servers) ? issuerMeta.authorization_servers : 
-                                (issuerMeta.authorization_server ? [issuerMeta.authorization_server] : []);
-  
-  let asBase = null;
-  
-  if (authorizationServers.length > 0) {
-    // authorization_servers is present - use it
-    // Use grant-level authorization_server if provided (must match one in authorization_servers array)
-    if (authorizationServer) {
-      if (!authorizationServers.includes(authorizationServer)) {
-        console.error("[codeflow] grant authorization_server does not match any entry in authorization_servers array");
-        try { slog("[codeflow] grant authorization_server mismatch", { grantAS: authorizationServer, availableAS: authorizationServers }); } catch {}
-        throw new Error("invalid_authorization_server: grant authorization_server must match one of the values in authorization_servers array");
-      }
-      asBase = authorizationServer;
-      console.log("[codeflow] using grant-level authorization_server:", asBase); 
-      try { slog("[codeflow] using grant-level authorization_server", { asBase }); } catch {}
-    } else {
-      // Use first authorization server from issuer metadata
-      asBase = authorizationServers[0];
-      console.log("[codeflow] using first authorization_server from issuer metadata:", asBase); 
-      try { slog("[codeflow] using first authorization_server", { asBase }); } catch {}
-    }
-  } else {
-    // authorization_servers is omitted - use credential_issuer identifier as Authorization Server
-    // Per spec: "the Credential Issuer's identifier is used to obtain the Authorization Server metadata"
-    asBase = issuerMeta.credential_issuer || apiBase;
-    console.log("[codeflow] authorization_servers omitted, using credential_issuer as Authorization Server:", asBase);
-    try { slog("[codeflow] using credential_issuer as AS", { asBase }); } catch {}
-    
-    // Grant-level authorization_server MUST NOT be used when authorization_servers is omitted
-    if (authorizationServer) {
-      console.error("[codeflow] grant authorization_server MUST NOT be used when authorization_servers is omitted");
-      try { slog("[codeflow] grant authorization_server invalid when authorization_servers omitted"); } catch {}
-      throw new Error("invalid_authorization_server: grant authorization_server MUST NOT be used when authorization_servers parameter is omitted");
-    }
-  }
-  
-  let authorizationServerMetaForScope = null;
-  let attestationChallengeState = createAttestationChallengeState();
-  try {
-    const asMeta = await discoverAuthorizationServerMetadata(asBase, logSessionId, fetch, {
-      grant: "authorization_code",
-    });
-    authorizationServerMetaForScope = asMeta;
-    authorizeEndpoint = authorizeEndpoint || asMeta.authorization_endpoint;
-    tokenEndpointFromAS = asMeta.token_endpoint || null;
-    parEndpoint = asMeta.pushed_authorization_request_endpoint || null;
-    requirePushedAuthorizationRequests = asMeta.require_pushed_authorization_requests === true;
-    authorizationServerIssuer = asMeta.issuer || asBase || authorizationServerIssuer;
-    attestationChallengeState = await initializeAttestationChallengeState(asMeta);
-    if (!tokenEndpointFromAS) {
-      console.error("[codeflow] authorization server metadata does not contain token_endpoint");
-      try { slog("[codeflow] AS metadata missing token_endpoint", { asBase }); } catch {}
-      throw new Error("token_endpoint_required: authorization server metadata must include 'token_endpoint'");
-    }
-    try { console.log("[codeflow] AS meta: authorize=", asMeta.authorization_endpoint, "token=", asMeta.token_endpoint, "par=", parEndpoint); slog("[codeflow] AS meta", { authorize: asMeta.authorization_endpoint, token: asMeta.token_endpoint, par: parEndpoint }); } catch {}
-    // Store AS metadata for credential signature verification
-    issuerMeta._authorizationServerMeta = asMeta;
-  } catch (e) {
-    console.error("[codeflow] AS metadata discovery failed:", e?.message || e); 
-    try { slog("[codeflow] AS metadata discovery failed", { error: e?.message || String(e) }); } catch {}
-    throw e; // Re-throw to fail fast instead of silently continuing
-  }
-  const authorizeUrl = new URL((authorizeEndpoint || apiBase + "/authorize"));
-  const { codeVerifier, codeChallenge, codeChallengeMethod } = createPkcePair();
-  const state = randomState();
-  const redirectUri = OPENID4VP_CS02_URI;
+let authCodeIssuanceInstance = null;
 
-  const scopeResolution = runGuardedSync(
-    slog,
-    "[codeflow] scope resolution failed",
-    () => resolveCredentialScope({
-      profile,
-      configurationId,
-      issuerMeta,
-      offerConfig,
-      scopesSupported: authorizationServerMetaForScope?.scopes_supported ?? null,
-    }),
-    {
-      configurationId,
-      scopesSupported: authorizationServerMetaForScope?.scopes_supported ?? null,
-    },
-  );
-  try {
-    slog("[codeflow] scope resolved", scopeResolution);
-  } catch {}
-  const authorizationDetailsSupport = runGuardedSync(
-    slog,
-    "[codeflow] authorization_details support validation failed",
-    () => assertAuthorizationDetailsSupportForCredentialRequest({
-      configurationId,
-      issuerMeta,
-      offerConfig,
-      authorizationServerMeta: authorizationServerMetaForScope,
-    }),
-    {
-      configurationId,
-      authorizationDetailsTypesSupported:
-        authorizationServerMetaForScope?.authorization_details_types_supported ?? null,
-    },
-  );
-  try {
-    slog("[codeflow] authorization_details support", authorizationDetailsSupport);
-  } catch {}
-
-  // Build common authorization request parameters
-  const authzDetails = [
-    {
-      type: "openid_credential",
-      credential_configuration_id: configurationId,
-      ...(issuerMeta?.credential_issuer ? { locations: [issuerMeta.credential_issuer] } : {}),
-    },
-  ];
-  const authzParams = {
-    response_type: "code",
-    ...(issuerState ? { issuer_state: issuerState } : {}), // Only include if provided in offer (OIDC4VCI 1.0)
-    state,
-    client_id: walletClientId,
-    redirect_uri: redirectUri,
-    code_challenge: codeChallenge,
-    code_challenge_method: codeChallengeMethod,
-    scope: scopeResolution.scope,
-    authorization_details: JSON.stringify(authzDetails),
-  };
-  const attestationConfiguration = describeAttestationConfiguration(profile);
-  const issuanceContext = {
-    configurationId,
-    scope: scopeResolution.scope,
-    scopeSource: scopeResolution.source,
-    attestation: attestationConfiguration,
-    attestationChallenge: attestationChallengeState.current,
-  };
-
-  // PAR is mandatory in CS-01 mode; optional with direct-authorization fallback in compatibility mode.
-  const parRequired = isParMandatory(profile, requirePushedAuthorizationRequests);
-  runGuardedSync(
-    slog,
-    "[codeflow] PAR endpoint unavailable",
-    () => assertParEndpointAvailable(profile, parEndpoint, { asRequiresPar: requirePushedAuthorizationRequests }),
-    { parEndpoint, parRequired },
-  );
-
-  let finalAuthorizeUrl = authorizeUrl.toString();
-  let usedPar = false;
-  if (parEndpoint) {
-    try {
-      let legacyParBodyClientAssertionJwt = null;
-      if (allowsLegacyBodyClientAssertion(profile)) {
-        try {
-          legacyParBodyClientAssertionJwt = await createLegacyBodyClientAssertionJwt({
-            keyPath,
-            audience: parEndpoint,
-          });
-          console.log("[codeflow][par] legacy body client_assertion generated for compatibility mode");
-          try { slog("[codeflow][par] legacy body client_assertion generated", { hasAssertion: !!legacyParBodyClientAssertionJwt }); } catch {}
-        } catch (legacyAssertionError) {
-          console.warn("[codeflow][par] Failed to generate legacy body client_assertion:", legacyAssertionError?.message);
-          try { slog("[codeflow][par] legacy body client_assertion failed", { error: legacyAssertionError?.message }); } catch {}
-        }
-      }
-      const parParams = {
-        ...authzParams,
-        ...(legacyParBodyClientAssertionJwt
-          ? {
-              client_assertion: legacyParBodyClientAssertionJwt,
-              client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
-            }
-          : {}),
-      };
-      const parRes = await httpPostFormWithAttestationChallengeRetry({
-        url: parEndpoint,
-        params: parParams,
-        logSessionId,
-        profile,
-        keyPath,
-        clientId: authzParams.client_id,
-        endpointAudience: parEndpoint,
-        authorizationServerIssuer,
-        stage: "PAR",
-        challengeState: attestationChallengeState,
-      });
-      console.log("[codeflow][par] endpoint=", parEndpoint, "status=", parRes.status); try { slog("[codeflow][par] endpoint", { endpoint: parEndpoint, status: parRes.status }); } catch {}
-      if (parRes.ok) {
-        const parBody = parRes.parsedBody || await parRes.json().catch(() => ({}));
-        const requestUri = parBody.request_uri;
-        console.log("[codeflow][par] request_uri=", requestUri, "expires_in=", parBody.expires_in); try { slog("[codeflow][par] request_uri", { requestUri, expiresIn: parBody.expires_in }); } catch {}
-        assertParResponse(profile, {
-          ok: true,
-          status: parRes.status,
-          requestUri,
-          asRequiresPar: requirePushedAuthorizationRequests,
-        });
-        if (requestUri) {
-          const url = new URL((authorizeEndpoint || apiBase + "/authorize"));
-          url.searchParams.set("client_id", authzParams.client_id);
-          url.searchParams.set("request_uri", requestUri);
-          finalAuthorizeUrl = url.toString();
-          usedPar = true;
-        }
-      } else {
-        const text = await parRes.text().catch(() => "");
-        console.warn("[codeflow][par] failed status=", parRes.status, "body:", text); try { slog("[codeflow][par] failed", { status: parRes.status, body: text }); } catch {}
-        assertParResponse(profile, {
-          ok: false,
-          status: parRes.status,
-          requestUri: null,
-          asRequiresPar: requirePushedAuthorizationRequests,
-          responseBody: text,
-        });
-      }
-    } catch (e) {
-      console.warn("[codeflow][par] error:", e?.message || e); try { slog("[codeflow][par] error", { error: e?.message || String(e) }); } catch {}
-      if (parRequired) {
-        throw e;
-      }
-    }
-  }
-
-  runGuardedSync(
-    slog,
-    "[codeflow] direct authorization fallback rejected",
-    () => assertNoDirectAuthorizationFallback(profile, usedPar),
-    { usedPar, parRequired },
-  );
-  if (!usedPar) {
-    // Compatibility mode only: append params to authorization URL directly when PAR was not used.
-    Object.entries(authzParams).forEach(([k, v]) => authorizeUrl.searchParams.set(k, v));
-    finalAuthorizeUrl = authorizeUrl.toString();
-  }
-
-  console.log("[codeflow] authorizeUrl:", finalAuthorizeUrl); try { slog("[codeflow] authorizeUrl", { url: finalAuthorizeUrl }); } catch {}
-  const authRes = await fetch(finalAuthorizeUrl, { redirect: "manual" });
-  attestationChallengeState.updateFromResponse(authRes.headers);
-  issuanceContext.attestationChallenge = attestationChallengeState.current;
-  console.log("[codeflow] authRes.status:", authRes.status); try { slog("[codeflow] authRes.status", { status: authRes.status }); } catch {}
-  console.log("[codeflow] authRes.headers:", Object.fromEntries(authRes.headers.entries())); try { slog("[codeflow] authRes.headers", { headers: Object.fromEntries(authRes.headers.entries()) }); } catch {}
-  
-  let redirectUrl = authRes.headers.get("location");
-  console.log("[codeflow] redirectUrl from headers:", redirectUrl); try { slog("[codeflow] redirectUrl from headers", { url: redirectUrl }); } catch {}
-  
-  if (!redirectUrl) {
-    const bodyText = await authRes.text().catch(() => "");
-    console.log("[codeflow] authRes body:", bodyText); try { slog("[codeflow] authRes body", { body: bodyText }); } catch {}
-    const redirectPayload = safeParseJson(bodyText);
-    console.log("[codeflow] parsed redirect payload:", redirectPayload); try { slog("[codeflow] parsed redirect payload", { payload: redirectPayload }); } catch {}
-    if (redirectPayload?.redirect_uri) redirectUrl = redirectPayload.redirect_uri;
-    else if (isOpenId4VpDeepLink(bodyText)) redirectUrl = bodyText;
-  }
-  
-  if (!redirectUrl) {
-    console.error("[codeflow] No redirect URL found. Status:", authRes.status); try { slog("[codeflow] no redirect URL found", { status: authRes.status }); } catch {}
-    throw new Error(`authorize_error ${authRes.status}: No redirect URL found`);
-  }
-  console.log("[codeflow] redirectUrl:", redirectUrl); try { slog("[codeflow] redirectUrl", { url: redirectUrl }); } catch {}
-  const redirect = new URL(redirectUrl);
-  const code = redirect.searchParams.get("code");
-  if (!code) {
-    const error = new Error("invalid_response: Authorization code missing");
-    logFlowError(slog, "[codeflow] authorization code missing", error, { redirectUrl });
-    throw error;
-  }
-
-  let tokenEndpoint = issuerMeta.token_endpoint || tokenEndpointFromAS || null;
-  
-  if (!tokenEndpoint) {
-    // This should not happen if AS metadata discovery succeeded, but handle it anyway
-    console.error("[codeflow] token_endpoint could not be determined from authorization server metadata");
-    try { slog("[codeflow] token_endpoint determination failed", { hasAuthorizationServers: authorizationServers.length > 0 }); } catch {}
-    throw new Error("token_endpoint_required: unable to determine token_endpoint from authorization server metadata");
-  }
-  
-  console.log("[codeflow] apiBase=", apiBase, "configurationId=", configurationId); try { slog("[codeflow] apiBase", { apiBase, configurationId }); } catch {}
-  console.log("[codeflow] tokenEndpoint=", tokenEndpoint); try { slog("[codeflow] tokenEndpoint", { tokenEndpoint }); } catch {}
-  console.log("[codeflow] requesting token..."); try { slog("[codeflow] requesting token"); } catch {}
-  
-  const dpopBinding = await createTokenRequestDpopBinding({
-    keyPath,
-    tokenEndpoint,
-    profile,
-  });
-  const { dpopJwt } = dpopBinding;
-  console.log("[codeflow] DPoP generated for token request"); try { slog("[codeflow] DPoP generated", { hasDPoP: !!dpopJwt }); } catch {}
-  
-  let legacyTokenBodyClientAssertionJwt = null;
-  if (allowsLegacyBodyClientAssertion(profile)) {
-    try {
-      legacyTokenBodyClientAssertionJwt = await createLegacyBodyClientAssertionJwt({
-        keyPath,
-        audience: tokenEndpoint,
-      });
-      console.log("[codeflow] legacy body client_assertion generated for compatibility mode");
-      try { slog("[codeflow] legacy body client_assertion generated", { hasAssertion: !!legacyTokenBodyClientAssertionJwt }); } catch {}
-    } catch (legacyAssertionError) {
-      console.warn("[codeflow] Failed to generate legacy body client_assertion:", legacyAssertionError?.message);
-      try { slog("[codeflow] legacy body client_assertion failed", { error: legacyAssertionError?.message }); } catch {}
-    }
-  }
-  const tokenAuthzDetails = [
-    {
-      type: "openid_credential",
-      credential_configuration_id: configurationId,
-      ...(issuerMeta?.credential_issuer ? { locations: [issuerMeta.credential_issuer] } : {}),
-    },
-  ];
-  const tokenRes = await httpPostFormWithAttestationChallengeRetry({
-    url: tokenEndpoint,
-    params: {
-      grant_type: "authorization_code",
-      code,
-      code_verifier: codeVerifier,
-      client_id: walletClientId,
-      redirect_uri: redirectUri,
-      authorization_details: JSON.stringify(tokenAuthzDetails),
-      ...(legacyTokenBodyClientAssertionJwt
-        ? {
-            client_assertion: legacyTokenBodyClientAssertionJwt,
-            client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
-          }
-        : {}),
-    },
-    logSessionId,
-    dpopHeader: dpopJwt,
-    profile,
-    keyPath,
-    clientId: walletClientId,
-    endpointAudience: tokenEndpoint,
-    authorizationServerIssuer: deriveAuthorizationServerIssuer(tokenEndpoint, authorizationServerIssuer),
-    stage: "token request",
-    challengeState: attestationChallengeState,
-    cnfKeyPair: dpopBinding,
-  });
-  console.log("[codeflow] tokenRes.status=", tokenRes.status); try { slog("[codeflow] tokenRes.status", { status: tokenRes.status }); } catch {}
-  if (!tokenRes.ok) {
-    const text = await tokenRes.text().catch(() => "");
-    console.error("[codeflow] token error", tokenRes.status, text);
-    let err = {};
-    try { err = JSON.parse(text); } catch {}
-    try { slog("[codeflow] token error", { status: tokenRes.status, err, body: text }); } catch {}
-    throw new Error(`token_error ${tokenRes.status}: ${JSON.stringify(err)}`);
-  }
-  let tokenBody;
-  try {
-    tokenBody = await tokenRes.json();
-    attestationChallengeState.updateFromResponse(tokenRes.headers);
-    issuanceContext.attestationChallenge = attestationChallengeState.current;
-  } catch (e) {
-    logFlowError(slog, "[codeflow] token response parse failed", e);
-    throw new Error(`token_error: invalid JSON response - ${e?.message}`);
-  }
-  const accessToken = tokenBody.access_token;
-  runGuardedSync(slog, "[codeflow] DPoP-bound token validation failed", () =>
-    assertDpopBoundTokenReceived(profile, tokenBody, accessToken),
-  );
-  await runGuardedAsync(slog, "[codeflow] access token cnf validation failed", () =>
-    assertAccessTokenCnfMatchesWia(profile, accessToken, dpopBinding.publicJwk),
-  );
-  let c_nonce = tokenBody.c_nonce;
-  const credentialRequestTargets = runGuardedSync(
-    slog,
-    "[codeflow] credential selector resolution failed",
-    () => resolveCredentialRequestTargets({ configurationId, tokenResponse: tokenBody }),
-    { configurationId },
-  );
-  issuanceContext.credentialSelection = {
-    ...(issuanceContext.credentialSelection || {}),
-    targets: credentialRequestTargets,
-  };
-  let c_nonce_expires_in = tokenBody.c_nonce_expires_in;
-  console.log("[codeflow] got access_token=", accessToken ? "yes" : "no", "c_nonce=", c_nonce ? "yes" : "no"); try { slog("[codeflow] token received", { hasAccessToken: !!accessToken, hasCNonce: !!c_nonce }); } catch {}
-  if (c_nonce) {
-    console.log("[codeflow] using c_nonce from token response"); try { slog("[codeflow] using c_nonce from token"); } catch {}
-  } else if (issuerMeta.nonce_endpoint) {
-    const nonceEndpoint = issuerMeta.nonce_endpoint;
-    console.log("[codeflow] nonceEndpoint=", nonceEndpoint); try { slog("[codeflow] nonceEndpoint", { nonceEndpoint }); } catch {}
-    const nonceRes = await httpPostJson(nonceEndpoint, {}, logSessionId); try { slog("[codeflow] nonce request", { endpoint: nonceEndpoint, status: nonceRes.status }); } catch {}
-    if (!nonceRes.ok) {
-      const text = await nonceRes.text().catch(() => "");
-      console.error("[codeflow] nonce error", nonceRes.status, text); try { slog("[codeflow] nonce error", { status: nonceRes.status, error: text }); } catch {}
-      let err = {};
-      try { err = JSON.parse(text); } catch {}
-      throw new Error(`nonce_error ${nonceRes.status}: ${JSON.stringify(err)}`);
-    }
-    const nonceJson = await nonceRes.json();
-    c_nonce = nonceJson.c_nonce;
-    c_nonce_expires_in = nonceJson.c_nonce_expires_in;
-  } else {
-    const error = new Error("nonce_error: issuer did not provide c_nonce and no nonce_endpoint is available");
-    logFlowError(slog, "[codeflow] nonce unavailable", error);
-    throw error;
-  }
-
-  if (credentialRequestTargets.length > 1) {
-    const credentialEndpoint = issuerMeta.credential_endpoint || `${apiBase}/credential`;
-    const multiple = await issueCredentialTargets({
-      targets: credentialRequestTargets,
-      profile,
-      keyPath,
-      issuerMeta,
-      apiBase,
-      credentialEndpoint,
-      cNonce: c_nonce,
-      cNonceExpiresIn: c_nonce_expires_in,
-      dpopBinding,
-      tokenBody,
-      accessToken,
-      pollTimeoutMs,
-      pollIntervalMs,
-      authorizationServerMeta: issuerMeta._authorizationServerMeta,
-      metadata: { configurationId, scope: scopeResolution.scope, scopeSource: scopeResolution.source, proofBinding: null },
-    }, logSessionId);
-    issuanceContext.proofBinding = multiple.proofBindings[0];
-    issuanceContext.credentialSelection = {
-      ...(issuanceContext.credentialSelection || {}),
-      targets: credentialRequestTargets,
-    };
-    return { credential: multiple.credentials[0], credentials: multiple.credentials, issuanceContext };
-  }
-
-  // Wallet Unit subject key proof for credential binding (see credentialProofBinding.js)
-  const credentialEndpoint = issuerMeta.credential_endpoint || `${apiBase}/credential`;
-  const proofBundle = await runGuardedAsync(
-    slog,
-    "[codeflow] credential proof request failed",
-    () => buildCredentialProofRequest({
-      profile,
-      keyPath,
-      issuerMeta,
-      apiBase,
-      configurationId,
-      credentialIdentifier: credentialRequestTargets[0].credential_identifier,
-      cNonce: c_nonce,
-      credentialEndpoint,
-    }),
-    { configurationId, credentialEndpoint },
-  );
-  const { subjectKey, credentialRequest: credReq } = proofBundle;
-  issuanceContext.proofBinding = buildCredentialProofBindingContext({
-    profile,
-    subjectKey,
-    dpopBinding,
-    tokenBody,
-    accessToken,
-    keyAttestation: proofBundle.keyAttestation,
-  });
-  try {
-    slog("[codeflow][credential-proof-binding]", {
-      walletUnitSubjectKey: subjectKey.subjectDidJwk,
-      proofAlg: proofBundle.proofAlg,
-      senderConstraining: issuanceContext.proofBinding.senderConstraining,
-    });
-  } catch {}
-
-  console.log("[codeflow] credentialEndpoint=", credentialEndpoint); try { slog("[codeflow] credentialEndpoint", { credentialEndpoint }); } catch {}
-  console.log("[codeflow] requesting credential..."); try { slog("[codeflow] requesting credential"); } catch {}
-  console.log("[codeflow] credential request:", JSON.stringify({ ...credReq, proofs: { jwt: ["<redacted>"] } }, null, 2)); try { slog("[codeflow] credential request body", { hasBody: true }); } catch {}
-  const credentialDpopJwtCode = await createResourceRequestDpopProof({
-    binding: dpopBinding,
-    tokenBody,
-    accessToken,
-    htu: credentialEndpoint,
-    profile,
-    stage: "credential request",
-  });
-  const credReqBody = JSON.stringify(credReq);
-  const credHeadersCode = {
-    "content-type": "application/json",
-    ...buildResourceRequestHeaders(accessToken, credentialDpopJwtCode, tokenBody),
-  };
-  try { slog("[codeflow] sending credential request", { endpoint: credentialEndpoint, hasDPoP: !!credentialDpopJwtCode, body: { ...credReq, proofs: { jwt: ["<redacted>"] } } }); } catch {}
-  const credRes = await fetch(credentialEndpoint, {
-    method: "POST",
-    headers: credHeadersCode,
-    body: credReqBody,
-  });
-  console.log("[codeflow] credentialRes.status=", credRes.status); 
-  try { slog("[codeflow] credentialRes.status", { status: credRes.status }); } catch {}
-  console.log("[codeflow] credentialRes.headers:", Object.fromEntries(credRes.headers.entries())); 
-  try { slog("[codeflow] credentialRes.headers", { headers: Object.fromEntries(credRes.headers.entries()) }); } catch {}
-
-  const responseText = await credRes.text().catch(() => "");
-  console.log("[codeflow] credentialRes.body length:", responseText.length); 
-  try { slog("[codeflow] credentialRes.body", { length: responseText.length }); } catch {}
-
-  if (credRes.status === 202) {
-    let credBody;
-    try {
-      credBody = JSON.parse(responseText);
-    } catch (e) {
-      console.error("[codeflow] failed to parse deferred response as JSON:", e?.message); 
-      try { slog("[codeflow] deferred response parse failed", { error: e?.message, body: responseText }); } catch {}
-      throw new Error(`credential_error ${credRes.status}: invalid JSON response`);
-    }
-    const { transaction_id, interval: issuerInterval } = credBody;
-    console.log("[codeflow] deferred issuance, transaction_id:", transaction_id);
-    try { slog("[codeflow] deferred issuance", { transaction_id, interval: issuerInterval }); } catch {}
-    const deferredEndpoint = issuerMeta.credential_deferred_endpoint || `${apiBase}/credential_deferred`;
-    const defBody = await pollDeferredCredentialIssuance({
-      transactionId: transaction_id,
-      issuerIntervalSeconds: issuerInterval,
-      pollTimeoutMs,
-      pollIntervalMs,
-      deferredEndpoint,
-      buildPollRequest: () => buildDeferredCredentialPollRequest({
-        profile,
-        dpopBinding,
-        tokenBody,
-        accessToken,
-        subjectKey,
-        deferredEndpoint,
-        transactionId: transaction_id,
-      }),
+function getAuthCodeIssuance() {
+  if (!authCodeIssuanceInstance) {
+    authCodeIssuanceInstance = createAuthorizationCodeIssuance({
+      discoverAuthorizationServerMetadata,
+      httpPostFormWithAttestationChallengeRetry,
       httpPostJson,
-      logSessionId,
+      validateAndStoreCredential,
+      issueCredentialTargets,
+      wrapIssuanceResult,
       sleep,
-      log: (msg, data) => {
-        try { slog(`[codeflow] ${msg}`, data); } catch {}
-      },
+      fetchImpl: fetch,
     });
-    try { slog("[codeflow] deferred ready"); } catch {}
-    await validateAndStoreCredential({ configurationId, credential: defBody, issuerMeta, apiBase, keyBinding: toKeyBindingMaterial(subjectKey), metadata: { configurationId, scope: scopeResolution.scope, scopeSource: scopeResolution.source, c_nonce, c_nonce_expires_in, proofBinding: issuanceContext.proofBinding }, authorizationServerMeta: issuerMeta._authorizationServerMeta }, logSessionId);
-    return wrapIssuanceResult(defBody, issuanceContext);
   }
+  return authCodeIssuanceInstance;
+}
 
-  if (!credRes.ok) {
-    let err = {};
-    try { 
-      err = JSON.parse(responseText); 
-    } catch (parseErr) {
-      console.error("[codeflow] credential error response is not JSON, raw text:", responseText); 
-      try { slog("[codeflow] credential error not JSON", { text: responseText }); } catch {}
-      err = { error: "invalid_response", error_description: responseText };
-    }
-    console.error("[codeflow] credential error parsed:", JSON.stringify(err, null, 2)); 
-    try { slog("[codeflow] credential error", { status: credRes.status, err }); } catch {}
-    throw new Error(`credential_error ${credRes.status}: ${JSON.stringify(err)}`);
-  }
-  
-  let credBody;
-  try {
-    credBody = JSON.parse(responseText);
-  } catch (e) {
-    console.error("[codeflow] failed to parse credential response as JSON:", e?.message); 
-    try { slog("[codeflow] credential response parse failed", { error: e?.message, body: responseText }); } catch {}
-    throw new Error(`credential_error: invalid JSON response - ${e?.message}`);
-  }
-  console.log("[codeflow] credential received, starting validation"); 
-  try { slog("[codeflow] credential received", { hasCredential: !!credBody }); } catch {}
-  
-  try {
-    await validateAndStoreCredential({ configurationId, credential: credBody, issuerMeta, apiBase, keyBinding: toKeyBindingMaterial(subjectKey), metadata: { configurationId, scope: scopeResolution.scope, scopeSource: scopeResolution.source, c_nonce, c_nonce_expires_in, proofBinding: issuanceContext.proofBinding }, authorizationServerMeta: issuerMeta._authorizationServerMeta }, logSessionId);
-  } catch (validationError) {
-    console.error("[codeflow] credential validation failed:", validationError?.message || validationError); 
-    try { slog("[codeflow] credential validation failed", { error: validationError?.message || String(validationError), stack: validationError?.stack }); } catch {}
-    throw validationError;
-  }
-  return wrapIssuanceResult(credBody, issuanceContext);
+async function runAuthorizationCodeIssuance(args, logSessionId) {
+  return getAuthCodeIssuance().runAuthorizationCodeIssuance(args, logSessionId);
 }
 
 async function validateAndStoreCredential({ configurationId, credential, issuerMeta, apiBase, keyBinding, metadata, authorizationServerMeta }, logSessionId) {
