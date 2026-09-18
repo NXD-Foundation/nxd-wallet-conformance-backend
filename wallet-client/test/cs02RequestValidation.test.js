@@ -227,6 +227,34 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
       );
     });
 
+    it("requires request-object aud for CS-07 DC API JARs", () => {
+      const now = Math.floor(Date.now() / 1000);
+      const cs07Payload = {
+        client_id: "x509_san_dns:dss.aegean.gr",
+        nonce: "nonce-123",
+        response_type: "vp_token",
+        response_mode: "dc_api.jwt",
+        iat: now,
+        exp: now + 120,
+        aud: "https://self-issued.me/v2",
+        expected_origins: ["https://rp.example"],
+        dcql_query: {
+          credentials: [{ id: "pid", format: "dc+sd-jwt", meta: { vct_values: ["example.v1"] } }],
+        },
+      };
+      expect(() => validateCs02JarPayload(cs07Payload, strictOptions())).to.not.throw();
+      const missingAud = { ...cs07Payload };
+      delete missingAud.aud;
+      expect(() => validateCs02JarPayload(missingAud, strictOptions())).to.throw(
+        Cs02ValidationError,
+        /aud/,
+      );
+      expect(() => validateCs02JarPayload(
+        { ...cs07Payload, aud: "origin:https://rp.example" },
+        strictOptions(),
+      )).to.throw(Cs02ValidationError, /audience/);
+    });
+
     it("rejects malformed transaction_data entries", () => {
       const encoded = Buffer.from(JSON.stringify({ type: "qes_authorization" })).toString("base64url");
       expect(() => validateCs02TransactionData([encoded], strictOptions())).to.not.throw();

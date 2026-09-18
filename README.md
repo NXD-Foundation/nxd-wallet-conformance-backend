@@ -676,7 +676,7 @@ Per OpenID4VP v1.0 Section 4.1:
 For `direct_post.jwt` and `dc_api.jwt` response modes:
 
 - **JWE encryption**: Decrypts JWT responses using verifier's private key
-- **Encryption algorithms**: Supports `ECDH-ES+A256KW` (key wrapping) and `A256GCM` (content encryption)
+- **Encryption algorithms**: Advertises `ECDH-ES` (P-256) per OpenID4VP 1.0 §8.3 / HAIP DC API; also decrypts `ECDH-ES+A256KW`. Content encryption prefers `A256GCM` and also supports `A128GCM`.
 - **Key selection**: Automatically selects decryption key based on JWE header
 - **Decryption handling**: Handles both spec-compliant (JWT string) and wallet-specific (payload object) decryption results
 - **Fallback support**: Gracefully handles different wallet encryption implementations

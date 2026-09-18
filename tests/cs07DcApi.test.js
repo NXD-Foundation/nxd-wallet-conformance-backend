@@ -1,10 +1,14 @@
 import { expect } from "chai";
+import crypto from "crypto";
+import fs from "fs";
 import * as jose from "jose";
 import { buildVpRequestJWT } from "../utils/cryptoUtils.js";
 import { validateCs02KeyBindingJwtClaims } from "../utils/cs02VerifierResponse.js";
 import {
   buildCs07DigitalCredentialRequest,
+  buildCs07SessionStatusPayload,
   cs07ExpectedAudience,
+  decodeCs07AuthorizationResponse,
   normalizeCs07DigitalCredentialResponse,
   parseCs07AuthorizationResponse,
   resolveCs07VerifierOrigin,
@@ -412,6 +416,48 @@ describe("CS-07 Digital Credentials API request profile", () => {
     )).to.throw(/multiple presentations/);
   });
 
+  it("decodes SD-JWT presentations in the Authorization Response for session polling", async () => {
+    const issuer = await jose.generateKeyPair("ES256", { extractable: true });
+    const holder = await jose.generateKeyPair("ES256", { extractable: true });
+    const holderPublicJwk = await jose.exportJWK(holder.publicKey);
+    const issuerKey = await jose.importJWK(await jose.exportJWK(issuer.privateKey), "ES256");
+    const holderKey = await jose.importJWK(await jose.exportJWK(holder.privateKey), "ES256");
+    const now = Math.floor(Date.now() / 1000);
+    const disclosed = Buffer.from(JSON.stringify(["salt", "family_name", "Neslo"])).toString("base64url");
+    const issuerJwt = await new jose.SignJWT({
+      iss: "https://issuer.example", iat: now, exp: now + 300, vct: "test",
+      cnf: { jwk: holderPublicJwk }, _sd_alg: "sha-256",
+      _sd: [crypto.createHash("sha256").update(disclosed, "ascii").digest("base64url")],
+    }).setProtectedHeader({ alg: "ES256", typ: "dc+sd-jwt" }).sign(issuerKey);
+    const unsigned = `${issuerJwt}~${disclosed}~`;
+    const sdHashInput = unsigned.endsWith("~") ? unsigned : `${unsigned}~`;
+    const kbJwt = await new jose.SignJWT({
+      nonce: "nonce", aud: "origin:https://rp.example", iat: now,
+      sd_hash: crypto.createHash("sha256").update(Buffer.from(sdHashInput, "ascii")).digest("base64url"),
+    }).setProtectedHeader({ alg: "ES256", typ: "kb+jwt" }).sign(holderKey);
+    const decoded = decodeCs07AuthorizationResponse({
+      vp_token: { pid: `${unsigned}${kbJwt}`, other: "not-a-jwt" },
+    });
+    expect(decoded.vp_token.pid.claims.family_name).to.equal("Neslo");
+    expect(decoded.vp_token.pid.claims.vct).to.equal("test");
+    expect(decoded.vp_token.pid.key_binding.aud).to.equal("origin:https://rp.example");
+    expect(decoded.vp_token.other).to.equal("not-a-jwt");
+    expect(JSON.stringify(decoded)).to.not.include(issuerJwt);
+
+    const poll = buildCs07SessionStatusPayload("sess-1", {
+      status: "success",
+      profile_id: "ts12-dpc-pid",
+      verified_credential_ids: ["pid"],
+      verification: "dcql_and_credential_binding_validated",
+      dc_api_response: decoded,
+    });
+    expect(poll.vp_response.vp_token.pid.claims.family_name).to.equal("Neslo");
+    expect(buildCs07SessionStatusPayload("sess-2", {
+      status: "success",
+      dc_api_response: { parsed: true },
+    }).vp_response).to.equal(undefined);
+  });
+
   it("uses an explicit origin audience for CS-07 key-binding validation", () => {
     const common = {
       kbHeader: { typ: "kb+jwt" },
@@ -477,9 +523,51 @@ describe("CS-07 Digital Credentials API request profile", () => {
       const payload = jose.decodeJwt(requestJwt);
       expect(payload.response_mode).to.equal("dc_api.jwt");
       expect(payload.expected_origins).to.deep.equal(["https://verifier.example"]);
+      expect(payload.aud).to.equal("https://self-issued.me/v2");
       expect(payload).to.not.have.property("state");
       expect(payload).to.not.have.property("response_uri");
-      expect(payload).to.not.have.property("aud");
+    } finally {
+      process.env = previous;
+    }
+  });
+
+  it("advertises an ECDH-ES P-256 encryption JWK in CS-07 request objects", async () => {
+    const previous = { ...process.env };
+    process.env.CS03_COMPATIBILITY = "false";
+    process.env.DC_API_VERIFIER_ORIGIN = "https://verifier.example";
+    try {
+      const clientMetadata = JSON.parse(fs.readFileSync("./data/verifier-config.json", "utf8"));
+      const requestJwt = await buildVpRequestJWT(
+        "x509_san_dns:verifier.example",
+        null,
+        null,
+        null,
+        clientMetadata,
+        null,
+        "https://verifier.example",
+        "vp_token",
+        "nonce-cs07-enc",
+        DEFAULT_DCQL_QUERY,
+        null,
+        "dc_api.jwt",
+        undefined,
+        undefined,
+        null,
+        null,
+        null,
+        "ES256",
+        true,
+        "https://verifier.example",
+      );
+      const payload = jose.decodeJwt(requestJwt);
+      const encKey = payload.client_metadata?.jwks?.keys?.find((key) => key.use === "enc");
+      expect(encKey).to.include({
+        kty: "EC",
+        crv: "P-256",
+        use: "enc",
+        alg: "ECDH-ES",
+      });
+      expect(encKey.kid).to.be.a("string").that.is.not.empty;
     } finally {
       process.env = previous;
     }
@@ -515,6 +603,21 @@ describe("CS-07 TS12 payment DC API requests", () => {
     expect(dpcPidDcql.credentials.map((c) => c.meta.vct_values[0])).to.deep.equal([
       TS12_SCA_CARD_DPC_VCT,
       TS12_PID_VCT,
+    ]);
+    expect(dpcPidDcql.credentials[1].claims.map((c) => c.path.join("."))).to.deep.equal([
+      "given_name",
+      "family_name",
+      "birthdate",
+      "email",
+      "nationalities",
+      "phone_number",
+      "address",
+    ]);
+    expect(dpcPidDcql.credentials[1].claim_sets.at(-1)).to.deep.equal([
+      "given_name",
+      "family_name",
+      "birthdate",
+      "nationalities",
     ]);
     expect(ibanPidDcql.credentials.map((c) => c.meta.vct_values[0])).to.deep.equal([
       TS12_SCA_IBAN_VCT,
@@ -608,6 +711,7 @@ describe("CS-07 TS12 payment DC API requests", () => {
       );
       const payload = jose.decodeJwt(requestJwt);
       expect(payload.response_mode).to.equal("dc_api.jwt");
+      expect(payload.aud).to.equal("https://self-issued.me/v2");
       expect(payload.dcql_query).to.deep.equal(built.dcqlQuery);
       expect(payload.transaction_data).to.deep.equal([built.encodedTransactionData]);
       const decodedTx = JSON.parse(Buffer.from(payload.transaction_data[0], "base64url").toString("utf8"));
@@ -639,6 +743,23 @@ describe("CS-07 TS12 payment DC API requests", () => {
     });
     expect(result.ok).to.equal(false);
     expect(result.code).to.equal("transaction_data_hash_mismatch");
+  });
+
+  it("accepts a DC API TS12 presentation without transaction_data_hashes when WALTID_DEMO is enabled", () => {
+    const built = buildCs07Ts12PaymentRequest(paymentInput, dpcDcql);
+    const result = validateTs12PaymentPresentationResponse({
+      kbPayload: { nonce: "n1", aud: "origin:https://rp.example" },
+      extractedClaims: [{ vct: TS12_SCA_CARD_DPC_VCT, card_id: "****" }],
+      vpSession: {
+        ts12_payment: true,
+        response_mode: "dc_api.jwt",
+        transaction_data: [built.encodedTransactionData],
+        ts12_expected_vct: TS12_SCA_CARD_DPC_VCT,
+        client_id: "x509_san_dns:verifier.example",
+      },
+      options: { waltidDemo: true },
+    });
+    expect(result.ok).to.equal(true);
   });
 
   it("rejects a DC API TS12 presentation of the wrong SCA attestation type", () => {

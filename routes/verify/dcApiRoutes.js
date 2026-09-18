@@ -14,6 +14,8 @@ import {
   resolveCs07VerifierOrigin,
   normalizeCs07DigitalCredentialResponse,
   parseCs07AuthorizationResponse,
+  decodeCs07AuthorizationResponse,
+  buildCs07SessionStatusPayload,
   Cs07DcApiResponseError,
 } from "../../utils/cs07DcApi.js";
 import { decryptJWE } from "../../utils/cryptoUtils.js";
@@ -105,8 +107,9 @@ dcApiRouter.options("/vp/dc-api/:resource(*)", (req, res) => {
   }
 });
 
-// Pollable, deliberately sanitized session state for the browser adapter and
-// test harness.  Never return request tokens, decrypted VP data, or secrets.
+// Pollable session state for the browser adapter and test harness. Returns
+// status plus the decoded Authorization Response (reconstructed claims), but
+// never request JARs, JWEs, compact presentations, or encryption keys.
 dcApiRouter.get("/vp/dc-api/session/:sessionId", async (req, res) => {
   let origin;
   try { origin = requestOrigin(req); } catch { return res.status(403).json({ error: "origin_not_allowed" }); }
@@ -116,15 +119,9 @@ dcApiRouter.get("/vp/dc-api/session/:sessionId", async (req, res) => {
     return res.status(404).json({ error: "session_not_found" });
   }
   if (origin !== session.verifier_origin) return res.status(403).json({ error: "origin_not_allowed" });
-  return res.set("Cache-Control", "no-store").json({
-    sessionId: req.params.sessionId,
-    status: session.status || "pending",
-    profile: session.profile_id || undefined,
-    error: session.error || undefined,
-    error_description: session.error_description || undefined,
-    verified_credential_ids: session.verified_credential_ids || undefined,
-    verification: session.verification || undefined,
-  });
+  return res.set("Cache-Control", "no-store").json(
+    buildCs07SessionStatusPayload(req.params.sessionId, session),
+  );
 });
 
 /** Create a CS-07 signed request descriptor for a browser verifier. */
@@ -327,6 +324,11 @@ dcApiRouter.post("/vp/dc-api/response/:sessionId", enforceBodyLimit(MAX_RESPONSE
       session.claims = cs03Result.claims;
       session.qes = cs03Result.qes;
       session.cs03_validation = artifactValidation;
+      session.dc_api_response = {
+        ...decodeCs07AuthorizationResponse(parsed.response),
+        claims: cs03Result.claims,
+        qes: cs03Result.qes,
+      };
       await storeVPSession(sessionId, session);
       return res.status(200).json({ status: "success", sessionId });
     }
@@ -385,9 +387,7 @@ dcApiRouter.post("/vp/dc-api/response/:sessionId", enforceBodyLimit(MAX_RESPONSE
     if (validationResult.trustDecisions?.length) {
       session.trustDecisions = validationResult.trustDecisions;
     }
-    // Keep only a non-sensitive receipt. The decrypted VP token is not
-    // persisted in Redis and can be retrieved only by the verifier process.
-    session.dc_api_response = { parsed: true };
+    session.dc_api_response = decodeCs07AuthorizationResponse(parsed.response);
     await storeVPSession(sessionId, session);
     logHttpResponse(slog, requestId, `/vp/dc-api/response/${sessionId}`, 200, "OK", res.getHeaders(), {
       status: "success",

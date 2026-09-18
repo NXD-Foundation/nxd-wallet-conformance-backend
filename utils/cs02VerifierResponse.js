@@ -15,7 +15,7 @@ import {
   extractKeyBindingJwtFromSdJwt,
   validateSdJwtKeyBindingMatchesCredential,
 } from "./sdJwtKeyBinding.js";
-import { resolveVerifierCs02Options } from "./cs02VerifierRequest.js";
+import { isWaltidDemoMode, resolveVerifierCs02Options } from "./cs02VerifierRequest.js";
 import { validateCs02CredentialStatusList, Cs02StatusListError } from "./cs02StatusList.js";
 import {
   validateCs02IssuerTrust,
@@ -750,13 +750,18 @@ export function validateCs02KeyBindingJwtClaims({
     );
   }
   if (Array.isArray(transactionData) && transactionData.length > 0) {
-    if (kbPayload.transaction_data_hashes_alg !== "sha-256" || !Array.isArray(kbPayload.transaction_data_hashes)) {
-      throw new Cs02VerifierResponseError("Key Binding JWT is missing transaction_data_hashes", "invalid_key_binding_jwt");
-    }
-    const expected = transactionData.map(computeTransactionDataHash);
-    if (expected.length !== kbPayload.transaction_data_hashes.length ||
-        expected.some((hash, index) => hash !== kbPayload.transaction_data_hashes[index])) {
-      throw new Cs02VerifierResponseError("Key Binding JWT transaction_data_hashes do not match the request", "invalid_key_binding_jwt");
+    const waltidDemo = options.waltidDemo === true || isWaltidDemoMode(options.env || process.env);
+    if (waltidDemo) {
+      console.warn("[WALTID_DEMO] skipping Key Binding JWT transaction_data_hashes validation");
+    } else {
+      if (kbPayload.transaction_data_hashes_alg !== "sha-256" || !Array.isArray(kbPayload.transaction_data_hashes)) {
+        throw new Cs02VerifierResponseError("Key Binding JWT is missing transaction_data_hashes", "invalid_key_binding_jwt");
+      }
+      const expected = transactionData.map(computeTransactionDataHash);
+      if (expected.length !== kbPayload.transaction_data_hashes.length ||
+          expected.some((hash, index) => hash !== kbPayload.transaction_data_hashes[index])) {
+        throw new Cs02VerifierResponseError("Key Binding JWT transaction_data_hashes do not match the request", "invalid_key_binding_jwt");
+      }
     }
   }
 }
@@ -935,7 +940,8 @@ function validateIssuerCredentialClaims({
     }
   }
 
-  if (rejectUnsolicitedDisclosures && Object.keys(disclosureKeymap || {}).length > 0) {
+  const claimsOmitted = !Array.isArray(credQuery?.claims);
+  if (rejectUnsolicitedDisclosures && !claimsOmitted && Object.keys(disclosureKeymap || {}).length > 0) {
     const allowedPaths = new Set(
       claimsToCheck
         .filter((claim) => Array.isArray(claim?.path) && claim.path.length > 0)

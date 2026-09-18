@@ -110,9 +110,10 @@ and returns:
 
 The signed request must contain `response_type=vp_token`,
 `response_mode=dc_api.jwt`, a non-empty `expected_origins` containing the RP
-origin, the configured DCQL, a fresh nonce, and the existing CS-02 signing and
-encryption metadata. It must omit redirect-only `state`, `response_uri`, and
-redirect-flow audience claims.
+origin, the configured DCQL, a fresh nonce, request-object `aud` of
+`https://self-issued.me/v2` (OpenID4VP 1.0 §5.8; not the RP origin or
+`origin:` proof audience), and encryption metadata whose `jwks` enc key uses
+`alg: ECDH-ES` on P-256. It must omit redirect-only `state` and `response_uri`.
 
 Persist nonce, profile, RP origin, expected audience, DCQL, workflow, protocol,
 creation/expiry timestamps, encryption-key information, and pending status
@@ -135,16 +136,18 @@ failure before exposing a signed request.
 - validate proof audiences as `origin:<rp-origin>`;
 - preserve nonce, holder-key, signature, `sd_hash`, transaction-data, replay,
   and structural checks;
-- persist only a sanitized success/failure receipt.
+- persist a decoded success receipt for later polling (reconstructed claims,
+  not compact JWEs or request JARs).
 
-Never log or persist the JAR, JWE, decrypted `vp_token`, raw credentials, or
-disclosed claims unless an existing specialized workflow explicitly requires a
-result artifact. Redact DC API bodies in the global HTTP logger before logging.
+Never log or persist the JAR, JWE, compact `vp_token` presentations, or
+encryption keys. Persist reconstructed claims on the session so the poll
+endpoint can return them. Redact DC API bodies in the global HTTP logger
+before logging.
 
 `GET /vp/dc-api/session/:sessionId` must enforce the same origin binding and
-return only status, profile, expiry, sanitized errors, verified credential IDs,
-and a verification summary. It must never return request tokens, keys, JWE,
-decrypted presentations, or claims.
+return status, profile, sanitized errors, verified credential IDs, a
+verification summary, and `vp_response` (the decoded Authorization Response
+claims). It must never return request tokens, keys, or JWEs.
 
 Rename origin helpers/session fields where needed so the stored origin clearly
 means the RP page origin, not `CONFIG.SERVER_URL`.

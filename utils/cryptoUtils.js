@@ -21,6 +21,7 @@ import {
   validateVerifierAttestationForRequestGeneration,
   validateX509SanDnsTrustForRequestGeneration,
   Cs02VerifierRequestError,
+  CS02_DEFAULT_AUDIENCE,
 } from "./cs02VerifierRequest.js";
 import { buildStrictCs02ClientMetadata } from "./cs02TrustPolicy.js";
 import { isStrictCs02Base64Url } from "./cs02Encoding.js";
@@ -445,7 +446,9 @@ export async function buildVpRequestJWT(
     ...(isRedirectUriScheme ? {} : { client_metadata: clientMetadataForPayload }),
     // NOTE: Per OpenID4VP, wallets MUST ignore an iss claim in the authorization request.
     // To avoid confusion for implementers, we intentionally omit iss here.
-    ...(cs07DcApi ? {} : { aud: audience }),
+    // OpenID4VP 1.0 §5.8: static wallet metadata uses this symbolic request-object aud,
+    // including DC API signed requests. Response-proof aud remains origin:<rp-origin>.
+    aud: CS02_DEFAULT_AUDIENCE,
   };
 
   // Add response_uri for all response modes that require it
@@ -456,10 +459,6 @@ export async function buildVpRequestJWT(
     response_mode === "dc_api"
   )) {
     jwtPayload.response_uri = redirect_uri;
-  }
-
-  if (!cs07DcApi) {
-    jwtPayload.aud = "https://self-issued.me/v2"; // Digital Credentials API audience
   }
 
   // Add required timestamp claims for Digital Credentials API

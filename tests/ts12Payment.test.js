@@ -30,6 +30,7 @@ import {
   parseTs12PaymentRequestInput,
   resolveTs12AttestationType,
 } from "../utils/ts12PaymentUtils.js";
+import { selectSatisfiedSdJwtClaimSet } from "../utils/sdJwtClaims.js";
 import {
   validateTs12KeyBindingJwt,
   validateTs12PaymentPresentationResponse,
@@ -63,6 +64,56 @@ describe("TS12 payment helpers", () => {
     expect(query.credentials[0].meta.vct_values).to.deep.equal([TS12_SCA_CARD_DPC_VCT]);
     expect(query.credentials[1].meta.vct_values).to.deep.equal(["urn:eu.europa.ec.eudi:pid:1"]);
     expect(query.credentials[1].id).to.equal("cmwallet");
+    expect(query.credentials[1].claims.map((c) => c.path.join("."))).to.deep.equal([
+      "given_name",
+      "family_name",
+      "birthdate",
+      "email",
+      "nationalities",
+      "phone_number",
+      "address",
+    ]);
+    expect(query.credentials[1].claim_sets[0]).to.deep.equal([
+      "given_name",
+      "family_name",
+      "birthdate",
+      "nationalities",
+      "email",
+      "phone_number",
+      "address",
+    ]);
+    expect(query.credentials[1].claim_sets.at(-1)).to.deep.equal([
+      "given_name",
+      "family_name",
+      "birthdate",
+      "nationalities",
+    ]);
+  });
+
+  it("treats PID email, phone_number, and address as optional DCQL claims", () => {
+    const pidQuery = buildTs12DpcWithPidDcqlQuery().credentials[1];
+    const requiredOnly = selectSatisfiedSdJwtClaimSet(pidQuery, {
+      given_name: "Hanna",
+      family_name: "Matkalainen",
+      birthdate: "2005-07-01",
+      nationalities: ["FI"],
+    });
+    expect([...requiredOnly]).to.deep.equal([
+      "given_name",
+      "family_name",
+      "birthdate",
+      "nationalities",
+    ]);
+
+    const withEmail = selectSatisfiedSdJwtClaimSet(pidQuery, {
+      given_name: "Hanna",
+      family_name: "Matkalainen",
+      birthdate: "2005-07-01",
+      nationalities: ["FI"],
+      email: "hanna.matkalainen@example.com",
+    });
+    expect([...withEmail]).to.include("email");
+    expect([...withEmail]).to.not.include("phone_number");
   });
 
   it("builds IBAN and user plus default PID DCQL without a second SCA attestation", () => {
@@ -71,6 +122,16 @@ describe("TS12 payment helpers", () => {
     expect(iban.credentials[0].id).to.equal("sca_iban");
     expect(iban.credentials[0].meta.vct_values).to.deep.equal([TS12_SCA_IBAN_VCT]);
     expect(iban.credentials[1].meta.vct_values).to.deep.equal(["urn:eu.europa.ec.eudi:pid:1"]);
+
+    expect(iban.credentials[1].claims.map((c) => c.path.join("."))).to.deep.equal([
+      "given_name",
+      "family_name",
+      "birthdate",
+      "email",
+      "nationalities",
+      "phone_number",
+      "address",
+    ]);
 
     const user = buildTs12ScaWithPidDcqlQuery("sca-user");
     expect(user.credentials[0].id).to.equal("sca_user");
@@ -326,6 +387,17 @@ describe("TS12 payment validation", () => {
 
     assert.equal(result.ok, false);
     assert.equal(result.code, "transaction_data_hash_mismatch");
+  });
+
+  it("skips CS-12 KB-JWT SCA claims when WALTID_DEMO is enabled", () => {
+    const encoded = encodeTs12TransactionData(buildTs12PaymentTransactionData());
+    const result = validateTs12KeyBindingJwt({
+      kbPayload: { nonce: "n1", aud: "client" },
+      expectedResponseMode: "direct_post",
+      encodedTransactionData: encoded,
+      options: { waltidDemo: true },
+    });
+    assert.equal(result.ok, true);
   });
 
   it("rejects missing, array-shaped, or unsupported transaction_data_hashes_alg", () => {

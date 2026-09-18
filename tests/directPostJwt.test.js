@@ -907,7 +907,7 @@ describe('Direct Post JWT Fixes', () => {
       expect(encryptionKey).to.exist;
       expect(encryptionKey).to.have.property('kty', 'EC');
       expect(encryptionKey).to.have.property('crv', 'P-256');
-      expect(encryptionKey).to.have.property('alg', 'ECDH-ES+A256KW');
+      expect(encryptionKey).to.have.property('alg', 'ECDH-ES');
 
       // Check for encryption algorithms
       expect(verifierConfig).to.have.property('encrypted_response_enc_values_supported');

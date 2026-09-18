@@ -61,7 +61,25 @@
             "id": "cmwallet",
             "format": "dc+sd-jwt",
             "meta": { "vct_values": ["urn:eu.europa.ec.eudi:pid:1"] },
-            "claims": [{ "path": ["family_name"] }]
+            "claims": [
+              { "id": "given_name", "path": ["given_name"] },
+              { "id": "family_name", "path": ["family_name"] },
+              { "id": "birthdate", "path": ["birthdate"] },
+              { "id": "email", "path": ["email"] },
+              { "id": "nationalities", "path": ["nationalities"] },
+              { "id": "phone_number", "path": ["phone_number"] },
+              { "id": "address", "path": ["address"] }
+            ],
+            "claim_sets": [
+              ["given_name", "family_name", "birthdate", "nationalities", "email", "phone_number", "address"],
+              ["given_name", "family_name", "birthdate", "nationalities", "email", "phone_number"],
+              ["given_name", "family_name", "birthdate", "nationalities", "email", "address"],
+              ["given_name", "family_name", "birthdate", "nationalities", "email"],
+              ["given_name", "family_name", "birthdate", "nationalities", "phone_number", "address"],
+              ["given_name", "family_name", "birthdate", "nationalities", "phone_number"],
+              ["given_name", "family_name", "birthdate", "nationalities", "address"],
+              ["given_name", "family_name", "birthdate", "nationalities"]
+            ]
           }
         ]
       }
@@ -103,7 +121,25 @@
             "id": "cmwallet",
             "format": "dc+sd-jwt",
             "meta": { "vct_values": ["urn:eu.europa.ec.eudi:pid:1"] },
-            "claims": [{ "path": ["family_name"] }]
+            "claims": [
+              { "id": "given_name", "path": ["given_name"] },
+              { "id": "family_name", "path": ["family_name"] },
+              { "id": "birthdate", "path": ["birthdate"] },
+              { "id": "email", "path": ["email"] },
+              { "id": "nationalities", "path": ["nationalities"] },
+              { "id": "phone_number", "path": ["phone_number"] },
+              { "id": "address", "path": ["address"] }
+            ],
+            "claim_sets": [
+              ["given_name", "family_name", "birthdate", "nationalities", "email", "phone_number", "address"],
+              ["given_name", "family_name", "birthdate", "nationalities", "email", "phone_number"],
+              ["given_name", "family_name", "birthdate", "nationalities", "email", "address"],
+              ["given_name", "family_name", "birthdate", "nationalities", "email"],
+              ["given_name", "family_name", "birthdate", "nationalities", "phone_number", "address"],
+              ["given_name", "family_name", "birthdate", "nationalities", "phone_number"],
+              ["given_name", "family_name", "birthdate", "nationalities", "address"],
+              ["given_name", "family_name", "birthdate", "nationalities"]
+            ]
           }
         ]
       }
@@ -135,7 +171,25 @@
             "id": "cmwallet",
             "format": "dc+sd-jwt",
             "meta": { "vct_values": ["urn:eu.europa.ec.eudi:pid:1"] },
-            "claims": [{ "path": ["family_name"] }]
+            "claims": [
+              { "id": "given_name", "path": ["given_name"] },
+              { "id": "family_name", "path": ["family_name"] },
+              { "id": "birthdate", "path": ["birthdate"] },
+              { "id": "email", "path": ["email"] },
+              { "id": "nationalities", "path": ["nationalities"] },
+              { "id": "phone_number", "path": ["phone_number"] },
+              { "id": "address", "path": ["address"] }
+            ],
+            "claim_sets": [
+              ["given_name", "family_name", "birthdate", "nationalities", "email", "phone_number", "address"],
+              ["given_name", "family_name", "birthdate", "nationalities", "email", "phone_number"],
+              ["given_name", "family_name", "birthdate", "nationalities", "email", "address"],
+              ["given_name", "family_name", "birthdate", "nationalities", "email"],
+              ["given_name", "family_name", "birthdate", "nationalities", "phone_number", "address"],
+              ["given_name", "family_name", "birthdate", "nationalities", "phone_number"],
+              ["given_name", "family_name", "birthdate", "nationalities", "address"],
+              ["given_name", "family_name", "birthdate", "nationalities"]
+            ]
           }
         ]
       }

@@ -47,6 +47,34 @@ describe("CS-07 verifier API route boundary", () => {
     expect((await request(app).get("/vp/dc-api/browser.js")).status).to.equal(404);
   });
 
+  it("returns the decoded VP response when polling a successful CS-07 session", async function () {
+    if (!process.env.ALLOW_NO_REDIS) process.env.ALLOW_NO_REDIS = "true";
+    const { storeVPSession, getVPSession } = await import("../services/cacheServiceRedis.js");
+    const sessionId = `cs07-poll-${Date.now()}`;
+    await storeVPSession(sessionId, {
+      transport_profile: "cs07-dc-api",
+      verifier_origin: "https://rp.example",
+      status: "success",
+      profile_id: "ts12-dpc-pid",
+      verified_credential_ids: ["sca_card_dpc", "cmwallet"],
+      verification: "dcql_and_credential_binding_validated",
+      dc_api_response: {
+        vp_token: {
+          sca_card_dpc: { claims: { vct: "https://webuildconsortium.eu/sca/sca-card-dpc/1.0", card_id: "****" } },
+          cmwallet: { claims: { vct: "urn:eu.europa.ec.eudi:pid:1", family_name: "Neslo" } },
+        },
+      },
+    });
+    if (!await getVPSession(sessionId)) this.skip();
+    const response = await request(app)
+      .get(`/vp/dc-api/session/${sessionId}`)
+      .set("Origin", "https://rp.example");
+    expect(response.status).to.equal(200);
+    expect(response.body.status).to.equal("success");
+    expect(response.body.vp_response.vp_token.cmwallet.claims.family_name).to.equal("Neslo");
+    expect(response.body.vp_response.vp_token.sca_card_dpc.claims.card_id).to.equal("****");
+  });
+
   it("does not block VP preflight in the issuance CORS middleware", async () => {
     const response = await request(issuanceApp)
       .options("/vp/dc-api/request")

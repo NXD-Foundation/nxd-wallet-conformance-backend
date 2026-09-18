@@ -359,6 +359,27 @@ describe("CS-02 verifier response validation (Phase 4)", () => {
     })).to.throw(/transaction_data_hashes/);
   });
 
+  it("skips KB-JWT transaction_data_hashes checks when WALTID_DEMO is enabled", () => {
+    const encoded = Buffer.from(JSON.stringify({ type: "payment_data", amount: 10 }), "utf8").toString("base64url");
+    const claims = {
+      kbHeader: { typ: "kb+jwt", alg: "ES256" },
+      kbPayload: {
+        nonce: "n1", aud: "client", iat: Math.floor(Date.now() / 1000), sd_hash: "abc",
+      },
+      sessionNonce: "n1",
+      clientId: "client",
+      transactionData: [encoded],
+    };
+    expect(() => validateCs02KeyBindingJwtClaims({
+      ...claims,
+      options: { strict: true },
+    })).to.throw(/transaction_data_hashes/);
+    expect(() => validateCs02KeyBindingJwtClaims({
+      ...claims,
+      options: { strict: true, waltidDemo: true },
+    })).not.to.throw();
+  });
+
   it("verifies outer response JWT signature and aud/state claims", async () => {
     const { privateKey, publicKey } = await jose.generateKeyPair("ES256", { extractable: true });
     const privateJwk = await jose.exportJWK(privateKey);
@@ -745,6 +766,22 @@ describe("CS-02 verifier response validation (Phase 4)", () => {
         expect(error).to.be.instanceOf(Cs02VerifierResponseError);
         expect(error.message).to.match(/unsolicited disclosed claim/);
       }
+    });
+
+    it("allows all disclosures when DCQL omits claims", async () => {
+      const keys = await keyMaterial();
+      const sdJwt = await buildSdJwtPresentation({
+        ...keys,
+        disclosures: [disclosure("family_name", "Neslo"), disclosure("given_name", "Alice")],
+      });
+
+      const result = await validateCs02SdJwtIssuerAuthenticity({
+        sdJwt,
+        credQuery: { meta: { vct_values: ["test"] } },
+        options: { strict: true, issuerVerificationJwk: keys.issuerPublicJwk },
+      });
+      expect(result.claims.family_name).to.equal("Neslo");
+      expect(result.claims.given_name).to.equal("Alice");
     });
 
     it("accepts nested SD-JWT claim paths when a disclosed object satisfies them", async () => {

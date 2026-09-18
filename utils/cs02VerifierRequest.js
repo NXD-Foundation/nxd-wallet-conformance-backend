@@ -67,12 +67,17 @@ function truthyEnv(value) {
   return normalized === "true" || normalized === "1" || normalized === "yes";
 }
 
+export function isWaltidDemoMode(env = process.env) {
+  return truthyEnv(env.WALTID_DEMO) || truthyEnv(env.VERIFIER_WALTID_DEMO);
+}
+
 export function resolveVerifierCs02Options(env = process.env) {
   const compatibility = truthyEnv(env.VERIFIER_CS02_COMPATIBILITY ?? env.CS02_COMPATIBILITY);
   const cs03Compatibility = truthyEnv(
     env.VERIFIER_CS03_COMPATIBILITY ?? env.CS03_COMPATIBILITY,
   );
   const ts12Compatibility = truthyEnv(env.VERIFIER_TS12_COMPATIBILITY);
+  const waltidDemo = isWaltidDemoMode(env);
   return {
     strict: !compatibility,
     allowCs03CredentialFormat: cs03Compatibility,
@@ -83,6 +88,7 @@ export function resolveVerifierCs02Options(env = process.env) {
     // CS-12 payment type is first-class in this ITB. The env flag remains accepted.
     allowTs12TransactionData: true,
     ts12Compatibility,
+    waltidDemo,
   };
 }
 
@@ -355,6 +361,7 @@ export function validateCs02SignedJar(requestJwt, options = { strict: true }) {
     "iat",
     "exp",
     "dcql_query",
+    "aud",
   ];
   if (!isCs07DcApiRequest) requiredFields.push("state", "response_uri");
   if (isCs07DcApiRequest) requiredFields.push("expected_origins");
@@ -383,6 +390,15 @@ export function validateCs02SignedJar(requestJwt, options = { strict: true }) {
 
   validateCs02ResponseMode(payload.response_mode, options);
   validateCs02Nonce(payload.nonce);
+  const requestAudiences = Array.isArray(payload.aud)
+    ? payload.aud
+    : payload.aud != null ? [payload.aud] : [];
+  if (!requestAudiences.includes(CS02_DEFAULT_AUDIENCE)) {
+    throw new Cs02VerifierRequestError(
+      `Generated CS-02 JAR aud must contain "${CS02_DEFAULT_AUDIENCE}"`,
+      "invalid_request",
+    );
+  }
   if (isCs07DcApiRequest) {
     if (payload.response_type !== "vp_token" || payload.response_mode !== "dc_api.jwt") {
       throw new Cs02VerifierRequestError("Invalid CS-07 DC API request profile", "invalid_request");

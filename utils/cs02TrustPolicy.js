@@ -116,7 +116,7 @@ export function getCs02CapabilityProfile() {
 
 export function selectCs02VerifierEncryptionJwk(clientMetadata = {}) {
   const keys = Array.isArray(clientMetadata?.jwks?.keys) ? clientMetadata.jwks.keys : [];
-  return keys.find(
+  const candidates = keys.filter(
     (key) =>
       key?.use === "enc" &&
       key?.kty === "EC" &&
@@ -125,7 +125,10 @@ export function selectCs02VerifierEncryptionJwk(clientMetadata = {}) {
       key.kid.length > 0 &&
       typeof key.alg === "string" &&
       CS02_ENFORCED_JWE_ALGS.has(key.alg),
-  ) || null;
+  );
+  // OpenID4VP 1.0 §8.3 / HAIP DC API require ECDH-ES on P-256. Prefer that
+  // advertised alg when both direct ECDH-ES and key-wrap variants are present.
+  return candidates.find((key) => key.alg === "ECDH-ES") || candidates[0] || null;
 }
 
 export function buildStrictCs02ClientMetadata(

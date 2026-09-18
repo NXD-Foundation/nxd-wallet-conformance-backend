@@ -46,6 +46,17 @@ describe("CS-02 trust and metadata policy (Phase 5)", () => {
     })).to.equal(null);
   });
 
+  it("prefers an ECDH-ES encryption JWK when key-wrap variants are also advertised", () => {
+    expect(selectCs02VerifierEncryptionJwk({
+      jwks: {
+        keys: [
+          { kid: "wrap", use: "enc", kty: "EC", crv: "P-256", alg: "ECDH-ES+A256KW" },
+          { kid: "direct", use: "enc", kty: "EC", crv: "P-256", alg: "ECDH-ES" },
+        ],
+      },
+    })).to.include({ kid: "direct", alg: "ECDH-ES" });
+  });
+
   it("returns placeholder trust for x509_san_dns until anchors are configured", async () => {
     const result = await validateX509SanDnsTrustAnchor("x509_san_dns:example.com", {}, "pem");
     expect(result.placeholder).to.equal(true);

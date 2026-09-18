@@ -9,6 +9,7 @@ import {
   createOpenId4VpRequestUrl,
   filterClientMetadataForCs02,
   resolveVerifierCs02Options,
+  isWaltidDemoMode,
   validateCs02TransactionDataEntries,
   validateCs02JarGenerationInput,
 } from "../utils/cs02VerifierRequest.js";
@@ -97,6 +98,15 @@ describe("CS-02 verifier request generation (Phase 3)", () => {
   it("is strict by default", () => {
     delete process.env.VERIFIER_CS02_COMPATIBILITY;
     expect(resolveVerifierCs02Options({}).strict).to.equal(true);
+  });
+
+  it("enables walt.id demo mode only when WALTID_DEMO is true", () => {
+    expect(isWaltidDemoMode({})).to.equal(false);
+    expect(resolveVerifierCs02Options({}).waltidDemo).to.equal(false);
+    expect(isWaltidDemoMode({ WALTID_DEMO: "true" })).to.equal(true);
+    expect(resolveVerifierCs02Options({ WALTID_DEMO: "true" }).waltidDemo).to.equal(true);
+    expect(resolveVerifierCs02Options({ VERIFIER_WALTID_DEMO: "1" }).waltidDemo).to.equal(true);
+    expect(resolveVerifierCs02Options({ WALTID_DEMO: "false" }).waltidDemo).to.equal(false);
   });
 
   it("allows compatibility mode when VERIFIER_CS02_COMPATIBILITY=true", () => {

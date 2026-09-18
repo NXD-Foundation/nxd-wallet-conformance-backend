@@ -365,6 +365,7 @@ export function validateCs02JarPayload(payload, options, log = () => {}) {
     "iat",
     "exp",
     "dcql_query",
+    "aud",
   ];
   if (!isCs07DcApiRequest) requiredFields.splice(2, 0, "response_uri", "state");
   if (isCs07DcApiRequest) requiredFields.push("expected_origins");
@@ -411,7 +412,7 @@ export function validateCs02JarPayload(payload, options, log = () => {}) {
     throw new Cs02ValidationError("Authorization request lifetime exceeds accepted maximum", "invalid_request");
   }
 
-  if (!isCs07DcApiRequest && !audienceMatchesPolicy(payload.aud, options.walletAudiences)) {
+  if (!audienceMatchesPolicy(payload.aud, options.walletAudiences)) {
     logValidationFailure(log, "jar_audience", {
       aud: payload.aud,
       allowed: options.walletAudiences,

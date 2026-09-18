@@ -1,3 +1,7 @@
+import { extractMdocClaimsByNamespace } from "./mdocClaims.js";
+import { parseSdJwtClaims } from "./sdJwtClaims.js";
+import { extractKeyBindingJwtFromSdJwt } from "./sdJwtKeyBinding.js";
+
 /** WE BUILD CS-07 verifier-side Digital Credentials API primitives. */
 
 export const CS07_DC_API_PROTOCOL = "openid4vp-v1-signed";
@@ -157,4 +161,86 @@ export function parseCs07AuthorizationResponse(value, dcqlQuery) {
     }
   }
   return { response, vpToken: response.vp_token };
+}
+
+function decodeJwtPayload(token) {
+  if (typeof token !== "string") return null;
+  const parts = token.split(".");
+  if (parts.length < 2) return null;
+  try {
+    return JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function decodePresentationToken(token) {
+  if (typeof token !== "string") return token;
+  if (token.includes("~")) {
+    try {
+      const parsed = parseSdJwtClaims(token);
+      const keyBinding = decodeJwtPayload(extractKeyBindingJwtFromSdJwt(token));
+      return {
+        claims: parsed.claims,
+        ...(keyBinding ? { key_binding: keyBinding } : {}),
+      };
+    } catch {
+      // Not a well-formed SD-JWT; try other encodings below.
+    }
+  }
+  try {
+    const mdoc = extractMdocClaimsByNamespace(token);
+    if (mdoc?.claimsByNamespace && Object.keys(mdoc.claimsByNamespace).length > 0) {
+      return {
+        docType: mdoc.docType,
+        claims: mdoc.claimsByNamespace,
+      };
+    }
+  } catch {
+    // Not an mdoc presentation.
+  }
+  const jwtPayload = decodeJwtPayload(token);
+  if (jwtPayload) return { claims: jwtPayload };
+  return token;
+}
+
+function decodeVpTokenValue(value) {
+  if (Array.isArray(value)) return value.map(decodeVpTokenValue);
+  return decodePresentationToken(value);
+}
+
+/**
+ * Replace compact presentations in a decrypted Authorization Response with
+ * reconstructed claims so pollers can read the VP result without JWEs or
+ * compact SD-JWTs.
+ */
+export function decodeCs07AuthorizationResponse(response) {
+  if (!isPlainObject(response)) return null;
+  const vpToken = response.vp_token;
+  if (!isPlainObject(vpToken)) return { ...response };
+  const decodedVpToken = {};
+  for (const [id, value] of Object.entries(vpToken)) {
+    decodedVpToken[id] = decodeVpTokenValue(value);
+  }
+  return { ...response, vp_token: decodedVpToken };
+}
+
+function storedVpResponse(session) {
+  const stored = session?.dc_api_response;
+  if (!isPlainObject(stored) || stored.parsed === true) return undefined;
+  return stored;
+}
+
+/** JSON body for GET /vp/dc-api/session/:sessionId. */
+export function buildCs07SessionStatusPayload(sessionId, session = {}) {
+  return {
+    sessionId,
+    status: session.status || "pending",
+    profile: session.profile_id || undefined,
+    error: session.error || undefined,
+    error_description: session.error_description || undefined,
+    verified_credential_ids: session.verified_credential_ids || undefined,
+    verification: session.verification || undefined,
+    vp_response: storedVpResponse(session),
+  };
 }

@@ -145,18 +145,66 @@ export function buildTs12DcqlQuery(attestationType = TS12_DEFAULT_ATTESTATION_TY
 export const TS12_PID_VCT = "urn:eu.europa.ec.eudi:pid:1";
 export const TS12_PID_CREDENTIAL_ID = "cmwallet";
 
+export const TS12_PID_DCQL_REQUIRED_CLAIM_IDS = Object.freeze([
+  "given_name",
+  "family_name",
+  "birthdate",
+  "nationalities",
+]);
+
+export const TS12_PID_DCQL_OPTIONAL_CLAIM_IDS = Object.freeze([
+  "email",
+  "phone_number",
+  "address",
+]);
+
+/**
+ * SD-JWT PID Rulebook claims requested by CS-07 `ts12-*-pid` profiles.
+ * Semantic mapping: name→given_name, surname→family_name, date of birth→birthdate,
+ * email→email, nationality→nationalities, mobile number→phone_number, address→address.
+ * email, phone_number, and address are optional via `claim_sets`.
+ */
+export const TS12_PID_DCQL_CLAIMS = Object.freeze([
+  { id: "given_name", path: Object.freeze(["given_name"]) },
+  { id: "family_name", path: Object.freeze(["family_name"]) },
+  { id: "birthdate", path: Object.freeze(["birthdate"]) },
+  { id: "email", path: Object.freeze(["email"]) },
+  { id: "nationalities", path: Object.freeze(["nationalities"]) },
+  { id: "phone_number", path: Object.freeze(["phone_number"]) },
+  { id: "address", path: Object.freeze(["address"]) },
+]);
+
+function buildTs12PidClaimSets(requiredIds, optionalIds) {
+  const sets = [];
+  for (let mask = (1 << optionalIds.length) - 1; mask >= 0; mask -= 1) {
+    const extras = optionalIds.filter((_, index) => (mask & (1 << (optionalIds.length - 1 - index))) !== 0);
+    sets.push(Object.freeze([...requiredIds, ...extras]));
+  }
+  return Object.freeze(sets);
+}
+
+export const TS12_PID_DCQL_CLAIM_SETS = buildTs12PidClaimSets(
+  TS12_PID_DCQL_REQUIRED_CLAIM_IDS,
+  TS12_PID_DCQL_OPTIONAL_CLAIM_IDS,
+);
+
+function cloneTs12PidCredentialQuery() {
+  return {
+    id: TS12_PID_CREDENTIAL_ID,
+    format: "dc+sd-jwt",
+    meta: { vct_values: [TS12_PID_VCT] },
+    claims: TS12_PID_DCQL_CLAIMS.map((claim) => ({ id: claim.id, path: [...claim.path] })),
+    claim_sets: TS12_PID_DCQL_CLAIM_SETS.map((set) => [...set]),
+  };
+}
+
 /** CS-12 payment DCQL for one SCA attestation plus the default PID. */
 export function buildTs12ScaWithPidDcqlQuery(attestationType) {
   const sca = buildTs12DcqlQuery(attestationType);
   return {
     credentials: [
       ...sca.credentials,
-      {
-        id: TS12_PID_CREDENTIAL_ID,
-        format: "dc+sd-jwt",
-        meta: { vct_values: [TS12_PID_VCT] },
-        claims: [{ path: ["family_name"] }],
-      },
+      cloneTs12PidCredentialQuery(),
     ],
   };
 }

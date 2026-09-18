@@ -225,7 +225,10 @@ unwrapping `direct_post`, `direct_post.jwt`, or `dc_api.jwt` into the inner
 `vp_token`. The Wallet selects an `EC`/`P-256`, `use=enc` JWK with
 both `kid` and `alg`, uses that exact `alg`, prefers `A256GCM`, and returns a
   protocol error rather than downgrading a successful response if encryption
-  cannot be created.
+  cannot be created. The advertised verifier encryption JWK uses
+  `alg: ECDH-ES` (OpenID4VP 1.0 §8.3 and HAIP DC API). Key-wrap variants such
+  as `ECDH-ES+A256KW` remain decryptable for compatibility but are not the
+  advertised DC API algorithm.
 - The verifier's advertised encryption JWK and decrypting private key are one
   key pair selected by `kid`. Startup/request handling must fail closed when
   their EC P-256 coordinates do not match; DC API and legacy HAIP response
@@ -247,8 +250,11 @@ Sources: [CS-02](./core/cs-02-credential-presentation%20%281%29.md),
 15 July 2026 together with OpenID4VP 1.0 Appendix A; the exact W3C draft is
 pinned locally and must not be replaced by the moving editor's draft.
 - The verifier-side CS-07 API consists of `POST /vp/dc-api/request`,
-`POST /vp/dc-api/response/:sessionId`, and the sanitized polling endpoint
-`GET /vp/dc-api/session/:sessionId`. The CS-07 JSON API does not invoke the
+`POST /vp/dc-api/response/:sessionId`, and the polling endpoint
+`GET /vp/dc-api/session/:sessionId`. After a successful presentation the
+poll result includes `vp_response`, the decrypted Authorization Response
+with reconstructed credential claims (not compact JWEs, JARs, or encryption
+keys). The CS-07 JSON API does not invoke the
 browser Digital Credentials API. For local ITB, the verifier also serves the
 RP demo pages at `GET /payment` and `GET /demo` (plus `GET /rp-client.js`).
 A separate `npm run dc-api:demo` server remains available when the RP origin
@@ -264,8 +270,11 @@ Encrypted `dc_api.jwt` response parsing and shared SD-JWT/mDoc dispatch have
 dedicated CS-07 success-flow coverage.
 The browser flow must use
 `openid4vp-v1-signed`, a compact signed request in `data.request`,
-`response_mode=dc_api.jwt`, configured `expected_origins`, and an audience
-of `origin:<verifier-origin>` for response proofs.
+`response_mode=dc_api.jwt`, configured `expected_origins`, a request-object
+`aud` of `https://self-issued.me/v2` (OpenID4VP 1.0 §5.8 static metadata),
+`client_metadata.jwks` advertising an `EC`/`P-256` encryption key with
+`alg: ECDH-ES`, and an audience of `origin:<verifier-origin>` for response
+proofs.
 - Profile and RP authorization are configured in `data/dc-api-config.json`
 (or `DC_API_CONFIG_PATH`); ephemeral RP origins can be merged at startup via
 `DC_API_RP_ORIGINS` (and optional `DC_API_RP_PROFILES`). Both env vars accept
@@ -276,7 +285,12 @@ intentionally has no relying parties enabled and must be populated for a deploym
 `ts12-dpc`, `ts12-iban`, and `ts12-user` for the three in-scope VCTs, plus
 `ts12-dpc-pid`, `ts12-iban-pid`, and `ts12-user-pid` which add the default
 SD-JWT PID `urn:eu.europa.ec.eudi:pid:1` (same VCT as `pid-basic`) in the
-same DCQL query. `ts12-payment` remains as an alias of `ts12-dpc`.
+same DCQL query. Those combined profiles request PID Rulebook claims
+`given_name`, `family_name`, `birthdate`, and `nationalities` (name, surname,
+date of birth, nationality), with `email`, `phone_number`, and `address`
+optional through DCQL `claim_sets`. Omitting `claims` would ask for no
+selectively disclosable PID attributes. `ts12-payment`
+remains as an alias of `ts12-dpc`.
 `POST /vp/dc-api/request` accepts payment payload fields for that
 workflow only; other profiles still allow only `profile` and `sessionId`. The
 RP demo page is `clients/dc-api/demo/payment.html` (`GET /payment` on the
@@ -284,6 +298,8 @@ verifier, or `npm run dc-api:demo`). Authorize the RP origin with
 `DC_API_RP_PROFILES=pid-basic,qualified-signing,ts12-dpc,ts12-dpc-pid,ts12-iban,ts12-iban-pid,ts12-user,ts12-user-pid,ts12-payment`.
 The response path runs the same
 TS-12 KB-JWT / attestation checks as `/ts12/payment/request` sessions.
+`WALTID_DEMO=true` skips those KB hash and CS-12 SCA KB claims for walt.id
+Android demos; see TS-12 / CS-12 Payment SCA.
 - DC API transport must remain a thin adapter over the CS-02 DCQL and
 credential-verification core. It must distinguish wallet protocol errors in
 fulfilled `DigitalCredential.data` values from browser promise rejection.
@@ -344,9 +360,12 @@ Sources: [SD-JWT key-binding fixes](./sd-jwt-key-binding-interop.md),
   `use=enc`. GET on `/ts12/payment/x509VPrequest/:id` is always rejected.
   The same payment `transaction_data` can be originated over Digital
   Credentials API via CS-07 profiles `ts12-dpc`, `ts12-iban`, and
-  `ts12-user` (one SCA attestation each) and `ts12-dpc-pid`,
+  `ts12-user` (one SCA attestation each) and   `ts12-dpc-pid`,
   `ts12-iban-pid`, and `ts12-user-pid` (that SCA attestation plus
-  `urn:eu.europa.ec.eudi:pid:1`) using `dc_api.jwt` and no encrypted
+  `urn:eu.europa.ec.eudi:pid:1` with required PID Rulebook claims
+  `given_name`, `family_name`, `birthdate`, and `nationalities`, plus
+  optional `email`, `phone_number`, and `address` via `claim_sets`) using
+  `dc_api.jwt` and no encrypted
   JAR POST.
   Optional TS12 payment payload fields (`purpose`, `amount_estimated`,
   `amount_earmarked`, `sct_inst`) are accepted. The CLI wallet does not
@@ -364,6 +383,12 @@ Sources: [SD-JWT key-binding fixes](./sd-jwt-key-binding-interop.md),
   treats a validated `jti` as the PSD2 Authentication Code. `sca-user`
   presentations also require the credential `aud` to include the RP
   `client_id`.
+- `WALTID_DEMO=true` (alias `VERIFIER_WALTID_DEMO=true`) is a non-conformant
+  demo switch for the walt.id Android wallet. It skips KB-JWT
+  `transaction_data_hashes` / `transaction_data_hashes_alg` checks and the
+  remaining CS-12 SCA KB claims (`jti`, `amr`, `response_mode`). Signature,
+  `nonce`, `aud`, `sd_hash`, DCQL, and credential-type checks still run.
+  Default is off. Do not use it for ITB scoring or production SCA.
 
 Sources: [CS-12 SCA payments](./core/cs-12-sca-payments%20(1).md) and
 [TS-12 SCA with wallet](./ts12/ts12-electronic-payments-SCA-implementation-with-wallet%20(1).md),

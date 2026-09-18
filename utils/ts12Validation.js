@@ -1,3 +1,4 @@
+import { isWaltidDemoMode } from "./cs02VerifierRequest.js";
 import {
   audienceIncludesRp,
   computeTs12TransactionDataHash,
@@ -51,9 +52,16 @@ export function validateTs12KeyBindingJwt({
   encodedTransactionData,
   seenJti = null,
   expectedVct = TS12_SCA_IBAN_VCT,
+  options = {},
 }) {
   if (!kbPayload || typeof kbPayload !== "object") {
     return { ok: false, code: "missing_key_binding", error: "Key Binding JWT payload is missing" };
+  }
+
+  const waltidDemo = options.waltidDemo === true || isWaltidDemoMode(options.env || process.env);
+  if (waltidDemo) {
+    console.warn("[WALTID_DEMO] skipping CS-12 Key Binding JWT SCA claims (jti, amr, response_mode, transaction_data_hashes)");
+    return { ok: true, expectedVct };
   }
 
   if (!kbPayload.jti || typeof kbPayload.jti !== "string") {
@@ -245,6 +253,7 @@ export function validateTs12PaymentPresentationResponse({
   vpSession,
   seenJti = null,
   rpClientId = null,
+  options = {},
 }) {
   const encodedTransactionData = Array.isArray(vpSession?.transaction_data)
     ? vpSession.transaction_data[0]
@@ -258,6 +267,7 @@ export function validateTs12PaymentPresentationResponse({
     encodedTransactionData,
     seenJti,
     expectedVct,
+    options,
   });
 
   if (!kbResult.ok) {
