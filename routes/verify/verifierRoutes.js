@@ -55,7 +55,7 @@ import {
 } from "../../utils/cs03Validation.js";
 import { validateSdJwtKeyBindingMatchesCredential } from "../../utils/sdJwtKeyBinding.js";
 import { checkVerifierCredentialTrust, isTrustFrameworkSession } from "../../utils/trustFrameworkPolicy.js";
-import { validateTs12PaymentPresentationResponse } from "../../utils/ts12Validation.js";
+import { selectTs12ScaValidationClaims, validateTs12PaymentPresentationResponse } from "../../utils/ts12Validation.js";
 import {
   Cs02VerifierResponseError,
   buildCs02FailedSessionPatch,
@@ -907,6 +907,7 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
       responseMode: vpSession.response_mode
     });
     let claimsFromExtraction;
+    let claimsForTs12Validation;
   let jwtFromKeybind;
   // Raw SD-JWT string associated with the key-binding JWT (if any),
   // used to validate the sd_hash claim in the KB-JWT.
@@ -1142,6 +1143,7 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
           digest,
         );
         claimsFromExtraction = result.extractedClaims;
+        claimsForTs12Validation = selectTs12ScaValidationClaims(result);
         jwtFromKeybind = result.keybindJwt;
         sdJwtForKeybind = result.sdJwtForKeybind || sdJwtForKeybind;
 
@@ -1470,7 +1472,7 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
           sessionId,
           vpSession,
           jwtFromKeybind,
-          claimsFromExtraction,
+          claimsFromExtraction: claimsForTs12Validation,
           res,
           slog,
         });
@@ -1708,6 +1710,7 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
         await logDebug(sessionId, "Extracting claims from direct_post request");
         const result = await extractClaimsFromRequest(req, digest);
         claimsFromExtraction = result.extractedClaims;
+        claimsForTs12Validation = selectTs12ScaValidationClaims(result);
         jwtFromKeybind = result.keybindJwt;
         sdJwtForKeybind = result.sdJwtForKeybind || sdJwtForKeybind;
         
@@ -2213,7 +2216,7 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
         sessionId,
         vpSession,
         jwtFromKeybind,
-        claimsFromExtraction,
+        claimsFromExtraction: claimsForTs12Validation,
         res,
         slog,
       });

@@ -22,6 +22,72 @@ async function decodeJwtVC(jwtString) {
 }
 
 /**
+ * SD-JWT VC claims that are carried in the issuer-signed JWT and are not
+ * selectively disclosable. DCQL selects the credential type with
+ * `meta.vct_values`, not a `vct` claim path, so projection must keep these
+ * when the wallet presented them. `_sd` and `_sd_alg` stay out of the output.
+ */
+export const SD_JWT_VC_NON_SELECTIVE_CLAIMS = Object.freeze([
+  "iss",
+  "iat",
+  "nbf",
+  "exp",
+  "cnf",
+  "vct",
+  "status",
+]);
+
+/**
+ * Copy the DCQL-requested claim paths into a new object, and retain
+ * issuer-signed claims that are not selectively disclosable.
+ * Selectively disclosable claims that were not requested, including `aud`,
+ * are omitted. Callers that need those claims for validation must keep the
+ * reconstructed credential.
+ */
+export function selectClaimsByDcqlPaths(sourceObj, dcqlPaths) {
+  if (!sourceObj || typeof sourceObj !== "object") return {};
+  const result = {};
+  const setDeep = (obj, pathSegments, value) => {
+    let cursor = obj;
+    for (let i = 0; i < pathSegments.length; i++) {
+      const segment = pathSegments[i];
+      if (i === pathSegments.length - 1) {
+        cursor[segment] = value;
+      } else {
+        if (cursor[segment] === undefined || typeof cursor[segment] !== "object" || Array.isArray(cursor[segment])) {
+          cursor[segment] = {};
+        }
+        cursor = cursor[segment];
+      }
+    }
+  };
+  const getDeep = (obj, pathSegments) => {
+    let cursor = obj;
+    for (const segment of pathSegments) {
+      if (!cursor || typeof cursor !== "object") return undefined;
+      cursor = cursor[segment];
+    }
+    return cursor;
+  };
+
+  for (const p of dcqlPaths || []) {
+    const segments = Array.isArray(p) ? p : (typeof p === "string" ? p.split(".") : []);
+    if (!segments.length) continue;
+    const value = getDeep(sourceObj, segments);
+    if (value !== undefined) {
+      setDeep(result, segments, value);
+    }
+  }
+
+  for (const claimName of SD_JWT_VC_NON_SELECTIVE_CLAIMS) {
+    if (sourceObj[claimName] !== undefined && result[claimName] === undefined) {
+      result[claimName] = sourceObj[claimName];
+    }
+  }
+  return result;
+}
+
+/**
  * Extracts claims from the request body.
  *
  * @param {Object} req - The Express request object.
@@ -32,6 +98,9 @@ async function decodeJwtVC(jwtString) {
 export async function extractClaimsFromRequest(req, digest, isPaymentVP, sessionIdentifier) {
   const sessionId = req.params?req.params.id:sessionIdentifier;
   let extractedClaims = [];
+  // Full issuer-signed claims, before DCQL path projection. SCA type and
+  // audience checks must use this copy; extractedClaims is the stored output.
+  let reconstructedClaims = [];
   let keybindJwt; // This might need to be an array if multiple SD-JWTs with different kbJwts are possible
   // Keep track of the SD-JWT string associated with the key-binding JWT so the verifier
   // can validate the sd_hash in the KB-JWT per SD-JWT spec.
@@ -148,10 +217,12 @@ export async function extractClaimsFromRequest(req, digest, isPaymentVP, session
               digest
             );
             extractedClaims.push(claims);
+            reconstructedClaims.push(claims);
           } else if (descriptor.format === "jwt_vc_json") {
             const decodedJwt = await decodeJwtVC(credString); // Using your existing decodeJwtVC
             if (decodedJwt && decodedJwt.payload) {
               extractedClaims.push(decodedJwt.payload);
+              reconstructedClaims.push(decodedJwt.payload);
               // keybindJwt is typically not part of a plain jwt_vc_json unless a custom mechanism is used.
               // If there's a cnf claim with jwk, it could be related but not directly a kbJwt.
             } else {
@@ -185,44 +256,13 @@ export async function extractClaimsFromRequest(req, digest, isPaymentVP, session
     // Non-PEX flow (e.g., for DCQL) where presentation_submission is not provided.
     console.log("Processing with non-PEX flow (no presentation_submission).");
     try {
-      // Helper to select values from an object using DCQL claim path arrays
-      // Each DCQL path is an array of segments, e.g., ["org.iso.18013.5.1", "family_name"]
-      const selectByDcqlPaths = (sourceObj, dcqlPaths) => {
-        if (!sourceObj || typeof sourceObj !== 'object') return {};
-        const result = {};
-        const setDeep = (obj, pathSegments, value) => {
-          let cursor = obj;
-          for (let i = 0; i < pathSegments.length; i++) {
-            const segment = pathSegments[i];
-            if (i === pathSegments.length - 1) {
-              cursor[segment] = value;
-            } else {
-              if (cursor[segment] === undefined || typeof cursor[segment] !== 'object' || Array.isArray(cursor[segment])) {
-                cursor[segment] = {};
-              }
-              cursor = cursor[segment];
-            }
-          }
-        };
-        const getDeep = (obj, pathSegments) => {
-          let cursor = obj;
-          for (const segment of pathSegments) {
-            if (!cursor || typeof cursor !== 'object') return undefined;
-            cursor = cursor[segment];
-          }
-          return cursor;
-        };
-
-        for (const p of dcqlPaths) {
-          // Support both ["a","b"] and "a.b" just in case
-          const segments = Array.isArray(p) ? p : (typeof p === 'string' ? p.split('.') : []);
-          if (!segments.length) continue;
-          const value = getDeep(sourceObj, segments);
-          if (value !== undefined) {
-            setDeep(result, segments, value);
-          }
+      const recordCredentialClaims = (claims) => {
+        reconstructedClaims.push(claims);
+        if (dcqlClaimPaths.length > 0) {
+          extractedClaims.push(selectClaimsByDcqlPaths(claims, dcqlClaimPaths));
+        } else {
+          extractedClaims.push(claims);
         }
-        return result;
       };
 
       // Collect requested DCQL claim paths (arrays of segments)
@@ -327,30 +367,16 @@ export async function extractClaimsFromRequest(req, digest, isPaymentVP, session
                 if (vcJwt.includes("~")) {
                   const decodedVc = await decodeSdJwt(vcJwt, digest);
                   const vcClaims = await getClaims(decodedVc.jwt.payload, decodedVc.disclosures, digest);
-                  // Apply DCQL claim filtering if dcql_query provided in session
-                  if (dcqlClaimPaths.length > 0) {
-                    extractedClaims.push(selectByDcqlPaths(vcClaims, dcqlClaimPaths));
-                  } else {
-                    extractedClaims.push(vcClaims);
-                  }
+                  recordCredentialClaims(vcClaims);
                 } else {
                   const decodedVc = await decodeJwtVC(vcJwt);
                   if (decodedVc && decodedVc.payload) {
-                    if (dcqlClaimPaths.length > 0) {
-                      extractedClaims.push(selectByDcqlPaths(decodedVc.payload, dcqlClaimPaths));
-                    } else {
-                      extractedClaims.push(decodedVc.payload);
-                    }
+                    recordCredentialClaims(decodedVc.payload);
                   }
                 }
               }
             } else {
-              // single VC
-              if (dcqlClaimPaths.length > 0) {
-                extractedClaims.push(selectByDcqlPaths(claims, dcqlClaimPaths));
-              } else {
-                extractedClaims.push(claims);
-              }
+              recordCredentialClaims(claims);
             }
           } else { // Handle standard JWT
             const decodedJwt = await decodeJwtVC(token);
@@ -360,20 +386,11 @@ export async function extractClaimsFromRequest(req, digest, isPaymentVP, session
                 for (const vcJwt of payload.vp.verifiableCredential) {
                   const decodedVc = await decodeJwtVC(vcJwt);
                   if (decodedVc && decodedVc.payload) {
-                    if (dcqlClaimPaths.length > 0) {
-                      extractedClaims.push(selectByDcqlPaths(decodedVc.payload, dcqlClaimPaths));
-                    } else {
-                      extractedClaims.push(decodedVc.payload);
-                    }
+                    recordCredentialClaims(decodedVc.payload);
                   }
                 }
               } else {
-                // single VC
-                if (dcqlClaimPaths.length > 0) {
-                  extractedClaims.push(selectByDcqlPaths(payload, dcqlClaimPaths));
-                } else {
-                  extractedClaims.push(payload);
-                }
+                recordCredentialClaims(payload);
               }
             } else {
                console.warn("Could not decode non-SD-JWT, skipping:", token);
@@ -391,7 +408,7 @@ export async function extractClaimsFromRequest(req, digest, isPaymentVP, session
 
   // console.log("Final keybindJwt (could be from the last processed SD-JWT with one):", keybindJwt);
   // sdJwtForKeybind carries the SD-JWT string associated with the key-binding JWT (if any)
-  return { sessionId, extractedClaims, keybindJwt, sdJwtForKeybind };
+  return { sessionId, extractedClaims, reconstructedClaims, keybindJwt, sdJwtForKeybind };
 }
 
 export async function validatePoP(
@@ -683,6 +700,8 @@ export function hasOnlyAllowedFields(
     "nonce",
     "nbf",
     "jti",
+    "vct",
+    "status",
   ]
 ) {
   // Convert allowedPaths to a set of property names by stripping "$.".

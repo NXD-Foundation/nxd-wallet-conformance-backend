@@ -6,7 +6,7 @@ import { expect } from "chai";
 import fs from "fs";
 import express from "express";
 import request from "supertest";
-import { compactDecrypt, exportJWK, generateKeyPair } from "jose";
+import { compactDecrypt, decodeProtectedHeader, exportJWK, generateKeyPair } from "jose";
 import ts12PaymentRouter from "../routes/verify/ts12PaymentRoutes.js";
 import { CONFIG } from "../utils/routeUtils.js";
 import issuerConfig from "../data/issuer-config.json" with { type: "json" };
@@ -31,7 +31,9 @@ import {
   resolveTs12AttestationType,
 } from "../utils/ts12PaymentUtils.js";
 import { selectSatisfiedSdJwtClaimSet } from "../utils/sdJwtClaims.js";
+import { selectClaimsByDcqlPaths } from "../utils/vpHeplers.js";
 import {
+  selectTs12ScaValidationClaims,
   validateTs12KeyBindingJwt,
   validateTs12PaymentPresentationResponse,
   validateTs12PresentedCredential,
@@ -506,6 +508,108 @@ describe("TS12 payment validation", () => {
     );
     assert.equal(audOk.ok, true);
   });
+
+  it("keeps vct in the DCQL projection and still checks SCA audience on the reconstructed credential", () => {
+    const cases = [
+      {
+        id: "sca-iban",
+        business: { masked_iban: "NL**", iban: "NL00BANK0123456789", bic: "BANKNL2A", currency: "EUR" },
+      },
+      {
+        id: "sca-user",
+        business: { masked_psu_id: "psu-*", aud: "x509_san_dns:rp.example" },
+      },
+      {
+        id: "sca-card-dpc",
+        business: { credential_id: "card-1", network: "visa", card_id: "****" },
+      },
+    ];
+
+    for (const entry of cases) {
+      const query = buildTs12DcqlQuery(entry.id);
+      const expectedVct = query.credentials[0].meta.vct_values[0];
+      const paths = query.credentials[0].claims.map((claim) => claim.path);
+      expect(paths.flat()).to.not.include("vct");
+      expect(paths.flat()).to.not.include("aud");
+
+      const reconstructed = { vct: expectedVct, iss: "https://issuer.example", ...entry.business };
+      const projected = selectClaimsByDcqlPaths(reconstructed, paths);
+      expect(projected.vct, entry.id).to.equal(expectedVct);
+      expect(projected.iss, entry.id).to.equal("https://issuer.example");
+      expect(projected).to.not.have.property("aud");
+      for (const [name, value] of Object.entries(entry.business)) {
+        if (name === "aud") continue;
+        expect(projected[name]).to.equal(value);
+      }
+
+      const encoded = encodeTs12TransactionData(
+        buildTs12PaymentTransactionData({ transaction_id: entry.id }),
+      );
+      const vpSession = {
+        ts12_payment: true,
+        response_mode: "direct_post",
+        client_id: "x509_san_dns:rp.example",
+        transaction_data: [encoded],
+        ts12_expected_vct: expectedVct,
+      };
+      const kbPayload = {
+        jti: `auth-${entry.id}`,
+        response_mode: "direct_post",
+        amr: [{ knowledge: "pin_6_or_more_digits" }, { possession: "key_in_local_native_wscd" }],
+        transaction_data_hashes: [computeTs12TransactionDataHash(encoded)],
+        transaction_data_hashes_alg: "sha-256",
+      };
+
+      const { vct: _omittedVct, ...projectedWithoutVct } = projected;
+      const projectedResult = validateTs12PaymentPresentationResponse({
+        kbPayload,
+        extractedClaims: [projectedWithoutVct],
+        vpSession,
+        rpClientId: vpSession.client_id,
+      });
+      expect(projectedResult.ok, entry.id).to.equal(false);
+      expect(projectedResult.code, entry.id).to.equal("missing_sca_credential");
+      expect(projectedResult.error, entry.id).to.include(expectedVct);
+
+      const claimsForValidation = selectTs12ScaValidationClaims({
+        reconstructedClaims: [reconstructed],
+        extractedClaims: [projected],
+      });
+      expect(claimsForValidation[0].vct, entry.id).to.equal(expectedVct);
+
+      const accepted = validateTs12PaymentPresentationResponse({
+        kbPayload,
+        extractedClaims: claimsForValidation,
+        vpSession,
+        rpClientId: vpSession.client_id,
+      });
+      expect(accepted.ok, entry.id).to.equal(true);
+      expect(accepted.credential.vct, entry.id).to.equal(expectedVct);
+    }
+
+    const wrongType = validateTs12PresentedCredential(
+      selectTs12ScaValidationClaims({
+        reconstructedClaims: [{ vct: TS12_SCA_USER_VCT, masked_psu_id: "psu-*", aud: "x509_san_dns:rp.example" }],
+        extractedClaims: [{ masked_psu_id: "psu-*" }],
+      }),
+      TS12_SCA_IBAN_VCT,
+      { rpClientId: "x509_san_dns:rp.example" },
+    );
+    expect(wrongType.ok).to.equal(false);
+    expect(wrongType.code).to.equal("missing_sca_credential");
+    expect(wrongType.error).to.include(TS12_SCA_IBAN_VCT);
+
+    const wrongAudience = validateTs12PresentedCredential(
+      selectTs12ScaValidationClaims({
+        reconstructedClaims: [{ vct: TS12_SCA_USER_VCT, masked_psu_id: "psu-*", aud: "x509_san_dns:other.example" }],
+        extractedClaims: [{ masked_psu_id: "psu-*" }],
+      }),
+      TS12_SCA_USER_VCT,
+      { rpClientId: "x509_san_dns:rp.example" },
+    );
+    expect(wrongAudience.ok).to.equal(false);
+    expect(wrongAudience.code).to.equal("aud_mismatch");
+  });
 });
 
 describe("TS12 issuer metadata", () => {
@@ -640,6 +744,9 @@ describe("TS12 payment routes", () => {
 
     const jar = jarResponse.text;
     expect(jar.split(".")).to.have.length(5);
+    const outerHeader = decodeProtectedHeader(jar);
+    expect(outerHeader.cty).to.equal("JWT");
+    expect(outerHeader.typ).to.equal("oauth-authz-req+jwt");
     const { plaintext } = await compactDecrypt(jar, privateKey);
     const requestJwt = new TextDecoder().decode(plaintext);
     expect(requestJwt.split(".")).to.have.length(3);

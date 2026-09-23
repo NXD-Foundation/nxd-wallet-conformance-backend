@@ -194,6 +194,19 @@ export function validateTs12KeyBindingJwt({
 }
 
 /**
+ * SCA type and audience belong to the issuer-signed reconstructed credential.
+ * Ordinary TS-12 DCQL queries request business claims. Stored output keeps
+ * non-selectively disclosable `vct`, and this check still uses the
+ * reconstructed credential so selectively disclosable `aud` is visible.
+ * @param {{ reconstructedClaims?: Array|Object, extractedClaims?: Array|Object }} extraction
+ * @returns {Array|Object|undefined}
+ */
+export function selectTs12ScaValidationClaims({ reconstructedClaims, extractedClaims } = {}) {
+  if (reconstructedClaims != null) return reconstructedClaims;
+  return extractedClaims;
+}
+
+/**
  * Ensure the presented credential claims include the expected TS12 SCA payment vct.
  * @param {Array|Object} extractedClaims
  * @param {string} [expectedVct]

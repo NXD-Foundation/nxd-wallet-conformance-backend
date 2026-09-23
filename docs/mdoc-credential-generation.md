@@ -86,6 +86,7 @@ This mirrors ISO 18013-5:
   - Fills the MSO’s `validityInfo` (`signed`, `validFrom`, `validUntil`).
 - `addDeviceKeyInfo`:
   - Sets `deviceKeyInfo.deviceKey` to the COSE/JWK derived from the wallet proof, binding the credential to that device key (holder binding).
+  - When the proof JWK has `kid`, the issuer passes it as UTF-8 bytes so COSE label 2 encodes as `bstr` per RFC 9052 §7.1 Table 4 (the JOSE proof header keeps `kid` as a string).
 
 #### 3.2 Creating the Mobile Security Object (MSO) and `issuerAuth`
 

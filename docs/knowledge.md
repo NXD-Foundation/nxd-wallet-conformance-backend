@@ -354,7 +354,9 @@ decode the value before hashing.
 - In strict CS-02 presentation, the Wallet also checks that its stored
 presentation key is the credential's `cnf.jwk` before producing a KB-JWT.
 - For mdoc issuance, construct ISO/IEC 18013-5 `IssuerSigned` and return
-`base64url(CBOR(IssuerSigned))` as the OID4VCI credential value.
+`base64url(CBOR(IssuerSigned))` as the OID4VCI credential value. When the proof
+JWK includes `kid`, the MSO `deviceKeyInfo.deviceKey` COSE label 2 MUST be the
+UTF-8 byte string of that identifier (RFC 9052 `bstr`), not a CBOR text string.
 - mdoc metadata claim paths must contain both namespace and element identifier;
 the PID `doctype` is the document identifier, not a format-suffixed
 configuration identifier. A presented mdoc must be a proper `DeviceResponse`
@@ -376,7 +378,9 @@ Sources: [SD-JWT key-binding fixes](./sd-jwt-key-binding-interop.md),
 - `/ts12/payment/request` asks for exactly one of those VCTs (default
   `sca-iban`) and always uses `request_uri_method=post`. The Request Object
   is encrypted with Wallet Unit `wallet_metadata` JWKs that advertise
-  `use=enc`. GET on `/ts12/payment/x509VPrequest/:id` is always rejected.
+  `use=enc`. The outer JWE protected header includes `typ:
+  oauth-authz-req+jwt` and `cty: JWT` (RFC 7519 nested JWT). GET on
+  `/ts12/payment/x509VPrequest/:id` is always rejected.
   The same payment `transaction_data` can be originated over Digital
   Credentials API via CS-07 profiles `ts12-dpc`, `ts12-iban`, and
   `ts12-user` (one SCA attestation each) and   `ts12-dpc-pid`,
@@ -402,6 +406,16 @@ Sources: [SD-JWT key-binding fixes](./sd-jwt-key-binding-interop.md),
   treats a validated `jti` as the PSD2 Authentication Code. `sca-user`
   presentations also require the credential `aud` to include the RP
   `client_id`.
+- DCQL output projection keeps issuer-signed claims that SD-JWT VC does not
+  make selectively disclosable (`iss`, `iat`, `nbf`, `exp`, `cnf`, `vct`,
+  `status`) for every query, including PID queries that select the type only
+  through `meta.vct_values`. Requested business claims are still the only
+  selectively disclosable claims copied into the stored result.
+- On `/direct_post` and `direct_post.jwt`, SCA `vct` and `aud` are checked
+  on the issuer-signed reconstructed credential after presentation
+  authentication. `aud` can be selectively disclosable, so a query that does
+  not request it does not put `aud` in the stored claims. The DC API response
+  path already validates the reconstructed SD-JWT claims.
 - `WALTID_DEMO=true` (alias `VERIFIER_WALTID_DEMO=true`) is a non-conformant
   demo switch for the walt.id Android wallet. It skips KB-JWT
   `transaction_data_hashes` / `transaction_data_hashes_alg` checks and the
