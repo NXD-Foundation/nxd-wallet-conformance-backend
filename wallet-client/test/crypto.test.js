@@ -103,6 +103,20 @@ describe("wallet-client crypto building blocks", () => {
     expect(payload).to.have.property("ath", ath);
   });
 
+  it("createProofJwt omits iss when issuer is not provided", async () => {
+    const { privateJwk, publicJwk } = await ensureOrCreateEcKeyPair(undefined, "ES256");
+    const proofJwt = await createProofJwt({
+      privateJwk,
+      publicJwk,
+      audience: "https://issuer.example.com",
+      nonce: "test-nonce",
+      typ: "openid4vci-proof+jwt",
+      alg: "ES256",
+    });
+    const payload = decodeJwt(proofJwt);
+    expect(payload).to.not.have.property("iss");
+  });
+
   it("createProofJwt MUST set key_attestation header when provided", async () => {
     const { privateJwk, publicJwk } = await ensureOrCreateEcKeyPair(undefined, "ES256");
 

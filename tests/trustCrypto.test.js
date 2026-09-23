@@ -1,6 +1,52 @@
 import { expect } from "chai";
 import fs from "node:fs/promises";
-import { verifyJadesJson, verifyXadesXml, certificateFingerprint, stableJsonStringify, validateCertificatePath } from "../trust/crypto.js";
+import { execSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import xmlCrypto from "xml-crypto";
+import {
+  verifyJadesJson,
+  verifyXadesXml,
+  certificateFingerprint,
+  stableJsonStringify,
+  validateCertificatePath,
+  XMLDSIG_ECDSA_SHA256,
+  XMLDSIG_RSA_SHA256,
+  XmlDsigEcdsaSha256,
+} from "../trust/crypto.js";
+
+const { SignedXml } = xmlCrypto;
+
+function createEcSelfSignedCert() {
+  const dir = mkdtempSync(join(tmpdir(), "ecdsa-trust-xml-"));
+  const keyPath = join(dir, "key.pem");
+  const certPath = join(dir, "cert.pem");
+  execSync(`openssl ecparam -name prime256v1 -genkey -noout -out "${keyPath}"`);
+  execSync(`openssl req -new -x509 -key "${keyPath}" -out "${certPath}" -days 365 -subj "/CN=ecdsa-trust-list-test"`);
+  const keyPem = readFileSync(keyPath, "utf8");
+  const certPem = readFileSync(certPath, "utf8");
+  rmSync(dir, { recursive: true, force: true });
+  return { keyPem, certPem };
+}
+
+function signEnvelopedEcdsaXml(unsignedXml, keyPem, certPem) {
+  const signer = new SignedXml({ privateKey: keyPem, publicCert: certPem });
+  signer.SignatureAlgorithms[XMLDSIG_ECDSA_SHA256] = XmlDsigEcdsaSha256;
+  signer.addReference({
+    xpath: "/*",
+    transforms: [
+      "http://www.w3.org/2000/09/xmldsig#enveloped-signature",
+      "http://www.w3.org/2001/10/xml-exc-c14n#",
+    ],
+    digestAlgorithm: "http://www.w3.org/2001/04/xmlenc#sha256",
+    isEmptyUri: true,
+  });
+  signer.canonicalizationAlgorithm = "http://www.w3.org/2001/10/xml-exc-c14n#";
+  signer.signatureAlgorithm = XMLDSIG_ECDSA_SHA256;
+  signer.computeSignature(unsignedXml, { location: { reference: "/*", action: "append" } });
+  return signer.getSignedXml();
+}
 import { normalizeCrlTime } from "../trust/revocation.js";
 
 const artifact = "tests/fixtures/trust/webuild-wp4/artifacts";
@@ -55,7 +101,37 @@ describe("Phase 1 signed trust-list validation", () => {
 
   it("verifies an enveloped XML signature", async () => {
     const pidCert = await fs.readFile(`${keyDir}/pid.crt`, "utf8");
-    const verified = verifyXadesXml(pidXml, { allowedFingerprints: [certificateFingerprint(pidCert)] });
+    const verified = verifyXadesXml(pidXml, {
+      allowedFingerprints: [certificateFingerprint(pidCert)],
+      algorithms: [XMLDSIG_RSA_SHA256],
+    });
     expect(verified.document.documentElement.localName).to.equal("TrustServiceStatusList");
+    expect(verified.signer.algorithm).to.equal(XMLDSIG_RSA_SHA256);
+  });
+
+  it("verifies an enveloped XML signature signed with ecdsa-sha256", () => {
+    const { keyPem, certPem } = createEcSelfSignedCert();
+    const unsignedXml = `<?xml version="1.0"?><TrustedEntitiesList xmlns="http://uri.etsi.org/019602/v1#"><ListAndSchemeInformation><LoTEType>http://uri.etsi.org/19602/LoTEType/EUWalletProvidersList</LoTEType></ListAndSchemeInformation></TrustedEntitiesList>`;
+    const signedXml = signEnvelopedEcdsaXml(unsignedXml, keyPem, certPem);
+    const fingerprint = certificateFingerprint(certPem);
+    const verified = verifyXadesXml(signedXml, {
+      allowedFingerprints: [fingerprint],
+      algorithms: [XMLDSIG_ECDSA_SHA256, XMLDSIG_RSA_SHA256],
+    });
+    expect(verified.document.documentElement.localName).to.equal("TrustedEntitiesList");
+    expect(verified.signer.algorithm).to.equal(XMLDSIG_ECDSA_SHA256);
+    const tampered = signedXml.replace(
+      "http://uri.etsi.org/19602/LoTEType/EUWalletProvidersList",
+      "http://uri.etsi.org/19602/LoTEType/EUWalletProvidersList-tampered",
+    );
+    try {
+      verifyXadesXml(tampered, {
+        allowedFingerprints: [fingerprint],
+        algorithms: [XMLDSIG_ECDSA_SHA256],
+      });
+      expect.fail("expected tampered XML to fail verification");
+    } catch (error) {
+      expect(error.reasonCode).to.equal("LIST_SIGNATURE_INVALID");
+    }
   });
 });

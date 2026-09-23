@@ -122,6 +122,7 @@ async function buildCs01PreAuthCredentialRequest({
     configurationId,
     cNonce: tokenBody.c_nonce,
     credentialEndpoint: cs01IssuerMetadata.credential_endpoint,
+    clientId: "wallet-client",
   });
   const proofBinding = buildCredentialProofBindingContext({
     profile: CS01,
@@ -319,6 +320,7 @@ describe("wallet-client CS-01 pre-auth issuance (Phase 6)", () => {
         credentialIdentifier: target.credential_identifier,
         cNonce: tokenBody.c_nonce,
         credentialEndpoint: cs01IssuerMetadata.credential_endpoint,
+        clientId: "wallet-client",
       });
       expect(proofBundle.credentialRequest.credential_identifier).to.equal("VerifiableIdCard_0000");
       expect(proofBundle.credentialRequest).to.not.have.property("credential_configuration_id");

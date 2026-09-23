@@ -1337,6 +1337,8 @@ async function issueCredentialTargets({
   pollIntervalMs,
   authorizationServerMeta,
   metadata,
+  clientId,
+  anonymousAccess = false,
 }, logSessionId) {
   const credentials = [];
   const proofBindings = [];
@@ -1350,6 +1352,8 @@ async function issueCredentialTargets({
       credentialIdentifier: target.credential_identifier,
       cNonce,
       credentialEndpoint,
+      clientId,
+      anonymousAccess,
     });
     const credentialDpop = await createResourceRequestDpopProof({
       binding: dpopBinding,
@@ -1704,6 +1708,7 @@ async function runPreAuthorizedIssuance({ profile = activeWalletProfile, walletC
       pollIntervalMs,
       authorizationServerMeta: issuerMeta._authorizationServerMeta,
       metadata: { configurationId, proofBinding: null },
+      clientId: walletClientId,
     }, logSessionId);
     issuanceContext.proofBinding = multiple.proofBindings[0];
     issuanceContext.credentialSelection.targets = credentialRequestTargets;
@@ -1724,6 +1729,7 @@ async function runPreAuthorizedIssuance({ profile = activeWalletProfile, walletC
       credentialIdentifier: credentialRequestTargets[0].credential_identifier,
       cNonce: c_nonce,
       credentialEndpoint,
+      clientId: walletClientId,
     }),
     { configurationId, credentialEndpoint },
   );

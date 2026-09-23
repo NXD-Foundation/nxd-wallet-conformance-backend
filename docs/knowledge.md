@@ -123,6 +123,25 @@ Sources: [CS-01](./core/cs-01-credential-issuance%20%281%29.md),
 [attestation options](./haip-etsi-wallet-attestation-options.md), and
 [pre-authorized-flow plan](./cs01-pre-authorized-flow-relaxation-plan.md).
 
+### OpenID4VCI JWT Proof `iss`
+
+- Credential-request JWT proofs (`openid4vci-proof+jwt`) use `iss` as the
+OAuth `client_id` of the Client making the Credential request, not the
+holder subject DID/JWK. Holder binding material stays in the JOSE header
+(`jwk` / `kid` / `x5c`) and KA `attested_keys`.
+- `iss` is OPTIONAL when the client authenticated at `/token`. If present it
+MUST equal that `client_id`, including Attestation-Based Client
+Authentication where `client_id` is the WIA `sub` / PoP `iss`.
+- `iss` MUST be omitted when the access token came from pre-authorized code
+through anonymous token access (`pre-authorized_grant_anonymous_access_supported`).
+- The reference holder sets `iss` to the token `client_id` for authenticated
+issuance. The issuer stores that binding at token time and rejects a
+present `iss` that does not match, or any `iss` on an anonymous pre-auth
+token.
+
+Sources: [OpenID4VCI 1.0](./rfc/openid-4-verifiable-credential-issuance-1_0.html)
+Appendix F.1 and §G.3.1.
+
 ### CS-04 Key Attestation Interoperability
 
 - CS-04 remains the governing WE BUILD structure for WIA/KA issuance:
@@ -397,35 +416,42 @@ Section 3.6 and Section 4.2.
 ### Wallet Attestation And Trust
 
 - WUA-required issuance (and `trustFramework=true` issuance sessions) fetch
-  and evaluate the WIA and KA Token Status Lists at issuance time. Incomplete
-  `status_list.uri`/`idx` values fail closed. The issuer `GET`s each
-  `status_list.uri` with `Accept: application/statuslist+jwt`, verifies the
-  compact Status List JWT (`typ: statuslist+jwt`) using the Wallet Provider
-  public key that already authenticated the WIA or KA when it verifies, or the
-  Status List Token's own protected-header `x5c` or `jwk` otherwise, inflates the
-  ZLIB/LSB-first bitstring (`bits` 1, 2, 4, or 8), and requires the value at
-  `idx` to be VALID (0). Status-list fetch follows a bounded number of HTTPS
-  redirects with per-hop SSRF checks. Content-Type must be
-  `application/statuslist+jwt`.
-  Status List Token `exp` is draft-20 RECOMMENDED and is checked only when
-  present; CS-04 still requires WIA `client_status.exp` / KA `key_storage_status.exp`.
-  Revoked, unavailable, or unverifiable lists fail PAR/token as
-  `invalid_client` and the Credential endpoint as `invalid_proof`.
-  Compatibility-mode optional attestations remain warning-only.   Empty
-  `key_attestations_required` objects do not trigger WUA status-list
-  enforcement; `/credential` uses the same credential-ID allowlist as PAR/token.
-  A DPoP `jkt` that does not match the WIA `cnf` thumbprint is logged as a
-  warning and does not fail the token request. TS-03 v1.5.2 rolled back that
-  binding; CS-04 §7.3 / CS-01 §7.4 still describe it. The issuer continues to
-  require Client Attestation PoP under WIA `cnf`.
-  The post-issuance 24-hour re-check cadence from CS-04 §7.2 is not implemented.
-- For CS-12 SCA payment credentials (`sca-iban`, `sca-user`, `sca-card-dpc`),
-  set `DISABLE_SCA_WIA_KA_CHECKS=true` (default when unset) to skip WIA client
-  attestation, required KA on credential proofs, and WIA/KA Token Status List
-  fail-closed checks for SCA-only issuance. Set
-  `DISABLE_SCA_WIA_KA_CHECKS=false` to restore CS-04 enforcement for those
-  credentials. Mixed issuance that also requests `VerifiablePIDSDJWTWUA` still
-  enforces WIA/KA. `trustFramework=true` sessions still require WIA.
+  and evaluate WIA and KA Token Status Lists. Incomplete `status_list.uri`/`idx`
+  values fail closed. The issuer `GET`s each `status_list.uri` with
+  `Accept: application/statuslist+jwt`, verifies the compact Status List JWT
+  (`typ: statuslist+jwt`) using the Wallet Provider key that authenticated the
+  WIA or KA when that key verifies, or the Status List Token protected-header
+  `x5c` or `jwk` otherwise, inflates the ZLIB/LSB-first bitstring (`bits` 1, 2,
+  4, or 8), and requires the value at `idx` to be VALID (0). Fetch follows a
+  bounded number of HTTPS redirects with per-hop SSRF checks; Content-Type must
+  be `application/statuslist+jwt`. Status List Token `exp` is draft-20
+  RECOMMENDED and is checked only when present; CS-04 still requires WIA
+  `client_status.exp` / KA `key_storage_status.exp`. Revoked, unavailable, or
+  unverifiable lists fail PAR/token as `invalid_client` and `/credential` as
+  `invalid_proof`. That fail-closed path is tied to the WUA credential-ID
+  allowlist and session flags, not to publishing `key_attestations_required: {}`
+  alone.
+- `/credential` Key Attestation follows issuer metadata per proof type (`jwt` or
+  `attestation`). If `key_attestations_required` is present (including `{}`), a
+  valid KA is required; an empty object adds no level checks. Non-empty
+  `key_storage` / `user_authentication` arrays require presented levels that meet
+  or exceed the advertised ISO 18045 values (a stronger level satisfies a weaker
+  minimum). When the member is omitted, KA is optional; invalid optional KA is
+  warning-only in compatibility mode. Required KA still passes CS-04 structural
+  checks (signature, `key_storage_status`, and related claims) even when level
+  arrays are unconstrained.
+- For CS-12 SCA-only issuance (`sca-iban`, `sca-user`, `sca-card-dpc`),
+  `DISABLE_SCA_WIA_KA_CHECKS=true` (default when unset) skips WIA client
+  attestation and WIA/KA Token Status List fail-closed checks on the SCA
+  allowlist path. It does not waive a published `key_attestations_required`
+  member; those configs publish `{}` and still require KA on `/credential`. Set
+  `DISABLE_SCA_WIA_KA_CHECKS=false` for full CS-04 WIA/KA and status-list
+  enforcement on SCA-only paths. Mixed issuance with `VerifiablePIDSDJWTWUA` or
+  `trustFramework=true` still enforces WIA/KA regardless.
+- A DPoP `jkt` that does not match the WIA `cnf` thumbprint is logged as a
+  warning and does not fail the token request (TS-03 v1.5.2). Client
+  Attestation PoP under WIA `cnf` remains required. The post-issuance 24-hour
+  re-check cadence from CS-04 §7.2 is not implemented.
 - WUA/key-attestation signature validation is shared by `proofs.jwt` protected
   header `key_attestation` and `proofs.attestation`. In compatibility mode,
   configured Wallet Provider keys are preferred, then a protected-header `jwk`
@@ -524,15 +550,15 @@ Section 3.6 and Section 4.2.
   The Wallet Provider LoTE profile is TS 119 602 Annex E (JSON preferred,
   Compact JAdES; `ServiceStatus` shall not be used). The pilot IDunion
   pointer is [`lotl/tl_entries/wallet-provider/idunion.json`](./trust/lotl/tl_entries/wallet-provider/idunion.json).
-- As of the 2026-09-10 snapshot, that IDunion `trust_anchor` is a list-signer
-  certificate valid only 2026-03-17 to 2026-04-16, while the published XML
-  LoTE is signed with a later certificate and uses XPath Filter 2.0 rather
-  than the WP4/ETSI enveloped-signature transform. The XML consumer now
-  parses TS 119 602 `TrustedEntity` LoTEs as well as TS 119 612 `TSPService`
-  lists. Signature verification still requires the profile's enveloped
-  XAdES (or JAdES JSON). Opted-in issuance therefore fail-closes at `/token`
-  with `TRUST_EVALUATION_INDETERMINATE` until the LoTL pointer matches and
-  the list signature verifies.
+- Runtime trust consumption fetches the published WP4 LoTL and follows its
+  pointers; the local `docs/trust/lotl/tl_entries/*` files are a documentation
+  snapshot only. The XML consumer parses TS 119 602 `TrustedEntity` LoTEs as
+  well as TS 119 612 `TSPService` lists. Enveloped XML-DSig verification
+  accepts `rsa-sha256` and `ecdsa-sha256` when listed in the trust profile;
+  JAdES JSON lists use the configured JWS algorithms. Opted-in issuance
+  fail-closes at `/token` with `TRUST_EVALUATION_INDETERMINATE` when no
+  authenticated list is available for the role; a listed Wallet Provider still
+  must match an entity on that list.
 
 Source: [WP4 trust snapshot](./trust/SOURCE.md),
 [future WUA enforcement](./futureWUAstricterEnforcements.md).
@@ -648,6 +674,8 @@ profile interpretation, protocol support claim, or documentation location.
   trust-policy functions. Transport handlers may add only transport-specific
   nonce, proof-of-possession, or binding checks, and every accepted transport
   needs parity tests.
+- When fixing a bug, add or extend an automated test in the same change set
+  that would have failed before the fix. See [`AGENTS.md`](../AGENTS.md).
 
 
 
@@ -656,7 +684,7 @@ profile interpretation, protocol support claim, or documentation location.
 
 | If you are changing...                                      | Read first                                                                |
 | ----------------------------------------------------------- | ------------------------------------------------------------------------- |
-| Credential offers, PAR, token, proofs, or deferred issuance | CS-01, attestation options, relevant VCI matrix                           |
+| Credential offers, PAR, token, proofs, or deferred issuance | CS-01, attestation options, relevant VCI matrix, OpenID4VCI JWT proof `iss` |
 | ITB browser auth handoff (headless wallet `/session`)       | [wallet-client auth handoff](../wallet-client/docs/auth-handoff-itb.md)   |
 | WUA/WIA/KA validation, trust, or status-list publication    | CS-04, Token Status List draft-20, wallet-client publisher, future WUA enforcement |
 | Trust framework, LoTL/LoTE, or `trustFramework=true`        | [`docs/trust/SOURCE.md`](./trust/SOURCE.md), UC-TE-03/06, Annex E profile; runtime in `trust/` |

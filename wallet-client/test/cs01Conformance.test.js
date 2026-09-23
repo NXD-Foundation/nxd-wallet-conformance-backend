@@ -287,6 +287,7 @@ describe("WE BUILD CS-01 conformance suite (Phase 10)", () => {
         configurationId: "VerifiableIdCard",
         cNonce: cs01DpopTokenResponse.c_nonce,
         credentialEndpoint: cs01IssuerMetadata.credential_endpoint,
+        clientId: "wallet-client",
       });
       const proofBinding = buildCredentialProofBindingContext({
         profile: CS01,

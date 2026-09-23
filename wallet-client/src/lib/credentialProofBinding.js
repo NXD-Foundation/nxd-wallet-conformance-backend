@@ -72,6 +72,24 @@ export async function resolveWalletUnitSubjectKey({ keyPath, proofAlg }) {
   };
 }
 
+/**
+ * OpenID4VCI 1.0 Appendix F.1: jwt proof `iss` is the OAuth client_id when the
+ * Client authenticated at the token endpoint, and MUST be omitted for anonymous
+ * pre-authorized access. The Wallet Unit subject DID is not this claim.
+ */
+export function resolveOpenid4VciProofIssuerClaim({ clientId, anonymousAccess = false } = {}) {
+  if (anonymousAccess) {
+    return undefined;
+  }
+  const resolved = typeof clientId === "string" ? clientId.trim() : "";
+  if (!resolved) {
+    throw new CredentialProofBindingError(
+      "Non-anonymous OpenID4VCI credential proofs must set iss to the OAuth client_id",
+    );
+  }
+  return resolved;
+}
+
 export function describeWalletUnitSubjectKey(subjectKey) {
   return {
     keyRole: subjectKey.keyRole,
@@ -175,10 +193,13 @@ export async function buildCredentialProofRequest({
   credentialIdentifier = null,
   cNonce,
   credentialEndpoint,
+  clientId = null,
+  anonymousAccess = false,
 }) {
   const proofAlg = selectProofSigningAlgorithm(issuerMeta, configurationId);
   const subjectKey = await resolveWalletUnitSubjectKey({ keyPath, proofAlg });
   const audience = resolveProofAudience(issuerMeta, apiBase);
+  const proofIssuer = resolveOpenid4VciProofIssuerClaim({ clientId, anonymousAccess });
 
   const keyAttestation = await createWalletUnitCredentialKeyAttestation({
     profile,
@@ -196,7 +217,7 @@ export async function buildCredentialProofRequest({
     publicJwk: subjectKey.publicJwk,
     audience,
     nonce: cNonce,
-    issuer: subjectKey.subjectDidJwk,
+    issuer: proofIssuer,
     typ: "openid4vci-proof+jwt",
     alg: proofAlg,
     key_attestation: keyAttestation.attestationJwt,

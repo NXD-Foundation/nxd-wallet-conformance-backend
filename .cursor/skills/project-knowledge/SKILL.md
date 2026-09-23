@@ -66,6 +66,8 @@ and implementation detail. Read only what the task needs.
   when a linked decision, profile interpretation, or support claim changes.
 - When a plan is implemented, move its summary from pending to current behaviour
   in `knowledge.md`; keep the plan as historical rationale.
+- When fixing a bug, add or extend an automated test in the same change set
+  that would have failed before the fix. See the repository `AGENTS.md`.
 
 ## When to update knowledge.md
 

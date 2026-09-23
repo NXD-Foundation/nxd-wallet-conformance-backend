@@ -1,0 +1,17 @@
+---
+description: Require a regression test in the same change set as every bug fix
+alwaysApply: true
+---
+
+# Bug fixes require a regression test
+
+When you fix a bug, add or extend an automated test in the same change set
+that would have failed before the fix and passes after it.
+
+- Prefer a focused unit test of the helper or check that encodes the rule.
+- Add a route-level or wallet-client test when the bug is on a protocol
+  boundary (token, credential, proof, presentation).
+- Do not ship a behavioural fix without that coverage.
+- Run the new test before calling the work done.
+
+See `AGENTS.md`.

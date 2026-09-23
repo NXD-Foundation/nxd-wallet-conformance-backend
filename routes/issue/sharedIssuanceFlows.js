@@ -89,6 +89,8 @@ import {
   shouldEnforceCredentialKeyAttestation,
   shouldRequireWiaClientAttestation,
   isScaOnlyWuaIssuance,
+  credentialConfigRequiresKeyAttestation,
+  proofTypeKeyForCredentialRequest,
 } from "../../utils/wuaEnforcementPolicy.js";
 import { applyScaWuaExpiryHint } from "../../utils/ts12PaymentUtils.js";
 import {
@@ -107,6 +109,12 @@ import {
   recordTrustDecision,
   recordTrustFailure,
 } from "../../utils/trustFrameworkPolicy.js";
+import {
+  applyTokenClientBindingToSession,
+  assertOpenid4VciProofIssClaim,
+  getProofIssBindingFromSession,
+  resolveTokenClientBinding,
+} from "../../utils/openid4vciProofIss.js";
 
 const sharedRouter = express.Router();
 
@@ -166,7 +174,7 @@ const ERROR_MESSAGES = {
   INVALID_PROOF_PUBLIC_KEY: "Public key for proof verification not found in JWT header.",
   INVALID_PROOF_UNABLE: "Unable to determine public key for proof verification.",
   INVALID_PROOF_SIGNATURE: "Proof JWT signature verification failed",
-  INVALID_PROOF_ISS: "Proof JWT is missing sender identifier (iss claim).",
+  INVALID_PROOF_ISS: "Proof JWT iss claim is invalid.",
   INVALID_PROOF_NONCE: "Proof JWT nonce is invalid, expired, or already used.",
   INVALID_TRANSACTION: "Invalid transaction ID",
   SERVER_ERROR: "An error occurred during proof validation.",
@@ -528,7 +536,7 @@ const validateProofJWT = (proofJwt, effectiveConfigurationId, sessionId = null) 
 };
 
 // Verify proof JWT signature and claims
-const verifyProofJWT = async (proofJwt, publicKeyForProof, flowType, sessionId = null) => {
+const verifyProofJWT = async (proofJwt, publicKeyForProof, flowType, sessionId = null, sessionObject = null) => {
   try {
     // Verify signature and other claims
     // Note: Nonce validation is done earlier in the credential endpoint handler
@@ -542,16 +550,20 @@ const verifyProofJWT = async (proofJwt, publicKeyForProof, flowType, sessionId =
       }
     );
 
-    // Verify claims
-    if (!proofPayload.iss && flowType === "code") {
-      throw new Error(`${ERROR_MESSAGES.INVALID_PROOF_ISS}. Received: payload without iss claim, expected: payload with iss claim (required for code flow). See ${SPEC_REFS.VCI_PROOF}`);
-    }
+    const { tokenClientId, anonymousAccess } = getProofIssBindingFromSession(sessionObject);
+    assertOpenid4VciProofIssClaim({
+      iss: proofPayload.iss,
+      tokenClientId,
+      anonymousAccess,
+    });
 
     if (sessionId) {
       logInfo(sessionId, "Proof JWT signature and claims validated successfully", {
         walletIssuer: proofPayload.iss,
         nonceVerified: true,
-        flowType
+        flowType,
+        tokenClientId,
+        anonymousAccess,
       }).catch(() => {});
     }
     return proofPayload;
@@ -661,6 +673,7 @@ const handlePreAuthorizedCodeFlow = async (
   authorizationDetails,
   dpopCnf = null,
   txCode = null,
+  tokenClientBinding = null,
 ) => {
   const existingPreAuthSession = await getPreAuthSession(preAuthorizedCode);
   
@@ -695,6 +708,7 @@ const handlePreAuthorizedCodeFlow = async (
   // Update session
   existingPreAuthSession.accessToken = generatedAccessToken;
   existingPreAuthSession.c_nonce = cNonceForSession;
+  applyTokenClientBindingToSession(existingPreAuthSession, tokenClientBinding);
 
   await storePreAuthSession(preAuthorizedCode, existingPreAuthSession);
 
@@ -719,7 +733,8 @@ const handleAuthorizationCodeFlow = async (
   code,
   code_verifier,
   authorizationDetails,
-  dpopCnf = null
+  dpopCnf = null,
+  tokenClientBinding = null,
 ) => {
   const issuanceSessionId = await getSessionKeyAuthCode(code);
   
@@ -800,6 +815,7 @@ const handleAuthorizationCodeFlow = async (
   // Update session
   existingCodeSession.requests.accessToken = generatedAccessToken;
   existingCodeSession.c_nonce = cNonceForSession;
+  applyTokenClientBindingToSession(existingCodeSession, tokenClientBinding);
 
   await storeCodeFlowSession(
     existingCodeSession.results.issuerState,
@@ -1404,6 +1420,17 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
 
     let tokenResponse;
 
+    const tokenClientBinding = resolveTokenClientBinding({
+      grantType: grant_type,
+      bodyClientId: req.body?.client_id,
+      attestationResult,
+    });
+    if (slog) {
+      try {
+        slog("[TOKEN] Client binding for credential proof iss", tokenClientBinding);
+      } catch {}
+    }
+
     if (grant_type === PRE_AUTHORIZED_GRANT_TYPE) {
       if (slog) {
         try { slog("[TOKEN] Processing pre-authorized code flow"); } catch {}
@@ -1413,6 +1440,7 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
         authorization_details,
         dpopCnf,
         txCode,
+        tokenClientBinding,
       );
     } else if (grant_type === "authorization_code") {
       if (slog) {
@@ -1422,7 +1450,8 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
         code,
         code_verifier,
         authorization_details,
-        dpopCnf
+        dpopCnf,
+        tokenClientBinding,
       );
     } else {
       if (slog) {
@@ -1577,10 +1606,18 @@ sharedRouter.post("/credential", async (req, res) => {
       credentialConfigurationId: effectiveConfigurationId,
       session: sessionObject,
     };
+    const credentialProofType = proofTypeKeyForCredentialRequest(
+      requestBody.credentialRequestProofKind
+    );
     const enforceWuaStatusLists =
       credentialRequiresWua && shouldEnforceWuaStatusLists(scaPolicyParams);
+    const metadataRequiresKa = credentialConfigRequiresKeyAttestation(
+      credConfigForWua,
+      credentialProofType
+    );
     const enforceCredentialKa =
-      credentialRequiresWua && shouldEnforceCredentialKeyAttestation(scaPolicyParams);
+      metadataRequiresKa ||
+      (credentialRequiresWua && shouldEnforceCredentialKeyAttestation(scaPolicyParams));
 
     if (enforceWuaStatusLists) {
       const wiaEvidence = sessionObject.wiaStatusList;
@@ -1625,8 +1662,9 @@ sharedRouter.post("/credential", async (req, res) => {
       }
       return res.status(400).json({
         error: "invalid_proof",
-        error_description:
-          "Key Attestation (KA) in proofs.jwt key_attestation header is required for VerifiablePIDSDJWTWUA",
+        error_description: metadataRequiresKa
+          ? "Key Attestation (KA) is required by issuer metadata for this credential configuration and proof type"
+          : "Key Attestation (KA) in proofs.jwt key_attestation header is required for VerifiablePIDSDJWTWUA",
       });
     }
     if (credentialRequiresWua && !enforceCredentialKa && !wuaJwt && slog) {
@@ -1725,7 +1763,8 @@ sharedRouter.post("/credential", async (req, res) => {
       }
       const levelCheck = validateKaLevelsAgainstMetadata(
         wuaValidationResult.payload,
-        credConfigForWua
+        credConfigForWua,
+        credentialProofType
       );
       if (!levelCheck.ok) {
         if (slog) {
@@ -1739,7 +1778,8 @@ sharedRouter.post("/credential", async (req, res) => {
     } else if (enforceCredentialKa && wuaValidationResult?.valid) {
       const levelCheck = validateKaLevelsAgainstMetadata(
         wuaValidationResult.payload,
-        credConfigForWua
+        credConfigForWua,
+        credentialProofType
       );
       if (!levelCheck.ok) {
         if (slog) {
@@ -1857,7 +1897,7 @@ sharedRouter.post("/credential", async (req, res) => {
             messages: ERROR_MESSAGES,
             specRefVciProof: SPEC_REFS.VCI_PROOF,
           });
-          await verifyProofJWT(requestBody.proofJwt, publicKeyForProof, flowType, sessionId);
+          await verifyProofJWT(requestBody.proofJwt, publicKeyForProof, flowType, sessionId, sessionObject);
 
           // Mode (2): JWT proof + validated WUA — PoP key must match the first attested key ("possession + assurance").
           // EUDI Wallet ARF / ETSI-style binding: credential cnf aligns with the primary attested key.

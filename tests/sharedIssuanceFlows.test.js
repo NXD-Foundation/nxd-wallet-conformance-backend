@@ -1315,6 +1315,82 @@ describe('Shared Issuance Flows', () => {
       expect(response.body).to.have.property('error', 'invalid_proof');
     });
 
+    it('rejects JWT proof without key attestation when metadata publishes key_attestations_required {}', async function () {
+      if (!cacheServiceRedis.client?.isReady) {
+        this.skip();
+      }
+
+      const defaultIssuerConfigJson = JSON.stringify({
+        credential_configurations_supported: {
+          'test-cred-config': {
+            format: 'dc+sd-jwt',
+            proof_types_supported: { jwt: { proof_signing_alg_values_supported: ['ES256'] } },
+          },
+        },
+        default_signing_kid: 'test-kid',
+        credential_response_encryption: {
+          alg_values_supported: ['ECDH-ES', 'RSA-OAEP-256'],
+          enc_values_supported: ['A256GCM'],
+          encryption_required: false,
+        },
+      });
+
+      const pidIssuerConfigJson = JSON.stringify({
+        credential_configurations_supported: {
+          'urn:eu.europa.ec.eudi:pid:1': {
+            format: 'dc+sd-jwt',
+            vct: 'urn:eu.europa.ec.eudi:pid:1',
+            proof_types_supported: {
+              jwt: {
+                proof_signing_alg_values_supported: ['ES256'],
+                key_attestations_required: {},
+              },
+            },
+          },
+        },
+        default_signing_kid: 'test-kid',
+        credential_response_encryption: {
+          alg_values_supported: ['ECDH-ES', 'RSA-OAEP-256'],
+          enc_values_supported: ['A256GCM'],
+          encryption_required: false,
+        },
+      });
+
+      fs.readFileSync.withArgs(sinon.match(/issuer-config\.json/)).returns(pidIssuerConfigJson);
+
+      try {
+        const sessionKey = `test-session-key-ka-meta-${uuidv4()}`;
+        const accessToken = `test-access-token-ka-meta-${uuidv4()}`;
+        const cnonce = cryptoUtils.generateNonce();
+        await cacheServiceRedis.storePreAuthSession(sessionKey, {
+          status: 'success',
+          isDeferred: false,
+          accessToken,
+        });
+        await cacheServiceRedis.storeNonce(cnonce, 300);
+
+        const testProofJwt = signProofJwt({
+          nonce: cnonce,
+          iss: 'test-issuer',
+          aud: process.env.SERVER_URL,
+        });
+
+        const response = await request(app)
+          .post('/credential')
+          .set('Authorization', resourceAuthorizationHeader(accessToken))
+          .send({
+            credential_configuration_id: 'urn:eu.europa.ec.eudi:pid:1',
+            proofs: { jwt: testProofJwt },
+          })
+          .expect(400);
+
+        expect(response.body).to.have.property('error', 'invalid_proof');
+        expect(response.body.error_description).to.match(/Key Attestation \(KA\) is required by issuer metadata/i);
+      } finally {
+        fs.readFileSync.withArgs(sinon.match(/issuer-config\.json/)).returns(defaultIssuerConfigJson);
+      }
+    });
+
     it('should reject request with both credential identifiers', async () => {
       const response = await request(app)
         .post('/credential')
@@ -1419,6 +1495,67 @@ describe('Shared Issuance Flows', () => {
         .expect(400);
 
       expect(second.body).to.have.property('error', 'invalid_nonce');
+    });
+
+    describe('OpenID4VCI F.1 proof JWT iss', () => {
+      async function credentialRequestWithIss({ sessionFields, proofPayload }) {
+        if (!cacheServiceRedis.client?.isReady) {
+          return null;
+        }
+        const sessionKey = 'test-session-key-iss-' + uuidv4();
+        const accessToken = 'test-access-token-iss-' + uuidv4();
+        const cnonce = cryptoUtils.generateNonce();
+        await cacheServiceRedis.storePreAuthSession(sessionKey, {
+          status: 'success',
+          isDeferred: false,
+          accessToken,
+          ...sessionFields,
+        });
+        await cacheServiceRedis.storeNonce(cnonce, 300);
+        const testProofJwt = signProofJwt({
+          nonce: cnonce,
+          aud: process.env.SERVER_URL,
+          ...proofPayload,
+        });
+        return request(app)
+          .post('/credential')
+          .set('Authorization', resourceAuthorizationHeader(accessToken))
+          .send({
+            credential_configuration_id: 'test-cred-config',
+            proofs: { jwt: testProofJwt },
+          });
+      }
+
+      it('rejects holder DID iss when the token client_id is known', async function () {
+        const response = await credentialRequestWithIss({
+          sessionFields: { tokenClientId: 'wallet-client', preAuthorizedAnonymousAccess: false },
+          proofPayload: { iss: 'did:jwk:eyJrdHkiOiJFQyJ9' },
+        });
+        if (!response) this.skip();
+        expect(response.status).to.equal(400);
+        expect(response.body).to.have.property('error', 'invalid_proof');
+        expect(response.body.error_description).to.match(/Issuer claim must be the client_id of the request: wallet-client/);
+      });
+
+      it('accepts iss equal to the authenticated client_id', async function () {
+        const response = await credentialRequestWithIss({
+          sessionFields: { tokenClientId: 'wallet-client', preAuthorizedAnonymousAccess: false },
+          proofPayload: { iss: 'wallet-client' },
+        });
+        if (!response) this.skip();
+        expect(response.body.error).to.not.equal('invalid_proof');
+      });
+
+      it('rejects iss on anonymous pre-authorized access', async function () {
+        const response = await credentialRequestWithIss({
+          sessionFields: { tokenClientId: null, preAuthorizedAnonymousAccess: true },
+          proofPayload: { iss: 'wallet-client' },
+        });
+        if (!response) this.skip();
+        expect(response.status).to.equal(400);
+        expect(response.body).to.have.property('error', 'invalid_proof');
+        expect(response.body.error_description).to.match(/omitted for anonymous pre-authorized access/);
+      });
     });
 
     it('should return unknown_credential_configuration for unsupported credential_configuration_id', async () => {

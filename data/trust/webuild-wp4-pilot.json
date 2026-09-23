@@ -14,7 +14,10 @@
   },
   "algorithms": {
     "jades": ["RS256", "ES256"],
-    "xades": ["rsa-sha256"]
+    "xades": [
+      "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256",
+      "http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha256"
+    ]
   },
   "acceptedStatuses": [
     "http://uri.etsi.org/19602/PubEAAProvidersList/SvcStatus/notified",

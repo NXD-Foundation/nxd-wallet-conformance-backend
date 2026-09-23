@@ -662,6 +662,7 @@ export function createAuthorizationCodeIssuance(deps) {
             scopeSource: scopeResolution.source,
             proofBinding: null,
           },
+          clientId: walletClientId,
         },
         logSessionId,
       );
@@ -687,6 +688,7 @@ export function createAuthorizationCodeIssuance(deps) {
           credentialIdentifier: credentialRequestTargets[0].credential_identifier,
           cNonce: c_nonce,
           credentialEndpoint,
+          clientId: walletClientId,
         }),
       { configurationId, credentialEndpoint },
     );

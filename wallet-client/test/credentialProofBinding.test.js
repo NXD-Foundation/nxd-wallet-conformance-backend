@@ -5,6 +5,7 @@ import {
   CredentialProofBindingError,
   selectProofSigningAlgorithm,
   resolveWalletUnitSubjectKey,
+  resolveOpenid4VciProofIssuerClaim,
   buildCredentialProofBindingContext,
   buildCredentialProofRequest,
   assertDeferredIssuanceBindingContext,
@@ -12,8 +13,23 @@ import {
   toKeyBindingMaterial,
 } from "../src/lib/credentialProofBinding.js";
 import { WALLET_PROFILES } from "../src/lib/profile.js";
+import { DEFAULT_WALLET_CLIENT_ID } from "../src/lib/walletClientId.js";
+import { createProofJwt, ensureOrCreateEcKeyPair } from "../src/lib/crypto.js";
 
 describe("wallet-client credentialProofBinding (Phase 8)", () => {
+  const previousWalletProviderUrl = process.env.WALLET_PROVIDER_URL;
+
+  before(() => {
+    process.env.WALLET_PROVIDER_URL = "https://wallet.example/wallet-client";
+  });
+
+  after(() => {
+    if (previousWalletProviderUrl === undefined) {
+      delete process.env.WALLET_PROVIDER_URL;
+    } else {
+      process.env.WALLET_PROVIDER_URL = previousWalletProviderUrl;
+    }
+  });
   const issuerMeta = {
     credential_issuer: "https://issuer.example.com",
     credential_configurations_supported: {
@@ -47,6 +63,7 @@ describe("wallet-client credentialProofBinding (Phase 8)", () => {
       configurationId: "PID",
       cNonce: "nonce-123",
       credentialEndpoint: "https://issuer.example.com/credential",
+      clientId: DEFAULT_WALLET_CLIENT_ID,
     });
 
     expect(result.proofJwt).to.be.a("string");
@@ -58,7 +75,41 @@ describe("wallet-client credentialProofBinding (Phase 8)", () => {
     expect(header.typ).to.equal("openid4vci-proof+jwt");
     expect(header).to.have.property("key_attestation");
     expect(payload.nonce).to.equal("nonce-123");
-    expect(payload.iss).to.equal(result.subjectKey.subjectDidJwk);
+    expect(payload.iss).to.equal(DEFAULT_WALLET_CLIENT_ID);
+    expect(payload.iss).to.not.equal(result.subjectKey.subjectDidJwk);
+  });
+
+  it("sets proof iss to the OAuth client_id used at /token, not the holder DID", () => {
+    expect(resolveOpenid4VciProofIssuerClaim({ clientId: "wallet-client" })).to.equal("wallet-client");
+    expect(resolveOpenid4VciProofIssuerClaim({ clientId: "wallet-client", anonymousAccess: true })).to.equal(
+      undefined,
+    );
+    expect(() => resolveOpenid4VciProofIssuerClaim({})).to.throw(CredentialProofBindingError);
+  });
+
+  it("signs openid4vci-proof+jwt with client_id iss, and omits iss for anonymous access", async () => {
+    const { privateJwk, publicJwk } = await ensureOrCreateEcKeyPair(undefined, "ES256");
+    const authenticated = await createProofJwt({
+      privateJwk,
+      publicJwk,
+      audience: "https://issuer.example.com",
+      nonce: "nonce-123",
+      issuer: resolveOpenid4VciProofIssuerClaim({ clientId: DEFAULT_WALLET_CLIENT_ID }),
+      typ: "openid4vci-proof+jwt",
+      alg: "ES256",
+    });
+    expect(decodeJwt(authenticated).iss).to.equal(DEFAULT_WALLET_CLIENT_ID);
+
+    const anonymous = await createProofJwt({
+      privateJwk,
+      publicJwk,
+      audience: "https://issuer.example.com",
+      nonce: "nonce-123",
+      issuer: resolveOpenid4VciProofIssuerClaim({ anonymousAccess: true }),
+      typ: "openid4vci-proof+jwt",
+      alg: "ES256",
+    });
+    expect(decodeJwt(anonymous)).to.not.have.property("iss");
   });
 
   it("uses credential_identifier instead of credential_configuration_id when selected", async () => {
@@ -71,6 +122,7 @@ describe("wallet-client credentialProofBinding (Phase 8)", () => {
       credentialIdentifier: "PID_0000",
       cNonce: "nonce-123",
       credentialEndpoint: "https://issuer.example.com/credential",
+      clientId: DEFAULT_WALLET_CLIENT_ID,
     });
 
     expect(result.credentialRequest.credential_identifier).to.equal("PID_0000");

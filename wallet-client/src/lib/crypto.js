@@ -59,7 +59,6 @@ export async function createProofJwt({
   }
   const now = Math.floor(Date.now() / 1000);
   const payload = {
-    iss: issuer,
     aud: audience,
     iat: now,
     nbf: now - 5,
@@ -67,6 +66,9 @@ export async function createProofJwt({
     nonce,
     jti: base64url(crypto.randomBytes(16)),
   };
+  if (typeof issuer === "string" && issuer.length > 0) {
+    payload.iss = issuer;
+  }
 
   // For SD-JWT Key Binding JWTs, optionally include sd_hash as defined in
   // draft-ietf-oauth-selective-disclosure-jwt-14 Section 4.3.1.

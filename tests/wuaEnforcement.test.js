@@ -12,6 +12,8 @@ import {
   isWuaRequiredCredentialId,
   issuanceRequestRequiresWua,
   credentialConfigRequiresKeyAttestation,
+  keyAttestationLevelMeetsRequirement,
+  keyAttestationLevelsMeetRequirement,
   validateKaLevelsAgainstMetadata,
   extractRequestedCredentialConfigurationIds,
   sessionRequiresWua,
@@ -170,6 +172,41 @@ describe("WUA enforcement policy", () => {
     ).to.equal(false);
   });
 
+  it("accepts a higher ISO 18045 level than the metadata minimum", () => {
+    expect(keyAttestationLevelMeetsRequirement("iso_18045_high", "iso_18045_moderate")).to.equal(
+      true
+    );
+    expect(keyAttestationLevelMeetsRequirement("iso_18045_basic", "iso_18045_moderate")).to.equal(
+      false
+    );
+    expect(
+      keyAttestationLevelsMeetRequirement(["iso_18045_high"], ["iso_18045_moderate"])
+    ).to.equal(true);
+
+    const moderateConfig = {
+      proof_types_supported: {
+        jwt: {
+          key_attestations_required: {
+            key_storage: ["iso_18045_moderate"],
+            user_authentication: ["iso_18045_moderate"],
+          },
+        },
+      },
+    };
+    expect(
+      validateKaLevelsAgainstMetadata(
+        { key_storage: ["iso_18045_high"], user_authentication: ["iso_18045_high"] },
+        moderateConfig
+      ).ok
+    ).to.equal(true);
+    expect(
+      validateKaLevelsAgainstMetadata(
+        { key_storage: ["iso_18045_basic"], user_authentication: ["iso_18045_moderate"] },
+        moderateConfig
+      ).ok
+    ).to.equal(false);
+  });
+
   it("marks pre-auth sessions for WUA-required credential types", () => {
     const wuaSession = createPreAuthSessionData({ credentialType: WUA_REQUIRED_CREDENTIAL_ID });
     expect(wuaSession.requiresWua).to.equal(true);
@@ -293,12 +330,14 @@ describe("WUA enforcement policy", () => {
     );
   });
 
-  it("does not treat empty key_attestations_required as a KA requirement", () => {
+  it("treats empty key_attestations_required as requiring KA without level checks", () => {
+    const emptyKaConfig = {
+      proof_types_supported: { jwt: { key_attestations_required: {} } },
+    };
+    expect(credentialConfigRequiresKeyAttestation(emptyKaConfig)).to.equal(true);
     expect(
-      credentialConfigRequiresKeyAttestation({
-        proof_types_supported: { jwt: { key_attestations_required: {} } },
-      })
-    ).to.equal(false);
+      validateKaLevelsAgainstMetadata({ attested_keys: [{}] }, emptyKaConfig).ok
+    ).to.equal(true);
     expect(
       credentialConfigRequiresKeyAttestation({
         proof_types_supported: {
@@ -317,7 +356,7 @@ describe("WUA enforcement policy", () => {
     );
     const pidCfg = cfg.credential_configurations_supported["urn:eu.europa.ec.eudi:pid:1"];
     expect(pidCfg).to.be.an("object");
-    expect(credentialConfigRequiresKeyAttestation(pidCfg)).to.equal(false);
+    expect(credentialConfigRequiresKeyAttestation(pidCfg)).to.equal(true);
     expect(sessionRequiresWua({ credentialConfigurationId: "urn:eu.europa.ec.eudi:pid:1" })).to.equal(
       false
     );

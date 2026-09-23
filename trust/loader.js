@@ -34,7 +34,10 @@ async function loadOne({ document, profile, format, allowedFingerprints, listTyp
       allowEmbeddedCertificate: isLoTL && profile.network.allowEmbeddedX5cBootstrapForTests === true,
     });
   } else {
-    verified = verifyXadesXml(document.bytes, { allowedFingerprints });
+    verified = verifyXadesXml(document.bytes, {
+      allowedFingerprints,
+      algorithms: profile.algorithms?.xades || undefined,
+    });
   }
   const parsed = format === "json"
     ? parseJsonDocument(verified.unsigned, { listType })

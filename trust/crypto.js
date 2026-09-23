@@ -1,4 +1,4 @@
-import { createHash, createPublicKey, X509Certificate } from "node:crypto";
+import { createHash, createPrivateKey, createPublicKey, createSign, createVerify, X509Certificate } from "node:crypto";
 import { compactVerify } from "jose";
 import { DOMParser } from "@xmldom/xmldom";
 import xmlCrypto from "xml-crypto";
@@ -153,12 +153,53 @@ function firstText(node, localName) {
   return found[0]?.textContent?.trim() || null;
 }
 
-export function verifyXadesXml(xmlBytes, { allowedFingerprints = [], publicCertPem = null } = {}) {
+export const XMLDSIG_RSA_SHA256 = "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256";
+export const XMLDSIG_ECDSA_SHA256 = "http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha256";
+
+export class XmlDsigEcdsaSha256 {
+  getSignature(signedInfo, privateKey) {
+    const signer = createSign("SHA256");
+    signer.update(signedInfo);
+    const key = typeof privateKey === "string" ? createPrivateKey(privateKey) : privateKey;
+    return signer.sign({ key, dsaEncoding: "ieee-p1363" }, "base64");
+  }
+
+  verifySignature(material, key, signatureValue) {
+    const verifier = createVerify("SHA256");
+    verifier.update(material);
+    const publicKey = typeof key === "string" ? createPublicKey(key) : key;
+    return verifier.verify({ key: publicKey, dsaEncoding: "ieee-p1363" }, Buffer.from(signatureValue, "base64"));
+  }
+
+  getAlgorithmName() {
+    return XMLDSIG_ECDSA_SHA256;
+  }
+}
+
+function signatureMethodFromNode(signatureNode) {
+  const signatureAlgorithm = xpath.select1(".//*[local-name(.)='SignatureMethod']/@Algorithm", signatureNode);
+  return signatureAlgorithm?.value || null;
+}
+
+function attachAllowedXmlSignatureAlgorithms(verifier, algorithms) {
+  if (algorithms.includes(XMLDSIG_ECDSA_SHA256)) {
+    verifier.SignatureAlgorithms[XMLDSIG_ECDSA_SHA256] = XmlDsigEcdsaSha256;
+  }
+}
+
+export function verifyXadesXml(xmlBytes, { allowedFingerprints = [], publicCertPem = null, algorithms = [XMLDSIG_RSA_SHA256] } = {}) {
   const xml = Buffer.from(xmlBytes).toString("utf8");
   const doc = new DOMParser().parseFromString(xml, "application/xml");
   const signatures = xpath.select("//*[local-name(.)='Signature' and namespace-uri(.)='http://www.w3.org/2000/09/xmldsig#']", doc);
   if (!signatures.length) {
     throw new TrustListError("XML signature is missing", TRUST_REASON_CODES.LIST_SIGNATURE_INVALID);
+  }
+  const signatureAlgorithm = signatureMethodFromNode(signatures[0]);
+  if (!signatureAlgorithm) {
+    throw new TrustListError("XML SignatureMethod is missing", TRUST_REASON_CODES.LIST_SIGNATURE_INVALID);
+  }
+  if (!algorithms.includes(signatureAlgorithm)) {
+    throw new TrustListError(`XAdES algorithm is not allowed: ${signatureAlgorithm}`, TRUST_REASON_CODES.LIST_SIGNATURE_INVALID);
   }
   const embedded = firstText(signatures[0], "X509Certificate");
   const certPem = publicCertPem || (embedded ? derToPem(Buffer.from(embedded, "base64")) : null);
@@ -167,6 +208,7 @@ export function verifyXadesXml(xmlBytes, { allowedFingerprints = [], publicCertP
   }
   const fingerprint = assertCertificateAllowed(certPem, allowedFingerprints);
   const verifier = new SignedXml({ publicCert: certPem, getCertFromKeyInfo: () => null });
+  attachAllowedXmlSignatureAlgorithms(verifier, algorithms);
   try {
     verifier.loadSignature(signatures[0]);
     if (!verifier.checkSignature(xml)) {
@@ -175,5 +217,5 @@ export function verifyXadesXml(xmlBytes, { allowedFingerprints = [], publicCertP
   } catch (error) {
     throw new TrustListError(`XAdES/XML signature verification failed: ${error.message}`, TRUST_REASON_CODES.LIST_SIGNATURE_INVALID);
   }
-  return { document: doc, signer: { certPem, fingerprint, algorithm: "XMLDSig-RSA-SHA256" } };
+  return { document: doc, signer: { certPem, fingerprint, algorithm: signatureAlgorithm } };
 }

@@ -180,15 +180,54 @@ function hasNonEmptyLevelList(value) {
   return Array.isArray(value) && value.length > 0;
 }
 
+/** ISO 18045 AVA_VAN rank (strongest first). */
+export const ISO_18045_LEVEL_RANK = Object.freeze({
+  iso_18045_high: 4,
+  iso_18045_moderate: 3,
+  "iso_18045_enhanced-basic": 2,
+  iso_18045_basic: 1,
+});
+
 /**
- * True when jwt.key_attestations_required advertises specific key_storage or
- * user_authentication levels. Empty `{}` is treated as no KA constraint.
+ * @param {string} proofKind - `jwt` or `attestation` from the credential request
+ * @returns {"jwt"|"attestation"}
+ */
+export function proofTypeKeyForCredentialRequest(proofKind) {
+  return proofKind === "attestation" ? "attestation" : "jwt";
+}
+
+/**
+ * Published `key_attestations_required` for a proof type, if any.
+ * @param {object|null|undefined} credConfig
+ * @param {"jwt"|"attestation"} [proofType="jwt"]
+ * @returns {object|null}
+ */
+export function getPublishedKeyAttestationsRequired(credConfig, proofType = "jwt") {
+  const req = credConfig?.proof_types_supported?.[proofType]?.key_attestations_required;
+  if (req === undefined || req === null) return null;
+  if (typeof req !== "object" || Array.isArray(req)) return null;
+  return req;
+}
+
+/**
+ * True when metadata publishes `key_attestations_required`, including `{}`.
  * @param {object|null|undefined} credConfig - credential_configurations_supported entry
+ * @param {"jwt"|"attestation"} [proofType="jwt"]
  * @returns {boolean}
  */
-export function credentialConfigRequiresKeyAttestation(credConfig) {
-  const req = credConfig?.proof_types_supported?.jwt?.key_attestations_required;
-  if (!req || typeof req !== "object") return false;
+export function credentialConfigRequiresKeyAttestation(credConfig, proofType = "jwt") {
+  return getPublishedKeyAttestationsRequired(credConfig, proofType) !== null;
+}
+
+/**
+ * True when metadata publishes non-empty level constraints (does not include `{}` alone).
+ * @param {object|null|undefined} credConfig
+ * @param {"jwt"|"attestation"} [proofType="jwt"]
+ * @returns {boolean}
+ */
+export function credentialConfigAdvertisesKeyAttestationLevels(credConfig, proofType = "jwt") {
+  const req = getPublishedKeyAttestationsRequired(credConfig, proofType);
+  if (!req) return false;
   return hasNonEmptyLevelList(req.key_storage) || hasNonEmptyLevelList(req.user_authentication);
 }
 
@@ -200,7 +239,7 @@ export function isWuaRequiredCredentialConfig(credConfig) {
   if (!credConfig) return false;
   const vct = credConfig.vct;
   if (isWuaRequiredCredentialId(vct)) return true;
-  if (credentialConfigRequiresKeyAttestation(credConfig)) {
+  if (credentialConfigAdvertisesKeyAttestationLevels(credConfig)) {
     return isWuaRequiredCredentialId(credConfig.scope);
   }
   return false;
@@ -282,8 +321,21 @@ export function sessionRequiresWua(session) {
 }
 
 /**
- * Compare ISO 18045 level lists: presented must meet or exceed required (same string or higher rank).
- * Simplified: exact match or includes required level string; higher rank not fully ordered yet.
+ * @param {string} presentedLevel
+ * @param {string} requiredLevel
+ * @returns {boolean}
+ */
+export function keyAttestationLevelMeetsRequirement(presentedLevel, requiredLevel) {
+  const presentedRank = ISO_18045_LEVEL_RANK[String(presentedLevel)];
+  const requiredRank = ISO_18045_LEVEL_RANK[String(requiredLevel)];
+  if (requiredRank !== undefined && presentedRank !== undefined) {
+    return presentedRank >= requiredRank;
+  }
+  return String(presentedLevel) === String(requiredLevel);
+}
+
+/**
+ * Compare ISO 18045 level lists: each required entry must be met or exceeded by some presented value.
  * @param {string[]} presented
  * @param {string[]} required
  * @returns {boolean}
@@ -291,18 +343,20 @@ export function sessionRequiresWua(session) {
 export function keyAttestationLevelsMeetRequirement(presented, required) {
   if (!Array.isArray(required) || required.length === 0) return true;
   if (!Array.isArray(presented) || presented.length === 0) return false;
-  const presentedSet = new Set(presented.map(String));
-  return required.every((r) => presentedSet.has(String(r)));
+  return required.every((reqLevel) =>
+    presented.some((p) => keyAttestationLevelMeetsRequirement(p, reqLevel))
+  );
 }
 
 /**
  * @param {object} kaPayload - decoded KA JWT payload
  * @param {object} credConfig - credential configuration metadata
+ * @param {"jwt"|"attestation"} [proofType="jwt"]
  * @returns {{ ok: boolean, error?: string }}
  */
-export function validateKaLevelsAgainstMetadata(kaPayload, credConfig) {
-  const required = credConfig?.proof_types_supported?.jwt?.key_attestations_required;
-  if (!required || typeof required !== "object") {
+export function validateKaLevelsAgainstMetadata(kaPayload, credConfig, proofType = "jwt") {
+  const required = getPublishedKeyAttestationsRequired(credConfig, proofType);
+  if (!required) {
     return { ok: true };
   }
   const reqKeyStorage = required.key_storage;
