@@ -86,7 +86,7 @@ describe("European Disability Card (european_disability_card)", () => {
       "disability_status_recognised",
     ]);
     expect(defaults.claims.portrait).to.match(/^data:image\/jpeg;base64,/);
-    expect(defaults.claims.assistant_entitlement).to.equal(false);
+    expect(defaults.claims.assistant_entitlement).to.equal(true);
     expect(defaults.claims.disability_status_recognised).to.equal(true);
   });
 
