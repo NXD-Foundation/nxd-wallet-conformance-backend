@@ -1,7 +1,23 @@
 import fs from "fs";
 import path from "path";
-import { importJWK, exportJWK, SignJWT, generateKeyPair } from "jose";
+import { importJWK, importPKCS8, exportJWK, SignJWT, generateKeyPair } from "jose";
 import crypto from "node:crypto";
+
+const PEM_CERTIFICATE_BLOCK =
+  /-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g;
+
+export function pemCertificateChainToX5c(certPem) {
+  const blocks = certPem.match(PEM_CERTIFICATE_BLOCK);
+  if (!blocks?.length) {
+    throw new Error("No certificates found in PEM data");
+  }
+  return blocks.map((cert) =>
+    cert
+      .replace(/-----BEGIN CERTIFICATE-----/g, "")
+      .replace(/-----END CERTIFICATE-----/g, "")
+      .replace(/\s+/g, ""),
+  );
+}
 
 export async function ensureOrCreateEcKeyPair(optionalPath, alg = "ES256") {
   if (optionalPath && fs.existsSync(optionalPath)) {
@@ -342,3 +358,68 @@ function publicJwkWithoutPrivateMaterial(jwk) {
   return publicJwk;
 }
 
+export async function createOAuthClientAttestationJwt({
+  privateJwk,
+  privateKeyPem = null,
+  publicJwk,
+  issuer,
+  subject,
+  audience,
+  cnfJwk,
+  alg = "ES256",
+  ttlSeconds = 300,
+  headerParams = null,
+  extraClaims = null,
+  includeJwkHeader = true,
+}) {
+  const now = Math.floor(Date.now() / 1000);
+  const header = {
+    alg,
+    typ: "oauth-client-attestation+jwt",
+    ...(includeJwkHeader ? { jwk: publicJwk } : {}),
+    ...(headerParams || {}),
+  };
+  const payload = {
+    ...(issuer ? { iss: issuer } : {}),
+    sub: subject,
+    aud: audience,
+    iat: now,
+    nbf: now,
+    exp: now + ttlSeconds,
+    jti: base64url(crypto.randomBytes(16)),
+    cnf: {
+      jwk: publicJwkWithoutPrivateMaterial(cnfJwk || publicJwk),
+    },
+    ...(extraClaims || {}),
+  };
+
+  const key = privateKeyPem ? await importPKCS8(privateKeyPem, alg) : await importJWK(privateJwk, alg);
+  const jwt = await new SignJWT(payload).setProtectedHeader(header).sign(key);
+  return jwt;
+}
+
+export async function createOAuthClientAttestationPopJwt({
+  privateJwk,
+  publicJwk,
+  issuer,
+  audience,
+  alg = "ES256",
+  ttlSeconds = 300,
+  challenge = null,
+}) {
+  const now = Math.floor(Date.now() / 1000);
+  const header = { alg, typ: "oauth-client-attestation-pop+jwt", jwk: publicJwk };
+  const payload = {
+    iss: issuer,
+    aud: audience,
+    iat: now,
+    nbf: now,
+    exp: now + ttlSeconds,
+    jti: base64url(crypto.randomBytes(16)),
+    ...(typeof challenge === "string" && challenge.length > 0 ? { challenge } : {}),
+  };
+
+  const key = await importJWK(privateJwk, alg);
+  const jwt = await new SignJWT(payload).setProtectedHeader(header).sign(key);
+  return jwt;
+}

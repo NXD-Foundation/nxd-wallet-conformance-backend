@@ -4,9 +4,14 @@
 
 This is the implementation-oriented entry point for the project. It maps the
 profile-specific requirements in [RFC001](./core/RFC001.md),
-[RFC002](./core/RFC002.md), and [RFC004](./core/RFC004.md) to the current
+[RFC002](./core/RFC002.md), [RFC003](./core/RFC003.md),
+[RFC004](./core/RFC004.md), and [RFC005](./core/RFC005.md) to the current
 issuer, verifier, wallet client, configuration, and automated tests. The
 APTITUDE RFCs are deltas/profiles, not replacements for their base standards.
+Local copies in `docs/core/` were last refreshed from
+https://github.com/APTITUDE-Consortium/aptitude-eudi-wallet-specs/tree/main/docs/RFCs
+on 2026-09-24. Use that tree when asked to update the APTITUDE specs to their
+latest version.
 
 It is not a claim that every requirement is implemented. For interoperability
 or conformance decisions, read the linked specification first, then confirm
@@ -97,9 +102,11 @@ the supporting implementation and tests are ported and revalidated.
 
 | APTITUDE profile delta | Base specifications that remain authoritative | Main implementation area |
 | --- | --- | --- |
-| [RFC001 issuance](./core/RFC001.md) | [OpenID4VCI](./references/openid/openid-4-verifiable-credential-issuance-1_0.html), [HAIP](./references/openid/openid4vc-high-assurance-interoperability-profile-1_0.html), [ARF](./references/eu/arf-v1.0.0.pdf) | `routes/issue/`, issuer metadata, wallet issuance libraries |
-| [RFC002 presentation](./core/RFC002.md) | [OpenID4VP](./references/openid/openid-4-verifiable-presentations-1_0.html), [HAIP](./references/openid/openid4vc-high-assurance-interoperability-profile-1_0.html), [ARF](./references/eu/arf-v1.0.0.pdf) | `routes/verify/`, VP crypto/helpers, wallet presentation libraries |
-| [RFC004 status and revocation](./core/RFC004.md) | [APTITUDE trust](./references/aptitude/deliverable-2.1-trust.html), [OAuth Status List draft](./references/ietf/draft-ietf-oauth-status-list.html), [RFC 5280](./references/ietf/rfc5280.txt), [RFC 6960](./references/ietf/rfc6960.txt) | WIA/WUA status hooks and credential status references; no CRL/OCSP/TSL provider routes |
+| [RFC001 issuance](./core/RFC001.md) (v1.0, 2026-09-22) | [OpenID4VCI](./references/openid/openid-4-verifiable-credential-issuance-1_0.html), [HAIP](./references/openid/openid4vc-high-assurance-interoperability-profile-1_0.html), [ARF](./references/eu/arf-v1.0.0.pdf) | `routes/issue/`, issuer metadata, wallet issuance libraries |
+| [RFC002 presentation](./core/RFC002.md) (Draft; `eu-eaap` mandatory) | [OpenID4VP](./references/openid/openid-4-verifiable-presentations-1_0.html), [HAIP](./references/openid/openid4vc-high-assurance-interoperability-profile-1_0.html), [ARF](./references/eu/arf-v1.0.0.pdf) | `routes/verify/`, VP crypto/helpers, wallet presentation libraries |
+| [RFC003 trust evaluation](./core/RFC003.md) (v0.1) | [APTITUDE trust](./references/aptitude/deliverable-2.1-trust.html) | Not implemented: LoTE / WRPAC / WRPRC / Sign-Seal evaluation is not a deployed service in this repo |
+| [RFC004 revocation](./core/RFC004.md) (v0.1) | [APTITUDE trust](./references/aptitude/deliverable-2.1-trust.html), [OAuth Status List draft](./references/ietf/draft-ietf-oauth-status-list.html), [RFC 5280](./references/ietf/rfc5280.txt), [RFC 6960](./references/ietf/rfc6960.txt) | WIA/WUA status hooks and credential status references; no CRL/OCSP/TSL provider routes |
+| [RFC005 proximity presentation](./core/RFC005.md) (Draft) | ISO/IEC 18013-5, ETSI TS 119 472-2 ISO/IEC-mdoc proximity profile | Not implemented: this service is remote OpenID4VP / ISO 18013-7, not BLE/NFC proximity |
 
 ## RFC001: Credential Issuance Profile
 
@@ -118,6 +125,7 @@ routes are kept alongside it for interoperability coverage.
 | Pre-authorized-code grant | offer routes above and `handlePreAuthorizedCodeFlow` in `sharedIssuanceFlows.js`. For multi-credential offers, each access token stores its own authorized configuration subset and issuance progress; a later exchange of the same test-service pre-authorized code cannot alter an earlier token's authorization. | `tests/preAuthSDjwRoutes.test.js`, `tests/sharedIssuanceFlows.test.js` |
 | DPoP sender constraint | DPoP-bound token creation in `utils/tokenUtils.js`; resource proof verification in `validateDpopProofForResourceRequest` | issuance-flow tests and wallet `credentialNotification.js` |
 | Credential proof and holder binding | `validateCredentialRequest`, `validateProofJWT`, and `verifyProofJWT`; wallet proof construction in `wallet-client/src/lib/credentialRequestProofs.js` | `tests/credGenerationUtilsProofBinding.test.js`, `tests/proofJwtResolver.test.js` |
+| Proof JWT `iss` (OpenID4VCI Appendix F.1) | Optional `iss` on credential proof JWT must equal token-bound `client_id` when present; omitted for anonymous pre-authorized access — `utils/openid4vciProofIss.js`, `routes/issue/sharedIssuanceFlows.js` | `tests/openid4vciProofIss.test.js`, `tests/sharedIssuanceFlows.test.js` |
 | WIA at PAR/token | `validateWIA` in `utils/routeUtils.js`; OAuth client-attestation and PoP validation in `utils/oauthClientAttestation.js` | `tests/oauthClientAttestation.test.js`, `tests/wuaValidation.test.js` |
 | WUA/key attestation at credential request | `validateWUA` and `utils/keyAttestationProof.js`; proof supports `proofs.jwt` and `proofs.attestation` paths. **Normative target (OpenID4VCI / HAIP):** an attestation proof must verify before issuance; decoded, unverified `attested_keys` must not be used as credential holder binding. When metadata advertises `proof_types_supported.jwt.key_attestations_required`, the JWT proof must carry a valid protected-header `key_attestation` and its signing key must match the primary attested key. **Temporary test-service deviation (2026-07):** for EUDI Reference Wallet interop, see [Temporary test-service relaxations](#temporary-test-service-relaxations-eudi-wallet-interop) below — tighten on the next spec-alignment pass. | `tests/keyAttestationProof.test.js`, `tests/wuaValidation.test.js`, `tests/sharedIssuanceFlows.test.js` |
 | Immediate and deferred credentials | `POST /credential`, `POST /credential_deferred`, `resolveDeferredIssuanceContext` | `tests/sharedIssuanceFlows.test.js` |
@@ -396,6 +404,15 @@ interoperability scenarios.
   KB-JWT, so its response path uses mdoc validation and state correlation
   instead of applying SD-JWT nonce rules.
 
+## RFC003: Trust Evaluation Profile
+
+RFC003 (v0.1) profiles APTITUDE trust evaluation: LoTE trust-source
+validation, common X.509 path validation, WRPAC authentication, WRPRC
+authorization, optional Register-response checks, and Sign/Seal validation.
+The APTITUDE Trust Specifications remain authoritative for process detail not
+explicitly restated here. This repository does not host LoTE publication,
+WRPAC/WRPRC evaluation, or Sign/Seal trust-evaluation services.
+
 ## RFC004: Status, Revocation, And Trust Profile
 
 RFC004 adds APTITUDE profile material for Wallet-side consumption of CRL,
@@ -409,7 +426,7 @@ partial.
 | RFC004 requirement area | Current mapping | Status |
 | --- | --- | --- |
 | Status references in issued credentials | `utils/credGenerationUtils.js` can include an upstream-provided status-list reference | Partial: issuance embeds a reference; it does not host a status list |
-| WUA status-list parsing | `utils/vpHeplers.js` fetches and decompresses a Token Status List reference | Partial: a helper exists; this is not end-to-end trust-framework enforcement |
+| WUA status-list parsing | `utils/wuaStatusListVerifier.js` and `utils/statusListStructure.js` parse references (`uri`, `idx`), fetch `statuslist+jwt`, verify signatures with header/`x5c` or WIA key material, and read the bitstring — **no trust-anchor or WP trust-list check** | Partial: structure and crypto only; wallet test publisher at `wallet-client/src/lib/wuaStatusList.js` |
 | WIA/WUA validation | `validateWIA` and `validateWUA` in `utils/routeUtils.js` validate JWT structure, signature material, expiry, and selected bindings | Partial: Wallet Provider trust-list policy is a hook, and revocation checking remains TODO |
 | CRL provider endpoint | No route under `routes/` | Not implemented |
 | OCSP provider endpoint | No route under `routes/` | Not implemented |
@@ -420,12 +437,19 @@ provision. A production trust implementation needs configured trust anchors,
 signature validation under those anchors, freshness and revocation checks, and
 the RFC004 interfaces where the service assumes a provider role.
 
+## RFC005: Proximity Presentation Profile
+
+RFC005 (Draft) profiles ISO/IEC 18013-5 proximity presentation (QR/NFC
+engagement and BLE/NFC retrieval). It is a separate track from RFC002 remote
+OpenID4VP / `mdoc-openid4vp`. This repository does not implement proximity
+device engagement or retrieval.
+
 ## Cross-Cutting Security Model
 
 | Control | Code location | Notes |
 | --- | --- | --- |
 | OAuth client attestation | `utils/oauthClientAttestation.js` | Enforces JWT type, asymmetric algorithms, `cnf` hygiene, PoP audience and freshness; trust depends on configured JWKS |
-| WIA and WUA | `utils/routeUtils.js`, `utils/keyAttestationProof.js` | Validates format/signature/bindings and exposes trust-policy gates. **Temporary:** see [Temporary test-service relaxations](#temporary-test-service-relaxations-eudi-wallet-interop) for unverified attestation binding and relaxed WUA `iss` — tighten on next spec-alignment pass. |
+| WIA and WUA | `utils/routeUtils.js`, `utils/keyAttestationProof.js` | Structural RFC checks (`typ`, `certification` URL shape, `attested_keys`); any cryptographically valid `header.jwk` / `x5c` leaf passes — **Wallet Provider trust anchors and LoTE/WRPAC are not implemented**. **Temporary:** see [Temporary test-service relaxations](#temporary-test-service-relaxations-eudi-wallet-interop) for unverified attestation binding and relaxed WUA `iss`. |
 | DPoP | `utils/tokenUtils.js`, `sharedIssuanceFlows.js` | Binds tokens and resource requests to an EC JWK thumbprint |
 | PKCE | `codeFlowSdJwtRoutes.js`, `sharedIssuanceFlows.js` | S256 is required for the authorization-code path |
 | Credential proof | `sharedIssuanceFlows.js`, `utils/proofJwtResolver.js` | Resolves proof verification keys and validates holder proof constraints |
@@ -448,17 +472,26 @@ the RFC004 interfaces where the service assumes a provider role.
   SD-JWT or mdoc presentation claims; mdoc namespace paths are normalized to
   the issuer-signed elements extracted by `verifyMdlToken`. TS-12 payment-SCA
   remains out of scope here.
+- DCQL projection keeps issuer-signed non-selective SD-JWT claims (`iss`, `vct`,
+  `cnf`, `status`, `iat`, `nbf`, `exp`) per RFC002 VP-CHECK-05 (`utils/vpHeplers.js`).
+- mdoc MSO `deviceKey` COSE `kid` is encoded as a byte string; encrypted JAR
+  protected headers include `cty: "JWT"` when JWE is used.
+- Wallet ITB authorization-code handoff: `POST /session` with `authHandoff: true`
+  returns `AUTHORIZATION_REQUIRED` and an `authorizationUrl`; browser completion
+  uses `GET /oauth/callback` (`wallet-client/src/server.js`, RFC001 §6.1).
 
 ## How To Navigate A Change
 
 | Change area | Read first | Then inspect |
 | --- | --- | --- |
 | Offer, grant, PAR, token, credential, nonce, or deferred behavior | RFC001 and local OpenID4VCI | `routes/issue/`, issuer/OAuth config, shared issuance tests |
-| Wallet attestation, WIA, WUA, or trust | RFC001, HAIP, ARF, RFC004 | `utils/routeUtils.js`, `utils/oauthClientAttestation.js`, `utils/keyAttestationProof.js`, WUA tests |
+| Wallet attestation, WIA, WUA, or trust | RFC001, HAIP, ARF, RFC003, RFC004 | `utils/routeUtils.js`, `utils/oauthClientAttestation.js`, `utils/keyAttestationProof.js`, WUA tests |
 | Verifier request, metadata, DCQL, or response mode | RFC002 and local OpenID4VP | `routes/verify/`, verifier config, VP tests |
 | SD-JWT holder binding | RFC002 and OpenID4VP | `utils/sdJwtKeyBinding.js`, `tests/sdJwtKeyBinding.test.js` |
 | mdoc/PID | RFC002, ARF, applicable ISO material | `utils/mdlVerification.js`, `routes/verify/mdlRoutes.js`, mdoc tests |
+| Trust evaluation (LoTE, WRPAC, WRPRC, Sign/Seal) | RFC003 and APTITUDE trust material | No dedicated implementation; do not infer conformance from RFC004 helpers |
 | Status, revocation, or certificate validation | RFC004 and APTITUDE trust material | `utils/vpHeplers.js`, `utils/routeUtils.js`, `utils/credGenerationUtils.js` |
+| Proximity presentation | RFC005 and ISO/IEC 18013-5 | Not implemented |
 
 ## Maintenance Rules
 

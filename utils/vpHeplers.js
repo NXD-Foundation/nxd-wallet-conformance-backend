@@ -22,6 +22,69 @@ async function decodeJwtVC(jwtString) {
 }
 
 /**
+ * SD-JWT VC claims that are carried in the issuer-signed JWT and are not
+ * selectively disclosable. DCQL selects the credential type with
+ * `meta.vct_values`, not a `vct` claim path, so projection must keep these
+ * when the wallet presented them. `_sd` and `_sd_alg` stay out of the output.
+ */
+export const SD_JWT_VC_NON_SELECTIVE_CLAIMS = Object.freeze([
+  "iss",
+  "iat",
+  "nbf",
+  "exp",
+  "cnf",
+  "vct",
+  "status",
+]);
+
+/**
+ * Copy the DCQL-requested claim paths into a new object, and retain
+ * issuer-signed claims that are not selectively disclosable.
+ */
+export function selectClaimsByDcqlPaths(sourceObj, dcqlPaths) {
+  if (!sourceObj || typeof sourceObj !== "object") return {};
+  const result = {};
+  const setDeep = (obj, pathSegments, value) => {
+    let cursor = obj;
+    for (let i = 0; i < pathSegments.length; i++) {
+      const segment = pathSegments[i];
+      if (i === pathSegments.length - 1) {
+        cursor[segment] = value;
+      } else {
+        if (cursor[segment] === undefined || typeof cursor[segment] !== "object" || Array.isArray(cursor[segment])) {
+          cursor[segment] = {};
+        }
+        cursor = cursor[segment];
+      }
+    }
+  };
+  const getDeep = (obj, pathSegments) => {
+    let cursor = obj;
+    for (const segment of pathSegments) {
+      if (!cursor || typeof cursor !== "object") return undefined;
+      cursor = cursor[segment];
+    }
+    return cursor;
+  };
+
+  for (const p of dcqlPaths || []) {
+    const segments = Array.isArray(p) ? p : (typeof p === "string" ? p.split(".") : []);
+    if (!segments.length) continue;
+    const value = getDeep(sourceObj, segments);
+    if (value !== undefined) {
+      setDeep(result, segments, value);
+    }
+  }
+
+  for (const claimName of SD_JWT_VC_NON_SELECTIVE_CLAIMS) {
+    if (sourceObj[claimName] !== undefined && result[claimName] === undefined) {
+      result[claimName] = sourceObj[claimName];
+    }
+  }
+  return result;
+}
+
+/**
  * Extracts claims from the request body.
  *
  * @param {Object} req - The Express request object.
@@ -185,46 +248,6 @@ export async function extractClaimsFromRequest(req, digest, isPaymentVP, session
     // Non-PEX flow (e.g., for DCQL) where presentation_submission is not provided.
     console.log("Processing with non-PEX flow (no presentation_submission).");
     try {
-      // Helper to select values from an object using DCQL claim path arrays
-      // Each DCQL path is an array of segments, e.g., ["org.iso.18013.5.1", "family_name"]
-      const selectByDcqlPaths = (sourceObj, dcqlPaths) => {
-        if (!sourceObj || typeof sourceObj !== 'object') return {};
-        const result = {};
-        const setDeep = (obj, pathSegments, value) => {
-          let cursor = obj;
-          for (let i = 0; i < pathSegments.length; i++) {
-            const segment = pathSegments[i];
-            if (i === pathSegments.length - 1) {
-              cursor[segment] = value;
-            } else {
-              if (cursor[segment] === undefined || typeof cursor[segment] !== 'object' || Array.isArray(cursor[segment])) {
-                cursor[segment] = {};
-              }
-              cursor = cursor[segment];
-            }
-          }
-        };
-        const getDeep = (obj, pathSegments) => {
-          let cursor = obj;
-          for (const segment of pathSegments) {
-            if (!cursor || typeof cursor !== 'object') return undefined;
-            cursor = cursor[segment];
-          }
-          return cursor;
-        };
-
-        for (const p of dcqlPaths) {
-          // Support both ["a","b"] and "a.b" just in case
-          const segments = Array.isArray(p) ? p : (typeof p === 'string' ? p.split('.') : []);
-          if (!segments.length) continue;
-          const value = getDeep(sourceObj, segments);
-          if (value !== undefined) {
-            setDeep(result, segments, value);
-          }
-        }
-        return result;
-      };
-
       // Collect requested DCQL claim paths (arrays of segments)
       const vpSessionForDcql = await getVPSession(sessionId).catch(() => null);
       const dcqlClaimPaths = [];
@@ -329,7 +352,7 @@ export async function extractClaimsFromRequest(req, digest, isPaymentVP, session
                   const vcClaims = await getClaims(decodedVc.jwt.payload, decodedVc.disclosures, digest);
                   // Apply DCQL claim filtering if dcql_query provided in session
                   if (dcqlClaimPaths.length > 0) {
-                    extractedClaims.push(selectByDcqlPaths(vcClaims, dcqlClaimPaths));
+                    extractedClaims.push(selectClaimsByDcqlPaths(vcClaims, dcqlClaimPaths));
                   } else {
                     extractedClaims.push(vcClaims);
                   }
@@ -337,7 +360,7 @@ export async function extractClaimsFromRequest(req, digest, isPaymentVP, session
                   const decodedVc = await decodeJwtVC(vcJwt);
                   if (decodedVc && decodedVc.payload) {
                     if (dcqlClaimPaths.length > 0) {
-                      extractedClaims.push(selectByDcqlPaths(decodedVc.payload, dcqlClaimPaths));
+                      extractedClaims.push(selectClaimsByDcqlPaths(decodedVc.payload, dcqlClaimPaths));
                     } else {
                       extractedClaims.push(decodedVc.payload);
                     }
@@ -347,7 +370,7 @@ export async function extractClaimsFromRequest(req, digest, isPaymentVP, session
             } else {
               // single VC
               if (dcqlClaimPaths.length > 0) {
-                extractedClaims.push(selectByDcqlPaths(claims, dcqlClaimPaths));
+                extractedClaims.push(selectClaimsByDcqlPaths(claims, dcqlClaimPaths));
               } else {
                 extractedClaims.push(claims);
               }
@@ -361,7 +384,7 @@ export async function extractClaimsFromRequest(req, digest, isPaymentVP, session
                   const decodedVc = await decodeJwtVC(vcJwt);
                   if (decodedVc && decodedVc.payload) {
                     if (dcqlClaimPaths.length > 0) {
-                      extractedClaims.push(selectByDcqlPaths(decodedVc.payload, dcqlClaimPaths));
+                      extractedClaims.push(selectClaimsByDcqlPaths(decodedVc.payload, dcqlClaimPaths));
                     } else {
                       extractedClaims.push(decodedVc.payload);
                     }
@@ -370,7 +393,7 @@ export async function extractClaimsFromRequest(req, digest, isPaymentVP, session
               } else {
                 // single VC
                 if (dcqlClaimPaths.length > 0) {
-                  extractedClaims.push(selectByDcqlPaths(payload, dcqlClaimPaths));
+                  extractedClaims.push(selectClaimsByDcqlPaths(payload, dcqlClaimPaths));
                 } else {
                   extractedClaims.push(payload);
                 }
@@ -683,6 +706,8 @@ export function hasOnlyAllowedFields(
     "nonce",
     "nbf",
     "jti",
+    "vct",
+    "status",
   ]
 ) {
   // Convert allowedPaths to a set of property names by stripping "$.".

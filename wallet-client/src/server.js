@@ -51,9 +51,26 @@ import {
   postFormWithWiaAttestationChallengeRetry,
   readFetchResponseJson,
 } from "./lib/attestationChallenge.js";
+import { createWuaStatusListRouter } from "./routes/wuaStatusListRoutes.js";
+import { serializePendingContext } from "./lib/authorizationCodeIssuance.js";
+import { createAuthCodeIssuanceHost } from "./lib/authCodeIssuanceHost.js";
+import {
+  isAuthHandoffEnabled,
+  resolveRedirectUriForFlow,
+  AuthHandoffConfigError,
+} from "./lib/authHandoffConfig.js";
+import {
+  savePendingAuthorization,
+  consumePendingByState,
+  updateWalletTestSession,
+  renderCallbackHtml,
+  issuersMatch,
+} from "./lib/authHandoffStore.js";
+import { resolveWalletProfile } from "./lib/profile.js";
 
 const app = express();
 app.use(express.json({ limit: "2mb" }));
+app.use(createWuaStatusListRouter());
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -293,6 +310,87 @@ app.get("/logs/:sessionId", async (req, res) => {
   }
 });
 
+// GET /oauth/callback — browser redirect for ITB auth handoff (RFC001 §6.1).
+app.get("/oauth/callback", async (req, res) => {
+  const { code, state, error, error_description: errorDescription, iss } = req.query || {};
+  const respondHtml = (payload) => {
+    res.status(payload.statusCode || 200);
+    res.type("html").send(renderCallbackHtml(payload));
+  };
+
+  if (!state) {
+    return respondHtml({
+      success: false,
+      statusCode: 400,
+      title: "Authentication failed",
+      message: "Missing state parameter.",
+    });
+  }
+
+  const pendingRecord = await consumePendingByState(String(state));
+  if (!pendingRecord) {
+    return respondHtml({
+      success: false,
+      statusCode: 400,
+      title: "Authentication failed",
+      message: "Authorization session expired or already used.",
+    });
+  }
+
+  const { sessionId, pendingContext } = pendingRecord;
+  const fail = async (message) => {
+    await updateWalletTestSession(sessionId, "failed", { error: message });
+    return respondHtml({
+      success: false,
+      statusCode: 400,
+      title: "Authentication failed",
+      message,
+    });
+  };
+
+  if (error) {
+    const detail = errorDescription ? `${error}: ${errorDescription}` : String(error);
+    return fail(`Authorization server error: ${detail}`);
+  }
+
+  if (!code) {
+    return fail("Authorization code missing from callback.");
+  }
+
+  if (
+    iss &&
+    pendingContext?.authorizationServerIssuer &&
+    !issuersMatch(pendingContext.authorizationServerIssuer, String(iss))
+  ) {
+    return fail("Authorization server issuer mismatch.");
+  }
+
+  try {
+    const result = await getAuthCodeIssuance().completeAuthorization(
+      pendingContext,
+      { code: String(code), state: String(state), iss: iss ? String(iss) : undefined },
+      sessionId,
+    );
+    await updateWalletTestSession(sessionId, "ok", { result });
+    return respondHtml({
+      success: true,
+      title: "Authentication complete",
+      message: "Credential issuance finished. You can close this tab and return to the test.",
+    });
+  } catch (callbackError) {
+    await logError(sessionId, "[/oauth/callback] error:", callbackError);
+    await updateWalletTestSession(sessionId, "failed", {
+      error: callbackError.message || String(callbackError),
+    });
+    return respondHtml({
+      success: false,
+      statusCode: 500,
+      title: "Authentication failed",
+      message: "Credential issuance failed. Return to the test for details.",
+    });
+  }
+});
+
 // GET /session-status/:sessionId
 // Returns the current status of a session from Redis
 app.get("/session-status/:sessionId", async (req, res) => {
@@ -430,6 +528,57 @@ async function handleWalletTestSession(req, res, issuanceOpts = {}) {
         // issuer_state is optional per OIDC4VCI 1.0 - only required if provided in the offer
         try {
           const authGrant = grants.authorization_code;
+          const authHandoff = isAuthHandoffEnabled(process.env, req.body);
+          let redirectUri;
+          try {
+            redirectUri = resolveRedirectUriForFlow(process.env, authHandoff);
+          } catch (configError) {
+            if (configError instanceof AuthHandoffConfigError) {
+              const failed = await setStatus("failed", { error: configError.message });
+              return res.status(400).json({
+                error: configError.errorCode || "invalid_configuration",
+                error_description: configError.message,
+                state: failed,
+              });
+            }
+            throw configError;
+          }
+
+          const issuanceArgs = {
+            profile: resolveWalletProfile(process.env),
+            walletClientId: await resolveWalletInstanceClientId(),
+            apiBase,
+            issuerMeta,
+            offerConfig: offerCfg,
+            configurationId,
+            issuerState: authGrant.issuer_state,
+            authorizationServer: authGrant.authorization_server,
+            keyPath: req.body.keyPath,
+            pollTimeoutMs: req.body.pollTimeoutMs,
+            pollIntervalMs: req.body.pollIntervalMs,
+            redirectUri,
+            proofMode,
+            attestKeyCount,
+          };
+
+          if (authHandoff) {
+            sessionLog("[/session] auth handoff: preparing authorization. configurationId=", configurationId);
+            const prepared = await getAuthCodeIssuance().prepareAuthorization(issuanceArgs, sessionId);
+            const pendingPayload = await savePendingAuthorization({
+              sessionId,
+              state: prepared.state,
+              pendingContext: serializePendingContext(prepared),
+              authorizationUrl: prepared.authorizationUrl,
+              expiresAt: prepared.expiresAt,
+              ttlSeconds: prepared.ttlSeconds,
+              previousSession: await walletRedisClient
+                .get(key)
+                .then((raw) => (raw ? JSON.parse(raw) : null))
+                .catch(() => null),
+            });
+            return res.json(pendingPayload);
+          }
+
           sessionLog("[/session] invoking authorization code issuance. configurationId=", configurationId);
           const result = await runAuthorizationCodeIssuance({
             apiBase,
@@ -2419,4 +2568,16 @@ async function verifyJwsWithDid(jws, header, didOrIss) {
     }
   }
   throw lastErr || new Error('DID verification failed');
+}
+
+const { getAuthCodeIssuance: getAuthCodeIssuanceImpl } = createAuthCodeIssuanceHost({
+  discoverAuthorizationServerMetadata,
+  httpPostForm,
+  httpPostJson,
+  validateAndStoreCredential,
+  sleep,
+});
+
+function getAuthCodeIssuance() {
+  return getAuthCodeIssuanceImpl();
 }

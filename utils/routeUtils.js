@@ -998,11 +998,12 @@ export const BOOKING_REFERENCE_PID_EDC_DCQL_QUERY = {
         vct_values: [EUROPEAN_DISABILITY_CARD_VCT],
       },
       claims: [
-      
+        { id: "edc_given_name", path: ["given_name"] },
+        { id: "edc_family_name", path: ["family_name"] },
         { id: "edc_assistant_entitlement", path: ["assistant_entitlement"] },
       ],
       claim_sets: [
-       
+        ["edc_given_name", "edc_family_name"],
         ["edc_assistant_entitlement"],
       ],
     },
@@ -2926,9 +2927,24 @@ export function resolveWuaVerificationJwk(decodedHeader, issuerMetadata) {
     return jwks.keys[0];
   }
   if (decodedHeader?.jwk) return decodedHeader.jwk;
+  if (Array.isArray(decodedHeader?.x5c) && decodedHeader.x5c.length > 0) {
+    try {
+      const der = Buffer.from(String(decodedHeader.x5c[0]).replace(/\s+/g, ""), "base64");
+      const cert = new X509Certificate(der);
+      return cert.publicKey.export({ format: "jwk" });
+    } catch (e) {
+      throw new Error(
+        withSpecRef(
+          `WUA x5c certificate parsing failed: ${e?.message || e}`,
+          WUA_SPEC_REF,
+          OID4VCI_WALLET_ATTESTATION_SPEC_REF
+        )
+      );
+    }
+  }
   throw new Error(
     withSpecRef(
-      "Cannot verify WUA signature: set issuer wallet_unit_attestation_jwks or send WUA with jwk in protected header",
+      "Cannot verify WUA signature: set issuer wallet_unit_attestation_jwks or send WUA with jwk or x5c in protected header",
       WUA_SPEC_REF,
       OID4VCI_WALLET_ATTESTATION_SPEC_REF
     )

@@ -180,6 +180,31 @@ function normalizeIssuerAuthHeaders(preparedIssuerSigned) {
   }
 }
 
+/**
+ * Prepare a proof JWK for MSO deviceKeyInfo embedding.
+ *
+ * RFC 9052 §7.1 Table 4 defines COSE_Key label 2 (kid) as bstr. @auth0/mdl uses
+ * cose-kit COSEKeyFromJWK, which encodes JavaScript strings as CBOR text; pass
+ * kid as UTF-8 bytes so the signed MSO contains a byte string.
+ */
+function devicePublicKeyJwkForMsoDeviceKey(devicePublicKeyJwk) {
+  const { kid, ...rest } = devicePublicKeyJwk;
+  const copy = { ...rest };
+  if (kid == null || kid === "") {
+    return copy;
+  }
+  if (typeof kid === "string") {
+    copy.kid = new TextEncoder().encode(kid);
+  } else if (Buffer.isBuffer(kid)) {
+    copy.kid = new Uint8Array(kid);
+  } else if (kid instanceof Uint8Array) {
+    copy.kid = kid;
+  } else {
+    copy.kid = kid;
+  }
+  return copy;
+}
+
 function resolveMsoMdocNamespace(credentialConfiguration, credPayload) {
   const metadataNamespace =
     credentialConfiguration?.credential_metadata?.claims?.find(
@@ -1325,7 +1350,9 @@ async function generateMdlCredentialWithAuth0Library(
     });
     console.log(`[mdl-issue] ✅ Added validity info`);
     
-    document.addDeviceKeyInfo({ deviceKey: devicePublicKeyJwk });
+    document.addDeviceKeyInfo({
+      deviceKey: devicePublicKeyJwkForMsoDeviceKey(devicePublicKeyJwk),
+    });
     console.log(`[mdl-issue] ✅ Added device key info`);
     
     // Log what we're passing to sign() for debugging

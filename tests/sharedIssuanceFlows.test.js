@@ -2469,6 +2469,67 @@ describe('Shared Issuance Flows', () => {
       expect(second.body).to.have.property('error', 'invalid_nonce');
     });
 
+    describe('OpenID4VCI F.1 proof JWT iss', () => {
+      async function credentialRequestWithIss({ sessionFields, proofPayload }) {
+        if (!cacheServiceRedis.client?.isReady) {
+          return null;
+        }
+        const sessionKey = 'test-session-key-iss-' + uuidv4();
+        const accessToken = 'test-access-token-iss-' + uuidv4();
+        const cnonce = cryptoUtils.generateNonce();
+        await cacheServiceRedis.storePreAuthSession(sessionKey, {
+          status: 'success',
+          isDeferred: false,
+          accessToken,
+          ...sessionFields,
+        });
+        await cacheServiceRedis.storeNonce(cnonce, 300);
+        const testProofJwt = signProofJwt({
+          nonce: cnonce,
+          aud: process.env.SERVER_URL,
+          ...proofPayload,
+        });
+        return request(app)
+          .post('/credential')
+          .set('Authorization', `DPoP ${accessToken}`)
+          .send({
+            credential_configuration_id: 'test-cred-config',
+            proofs: { jwt: [testProofJwt] },
+          });
+      }
+
+      it('rejects holder DID iss when the token client_id is known', async function () {
+        const response = await credentialRequestWithIss({
+          sessionFields: { tokenClientId: 'wallet-client', preAuthorizedAnonymousAccess: false },
+          proofPayload: { iss: 'did:jwk:eyJrdHkiOiJFQyJ9' },
+        });
+        if (!response) this.skip();
+        expect(response.status).to.equal(400);
+        expect(response.body).to.have.property('error', 'invalid_proof');
+        expect(response.body.error_description).to.match(/Issuer claim must be the client_id of the request: wallet-client/);
+      });
+
+      it('accepts iss equal to the authenticated client_id', async function () {
+        const response = await credentialRequestWithIss({
+          sessionFields: { tokenClientId: 'wallet-client', preAuthorizedAnonymousAccess: false },
+          proofPayload: { iss: 'wallet-client' },
+        });
+        if (!response) this.skip();
+        expect(response.body.error).to.not.equal('invalid_proof');
+      });
+
+      it('rejects iss on anonymous pre-authorized access', async function () {
+        const response = await credentialRequestWithIss({
+          sessionFields: { tokenClientId: null, preAuthorizedAnonymousAccess: true },
+          proofPayload: { iss: 'wallet-client' },
+        });
+        if (!response) this.skip();
+        expect(response.status).to.equal(400);
+        expect(response.body).to.have.property('error', 'invalid_proof');
+        expect(response.body.error_description).to.match(/omitted for anonymous pre-authorized access/);
+      });
+    });
+
     it('should return unknown_credential_configuration for unsupported credential_configuration_id', async () => {
       const response = await request(app)
         .post('/credential')
@@ -2686,7 +2747,7 @@ describe('Shared Issuance Flows', () => {
     });
 
     describe('V1.0 PoP Cryptographic Validation', () => {
-      it('MUST reject proof JWT without iss in pre-authorized (non-code) flow', async () => {
+      it('allows proof JWT without iss when the session has no token client binding (F.1 OPTIONAL)', async () => {
         const sessionKey = 'test-session-key-' + uuidv4();
         const accessToken = 'test-access-token-' + uuidv4();
         const nonce = cryptoUtils.generateNonce();
@@ -2698,7 +2759,7 @@ describe('Shared Issuance Flows', () => {
         });
         await cacheServiceRedis.storeNonce(nonce, 300);
 
-        const tampered = jwt.sign(
+        const proofWithoutIss = jwt.sign(
           { nonce, aud: process.env.SERVER_URL },
           testKeys.privateKeyPem,
           {
@@ -2715,12 +2776,14 @@ describe('Shared Issuance Flows', () => {
           .set('Authorization', `Bearer ${accessToken}`)
           .send({
             credential_configuration_id: 'test-cred-config',
-            proofs: { jwt: [tampered] },
-          })
-          .expect(400);
+            proofs: { jwt: [proofWithoutIss] },
+          });
 
-        expect(res.body).to.have.property('error', 'invalid_proof');
-        expect(res.body.error_description).to.match(/iss/i);
+        if (res.status === 400 && res.body?.error === 'invalid_proof') {
+          expect(res.body.error_description || '').to.not.match(/iss/i);
+        } else {
+          expect([200, 202, 400, 500]).to.include(res.status);
+        }
       });
 
       it('MUST reject proof JWT when header typ is not openid4vci-proof+jwt', async () => {

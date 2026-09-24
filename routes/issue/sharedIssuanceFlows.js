@@ -89,6 +89,12 @@ import {
   parseProofAttestationJwtFromCredentialProofs,
   verifyKeyAttestationProofChain,
 } from "../../utils/keyAttestationProof.js";
+import {
+  applyTokenClientBindingToSession,
+  assertOpenid4VciProofIssClaim,
+  getProofIssBindingFromSession,
+  resolveTokenClientBinding,
+} from "../../utils/openid4vciProofIss.js";
 
 const sharedRouter = express.Router();
 
@@ -331,7 +337,7 @@ const ERROR_MESSAGES = {
   INVALID_PROOF_PUBLIC_KEY: "Public key for proof verification not found in JWT header.",
   INVALID_PROOF_UNABLE: "Unable to determine public key for proof verification.",
   INVALID_PROOF_SIGNATURE: "Proof JWT signature verification failed",
-  INVALID_PROOF_ISS: "Proof JWT is missing sender identifier (iss claim).",
+  INVALID_PROOF_ISS: "Proof JWT iss claim is invalid.",
   INVALID_PROOF_TYP: "Proof JWT must use typ openid4vci-proof+jwt in the JWT header (OpenID4VCI1.0 §8.2)",
   INVALID_PROOF_NONCE: "Proof JWT nonce is invalid, expired, or already used.",
   INVALID_TRANSACTION: "Invalid transaction ID",
@@ -869,6 +875,7 @@ const verifyProofJWT = async (
   publicKeyForProof,
   flowType,
   sessionId = null,
+  sessionObject = null,
   httpReq = null,
 ) => {
   try {
@@ -884,17 +891,20 @@ const verifyProofJWT = async (
       }
     );
 
-    // Holder PoP in proofs.jwt (OpenID4VCI1.0 §8.2; RFC001 §7.5): iss required in every flow.
-    // proofs.attestation uses verifyKeyAttestationProofChain (key-attestation JWT), not this path.
-    if (!proofPayload.iss) {
-      throw new Error(`${ERROR_MESSAGES.INVALID_PROOF_ISS}. Received: payload without iss claim, expected: payload with iss claim. See ${SPEC_REFS.VCI_PROOF}`);
-    }
+    const { tokenClientId, anonymousAccess } = getProofIssBindingFromSession(sessionObject);
+    assertOpenid4VciProofIssClaim({
+      iss: proofPayload.iss,
+      tokenClientId,
+      anonymousAccess,
+    });
 
     if (sessionId) {
       logInfo(sessionId, "Proof JWT signature and claims validated successfully", {
         walletIssuer: proofPayload.iss,
         nonceVerified: true,
-        flowType
+        flowType,
+        tokenClientId,
+        anonymousAccess,
       }).catch(() => {});
     }
     return proofPayload;
@@ -952,6 +962,7 @@ const handlePreAuthorizedCodeFlow = async (
   dpopCnf = null,
   txCodeFromRequest = undefined,
   httpReq = null,
+  tokenClientBinding = null,
 ) => {
   const existingPreAuthSession = await getPreAuthSession(preAuthorizedCode);
   
@@ -1045,6 +1056,7 @@ const handlePreAuthorizedCodeFlow = async (
   // compatibility callers. Multi-credential enforcement reads the map above.
   existingPreAuthSession.accessToken = generatedAccessToken;
   existingPreAuthSession.c_nonce = cNonceForSession;
+  applyTokenClientBindingToSession(existingPreAuthSession, tokenClientBinding);
 
   await storePreAuthSession(preAuthorizedCode, existingPreAuthSession);
 
@@ -1078,6 +1090,7 @@ const handleAuthorizationCodeFlow = async (
   tokenRequestClientId = undefined,
   tokenRequestRedirectUri = undefined,
   httpReq = null,
+  tokenClientBinding = null,
 ) => {
   const issuanceSessionId = await getSessionKeyAuthCode(code);
   
@@ -1213,6 +1226,7 @@ const handleAuthorizationCodeFlow = async (
   // Update session
   existingCodeSession.requests.accessToken = generatedAccessToken;
   existingCodeSession.c_nonce = cNonceForSession;
+  applyTokenClientBindingToSession(existingCodeSession, tokenClientBinding);
 
   await storeCodeFlowSession(
     existingCodeSession.results.issuerState,
@@ -1773,6 +1787,17 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
 
     let tokenResponse;
 
+    const tokenClientBinding = resolveTokenClientBinding({
+      grantType: grant_type,
+      bodyClientId: req.body?.client_id,
+      attestationResult,
+    });
+    if (slog) {
+      try {
+        slog("[TOKEN] Client binding for credential proof iss", tokenClientBinding);
+      } catch {}
+    }
+
     if (
       grant_type ===
       "urn:ietf:params:oauth:grant-type:pre-authorized_code"
@@ -1786,6 +1811,7 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
         dpopCnf,
         tx_code,
         req,
+        tokenClientBinding,
       );
     } else if (grant_type === "authorization_code") {
       if (slog) {
@@ -1806,6 +1832,7 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
         req.body?.client_id,
         redirect_uri,
         req,
+        tokenClientBinding,
       );
     } else {
       if (slog) {
@@ -2196,6 +2223,7 @@ sharedRouter.post("/credential", async (req, res) => {
               publicKeyForProof,
               flowType,
               sessionId,
+              sessionObject,
               req,
             );
             if (typeof wuaCompact !== "string" || !wuaCompact.trim()) {
@@ -2242,6 +2270,7 @@ sharedRouter.post("/credential", async (req, res) => {
               publicKeyForProof,
               flowType,
               sessionId,
+              sessionObject,
               req,
             );
 

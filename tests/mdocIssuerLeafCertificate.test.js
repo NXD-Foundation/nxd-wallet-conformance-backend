@@ -22,6 +22,74 @@ function getLeafKeyUsage(cert) {
   return cert.getExtension(KeyUsagesExtension);
 }
 
+const COSE_LABEL_KID = 2;
+const COSE_LABEL_X = -2;
+const COSE_LABEL_Y = -3;
+
+function coseKeyParameter(deviceKey, label) {
+  if (deviceKey instanceof Map) {
+    return deviceKey.get(label);
+  }
+  return deviceKey?.[label] ?? deviceKey?.[String(label)];
+}
+
+function decodeMsoFromIssuerAuthPayload(msoPayload) {
+  const msoBytes =
+    msoPayload instanceof Uint8Array || Buffer.isBuffer(msoPayload)
+      ? msoPayload
+      : Buffer.from(msoPayload);
+  let decoded = decode(msoBytes);
+  if (decoded?.tag === 24) {
+    decoded = decode(decoded.value);
+  }
+  return decoded;
+}
+
+function decodeMsoDeviceKeyFromIssuerSigned(issuerSigned) {
+  expect(issuerSigned.issuerAuth).to.be.an("array").with.length.at.least(3);
+  const mso = decodeMsoFromIssuerAuthPayload(issuerSigned.issuerAuth[2]);
+  const deviceKey = mso?.deviceKeyInfo?.deviceKey;
+  expect(deviceKey, "MSO deviceKeyInfo.deviceKey must be present").to.exist;
+  return deviceKey;
+}
+
+function expectByteStringCoseParameter(value, expectedUtf8 = null) {
+  expect(
+    Buffer.isBuffer(value) || value instanceof Uint8Array,
+    "COSE parameter must decode as a byte string, not text",
+  ).to.equal(true);
+  if (expectedUtf8 != null) {
+    expect(Buffer.from(value).toString("utf8")).to.equal(expectedUtf8);
+  }
+}
+
+async function issuePidMdocWithProofJwk(proofJwk, privateKey, nonce) {
+  const proofJwt = await new jose.SignJWT({
+    iss: "did:example:holder",
+    aud: "http://localhost:3000",
+    nonce,
+  })
+    .setProtectedHeader({
+      alg: "ES256",
+      typ: "openid4vci-proof+jwt",
+      jwk: proofJwk,
+    })
+    .sign(privateKey);
+
+  return handleCredentialGenerationBasedOnFormat(
+    {
+      vct: "urn:eu.europa.ec.eudi:pid:1:mso_mdoc",
+      proofs: { jwt: [proofJwt] },
+    },
+    {
+      signatureType: "x509",
+      isHaip: false,
+    },
+    "http://localhost:3000",
+    "mDL",
+  );
+}
+
 describe("mdoc issuance leaf certificate (Aptitude issuer signing material)", () => {
   it("includes Key Usage with the digitalSignature bit set", function () {
     const pem = loadAptitudeIssuerSigningMaterial().leafCertificatePem;
@@ -151,5 +219,47 @@ describe("mdoc issuance leaf certificate (Aptitude issuer signing material)", ()
     expect(issuerSigned.nameSpaces).to.not.have.property(
       "urn:eu.europa.ec.eudi:pid:1:mso_mdoc"
     );
+  });
+
+  it("encodes MSO deviceKey COSE label 2 (kid) as a byte string per RFC 9052", async function () {
+    const { publicKey, privateKey } = await jose.generateKeyPair("ES256");
+    const proofJwk = await jose.exportJWK(publicKey);
+    const kidString = "wallet-unit-subject-key-1";
+    proofJwk.kid = kidString;
+
+    const credential = await issuePidMdocWithProofJwk(
+      proofJwk,
+      privateKey,
+      "test-nonce-mdoc-devicekey-kid-bstr",
+    );
+
+    const issuerSigned = decode(Buffer.from(credential, "base64url"));
+    const deviceKey = decodeMsoDeviceKeyFromIssuerSigned(issuerSigned);
+
+    const kid = coseKeyParameter(deviceKey, COSE_LABEL_KID);
+    expectByteStringCoseParameter(kid, kidString);
+    expect(typeof kid).to.not.equal("string");
+
+    expectByteStringCoseParameter(coseKeyParameter(deviceKey, COSE_LABEL_X));
+    expectByteStringCoseParameter(coseKeyParameter(deviceKey, COSE_LABEL_Y));
+    expect(coseKeyParameter(deviceKey, COSE_LABEL_X).length).to.equal(32);
+    expect(coseKeyParameter(deviceKey, COSE_LABEL_Y).length).to.equal(32);
+  });
+
+  it("omits MSO deviceKey COSE label 2 when the proof JWK has no kid", async function () {
+    const { publicKey, privateKey } = await jose.generateKeyPair("ES256");
+    const proofJwk = await jose.exportJWK(publicKey);
+    delete proofJwk.kid;
+
+    const credential = await issuePidMdocWithProofJwk(
+      proofJwk,
+      privateKey,
+      "test-nonce-mdoc-devicekey-no-kid",
+    );
+
+    const issuerSigned = decode(Buffer.from(credential, "base64url"));
+    const deviceKey = decodeMsoDeviceKeyFromIssuerSigned(issuerSigned);
+
+    expect(coseKeyParameter(deviceKey, COSE_LABEL_KID)).to.be.undefined;
   });
 });

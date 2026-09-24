@@ -5,8 +5,8 @@
   "main": "server.js",
   "type": "module",
   "scripts": {
-    "test": "mocha tests/**/*.js",
-    "test:aptitude": "NODE_ENV=test ALLOW_NO_REDIS=true mocha tests/**/*.js",
+    "test": "mocha \"tests/**/*.js\" --ignore \"tests/helpers/**\"",
+    "test:aptitude": "NODE_ENV=test ALLOW_NO_REDIS=true mocha \"tests/**/*.js\" --ignore \"tests/helpers/**\"",
     "dev": "SERVER_URL=https://c3b5-2a02-85f-ec91-c300-8a0b-ce8e-5a65-b290.ngrok-free.app node server.js"
   },
   "author": "",

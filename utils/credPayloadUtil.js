@@ -1462,7 +1462,7 @@ const DEFAULT_EUROPEAN_DISABILITY_CARD_CLAIMS = {
   expiry_date: "2031-01-14",
   issuing_country: "FI",
   portrait: PID_PORTRAIT_DATA_URL,
-  assistant_entitlement: true,
+  assistant_entitlement: false,
   disability_status_recognised: true,
 };
 

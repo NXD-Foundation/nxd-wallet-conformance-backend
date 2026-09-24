@@ -11,6 +11,9 @@ export const OPENID4VP_PRESENT_URI = `openid4vp://${OPENID4VP_PRESENT_HOST}`;
 /** Prefix for by-value VP deep links (`openid4vp://present?client_id=…`). */
 export const OPENID4VP_PRESENT_QUERY_PREFIX = `${OPENID4VP_PRESENT_URI}?`;
 
+/** OAuth redirect_uri for blocking authorization-code flows (APTITUDE uses `present` authority). */
+export const OPENID4VP_CS02_URI = OPENID4VP_PRESENT_URI;
+
 export function isOpenId4VpDeepLink(value) {
   return typeof value === "string" && /^openid4vp:\/\//.test(value);
 }

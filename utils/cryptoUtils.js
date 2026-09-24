@@ -679,7 +679,12 @@ export async function buildVpRequestJWT(
     const encryptedRequest = await new jose.CompactEncrypt(
       new TextEncoder().encode(signedJwt)
     )
-      .setProtectedHeader({ alg: alg, enc: enc, typ: "oauth-authz-req+jwt" })
+      .setProtectedHeader({
+        alg: alg,
+        enc: enc,
+        typ: "oauth-authz-req+jwt",
+        cty: "JWT",
+      })
       .encrypt(publicKey);
 
     return encryptedRequest;

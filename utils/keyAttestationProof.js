@@ -10,6 +10,7 @@
 
 import jwt from "jsonwebtoken";
 import * as jose from "jose";
+import { X509Certificate } from "node:crypto";
 
 /** Match sharedIssuanceFlows ERROR_MESSAGES.INVALID_PROOF_* strings for consistent error handling */
 const INVALID_PROOF = "No proof information found";
@@ -28,6 +29,38 @@ function withSpecRef(message, ...refs) {
 }
 
 export const KEY_ATTESTATION_JWT_TYP = "key-attestation+jwt";
+
+function assertCertificationClaimShape(certification, specRef = "") {
+  if (certification === undefined) return;
+  if (typeof certification !== "string" || certification.trim() === "") {
+    const detail =
+      certification != null && typeof certification === "object"
+        ? "Key Attestation certification must be a string URL, not a JSON object"
+        : "Key Attestation certification must be a non-empty string URL";
+    throw new Error(withSpecRef(detail, KEY_ATTESTATION_SPEC_REF, specRef));
+  }
+  let parsed;
+  try {
+    parsed = new URL(certification.trim());
+  } catch {
+    throw new Error(
+      withSpecRef(
+        "Key Attestation certification must be a valid absolute URL",
+        KEY_ATTESTATION_SPEC_REF,
+        specRef
+      )
+    );
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(
+      withSpecRef(
+        "Key Attestation certification URL must use http or https",
+        KEY_ATTESTATION_SPEC_REF,
+        specRef
+      )
+    );
+  }
+}
 
 /**
  * Conformance-style parsing: proofs.attestation MUST be a JSON array containing exactly one JWT string.
@@ -97,6 +130,21 @@ export function resolveKeyAttestationVerificationJwk(decodedComplete, issuerConf
     return jwks.keys[0];
   }
   if (header?.jwk) return header.jwk;
+  if (Array.isArray(header?.x5c) && header.x5c.length > 0 && header.x5c[0]) {
+    try {
+      const der = Buffer.from(String(header.x5c[0]).replace(/\s+/g, ""), "base64");
+      const cert = new X509Certificate(der);
+      return cert.publicKey.export({ format: "jwk" });
+    } catch (e) {
+      throw new Error(
+        withSpecRef(
+          `${INVALID_PROOF_PUBLIC_KEY} Key attestation: x5c certificate parsing failed (${e?.message || e})`,
+          KEY_ATTESTATION_SPEC_REF,
+          HAIP_KEY_ATTESTATION_SPEC_REF
+        )
+      );
+    }
+  }
   throw new Error(
     withSpecRef(
       `${INVALID_PROOF_PUBLIC_KEY} Key attestation: configure issuer key_attestation_jwks or provide header.jwk for signature verification.`,
@@ -182,6 +230,9 @@ export function validateKeyAttestationHeaderForCredentialConfig(header, credConf
 export function validateAttestationClaimsAndExtractAttestedKeys(payload, specRef = "") {
   if (!payload || typeof payload !== "object") {
     throw new Error(`${INVALID_PROOF_MALFORMED} Key attestation: empty payload${specRef ? `. See ${specRef}` : ""}`);
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, "certification")) {
+    assertCertificationClaimShape(payload.certification, specRef);
   }
   const keys = payload.attested_keys;
   if (!Array.isArray(keys) || keys.length === 0) {

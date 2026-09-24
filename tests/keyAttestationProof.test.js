@@ -84,6 +84,24 @@ describe("keyAttestationProof", () => {
         validateAttestationClaimsAndExtractAttestedKeys({ attested_keys: [{}] })
       ).to.throw(/must be a JWK/);
     });
+
+    it("rejects certification when it is a JSON object instead of a URL string", () => {
+      expect(() =>
+        validateAttestationClaimsAndExtractAttestedKeys({
+          attested_keys: [{ kty: "EC", crv: "P-256", x: "a", y: "b" }],
+          certification: { scheme: "local" },
+        })
+      ).to.throw(/not a JSON object/);
+    });
+
+    it("accepts certification as an absolute https URL", () => {
+      const keys = [{ kty: "EC", crv: "P-256", x: "abc", y: "def" }];
+      const out = validateAttestationClaimsAndExtractAttestedKeys({
+        attested_keys: keys,
+        certification: "https://wallet-provider.example/certification/wscd/",
+      });
+      expect(out).to.deep.equal(keys);
+    });
   });
 
   it("buildCredentialBindingCnfFromAttestedKeys uses first key as cnf.jwk", () => {
