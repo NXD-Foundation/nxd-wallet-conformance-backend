@@ -671,7 +671,7 @@ export async function buildVpRequestJWT(
 
     const alg =
       wallet_metadata.authorization_encryption_alg_values_supported?.[0] ||
-      "ECDH-ES+A256KW";
+      "ECDH-ES";
     const enc =
       wallet_metadata.authorization_encryption_enc_values_supported?.[0] ||
       "A256GCM";

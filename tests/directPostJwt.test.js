@@ -40,7 +40,7 @@ describe('Direct Post JWT Fixes', () => {
             y: 'test-y',
             use: 'enc',
             kid: 'enc-key-1',
-            alg: 'ECDH-ES+A256KW'
+            alg: 'ECDH-ES'
           }]
         },
         encrypted_response_enc_values_supported: ['A256GCM']
@@ -71,7 +71,7 @@ describe('Direct Post JWT Fixes', () => {
       expect(decoded.payload.client_metadata).to.have.property('encrypted_response_enc_values_supported');
       expect(decoded.payload.client_metadata.jwks.keys).to.be.an('array');
       expect(decoded.payload.client_metadata.jwks.keys[0]).to.have.property('use', 'enc');
-      expect(decoded.payload.client_metadata.jwks.keys[0]).to.have.property('alg', 'ECDH-ES+A256KW');
+      expect(decoded.payload.client_metadata.jwks.keys[0]).to.have.property('alg', 'ECDH-ES');
     });
 
     it('should not include encryption metadata for direct_post', async () => {
@@ -893,7 +893,8 @@ describe('Direct Post JWT Fixes', () => {
       expect(encryptionKey).to.exist;
       expect(encryptionKey).to.have.property('kty', 'EC');
       expect(encryptionKey).to.have.property('crv', 'P-256');
-      expect(encryptionKey).to.have.property('alg', 'ECDH-ES+A256KW');
+      expect(encryptionKey).to.have.property('alg', 'ECDH-ES');
+      expect(encryptionKey).to.have.property('crv', 'P-256');
 
       // Check for encryption algorithms
       expect(verifierConfig).to.have.property('encrypted_response_enc_values_supported');

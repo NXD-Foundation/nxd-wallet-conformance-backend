@@ -29,7 +29,7 @@
         "y": "8ZXh3dOsLoJFT1Y6F--HgR6uBjsOifnTIiiVnQfgoWs",
         "use": "enc",
         "kid": "enc-key-1",
-        "alg": "ECDH-ES+A256KW"
+        "alg": "ECDH-ES"
       }
     ]
   },

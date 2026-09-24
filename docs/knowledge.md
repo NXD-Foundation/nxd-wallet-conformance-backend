@@ -351,9 +351,10 @@ wallet and issuer agree on the identifying-credential path (OpenID4VCI §3.3.4 /
 - `isWuaWalletProviderTrustedByPolicy` and
   `isKeyAttestationTrustedByIssuer` are explicit trust-policy hooks. They are
   not a configured trusted-list implementation today.
-- The configuration advertises `A128GCM` and `A256GCM` credential response
-  encryption; request validation and JWE creation enforce the advertised
-  parameters. Confirm the selected key-management algorithm with the wallet.
+- The configuration advertises `A128GCM` and `A256GCM` content encryption.
+  Verifier response encryption and wallet JAR encryption use HAIP key agreement
+  `ECDH-ES` on the P-256 encryption key (`alg` on the `enc` JWK), not
+  `ECDH-ES+A256KW`.
 
 ## RFC002: Credential Presentation Profile
 

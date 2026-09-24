@@ -154,8 +154,8 @@ export function buildWalletMetadataForVpRequest({ publicJwk, mdocGeneratedNonce 
     response_modes_supported: ["direct_post", "direct_post.jwt"],
     response_modes: ["direct_post", "direct_post.jwt"],
     jwks: { keys: [encKey] },
-    authorization_encryption_alg_values_supported: ["ECDH-ES+A256KW"],
-    authorization_encryption_enc_values_supported: ["A256GCM"],
+    authorization_encryption_alg_values_supported: ["ECDH-ES"],
+    authorization_encryption_enc_values_supported: ["A128GCM", "A256GCM"],
   };
   if (typeof mdocGeneratedNonce === "string" && mdocGeneratedNonce.length > 0) {
     meta.mdoc_generated_nonce = mdocGeneratedNonce;
@@ -2044,8 +2044,7 @@ export async function performPresentation(
           let alg =
             clientMetadata.authorization_encrypted_response_alg ||
             encKey.alg ||
-            "ECDH-ES+A256KW";
-          if (alg === "ECDH-ES") alg = "ECDH-ES+A256KW"; // Ensure key wrapping alg is included
+            "ECDH-ES";
 
           let enc = "A256GCM"; // Default enc
           if (clientMetadata.authorization_encrypted_response_enc) {
@@ -2250,7 +2249,7 @@ export async function performPresentation(
           );
           if (encKey) {
             const { importJWK, EncryptJWT } = await import("jose");
-            const alg = encKey.alg || "ECDH-ES+A256KW";
+            const alg = encKey.alg || "ECDH-ES";
             const supportedEnc = Array.isArray(
               clientMetadata.encrypted_response_enc_values_supported,
             )
