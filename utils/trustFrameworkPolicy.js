@@ -1,5 +1,5 @@
 import { decodeJwt, decodeProtectedHeader } from "jose";
-import { certificateFingerprint, certificateFromX5c, certificatesFromX5c } from "../trust/crypto.js";
+import { certificateFingerprint, certificateFromX5c, certificatesFromX5c, validateCertificatePath } from "../trust/crypto.js";
 import { createTrustResolver } from "../trust/resolver.js";
 import { loadTrustProfile } from "../trust/profile.js";
 import { loadTrustSnapshot } from "../trust/loader.js";
@@ -11,6 +11,8 @@ import { sessionTrustPolicy } from "./sessionContext.js";
 
 const WEBUILD_PROFILE = "webuild-wp4-pilot";
 const DEFAULT_TRUST_PROFILE_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../data/trust/webuild-wp4-pilot.json");
+const PREPROD_PKI_HOST = "preprod.pki.eudiw.dev";
+const PREPROD_PKI_ACCESS_CA_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../certs/pidissuerca02_eu.pem");
 let testResolver = null;
 let runtimeResolverPromise = null;
 
@@ -209,6 +211,42 @@ export async function checkVerifierCredentialTrust({
   }
 }
 
+export function preprodPkiAccessCaEnabled(env = process.env) {
+  return !/^false$/i.test(String(env.TRUST_ALLOW_PREPROD_PKI_ACCESS_CA ?? ""));
+}
+
+async function preprodPkiAccessCaDecision({ certificatePem, certificateChain = null, role, operation, entityId, trustPolicy }) {
+  if (role !== "wrpac-provider" || !preprodPkiAccessCaEnabled() || !certificatePem) return null;
+  let caPem;
+  try {
+    caPem = await fs.readFile(PREPROD_PKI_ACCESS_CA_PATH, "utf8");
+  } catch {
+    return null;
+  }
+  try {
+    const pathResult = validateCertificatePath({
+      certificateChain: certificateChain?.length ? certificateChain : [certificatePem],
+      anchorCertificates: [caPem],
+    });
+    return {
+      trusted: true,
+      state: "trusted",
+      reasonCode: "TRUSTED",
+      evidence: {
+        role,
+        operation,
+        entityId,
+        trustPolicy,
+        alternative: PREPROD_PKI_HOST,
+        source: "hardcoded-preprod-pki-access-ca",
+        anchorFingerprint: pathResult.anchorFingerprint,
+      },
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function checkAccessCertificateTrust({
   session,
   certificatePem,
@@ -227,22 +265,25 @@ export async function checkAccessCertificateTrust({
       evidence: { role, operation, entityId, trustPolicy, error: "Access certificate is missing" },
     };
   }
+  const presentedChain = certificateChain?.length ? certificateChain : [certificatePem];
   try {
     const resolver = await runtimeTrustResolver();
-    return resolver.resolve({
+    const decision = await resolver.resolve({
       framework: trustPolicy.profile,
       role,
       operation,
       presentedIdentity: {
         entityId,
         certificateFingerprint: certificateFingerprint(certificatePem),
-        certificateChain: certificateChain?.length ? certificateChain : [certificatePem],
+        certificateChain: presentedChain,
       },
       credentialContext: { certificateType: role },
       policy: { requireRevocation: false },
     });
+    if (decision?.trusted) return decision;
+    return await preprodPkiAccessCaDecision({ certificatePem, certificateChain: presentedChain, role, operation, entityId, trustPolicy }) || decision;
   } catch (error) {
-    return {
+    return await preprodPkiAccessCaDecision({ certificatePem, certificateChain: presentedChain, role, operation, entityId, trustPolicy }) || {
       trusted: false,
       state: "indeterminate",
       reasonCode: "TRUST_EVALUATION_INDETERMINATE",

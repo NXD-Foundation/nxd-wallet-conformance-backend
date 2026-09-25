@@ -155,6 +155,44 @@ export function loadVerifierP12({ p12Path, passphrase } = {}) {
   }
 }
 
+const DEFAULT_TRUST_WRPAC_CERT = path.resolve(process.cwd(), "certs", "we-build-wrpac.pem");
+const DEFAULT_TRUST_WRPAC_KEY = path.resolve(process.cwd(), "certs", "dev-i4mlab.aegean.gr.key.pem");
+
+function resolveMaterialPath(explicitPath, envPath, fallback) {
+  const selected = explicitPath || envPath || fallback;
+  return path.isAbsolute(selected) ? selected : path.resolve(process.cwd(), selected);
+}
+
+/**
+ * Leaf plus issuing CA for VP requests created with trustFramework=true.
+ * The preprod verifier P12 remains the signing material for every other request.
+ */
+export function loadTrustFrameworkVerifierMaterial({ certPath, keyPath } = {}) {
+  const resolvedCertPath = resolveMaterialPath(certPath, process.env.TRUST_WRPAC_CERT_PATH, DEFAULT_TRUST_WRPAC_CERT);
+  const resolvedKeyPath = resolveMaterialPath(keyPath, process.env.TRUST_WRPAC_KEY_PATH, DEFAULT_TRUST_WRPAC_KEY);
+  if (!fs.existsSync(resolvedCertPath) || !fs.existsSync(resolvedKeyPath)) {
+    throw new Error(
+      `Trust-framework verifier certificate is unavailable at ${resolvedCertPath} with key ${resolvedKeyPath}. ` +
+      "trustFramework=true VP requests do not fall back to the preprod verifier certificate."
+    );
+  }
+
+  const certPem = fs.readFileSync(resolvedCertPath, "utf8");
+  const certChain = extractCertificateChain(certPem);
+  const privateKey = crypto.createPrivateKey(fs.readFileSync(resolvedKeyPath, "utf8"));
+  const leaf = new crypto.X509Certificate(derBase64ToPemCert(certChain[0]));
+  const keyPublic = crypto.createPublicKey(privateKey).export({ type: "spki", format: "der" });
+  const certPublic = leaf.publicKey.export({ type: "spki", format: "der" });
+  if (!keyPublic.equals(certPublic)) {
+    throw new Error("Trust-framework WRPAC certificate does not match its private key");
+  }
+
+  return {
+    privateKeyPkcs8: privateKey.export({ type: "pkcs8", format: "pem" }),
+    certChain,
+  };
+}
+
 export function pemToJWK(pem, keyType) {
   let key;
   let jwk;
@@ -344,6 +382,7 @@ export async function buildVpRequestJWT(
   jar_alg = null, // Optional JAR signature algorithm override (e.g., 'ES256') for x509 schemes
   cs07DcApi = false,
   cs07VerifierOrigin = null,
+  verifierSigningMaterial = null,
 ) {
     const cs02Options = resolveVerifierCs02Options(process.env);
   const cs07Origin = cs07DcApi
@@ -492,10 +531,11 @@ export async function buildVpRequestJWT(
   }
 
   let signedJwt;
+  const verifierMaterial = () => verifierSigningMaterial || loadVerifierP12();
 
   if (response_mode === "dc_api.jwt" || response_mode === "dc_api") {
     // Use WE-BUILD Verifier P12 certificate for Digital Credentials API
-    const { privateKeyPkcs8, certChain } = loadVerifierP12();
+    const { privateKeyPkcs8, certChain } = verifierMaterial();
 
     const header = {
       alg: "ES256",
@@ -516,9 +556,9 @@ export async function buildVpRequestJWT(
 
     let certChain;
     if (useEs256) {
-      const p12 = loadVerifierP12();
+      const p12 = verifierMaterial();
       privateKey = p12.privateKeyPkcs8;
-      certChain = appendCaCertsIfNeeded([...p12.certChain]);
+      certChain = verifierSigningMaterial ? [...p12.certChain] : appendCaCertsIfNeeded([...p12.certChain]);
       await validateX509SanDnsTrustForRequestGeneration(client_id, { x5c: certChain });
     } else {
       if (cs02Options.strict) {
@@ -558,7 +598,7 @@ export async function buildVpRequestJWT(
 
     let certChain;
     if (useEs256) {
-      const p12 = loadVerifierP12();
+      const p12 = verifierMaterial();
       privateKey = p12.privateKeyPkcs8;
       certChain = p12.certChain;
     } else {
@@ -685,7 +725,7 @@ export async function buildVpRequestJWT(
       const useEs256 = signingPolicy.forceEs256;
       let header;
       if (useEs256) {
-        const p12 = loadVerifierP12();
+        const p12 = verifierMaterial();
         privateKey = p12.privateKeyPkcs8;
         const certChain = appendCaCertsIfNeeded([...p12.certChain]);
         header = {

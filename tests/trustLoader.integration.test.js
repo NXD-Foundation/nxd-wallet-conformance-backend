@@ -2,7 +2,7 @@ import { expect } from "chai";
 import fs from "node:fs/promises";
 import http from "node:http";
 import { loadTrustProfile } from "../trust/profile.js";
-import { loadTrustSnapshot, pointerForType } from "../trust/loader.js";
+import { loadTrustSnapshot, pointerForType, pointersForType } from "../trust/loader.js";
 import { evaluateTrust } from "../trust/evaluate.js";
 import { certificateFingerprint } from "../trust/crypto.js";
 
@@ -70,6 +70,15 @@ describe("Phase 1 local trust-chain integration", () => {
     const snapshot = await loadTrustSnapshot({ profile, fetchImpl: fetchLocal, clock: () => new Date("2026-07-27T00:00:00Z") });
     const result = evaluateTrust({ snapshot, role: "pid-provider", presentedIdentity: { entityId: "Test PID Provider", certificateFingerprint: "00".repeat(32) } });
     expect(result).to.include({ trusted: false, reasonCode: "ANCHOR_MISMATCH" });
+  });
+
+  it("keeps every publisher for a role when the LoTL format matches only one of them", () => {
+    const pointers = [
+      { url: "https://example/wrpac.json", mimeType: "application/json", listTypeUri: "urn:wrpac" },
+      { url: "https://example/wrpac.xml", mimeType: "application/xml", listTypeUri: "urn:wrpac" },
+    ];
+    expect(pointersForType(pointers, { referenceUri: "urn:wrpac" }, "json").map((pointer) => pointer.url))
+      .to.deep.equal(["https://example/wrpac.json", "https://example/wrpac.xml"]);
   });
 
   it("fails closed on same-type pointers until the profile selects one", () => {

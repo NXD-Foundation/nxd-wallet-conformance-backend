@@ -521,11 +521,18 @@ Section 3.6 and Section 4.2.
   `not-advertised`.
 - A trust role can have multiple compatible pointers in the WE BUILD LoTL. The
   resolver authenticates, validates, and freshness-checks each pointer
-  independently, then trusts a provider only if its identity/certificate
+  independently, including publishers whose MIME type differs from the LoTL
+  document that was loaded. It trusts a provider only if its identity/certificate
   matches at least one eligible list. Invalid or unavailable unrelated lists
   are included as diagnostic evidence; if no list for the role authenticates,
   the opted-in result is indeterminate and fails closed. A profile may set
   `pointerUrl` to deliberately restrict a role to one LoTL publisher.
+- Verifier access certificates (WRPAC) may also chain to the hardcoded
+  `preprod.pki.eudiw.dev` anchor `certs/pidissuerca02_eu.pem` (PID Issuer CA 02)
+  when no LoTE lists that certificate. Set
+  `TRUST_ALLOW_PREPROD_PKI_ACCESS_CA=false` to disable that alternative and
+  require a LoTE decision. The alternative does not apply to WRPRC or issuer
+  credential checks.
 - Registrars are generic: registration data may describe approved attestation
   types, while LoTEs publish provider anchors and status. NXD's current EAA
   LoTE has provider services and anchors but no registrar reference or
@@ -603,7 +610,13 @@ deliberately separate:
   and `x509EC/client_certificate.crt`.
 - `certs/WE-BUILD-Verifier.p12` is the X.509 verifier/JAR and signed issuer
   metadata signing material. `certs/pidissuerca02_eu.pem` is the CA used to
-  extend the JAR `x5c` chain.
+  extend the JAR `x5c` chain and the hardcoded `preprod.pki.eudiw.dev` WRPAC
+  alternative anchor.
+- `trustFramework=true` x509 VP requests are signed with
+  `certs/we-build-wrpac.pem` and `certs/dev-i4mlab.aegean.gr.key.pem`
+  (`TRUST_WRPAC_CERT_PATH`, `TRUST_WRPAC_KEY_PATH`). Requests without that flag
+  keep the preprod P12. A missing trust-framework certificate fails generation
+  instead of falling back.
 - Wallet-client credentials remain protocol-specific fixtures. DID, X.509,
   EC, CS-03, X25519, wallet-provider, and device keys must not be merged
   unless their protocol role and public-key identity are identical.

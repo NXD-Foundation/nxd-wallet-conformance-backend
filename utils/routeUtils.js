@@ -3,8 +3,8 @@ import { v4 as uuidv4 } from "uuid";
 import qr from "qr-image";
 import imageDataURI from "image-data-uri";
 import { streamToBuffer } from "@jorgeferrero/stream-to-buffer";
-import { generateNonce, buildVpRequestJWT, derBase64ToPemCert, loadVerifierP12 } from "./cryptoUtils.js";
-import { certificateFromX5c } from "../trust/crypto.js";
+import { generateNonce, buildVpRequestJWT, derBase64ToPemCert, loadTrustFrameworkVerifierMaterial } from "./cryptoUtils.js";
+import { certificateFromX5c, certificatesFromX5c } from "../trust/crypto.js";
 import { checkAccessCertificateTrust, isTrustFrameworkSession, loadConfiguredAccessCertificate } from "./trustFrameworkPolicy.js";
 import {
   filterClientMetadataForCs02,
@@ -1272,12 +1272,16 @@ export async function generateVPRequest(params) {
     sessionData.trustPolicy = trustPolicy;
   }
 
+  const useTrustWrpac = isTrustFrameworkSession(sessionData)
+    && (String(clientId || "").startsWith("x509_") || cs07DcApi);
+  const verifierSigningMaterial = useTrustWrpac ? loadTrustFrameworkVerifierMaterial() : null;
+
   if (isTrustFrameworkSession(sessionData) && String(clientId || "").startsWith("x509_san_")) {
-    const verifierP12 = loadVerifierP12();
-    const accessCertificatePem = certificateFromX5c(verifierP12.certChain);
+    const accessCertificatePem = certificateFromX5c(verifierSigningMaterial.certChain);
     const accessDecision = await checkAccessCertificateTrust({
       session: sessionData,
       certificatePem: accessCertificatePem,
+      certificateChain: certificatesFromX5c(verifierSigningMaterial.certChain),
       entityId: clientId,
       role: "wrpac-provider",
       operation: "verify-access-certificate",
@@ -1402,6 +1406,7 @@ export async function generateVPRequest(params) {
     jarAlg || CONFIG.DEFAULT_JAR_ALG,
     cs07DcApi,
     resolvedCs07Origin,
+    verifierSigningMaterial,
   );
   await logInfo(sessionId, "VP request JWT built successfully");
 
@@ -1488,6 +1493,11 @@ export async function processVPRequest(params) {
     const metadataForRequest = isVerifierCs02StrictMode()
       ? filterClientMetadataForCs02(clientMetadata, vpSession.response_mode)
       : clientMetadata;
+    const requestClientId = clientId || vpSession.client_id;
+    const trustSigningMaterial = isTrustFrameworkSession(vpSession)
+      && String(requestClientId || "").startsWith("x509_")
+      ? loadTrustFrameworkVerifierMaterial()
+      : null;
 
     const vpRequestJWT = await buildVpRequestJWT(
       clientId,
@@ -1507,7 +1517,10 @@ export async function processVPRequest(params) {
       walletMetadata,
       null, // va_jwt - Verifier Attestation JWT (not used in response processing)
       vpSession.state,
-      vpSession.jar_alg || CONFIG.DEFAULT_JAR_ALG
+      vpSession.jar_alg || CONFIG.DEFAULT_JAR_ALG,
+      false,
+      null,
+      trustSigningMaterial,
     );
     
     await logInfo(sessionId, "VP request JWT built successfully", {

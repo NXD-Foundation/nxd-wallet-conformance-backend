@@ -59,9 +59,12 @@ async function loadByFormat({ profile, format, fetchImpl, clock, listType = null
 
 export function pointersForType(pointers, typeProfile, format) {
   const matches = pointers.filter((pointer) => pointer.listTypeUri === typeProfile.referenceUri);
-  const formatMatches = matches.filter((pointer) => pointer.mimeType.includes(format));
-  const candidates = formatMatches.length ? formatMatches : matches;
-  if (!candidates.length) return null;
+  if (!matches.length) return null;
+  const formatMatches = format
+    ? matches.filter((pointer) => String(pointer.mimeType || "").includes(format))
+    : [];
+  const otherFormats = matches.filter((pointer) => !formatMatches.includes(pointer));
+  const candidates = [...formatMatches, ...otherFormats];
 
   if (typeProfile.pointerUrl) {
     const selected = candidates.filter((pointer) => pointer.url === typeProfile.pointerUrl);

@@ -5,7 +5,7 @@ import path from "path";
 import { execSync } from "child_process";
 import * as jose from "jose";
 import { X509Certificate } from "crypto";
-import { buildVpRequestJWT } from "../utils/cryptoUtils.js";
+import { buildVpRequestJWT, loadTrustFrameworkVerifierMaterial } from "../utils/cryptoUtils.js";
 
 function x5cToPem(x5cEntry) {
   return `-----BEGIN CERTIFICATE-----
@@ -16,7 +16,7 @@ ${String(x5cEntry)
 `;
 }
 
-async function buildEs256X509Jar() {
+async function buildEs256X509Jar(signingMaterial = null) {
   return buildVpRequestJWT(
     "x509_san_dns:dev-i4mlab.aegean.gr",
     "https://dev-i4mlab.aegean.gr/callback",
@@ -36,6 +36,9 @@ async function buildEs256X509Jar() {
     null,
     "test-state-jar-x5c",
     "ES256",
+    false,
+    null,
+    signingMaterial,
   );
 }
 
@@ -93,6 +96,27 @@ describe("JAR x5c certificate chain", () => {
     await assert.rejects(
       buildEs256X509Jar(),
       /WE-BUILD verifier x5c CA chain is unavailable/,
+    );
+  });
+
+  it("uses the WRPAC leaf when trust-framework signing material is supplied", async () => {
+    const requestJwt = await buildEs256X509Jar(loadTrustFrameworkVerifierMaterial());
+    const header = jose.decodeProtectedHeader(requestJwt);
+    const leaf = new X509Certificate(x5cToPem(header.x5c[0]));
+    const issuer = new X509Certificate(x5cToPem(header.x5c[1]));
+
+    assert.match(leaf.subject, /CN=dev-i4mlab.aegean.gr/);
+    assert.match(issuer.subject, /CN=https:\/\/webuild-consortium.github.io\//);
+    assert.doesNotMatch(leaf.subject, /CN=WE-BUILD Verifier/);
+  });
+
+  it("refuses a trust-framework VP request when the WRPAC material is missing", () => {
+    assert.throws(
+      () => loadTrustFrameworkVerifierMaterial({
+        certPath: "certs/does-not-exist-wrpac.pem",
+        keyPath: "certs/does-not-exist-wrpac.key",
+      }),
+      /do not fall back to the preprod verifier certificate/,
     );
   });
 
