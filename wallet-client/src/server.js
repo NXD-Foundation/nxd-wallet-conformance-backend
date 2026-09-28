@@ -794,7 +794,7 @@ function pickConfigurationId(offer, requestedId) {
   return ids.length > 0 ? ids[0] : undefined;
 }
 
-/** RFC001 P2-W-5: expose signed issuer metadata `issuer_info.registration_certificate` for test harnesses. */
+/** RFC001 P2-W-5: expose signed issuer metadata `issuer_info` registration_cert data for test harnesses. */
 function attachIssuerMetadataWalletHarness(issuerMeta, result) {
   const dbg = issuerMeta?._walletIssuerMetadataDebug;
   if (!dbg) return result;

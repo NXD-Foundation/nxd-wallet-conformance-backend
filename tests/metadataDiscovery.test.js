@@ -198,28 +198,26 @@ describe('OIDC4VCI V1.0 - Metadata Discovery Compliance', () => {
         .get('/.well-known/openid-credential-issuer')
         .expect(200);
 
-      expect(response.body).to.have.property('issuer_info').that.is.an('object');
+      expect(response.body).to.have.property('issuer_info').that.is.an('array').with.length.greaterThan(0);
       const issuerInfo = response.body.issuer_info;
+      for (const entry of issuerInfo) {
+        expect(entry).to.have.keys('format', 'data');
+      }
 
-      expect(issuerInfo).to.have.property('registration_certificate').that.is.a('string');
-      expect(issuerInfo.registration_certificate).to.match(/^[A-Za-z0-9+/=]+$/);
-      expect(issuerInfo.registration_certificate.length).to.be.greaterThan(100);
+      const registrationCert = issuerInfo.find((entry) => entry.format === 'registration_cert');
+      expect(registrationCert, 'issuer_info must include format=registration_cert').to.exist;
+      expect(registrationCert.data).to.be.a('string').that.matches(/^[A-Za-z0-9+/=]+$/);
+      expect(registrationCert.data.length).to.be.greaterThan(100);
 
-      expect(issuerInfo).to.have.property('registration_certificate_pem').that.includes('BEGIN CERTIFICATE');
-      expect(issuerInfo).to.have.property('registration_certificate_summary').that.is.an('object');
-      const summary = issuerInfo.registration_certificate_summary;
-      expect(summary).to.include.keys([
-        'subject',
-        'issuer',
-        'serial_number',
-        'not_before',
-        'not_after',
-        'self_signed',
-      ]);
-      expect(summary.self_signed).to.be.a('boolean');
-
-      expect(issuerInfo).to.have.property('registration_information').that.is.an('object');
-      expect(issuerInfo).to.have.property('profile').that.includes('ETSI TS 119 472-3');
+      const registrarDataset = issuerInfo.find((entry) => entry.format === 'registrar_dataset');
+      expect(registrarDataset, 'issuer_info must include format=registrar_dataset').to.exist;
+      expect(registrarDataset.data).to.be.an('object');
+      expect(registrarDataset.data).to.include.keys(
+        'identifier',
+        'srvDescription',
+        'registryURI',
+        'providesAttestations',
+      );
     });
 
     it('MUST support signed issuer metadata with x5c when client requests application/jwt (RFC001 §7.7 SHALL 7)', async () => {
@@ -241,7 +239,9 @@ describe('OIDC4VCI V1.0 - Metadata Discovery Compliance', () => {
 
       expect(payload).to.have.property('credential_issuer', 'https://issuer.example.com');
       expect(payload).to.have.property('credential_endpoint', 'https://issuer.example.com/credential');
-      expect(payload).to.have.property('issuer_info').that.is.an('object');
+      expect(payload).to.have.property('issuer_info').that.is.an('array');
+      expect(payload.issuer_info.some((entry) => entry.format === 'registration_cert')).to.equal(true);
+      expect(payload.issuer_info.some((entry) => entry.format === 'registrar_dataset')).to.equal(true);
     });
 
     it('MUST include credential_issuer identifier in metadata', async () => {

@@ -1,10 +1,11 @@
 /**
- * RFC001 §5 / §7.7 SHALL 8 — ETSI TS 119 472-3 `issuer_info` metadata parameter.
+ * RFC001 §7.7 SHALL 8 / ETSI TS 119 472-3 clause 4.2.3 `issuer_info`.
  *
- * Builds a JSON object that transports the Issuer's registration material:
- *   - the registration certificate (PEM + base64 DER + parsed summary fields),
- *   - the registrar-provided registration information (legal name, country,
- *     registrar identifier, etc.).
+ * `issuer_info` is an array of OpenID4VP `verifier_info`-shaped objects:
+ * `{ format, data }`. This profile uses:
+ *   - `format: "registration_cert"` — WRPRC / registration certificate (`data` string)
+ *   - `format: "registrar_dataset"` — registrar JSON (`data` object with
+ *     `identifier`, `srvDescription`, `registryURI`, `providesAttestations`)
  *
  * The active Aptitude issuer certificate may be provided directly by the
  * issuer-signing material loader, avoiding drift from the metadata JWS signer.
@@ -12,6 +13,16 @@
 import fs from "fs";
 import path from "path";
 import { X509Certificate } from "@peculiar/x509";
+
+export const ISSUER_INFO_FORMAT_REGISTRATION_CERT = "registration_cert";
+export const ISSUER_INFO_FORMAT_REGISTRAR_DATASET = "registrar_dataset";
+
+const REQUIRED_REGISTRAR_DATASET_KEYS = [
+  "identifier",
+  "srvDescription",
+  "registryURI",
+  "providesAttestations",
+];
 
 const DEFAULT_CERT_PATH = path.join(
   process.cwd(),
@@ -24,17 +35,24 @@ const DEFAULT_REGISTRATION_PATH = path.join(
   "issuer-registration.json",
 );
 
+const FALLBACK_REGISTRAR_DATASET = {
+  identifier: "dev:rfc-issuer-v1",
+  srvDescription: [
+    {
+      lang: "en",
+      content:
+        "APTITUDE RFC001 test issuer (self-registered development material)",
+    },
+  ],
+  registryURI: "https://uaegean.gr",
+  providesAttestations: [],
+};
+
 function stripPemToBase64Der(pem) {
   return pem
     .replace(/-----BEGIN [^-]+-----/g, "")
     .replace(/-----END [^-]+-----/g, "")
     .replace(/\s+/g, "");
-}
-
-function hex(buf) {
-  return Array.from(new Uint8Array(buf))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
 }
 
 function readRegistrationDataset(pathOverride) {
@@ -43,7 +61,7 @@ function readRegistrationDataset(pathOverride) {
   try {
     const raw = fs.readFileSync(p, "utf-8");
     const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === "object") {
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       delete parsed._comment;
       return parsed;
     }
@@ -56,17 +74,43 @@ function readRegistrationDataset(pathOverride) {
   }
 }
 
+function warnIfRegistrarDatasetIncomplete(dataset) {
+  const missing = REQUIRED_REGISTRAR_DATASET_KEYS.filter(
+    (key) => dataset[key] == null,
+  );
+  if (missing.length > 0) {
+    console.warn(
+      `[issuer_info] registrar_dataset is missing ETSI TS 119 472-3 members: ${missing.join(", ")}`,
+    );
+  }
+}
+
 /**
- * Build an `issuer_info` object from the PEM certificate at `certPath` and the
- * registrar dataset at `registrationPath`. Returns `null` if the certificate
- * cannot be loaded (callers should then skip attaching `issuer_info`).
+ * Return the first `issuer_info` array element whose `format` matches.
+ *
+ * @param {unknown} issuerInfo
+ * @param {string} format
+ * @returns {object | undefined}
+ */
+export function pickIssuerInfoEntry(issuerInfo, format) {
+  if (!Array.isArray(issuerInfo)) return undefined;
+  return issuerInfo.find(
+    (entry) => entry && typeof entry === "object" && entry.format === format,
+  );
+}
+
+/**
+ * Build the ETSI/RFC001 `issuer_info` array from the PEM certificate at
+ * `certPath` and the registrar dataset at `registrationPath`. Returns `null`
+ * if the certificate cannot be loaded (callers should then skip attaching
+ * `issuer_info`).
  *
  * @param {object} [options]
  * @param {string} [options.certPath] - Path to PEM certificate.
  * @param {string} [options.certificatePem] - Active issuer leaf certificate.
  * @param {string} [options.registrationPath] - Path to registrar dataset JSON
  *   (default: `data/issuer-registration.json`).
- * @returns {Promise<object|null>}
+ * @returns {Promise<object[]|null>}
  */
 export async function buildIssuerInfo({
   certPath = process.env.ISSUER_REGISTRATION_CERT_PATH || DEFAULT_CERT_PATH,
@@ -91,9 +135,11 @@ export async function buildIssuerInfo({
     return null;
   }
 
-  let cert;
   try {
-    cert = new X509Certificate(pem);
+    // Validate the stand-in registration material is an X.509 certificate.
+    // A production WRPRC is typically a JWT; this test service currently
+    // publishes the issuer leaf certificate in `registration_cert.data`.
+    new X509Certificate(pem);
   } catch (e) {
     console.warn(
       `[issuer_info] Unable to parse registration certificate ${certPath}: ${e.message}`,
@@ -102,34 +148,18 @@ export async function buildIssuerInfo({
   }
 
   const registrationCertificateB64Der = stripPemToBase64Der(pem);
+  const registrationDataset =
+    readRegistrationDataset(registrationPath) || FALLBACK_REGISTRAR_DATASET;
+  warnIfRegistrarDatasetIncomplete(registrationDataset);
 
-  let sha256Thumbprint = null;
-  try {
-    const raw = await cert.getThumbprint("SHA-256");
-    sha256Thumbprint = hex(raw);
-  } catch {
-    // Some runtimes expose a sync thumbprint helper; fall back to null.
-  }
-
-  const registrationDataset = readRegistrationDataset(registrationPath) || {
-    self_registered: true,
-  };
-
-  const issuerInfo = {
-    registration_certificate: registrationCertificateB64Der,
-    registration_certificate_pem: pem.trim(),
-    registration_certificate_summary: {
-      subject: cert.subject,
-      issuer: cert.issuer,
-      serial_number: cert.serialNumber,
-      not_before: cert.notBefore.toISOString(),
-      not_after: cert.notAfter.toISOString(),
-      sha256_thumbprint: sha256Thumbprint,
-      self_signed: cert.subject === cert.issuer,
+  return [
+    {
+      format: ISSUER_INFO_FORMAT_REGISTRATION_CERT,
+      data: registrationCertificateB64Der,
     },
-    registration_information: registrationDataset,
-    profile: "ETSI TS 119 472-3 (APTITUDE RFC001 §7.7 SHALL 8)",
-  };
-
-  return issuerInfo;
+    {
+      format: ISSUER_INFO_FORMAT_REGISTRAR_DATASET,
+      data: registrationDataset,
+    },
+  ];
 }

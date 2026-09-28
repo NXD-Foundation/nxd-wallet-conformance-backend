@@ -118,7 +118,7 @@ routes are kept alongside it for interoperability coverage.
 
 | RFC001 concern | Implementation mapping | Verification |
 | --- | --- | --- |
-| Discovery and issuer metadata | `routes/metadataroutes.js`; `data/issuer-config.json`; `data/oauth-config.json` | `tests/metadataDiscovery.test.js` |
+| Discovery and issuer metadata | `routes/metadataroutes.js`; `data/issuer-config.json`; `data/oauth-config.json`. `issuer_info` is the ETSI TS 119 472-3 / RFC001 §7.7 array of `{format, data}` objects (`registration_cert`, `registrar_dataset`) from `utils/issuerInfo.js` and `data/issuer-registration.json`. | `tests/metadataDiscovery.test.js`, `tests/issuerInfo.test.js` |
 | Credential offers and wallet invocation | `routes/issue/preAuthSDjwRoutes.js`, `routes/issue/codeFlowSdJwtRoutes.js`, `routes/issue/vciStandardRoutes.js`, `routes/multiCredentialOfferRoutes.js` | `tests/preAuthSDjwRoutes.test.js`, `tests/sharedIssuanceFlows.test.js` |
 | Authorization-code grant | `POST /par` or `/authorize/par`, `GET /authorize`, then `POST /token_endpoint` | `tests/codeFlowSdJwtRoutes.test.js` |
 | PAR and PKCE S256 | `routes/issue/codeFlowSdJwtRoutes.js` stores immutable PAR payloads, requires `request_uri` when configuration requires PAR, and validates S256; `validatePKCE` verifies the token request | `tests/codeFlowSdJwtRoutes.test.js` |

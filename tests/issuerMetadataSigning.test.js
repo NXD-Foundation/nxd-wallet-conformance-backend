@@ -70,7 +70,11 @@ describe("signed Credential Issuer metadata", () => {
     const { payload } = await jose.jwtVerify(response.text, verifyKey, {
       typ: SIGNED_ISSUER_METADATA_TYP,
     });
-    expect(payload.issuer_info.registration_certificate).to.equal(material.certChain[0]);
+    const registrationCert = payload.issuer_info.find(
+      (entry) => entry.format === "registration_cert",
+    );
+    expect(registrationCert, "issuer_info must include format=registration_cert").to.exist;
+    expect(registrationCert.data).to.equal(material.certChain[0]);
     expect(
       payload.credential_configurations_supported.airline_pnr_credential
         .proof_types_supported.jwt,

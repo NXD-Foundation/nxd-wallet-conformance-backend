@@ -35,10 +35,10 @@ const defaultSigningKid = issuerConfigValues.default_signing_kid || "aegean#auth
 
 const jwks = pemToJWK(publicKeyPem, "public");
 
-// RFC001 §7.7 SHALL 8 / ETSI TS 119 472-3: build the `issuer_info` metadata
-// parameter once at module load. We intentionally do not fail module init if
-// the registration certificate is missing — the metadata response simply
-// omits `issuer_info` when no material is available.
+// RFC001 §7.7 SHALL 8 / ETSI TS 119 472-3: build the `issuer_info` array
+// (`{format, data}` entries) once at module load. We intentionally do not
+// fail module init if the registration certificate is missing — the metadata
+// response simply omits `issuer_info` when no material is available.
 let issuerInfoPromise = buildIssuerInfo({
   certificatePem: loadAptitudeIssuerSigningMaterial().leafCertificatePem,
 }).catch((err) => {
@@ -96,8 +96,8 @@ metadataRouter.get(
       delete issuerConfig.batch_credential_endpoint;
     }
 
-    // RFC001 §7.7 SHALL 8 — attach `issuer_info` (registration certificate +
-    // registrar-provided registration information) when available.
+    // RFC001 §7.7 SHALL 8 — attach `issuer_info` (registration_cert +
+    // registrar_dataset `{format, data}` entries) when available.
     const issuerInfo = await issuerInfoPromise;
     if (issuerInfo) {
       issuerConfig.issuer_info = issuerInfo;

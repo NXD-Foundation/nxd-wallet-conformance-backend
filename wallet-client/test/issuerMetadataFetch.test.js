@@ -3,12 +3,32 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { SignJWT, importPKCS8 } from "jose";
-import { parseIssuerMetadataHttpResponse } from "../src/lib/issuerMetadataFetch.js";
+import {
+  parseIssuerMetadataHttpResponse,
+  registrationCertificateFromIssuerInfo,
+} from "../src/lib/issuerMetadataFetch.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 describe("issuer metadata JWS (RFC001 P2-W-5)", () => {
-  it("parses application/jwt metadata, verifies x5c, surfaces issuer_info.registration_certificate", async () => {
+  it("extracts registration_cert data from the ETSI issuer_info array", () => {
+    assert.strictEqual(
+      registrationCertificateFromIssuerInfo([
+        { format: "registrar_dataset", data: { identifier: "x" } },
+        { format: "registration_cert", data: "cert-b64" },
+      ]),
+      "cert-b64",
+    );
+  });
+
+  it("falls back to the legacy flat registration_certificate object", () => {
+    assert.strictEqual(
+      registrationCertificateFromIssuerInfo({ registration_certificate: "legacy" }),
+      "legacy",
+    );
+  });
+
+  it("parses application/jwt metadata, verifies x5c, surfaces issuer_info registration_cert data", async () => {
     const crtPath = path.join(__dirname, "../x509EC/client_certificate.crt");
     const keyPath = path.join(__dirname, "../x509EC/ec_private_pkcs8.key");
     const pem = fs.readFileSync(crtPath, "utf8");
@@ -24,7 +44,18 @@ describe("issuer metadata JWS (RFC001 P2-W-5)", () => {
       credential_issuer: "https://wallet-test.example/issuer",
       token_endpoint: "https://wallet-test.example/token",
       credential_endpoint: "https://wallet-test.example/credential",
-      issuer_info: { registration_certificate: expectedReg },
+      issuer_info: [
+        { format: "registration_cert", data: expectedReg },
+        {
+          format: "registrar_dataset",
+          data: {
+            identifier: "uaegean.gr",
+            srvDescription: [{ lang: "en", content: "test issuer" }],
+            registryURI: "https://uaegean.gr",
+            providesAttestations: [],
+          },
+        },
+      ],
     })
       .setProtectedHeader({ alg: "ES256", typ: "jwt", x5c })
       .sign(await importPKCS8(pkcs8, "ES256"));
