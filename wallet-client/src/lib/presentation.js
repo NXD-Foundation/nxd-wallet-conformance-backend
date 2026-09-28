@@ -1377,9 +1377,9 @@ export async function performPresentation(
     }
 
     // Build vp_token according to OpenID4VP 1.0 Section 8.1:
-    // When DCQL is used, vp_token MUST be a JSON object mapping credential query IDs to presentations.
-    // Per spec: "The object MUST contain one member for each Credential Query ... The member value
-    // MUST be a string or an array of strings". We use array form for consistency, e.g.:
+    // When DCQL is used, vp_token is a JSON object mapping credential query IDs
+    // to arrays of presentations. When multiple is omitted or false, the array
+    // contains exactly one presentation, e.g.:
     // { "vp_token": { "example_credential_id": ["eyJhb...YMetA"] }, ... }
     if (
       dcqlQuery &&

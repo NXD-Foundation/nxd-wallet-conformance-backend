@@ -947,18 +947,16 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
         });
 
         // For HAIP dc_api.jwt with Digital Credentials API, the vpToken might be an object
-        // with credential IDs as keys and mdoc data as values (string or array of strings per DCQL)
+        // with credential IDs as keys and mdoc data as arrays of presentation strings.
         let mdocData;
         if (typeof vpToken === 'object' && vpToken !== null && !Array.isArray(vpToken)) {
           // Extract the actual mdoc data from the object structure
           const credentialKeys = Object.keys(vpToken);
           if (credentialKeys.length > 0) {
             const raw = vpToken[credentialKeys[0]];
-            // DCQL format: value is array of strings e.g. ["eyJ..."]; spec also allows single string
+            // OpenID4VP 1.0 §8.1: a DCQL entry is an array of presentations.
             mdocData = Array.isArray(raw) && raw.length > 0 && typeof raw[0] === 'string'
               ? raw[0]
-              : typeof raw === 'string'
-              ? raw
               : undefined;
             await logDebug(sessionId, "Extracted mdoc data from HAIP dc_api.jwt credential", {
               credentialId: credentialKeys[0],

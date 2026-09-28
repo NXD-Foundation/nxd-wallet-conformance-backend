@@ -237,6 +237,11 @@ Supported response modes include `direct_post`, `direct_post.jwt`,
 In particular, state/nonce checks, DCQL response shape, transaction-data
 bindings, mdoc claim matching, and SD-JWT key binding each have explicit
 enforcement paths.
+- A DCQL `vp_token` is a JSON object keyed by credential-query id. OpenID4VP
+1.0 §8.1 requires every entry to be an array of presentations. When
+`multiple` is omitted or false, that array contains exactly one presentation.
+The wallet emits that array form, and the verifier rejects a bare string
+for a DCQL credential entry.
 - For strict `direct_post.jwt`, OpenID4VP encrypted-response processing uses
 an unsigned encrypted JWT whose plaintext is the top-level Authorization
 Response JSON object. Format-specific verification (mdoc, SD-JWT, JWT VC) runs only after

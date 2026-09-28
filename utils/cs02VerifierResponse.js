@@ -34,7 +34,7 @@ import {
   parseSdJwtClaims,
   selectSatisfiedSdJwtClaimSet,
 } from "./sdJwtClaims.js";
-import { isSupportedCs02ClaimPathSegment, validateSupportedCs02ClaimPath, evaluateCs02CredentialSets } from "./cs02DcqlCore.js";
+import { isSupportedCs02ClaimPathSegment, validateSupportedCs02ClaimPath, evaluateCs02CredentialSets, isCs02PresentationCardinalityValid } from "./cs02DcqlCore.js";
 import { checkVerifierCredentialTrust, isTrustFrameworkSession } from "./trustFrameworkPolicy.js";
 import { sessionContextFor } from "./sessionContext.js";
 import { decryptJWE } from "./cryptoUtils.js";
@@ -379,58 +379,32 @@ function credentialQueryById(dcqlQuery, id) {
 }
 
 function validateCredentialPresentationValue(value, multiple, credentialId) {
-  if (multiple === true) {
-    if (!Array.isArray(value)) {
-      throw new Cs02VerifierResponseError(
-        `DCQL credential "${credentialId}" requires an array when multiple=true`,
-        "invalid_vp_token",
-      );
-    }
-    if (value.length === 0) {
-      throw new Cs02VerifierResponseError(
-        `DCQL credential "${credentialId}" returned an empty array`,
-        "invalid_vp_token",
-      );
-    }
-    for (const entry of value) {
-      if (typeof entry !== "string" || entry.length === 0) {
-        throw new Cs02VerifierResponseError(
-          `DCQL credential "${credentialId}" array entries must be non-empty strings`,
-          "invalid_vp_token",
-        );
-      }
-    }
-    return;
-  }
+  if (isCs02PresentationCardinalityValid(value, multiple)) return;
 
-  if (Array.isArray(value)) {
-    if (value.length === 0) {
-      throw new Cs02VerifierResponseError(
-        `DCQL credential "${credentialId}" returned an empty array`,
-        "invalid_vp_token",
-      );
-    }
-    if (value.length > 1) {
-      throw new Cs02VerifierResponseError(
-        `DCQL credential "${credentialId}" returned multiple presentations without multiple=true`,
-        "invalid_vp_token",
-      );
-    }
-    if (typeof value[0] !== "string" || value[0].length === 0) {
-      throw new Cs02VerifierResponseError(
-        `DCQL credential "${credentialId}" presentation must be a non-empty string`,
-        "invalid_vp_token",
-      );
-    }
-    return;
-  }
-
-  if (typeof value !== "string" || value.length === 0) {
+  if (!Array.isArray(value)) {
     throw new Cs02VerifierResponseError(
-      `DCQL credential "${credentialId}" presentation must be a non-empty string`,
+      multiple === true
+        ? `DCQL credential "${credentialId}" requires an array when multiple=true`
+        : `DCQL credential "${credentialId}" presentation must be an array of one presentation`,
       "invalid_vp_token",
     );
   }
+  if (value.length === 0) {
+    throw new Cs02VerifierResponseError(
+      `DCQL credential "${credentialId}" returned an empty array`,
+      "invalid_vp_token",
+    );
+  }
+  if (multiple !== true && value.length > 1) {
+    throw new Cs02VerifierResponseError(
+      `DCQL credential "${credentialId}" returned multiple presentations without multiple=true`,
+      "invalid_vp_token",
+    );
+  }
+  throw new Cs02VerifierResponseError(
+    `DCQL credential "${credentialId}" array entries must be non-empty strings`,
+    "invalid_vp_token",
+  );
 }
 
 function requiredCredentialSetsSatisfied(requiredSets, vpTokenObject) {
@@ -1226,7 +1200,13 @@ export async function validateCs02SdJwtEntriesInVpToken(
     const value = vpTokenObject[credQuery.id];
     if (value == null) continue;
 
-    const presentations = Array.isArray(value) ? value : [value];
+    if (!Array.isArray(value)) {
+      throw new Cs02VerifierResponseError(
+        `DCQL credential "${credQuery.id}" presentation must be an array of presentations`,
+        "invalid_vp_token",
+      );
+    }
+    const presentations = value;
     if (String(credQuery?.format || "") === MDOC_FORMAT) {
       for (const presentation of presentations) {
         const mdocResult = validateCs02MdocPresentation({

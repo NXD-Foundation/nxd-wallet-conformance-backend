@@ -84,7 +84,7 @@ describe("CS-02 successful flow matrix", () => {
       ],
       credential_sets: [{ required: true, options: [["pid", "license"]] }],
     };
-    const vpToken = { pid: ["sd-jwt-1", "sd-jwt-2"], license: "mdoc-token" };
+    const vpToken = { pid: ["sd-jwt-1", "sd-jwt-2"], license: ["mdoc-token"] };
     expect(validateCs02DcqlVpTokenResponse(vpToken, query, { strict: true })).to.deep.equal(vpToken);
   });
 

@@ -216,13 +216,13 @@ describe("CS-02 verifier response validation (Phase 4)", () => {
 
   it("accepts credential_sets satisfied options instead of all credential ids", () => {
     const vpToken = validateCs02DcqlVpTokenResponse(
-      { "mdoc-id": "mdoc-data" },
+      { "mdoc-id": ["mdoc-data"] },
       sampleDcqlQuery({
         credential_sets: [{ required: true, options: [["mdoc-id"], ["cmwallet"]] }],
       }),
       { strict: true },
     );
-    expect(vpToken).to.deep.equal({ "mdoc-id": "mdoc-data" });
+    expect(vpToken).to.deep.equal({ "mdoc-id": ["mdoc-data"] });
   });
 
   it("rejects empty credential arrays", () => {
@@ -235,6 +235,18 @@ describe("CS-02 verifier response validation (Phase 4)", () => {
         { strict: true },
       ),
     ).to.throw(Cs02VerifierResponseError, /empty array/);
+  });
+
+  it("rejects a bare string DCQL vp_token entry when multiple is omitted", () => {
+    expect(() =>
+      validateCs02DcqlVpTokenResponse(
+        { cmwallet: ["eyJ..."], "mdoc-id": "mdoc-data" },
+        sampleDcqlQuery({
+          credential_sets: [{ required: true, options: [["cmwallet", "mdoc-id"]] }],
+        }),
+        { strict: true },
+      ),
+    ).to.throw(Cs02VerifierResponseError, /must be an array of one presentation/);
   });
 
   it("rejects multiple presentations when multiple=false", () => {
@@ -251,7 +263,7 @@ describe("CS-02 verifier response validation (Phase 4)", () => {
 
   it("accepts arrays when multiple=true", () => {
     const vpToken = validateCs02DcqlVpTokenResponse(
-      { cmwallet: ["one", "two"], "mdoc-id": "mdoc-data" },
+      { cmwallet: ["one", "two"], "mdoc-id": ["mdoc-data"] },
       sampleDcqlQuery({
         credentials: [
           { id: "cmwallet", format: "dc+sd-jwt", multiple: true, meta: { vct_values: ["test"] } },
@@ -883,7 +895,7 @@ describe("CS-02 verifier response validation (Phase 4)", () => {
     });
 
     it("enforces mdoc trust from context.session only for opted-in sessions", async () => {
-      const vpToken = { "mdoc-id": buildMdocB64ForTests("test") };
+      const vpToken = { "mdoc-id": [buildMdocB64ForTests("test")] };
       const dcqlQuery = [{ id: "mdoc-id", format: "mso_mdoc", meta: { doctype_value: "test" } }];
       await validateCs02SdJwtEntriesInVpToken(
         vpToken,

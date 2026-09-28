@@ -1,3 +1,4 @@
+import { isCs02PresentationCardinalityValid } from "./cs02DcqlCore.js";
 import { extractMdocClaimsByNamespace } from "./mdocClaims.js";
 import { parseSdJwtClaims } from "./sdJwtClaims.js";
 import { extractKeyBindingJwtFromSdJwt } from "./sdJwtKeyBinding.js";
@@ -156,8 +157,13 @@ export function parseCs07AuthorizationResponse(value, dcqlQuery) {
       }
       continue;
     }
-    if (!query.multiple && Array.isArray(valueForId) && valueForId.length > 1) {
-      throw new Cs07DcApiResponseError(`vp_token contains multiple presentations for "${query.id}"`);
+    if (!isCs02PresentationCardinalityValid(valueForId, query.multiple === true)) {
+      if (Array.isArray(valueForId) && query.multiple !== true && valueForId.length > 1) {
+        throw new Cs07DcApiResponseError(`vp_token contains multiple presentations for "${query.id}"`);
+      }
+      throw new Cs07DcApiResponseError(
+        `vp_token credential "${query.id}" must be an array of presentations`,
+      );
     }
   }
   return { response, vpToken: response.vp_token };

@@ -421,10 +421,12 @@ export function buildCs02VpTokenMember(presentations, multiple = false) {
       "access_denied",
     );
   }
+  // OpenID4VP 1.0 §8.1: each DCQL vp_token entry is an array. When multiple
+  // is omitted or false, that array contains exactly one presentation.
   if (multiple === true) {
     return values;
   }
-  return values.length === 1 ? values[0] : values[0];
+  return [values[0]];
 }
 
 export function buildCs02VpTokenObject(entries) {

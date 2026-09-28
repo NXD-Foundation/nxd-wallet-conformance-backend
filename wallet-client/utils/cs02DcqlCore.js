@@ -60,7 +60,7 @@ export function selectSatisfiedCs02ClaimSet(credQuery, isClaimSatisfied) {
 }
 
 export function isCs02PresentationCardinalityValid(value, multiple = false) {
-  if (multiple === true) return Array.isArray(value) && value.length > 0 && value.every((item) => typeof item === "string" && item.length > 0);
-  return (typeof value === "string" && value.length > 0) ||
-    (Array.isArray(value) && value.length === 1 && typeof value[0] === "string" && value[0].length > 0);
+  const presentations = Array.isArray(value) && value.length > 0 && value.every((item) => typeof item === "string" && item.length > 0);
+  if (multiple === true) return presentations;
+  return presentations && value.length === 1;
 }

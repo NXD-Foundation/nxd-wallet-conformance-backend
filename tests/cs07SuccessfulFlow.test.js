@@ -26,7 +26,7 @@ describe("CS-07 successful encrypted response flow", () => {
     const publicKey = await jose.exportJWK(await jose.importSPKI(publicKeyPem, "ES256"));
     const encryptionKey = await jose.importJWK(publicKey, "ECDH-ES");
     const encrypted = await new jose.EncryptJWT({
-      vp_token: { license: "mdoc-placeholder" },
+      vp_token: { license: ["mdoc-placeholder"] },
     })
       .setProtectedHeader({ alg: "ECDH-ES", enc: "A256GCM" })
       .encrypt(encryptionKey);
@@ -70,7 +70,7 @@ describe("CS-07 successful encrypted response flow", () => {
     }).setProtectedHeader({ alg: "ES256", typ: "kb+jwt" }).sign(holderKey);
     const sdJwt = `${unsigned}${kbJwt}`;
     const result = await validateCs07CredentialPresentations({
-      vpToken: { pid: sdJwt },
+      vpToken: { pid: [sdJwt] },
       session: {
         nonce: "nonce",
         client_id: "x509_san_dns:verifier.example",

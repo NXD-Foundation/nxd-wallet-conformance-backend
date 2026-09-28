@@ -278,8 +278,9 @@ describe("CS-02 DCQL validation (Phase 2)", () => {
     ).to.throw(Cs02ValidationError);
   });
 
-  it("builds vp_token members according to multiple policy", () => {
-    expect(buildCs02VpTokenMember(["pres-1"], false)).to.equal("pres-1");
+  it("wraps a single DCQL vp_token entry in an array when multiple is omitted", () => {
+    expect(buildCs02VpTokenMember(["pres-1"], false)).to.deep.equal(["pres-1"]);
+    expect(buildCs02VpTokenMember("pres-1", false)).to.deep.equal(["pres-1"]);
     expect(buildCs02VpTokenMember(["pres-1", "pres-2"], true)).to.deep.equal([
       "pres-1",
       "pres-2",
@@ -290,7 +291,7 @@ describe("CS-02 DCQL validation (Phase 2)", () => {
     const object = buildCs02VpTokenObject([
       { credQueryId: "pid", presentations: ["pres-1"], multiple: false },
     ]);
-    expect(object).to.deep.equal({ pid: "pres-1" });
+    expect(object).to.deep.equal({ pid: ["pres-1"] });
   });
 
   it("resolves KB-JWT audience from JAR client_id", () => {

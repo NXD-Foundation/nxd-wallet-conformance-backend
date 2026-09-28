@@ -33,6 +33,7 @@ describe("shared CS-02 DCQL structural rules", () => {
     expect(isCs02PresentationCardinalityValid(["a", "b"], true)).to.equal(true);
     expect(isCs02PresentationCardinalityValid("a", true)).to.equal(false);
     expect(isCs02PresentationCardinalityValid(["a"], false)).to.equal(true);
+    expect(isCs02PresentationCardinalityValid("a", false)).to.equal(false);
     expect(isCs02PresentationCardinalityValid(["a", "b"], false)).to.equal(false);
   });
 

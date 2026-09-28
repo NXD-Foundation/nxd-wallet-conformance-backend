@@ -402,10 +402,14 @@ describe("CS-07 Digital Credentials API request profile", () => {
       { id: "optional", required: false, multiple: true },
     ] };
     const parsed = parseCs07AuthorizationResponse(
-      JSON.stringify({ vp_token: { one: "presentation" } }),
+      JSON.stringify({ vp_token: { one: ["presentation"] } }),
       query,
     );
-    expect(parsed.vpToken).to.deep.equal({ one: "presentation" });
+    expect(parsed.vpToken).to.deep.equal({ one: ["presentation"] });
+    expect(() => parseCs07AuthorizationResponse(
+      { vp_token: { one: "presentation" } },
+      query,
+    )).to.throw(/must be an array of presentations/);
     expect(() => parseCs07AuthorizationResponse(
       { vp_token: { unknown: "presentation" } },
       query,
@@ -478,7 +482,7 @@ describe("CS-07 Digital Credentials API request profile", () => {
 
   it("dispatches an mdoc presentation through the shared CS-02 validator", async () => {
     const result = await validateCs07CredentialPresentations({
-      vpToken: { license: "mdoc-placeholder" },
+      vpToken: { license: ["mdoc-placeholder"] },
       session: {
         nonce: "nonce",
         client_id: "x509_san_dns:verifier.example",
