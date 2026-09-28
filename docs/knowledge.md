@@ -47,8 +47,15 @@ TTLs: pre-authorized issuance, authorization-code issuance, VP, and wallet
 test sessions are separate lifecycles with distinct session IDs. Every newly
 stored session also contains a versioned `sessionContext` envelope. It is the
 canonical location for lifecycle, nonce/client/audience/transaction bindings,
-trust policy and decisions, and correlation metadata; legacy flat fields stay
-present while routes are migrated.
+trust policy and decisions, credential revocation, and correlation metadata;
+legacy flat fields stay present while routes are migrated. Issuance sessions
+record `sessionContext.revocation.enabled`, mirrored to `revocationEnabled`.
+Pre-authorized, authorization-code, DC API, and batch offer builders copy that
+flag from the offer request. A credential request cannot supply `status` or
+`status_reference`. Deferred issuance signs the credential once and returns
+that same token on later polls. Status-list cache lifetime is the earliest of
+`exp`, fetch time plus `ttl` (60 seconds when `ttl` is absent), and five
+minutes. The 60-second clock skew applies only to accepting `iat` and `exp`.
 
 Session logs remain separate append-only Redis records, not mutable arrays in
 the session object. Issuer/verifier logs use `session-logs:<sessionId>` and the

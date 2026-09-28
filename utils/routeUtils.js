@@ -134,6 +134,7 @@ export function createPreAuthSessionData({
     flow: "pre-auth",
     status: session.status,
     trustPolicy: session.trustPolicy,
+    revocationEnabled: session.revocationEnabled === true,
   }).withIssuanceSession(session).toSession(session);
 }
 
@@ -796,6 +797,7 @@ export const createBaseSession = (flowType = "pre-auth", isHaip = false, signatu
     flow: flowType,
     status: session.status,
     trustPolicy: session.trustPolicy,
+    revocationEnabled: session.revocationEnabled === true,
   }).withIssuanceSession(session).toSession(session);
 };
 
@@ -841,6 +843,7 @@ export const createCodeFlowSession = (client_id_scheme, flowType, isDynamic = fa
     status: session.status,
     clientId: client_id_scheme,
     trustPolicy: session.trustPolicy,
+    revocationEnabled: session.revocationEnabled === true,
   }).withIssuanceSession(session).toSession(session);
 };
 

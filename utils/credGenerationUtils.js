@@ -18,6 +18,7 @@ import {
 } from "../utils/issuerDidKeys.js";
 import fs from "fs";
 import { SDJwtVcInstance } from "@sd-jwt/sd-jwt-vc";
+import { disclosureFrameWithoutStatus, embedIssuerOwnedStatus } from "./credentialStatusIssuance.js";
 
 /** JWT typ header for SD-JWT credentials 
  * https://www.w3.org/TR/vc-jose-cose/?utm_source=chatgpt.com#securing-with-sd-jwt 
@@ -680,16 +681,12 @@ export async function handleCredentialGenerationBasedOnFormat(
       credentialSubject: credPayload.claims,
       cnf,
     };
-
-    // If a status list reference was attached upstream, embed it in the payload
-    if (requestBody.status_reference) {
-      sdPayload.status = requestBody.status_reference;
-    }
+    embedIssuerOwnedStatus(sdPayload, requestBody);
 
     // For VCDM 2.0 + SD-JWT, selective disclosure applies to claims within credentialSubject
-    const vcdmDisclosureFrame = {
+    const vcdmDisclosureFrame = disclosureFrameWithoutStatus({
       credentialSubject: credPayload.disclosureFrame,
-    };
+    });
 
     const vcSdJwtHeader = {
       header: {
@@ -729,18 +726,14 @@ export async function handleCredentialGenerationBasedOnFormat(
       ...credPayload.claims,
       cnf,
     };
-
-    // If a status list reference was attached upstream, embed it in the payload
-    if (requestBody.status_reference) {
-      sdPayload.status = requestBody.status_reference;
-    }
+    embedIssuerOwnedStatus(sdPayload, requestBody);
 
     const dcSdJwtHeader = {
       header: { ...headerOptions.header, typ: SDJWT_CREDENTIAL_TYP_HEADER },
     };
     const credential = await sdjwt.issue(
       sdPayload,
-      credPayload.disclosureFrame,
+      disclosureFrameWithoutStatus(credPayload.disclosureFrame),
       dcSdJwtHeader,
     );
     console.log("Credential issued (dc+sd-jwt): ", credential);
@@ -1529,18 +1522,18 @@ export async function handleCredentialGenerationBasedOnFormatDeferred(
     );
     expiryDate.setTime(cappedExp * 1000);
   }
-  // Issue credential
+  const deferredPayload = embedIssuerOwnedStatus({
+    iss: issuerIdentifier,
+    iat: Math.floor(Date.now() / 1000),
+    nbf: Math.floor(Date.now() / 1000),
+    exp: Math.floor(expiryDate.getTime() / 1000),
+    vct: credType,
+    ...credPayload.claims,
+    cnf,
+  }, requestBody);
   const credential = await sdjwt.issue(
-    {
-      iss: issuerIdentifier,
-      iat: Math.floor(Date.now() / 1000),
-      nbf: Math.floor(Date.now() / 1000),
-      exp: Math.floor(expiryDate.getTime() / 1000),
-      vct: credType,
-      ...credPayload.claims,
-      cnf,
-    },
-    credPayload.disclosureFrame,
+    deferredPayload,
+    disclosureFrameWithoutStatus(credPayload.disclosureFrame),
     headerOptions,
   );
 

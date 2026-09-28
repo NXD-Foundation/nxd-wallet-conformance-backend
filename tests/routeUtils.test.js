@@ -127,6 +127,17 @@ describe('Route Utils', () => {
       expect(preAuth.trustPolicy).to.deep.equal({ mode: 'webuild', profile: 'webuild-wp4-pilot' });
       expect(code.trustPolicy).to.deep.equal({ mode: 'webuild', profile: 'webuild-wp4-pilot' });
     });
+
+    it('stores revocation on the canonical session for pre-auth and code flows', () => {
+      const enabled = createPreAuthSessionData({ additionalProps: { revocationEnabled: true } });
+      const disabled = createCodeFlowSession('redirect_uri', 'code', false, false, null, {
+        revocationEnabled: false,
+      });
+      expect(enabled.revocationEnabled).to.equal(true);
+      expect(enabled.sessionContext.revocation).to.deep.equal({ enabled: true });
+      expect(disabled.revocationEnabled).to.equal(false);
+      expect(disabled.sessionContext.revocation).to.deep.equal({ enabled: false });
+    });
   });
 
   describe('createCredentialOfferResponse', () => {

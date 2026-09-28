@@ -16,6 +16,13 @@ function appendDecisionIfMissing(decisions, decision) {
     : [...decisions, clone(decision)];
 }
 
+function resolveRevocationEnabled(source, existing) {
+  if (typeof source.revocationEnabled === "boolean") return source.revocationEnabled;
+  if (typeof source.revocation?.enabled === "boolean") return source.revocation.enabled;
+  if (typeof existing?.revocation?.enabled === "boolean") return existing.revocation.enabled;
+  return false;
+}
+
 function buildContext(input = {}) {
   const source = asObject(input);
   const existing = asObject(source.sessionContext);
@@ -44,6 +51,9 @@ function buildContext(input = {}) {
       enabled: source.trustEnabled ?? trust.enabled ?? false,
       policy: clone(source.trustPolicy ?? trust.policy ?? null),
       decisions: clone(source.trustDecisions ?? trust.decisions ?? (source.trustDecision ? [source.trustDecision] : [])),
+    },
+    revocation: {
+      enabled: resolveRevocationEnabled(source, existing),
     },
     correlation: {
       sessionId: source.id ?? existing.correlation?.sessionId ?? null,
@@ -93,6 +103,7 @@ class SessionContextBuilder {
       ...legacySession,
       ...(context.trust.policy ? { trustPolicy: context.trust.policy } : {}),
       ...(latestDecision ? { trustDecision: latestDecision } : {}),
+      revocationEnabled: context.revocation.enabled,
       sessionContext: context,
     };
   }
@@ -124,6 +135,12 @@ export function sessionTrustPolicy(session = {}) {
   return sessionContextFor(session)?.trust?.policy ?? session?.trustPolicy ?? null;
 }
 
+export function sessionRevocationEnabled(session = {}) {
+  const enabled = sessionContextFor(session)?.revocation?.enabled;
+  if (typeof enabled === "boolean") return enabled;
+  return session?.revocationEnabled === true;
+}
+
 export function withCanonicalSessionContext(sessionId, session, domain, flow = null) {
   const existing = sessionContextFor(session);
   const request = existing?.request || {};
@@ -145,5 +162,8 @@ export function withCanonicalSessionContext(sessionId, session, domain, flow = n
     trustPolicy,
     trustEnabled: !!trustPolicy,
     trustDecisions: decisionsWithCurrent,
+    revocationEnabled: typeof existing?.revocation?.enabled === "boolean"
+      ? existing.revocation.enabled
+      : session?.revocationEnabled,
   }).toSession(session);
 }

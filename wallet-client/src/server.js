@@ -3,6 +3,7 @@ import fetch from "node-fetch";
 import { createPkcePair } from "./lib/crypto.js";
 import { performPresentation, resolveDeepLinkFromEndpoint } from "./lib/presentation.js";
 import { storeWalletCredentialByType, walletRedisClient, getWalletLogs, getGlobalLogs } from "./lib/cache.js";
+import { validateCs02CredentialStatusList } from "../../utils/cs02StatusList.js";
 import { jwtVerify, decodeJwt, decodeProtectedHeader, createLocalJWKSet, importJWK, importX509 } from "jose";
 import { decodeSdJwt, getClaims } from "@sd-jwt/decode";
 import { digest } from "@sd-jwt/crypto-nodejs";
@@ -1977,6 +1978,7 @@ async function validateAndStoreCredential({ configurationId, credential, issuerM
       console.log("[validate] detected SD-JWT format (contains '~')"); 
       try { slog("[validate] validating SD-JWT", { detectedFormat }); } catch {}
       const verified = await validateSdJwt({ sdJwt: token, issuerMeta, configurationId, expectedCNonce: metadata?.c_nonce, authorizationServerMeta: authorizationServerMeta || issuerMeta._authorizationServerMeta }, logSessionId);
+      await validateCs02CredentialStatusList(token, { strictMissingStatus: false, enforceStatus: true, jwksUri: issuerMeta?.jwks_uri, trustPolicyOptions: { skipStatusFetch: false } });
       const scopeEvidence = await resolveIssuerScopeEvidence({ sessionId: logSessionId, issuerMetadata: issuerMeta });
       await enforceIssuedCredentialTrust({ sessionId: logSessionId, payload: verified.payload, header: verified.header, format: detectedFormat, vct: verified.payload?.vct, doctype: detectedDoctype, scopeEvidence, trustEvidenceBound: verified.x5cSignatureVerified });
     } else if (typeof token === 'string' && token.split('.').length >= 3) {

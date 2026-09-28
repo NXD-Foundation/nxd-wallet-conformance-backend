@@ -31,4 +31,18 @@ describe("CS-07 DC API issuance route contract", () => {
     assert.equal(res.body.digital.requests[0].protocol, PROTOCOL);
     assert.ok(res.body.fallback.deepLink);
   });
+  it("rejects a malformed revocation flag before creating a session", async () => {
+    const res = {
+      headers: {},
+      statusCode: 200,
+      body: null,
+      set() { return this; },
+      status(code) { this.statusCode = code; return this; },
+      json(body) { this.body = body; return this; },
+    };
+    await createOfferHandler({ body: { scenario: "pid-pre-authorized", revocation: "yes" } }, res);
+    assert.equal(res.statusCode, 400);
+    assert.equal(res.body.error, "invalid_request");
+    assert.match(res.body.error_description, /revocation must be a boolean/);
+  });
 });

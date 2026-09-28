@@ -10,6 +10,8 @@ import {
   storeCodeFlowSession,
   getSessionKeyAuthCode,
 } from "../services/cacheServiceRedis.js";
+import { createPreAuthSessionData } from "../utils/routeUtils.js";
+import { issuanceSessionProps } from "../utils/trustFrameworkPolicy.js";
 
 import qr from "qr-image";
 import imageDataURI from "image-data-uri";
@@ -43,13 +45,16 @@ batchRouter.get(["/offer-no-code-batch"], async (req, res) => {
 
   let existingPreAuthSession = await getPreAuthSession(uuid);
   if (!existingPreAuthSession) {
-    storePreAuthSession(uuid, {
-      status: "pending",
-      resulut: null,
-      persona: null,
-      accessToken: null,
-      flowType: "pre-auth",
-    });
+    let issuanceProps;
+    try {
+      issuanceProps = issuanceSessionProps(req.query);
+    } catch (error) {
+      return res.status(400).json({ error: "invalid_request", error_description: error.message });
+    }
+    await storePreAuthSession(uuid, createPreAuthSessionData({
+      credentialType,
+      additionalProps: issuanceProps,
+    }));
   }
   let encodedCredentialOfferUri = encodeURIComponent(`${serverURL}/credential-offer-no-code-batch/${uuid}?type=${credentialType}`)
   let credentialOffer = `openid-credential-offer://?credential_offer_uri=${encodedCredentialOfferUri}`;  

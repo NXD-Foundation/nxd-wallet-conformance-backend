@@ -17,6 +17,7 @@ import {
   storeCodeFlowSession,
   storePreAuthSession,
 } from "../../services/cacheServiceRedis.js";
+import { issuanceSessionProps } from "../../utils/trustFrameworkPolicy.js";
 
 const router = express.Router();
 const PROTOCOL = "openid4vci-v1";
@@ -64,6 +65,12 @@ export async function createOfferHandler(req, res) {
   catch (error) { return res.status(400).json({ error: "invalid_request", error_description: error.message }); }
   const credentialType = selection.credentialType;
   const signatureType = getSignatureType({ query: {} });
+  let issuanceProps;
+  try {
+    issuanceProps = issuanceSessionProps({ ...(req.query || {}), ...(req.body || {}) });
+  } catch (error) {
+    return res.status(400).json({ error: "invalid_request", error_description: error.message });
+  }
   try {
     const ttlSeconds = issuanceTtlSeconds(selected.flow);
     let offer;
@@ -71,13 +78,13 @@ export async function createOfferHandler(req, res) {
     if (selected.flow === "authorization_code") {
       const clientIdScheme = signatureType === "x509" ? "x509_san_dns" : signatureType === "did-web" ? "did:web" : "redirect_uri";
       await storeCodeFlowSession(sessionId, createCodeFlowSession(clientIdScheme, "code", true, false, signatureType, {
-        dcApi: true, dcApiScenario: selected.scenario, credentialType,
+        dcApi: true, dcApiScenario: selected.scenario, credentialType, ...issuanceProps,
       }));
       offer = createCredentialOfferConfig(credentialType, sessionId, false, "authorization_code");
       const deepLink = createCodeFlowCredentialOfferResponse(sessionId, credentialType, clientIdScheme, true, URL_SCHEMES.STANDARD);
       fallback = { deepLink, qr: await generateQRCode(deepLink, sessionId) };
     } else {
-      const session = createPreAuthSessionData({ signatureType, credentialType, txCodeRequired: selected.txCodeRequired, additionalProps: { dcApi: true, dcApiScenario: selected.scenario } });
+      const session = createPreAuthSessionData({ signatureType, credentialType, txCodeRequired: selected.txCodeRequired, additionalProps: { dcApi: true, dcApiScenario: selected.scenario, ...issuanceProps } });
       await storePreAuthSession(sessionId, session);
       const endpointPath = selected.txCodeRequired ? "/credential-offer-tx-code" : "/credential-offer-no-code";
       offer = createCredentialOfferConfig(credentialType, sessionId, selected.txCodeRequired);

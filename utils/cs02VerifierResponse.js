@@ -1153,6 +1153,7 @@ export async function validateCs02SdJwtPresentation({
     credentialStatus = await validateCs02CredentialStatusList(sdJwt, {
       env: context.env || options.env,
       trustPolicyOptions,
+      enforceStatus: String((context.env || options.env || process.env).CS10_STATUS_ENFORCEMENT || "").toLowerCase() === "true",
       log: context.log || options.log,
     });
   } catch (error) {

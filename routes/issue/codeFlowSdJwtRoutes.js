@@ -86,7 +86,7 @@ import {
   shouldRequireWiaClientAttestation,
   isScaOnlyWuaIssuance,
 } from "../../utils/wuaEnforcementPolicy.js";
-import { trustFrameworkSessionProps } from "../../utils/trustFrameworkPolicy.js";
+import { issuanceSessionProps } from "../../utils/trustFrameworkPolicy.js";
 
 const codeFlowRouterSDJWT = express.Router();
 
@@ -488,7 +488,7 @@ codeFlowRouterSDJWT.get(["/offer-code-sd-jwt"], async (req, res) => {
     const credentialType = getCredentialType(req);
     const client_id_scheme = getClientIdScheme(req);
 
-    const sessionData = createCodeFlowSession(client_id_scheme, "code", false, false, signatureType, trustFrameworkSessionProps(req.query));
+    const sessionData = createCodeFlowSession(client_id_scheme, "code", false, false, signatureType, issuanceSessionProps(req.query));
     await manageSession(sessionId, sessionData);
 
     // Allow caller to control wallet invocation scheme (openid-credential-offer:// by default, haip:// if requested)
@@ -523,7 +523,7 @@ codeFlowRouterSDJWT.get(["/offer-code-sd-jwt-dynamic"], async (req, res) => {
     const credentialType = getCredentialType(req);
     const client_id_scheme = getClientIdScheme(req);
 
-    const sessionData = createCodeFlowSession(client_id_scheme, "code", true, false, null, trustFrameworkSessionProps(req.query));
+    const sessionData = createCodeFlowSession(client_id_scheme, "code", true, false, null, issuanceSessionProps(req.query));
     await manageSession(sessionId, sessionData);
 
     const invocationScheme =
@@ -557,7 +557,7 @@ codeFlowRouterSDJWT.get(["/offer-code-defered"], async (req, res) => {
     const credentialType = getCredentialType(req);
     const client_id_scheme = getClientIdScheme(req);
 
-    const sessionData = createCodeFlowSession(client_id_scheme, "code", false, true, null, trustFrameworkSessionProps(req.query));
+    const sessionData = createCodeFlowSession(client_id_scheme, "code", false, true, null, issuanceSessionProps(req.query));
     await manageSession(sessionId, sessionData);
 
     const invocationScheme =

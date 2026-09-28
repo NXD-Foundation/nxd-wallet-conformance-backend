@@ -99,6 +99,8 @@ import {
   getDeferredSessionAccessToken,
   isDeferredCredentialDenied,
 } from "../../utils/deferredCredentialPoll.js";
+import { applyIssuerOwnedCredentialStatus, issueDeferredCredentialOnce } from "../../utils/credentialStatusIssuance.js";
+import { sessionRevocationEnabled } from "../../utils/sessionContext.js";
 import {
   parseProofAttestationJwtFromCredentialProofs,
   verifyKeyAttestationProofChain,
@@ -115,6 +117,7 @@ import {
   getProofIssBindingFromSession,
   resolveTokenClientBinding,
 } from "../../utils/openid4vciProofIss.js";
+import { allocateCredentialStatus } from "../../utils/credentialStatusList.js";
 
 const sharedRouter = express.Router();
 
@@ -865,6 +868,11 @@ const handleImmediateCredentialIssuance = async (
   if (format === 'mso_mdoc') {
     format = 'mDL'; // Use 'mDL' for internal processing
   }
+
+  applyIssuerOwnedCredentialStatus(requestBody, {
+    enabled: sessionRevocationEnabled(sessionObject) && (format === "dc+sd-jwt" || format === "vc+sd-jwt"),
+    allocate: () => allocateCredentialStatus({ baseUrl: getServerUrl() }).status,
+  });
 
   const credential = await handleCredentialGenerationBasedOnFormat(
     requestBody,
@@ -2357,10 +2365,14 @@ sharedRouter.post("/credential_deferred", async (req, res) => {
       );
     }
 
-    const credential = await handleCredentialGenerationBasedOnFormatDeferred(
-      sessionObject,
-      getServerUrl()
-    );
+    const { credential, reused } = await issueDeferredCredentialOnce(sessionObject, () => {
+      applyIssuerOwnedCredentialStatus(sessionObject.requestBody, {
+        enabled: sessionRevocationEnabled(sessionObject),
+        allocate: () => allocateCredentialStatus({ baseUrl: getServerUrl() }).status,
+      });
+      return handleCredentialGenerationBasedOnFormatDeferred(sessionObject, getServerUrl());
+    });
+    if (!reused) await persistDeferredSession(sessionObject, sessionId, flowType);
 
     const payload = { credential };
     res.set("Cache-Control", "no-store");

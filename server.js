@@ -32,12 +32,28 @@ import { enterSessionLogContext, clearSessionLogContext } from "./utils/sessionL
 import * as OpenApiValidator from "express-openapi-validator";
 
 import path from "path";
+import { signCredentialStatusList, revokeCredentialStatus } from "./utils/credentialStatusList.js";
 
 // Path to your OpenAPI spec file (JSON or YAML)
 const apiSpec = path.join(process.cwd(), "openapi.yaml");
 
 const app = express();
 const port = 3000;
+
+app.get("/status-lists/credentials/:listId", async (req, res) => {
+  try {
+    const token = await signCredentialStatusList(req.params.listId, { issuer: process.env.SERVER_URL || "http://localhost:3000" });
+    res.set("Content-Type", "application/statuslist+jwt").set("Cache-Control", "public, max-age=300").send(token);
+  } catch (error) { res.status(404).json({ error: "not_found", error_description: error.message }); }
+});
+
+app.post("/status-lists/credentials/:listId/entries/:idx/revoke", (req, res) => {
+  const expected = process.env.ISSUER_STATUS_ADMIN_TOKEN;
+  const presented = String(req.get("authorization") || "").replace(/^Bearer\s+/i, "");
+  if (!expected || presented !== expected) return res.status(401).json({ error: "unauthorized" });
+  try { return res.json(revokeCredentialStatus(req.params.listId, req.params.idx)); }
+  catch (error) { return res.status(error.status || 400).json({ error: "invalid_request", error_description: error.message }); }
+});
 
 // Enable console log interception globally
 // This will capture all console.log/warn/error/info/debug calls and store them in cache

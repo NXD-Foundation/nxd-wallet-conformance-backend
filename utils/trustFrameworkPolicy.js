@@ -25,6 +25,18 @@ export function trustFrameworkSessionProps(input = {}) {
   return { trustPolicy: { mode: "webuild", profile: WEBUILD_PROFILE } };
 }
 
+export function revocationSessionProps(input = {}) {
+  const value = input.revocation ?? input.revocable ?? input.revocation_enabled;
+  if (value === undefined || value === null || value === "") return {};
+  if (value === true || value === "true" || value === "1") return { revocationEnabled: true };
+  if (value === false || value === "false" || value === "0") return { revocationEnabled: false };
+  throw new Error("revocation must be a boolean");
+}
+
+export function issuanceSessionProps(input = {}) {
+  return { ...trustFrameworkSessionProps(input), ...revocationSessionProps(input) };
+}
+
 export function isTrustFrameworkSession(session) {
   const trustPolicy = sessionTrustPolicy(session);
   return trustPolicy?.mode === "webuild" && typeof trustPolicy?.profile === "string";

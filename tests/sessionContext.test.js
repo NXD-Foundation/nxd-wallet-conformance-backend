@@ -5,6 +5,7 @@ import {
   createWalletContext,
   withCanonicalSessionContext,
   sessionTrustPolicy,
+  sessionRevocationEnabled,
 } from "../utils/sessionContext.js";
 import {
   getSessionLogContext,
@@ -76,6 +77,26 @@ describe("session context", () => {
     expect(completed.sessionContext.lifecycle.status).to.equal("ok");
     expect(completed.sessionContext.trust.decisions).to.deep.equal([{ trusted: true, state: "trusted" }]);
     expect(completed.sessionContext.trust.policy).to.deep.equal(pending.trustPolicy);
+  });
+
+  it("keeps revocation on the canonical context when the legacy field is changed", () => {
+    const session = createIssuanceContext({ id: "issue-1", revocationEnabled: false }).toSession({
+      status: "pending",
+    });
+    session.revocationEnabled = true;
+    const stored = withCanonicalSessionContext("issue-1", session, "issuance", "pre-auth");
+
+    expect(session.sessionContext.revocation).to.deep.equal({ enabled: false });
+    expect(sessionRevocationEnabled(session)).to.equal(false);
+    expect(stored.revocationEnabled).to.equal(false);
+    expect(stored.sessionContext.revocation).to.deep.equal({ enabled: false });
+  });
+
+  it("carries an enabled revocation flag through canonical session rebuilds", () => {
+    const session = createIssuanceContext({ id: "issue-2", revocationEnabled: true }).toSession({});
+    const stored = withCanonicalSessionContext("issue-2", session, "issuance", "code");
+    expect(sessionRevocationEnabled(stored)).to.equal(true);
+    expect(stored.sessionContext.revocation.enabled).to.equal(true);
   });
 
   it("isolates concurrent async log contexts", async () => {
