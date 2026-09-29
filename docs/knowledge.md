@@ -682,6 +682,16 @@ re-entering active protocol directories.
 
 ### Plans And Deferred Decisions
 
+The [CS-05 issuer acceptance plan](./cs05-issuer-acceptance-plan.md) records the
+common BWIA/SKA acceptance scope. The issuer implementation now supports a
+session `walletAttestationProfile` (`auto`, `cs04`, or `cs05`), verified-claim
+classification, BWIA continuity through issuance, CS-05 DPoP nonce and replay
+controls, SKA status checks, and binding a JWT proof to any SKA-attested key.
+This is an issuer acceptance slice; discovery, business-provider trust-list
+integration, multi-proof batch issuance, periodic lifecycle monitoring, and
+full CS-05 conformance remain out of scope. Confirm the current route and test
+coverage before relying on any listed behavior.
+
 
 | Document                                                                          | Decision or work that remains conditional/pending                                                                           |
 | --------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |

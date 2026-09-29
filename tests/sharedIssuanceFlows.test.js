@@ -8,6 +8,13 @@ import fs from 'fs';
 import jwt from 'jsonwebtoken';
 import * as jose from 'jose';
 import { v4 as uuidv4 } from 'uuid';
+import {
+  KA_STATUS_LIST_URI,
+  WIA_STATUS_LIST_URI,
+  installStatusListTestHooks,
+  resetStatusListTestHooks,
+  signStatusListToken,
+} from './helpers/wuaStatusListFixtures.js';
 
 // Set up environment for testing BEFORE importing modules
 process.env.ALLOW_NO_REDIS = 'true';
@@ -19,16 +26,21 @@ process.env.HAIP_PROFILE_REQUIRE_DPOP_FOR_TOKEN = 'false';
 // We'll test the real implementation with real dependencies configured for testing.
 // The ALLOW_NO_REDIS flag allows Redis-dependent code to work without a Redis connection.
 
-describe('Shared Issuance Flows', () => {
+describe('Shared Issuance Flows', function () {
+  // The shared route exercises Redis-backed session storage and may wait for
+  // the test Redis service while its asynchronous setup completes.
+  this.timeout(10000);
   let sandbox;
   let app;
   let sharedModule;
+  let codeFlowModule;
   let cacheServiceRedis;
   let cryptoUtils;
   let tokenUtils;
   let credGenerationUtils;
   let testKeys;
   let globalSandbox;
+  let issuerConfigOverride = null;
 
   const signProofJwt = (payload) => {
     return jwt.sign(payload, testKeys.privateKeyPem, {
@@ -47,7 +59,11 @@ describe('Shared Issuance Flows', () => {
     return `Bearer ${accessToken}`;
   };
 
+  let previousServerUrl;
+
   before(async () => {
+    previousServerUrl = process.env.SERVER_URL;
+    process.env.SERVER_URL = 'http://localhost:3000';
     // Create a global sandbox for module-level stubs
     globalSandbox = sinon.createSandbox();
     
@@ -57,8 +73,10 @@ describe('Shared Issuance Flows', () => {
     const validPrivateKeyPem = testPrivateKey.export({ type: 'pkcs8', format: 'pem' });
     const validPublicKeyPem = testPublicKey.export({ type: 'spki', format: 'pem' });
     
-    globalSandbox.stub(fs, 'readFileSync')
-      .withArgs(sinon.match(/issuer-config\.json/)).returns(JSON.stringify({
+    const originalReadFileSync = fs.readFileSync.bind(fs);
+    globalSandbox.stub(fs, 'readFileSync').callsFake((filePath, ...args) => {
+      const normalizedPath = String(filePath);
+      if (/issuer-config\.json/.test(normalizedPath)) return issuerConfigOverride || JSON.stringify({
         credential_configurations_supported: {
           'test-cred-config': { format: 'dc+sd-jwt', proof_types_supported: { jwt: { proof_signing_alg_values_supported: ['ES256'] } } },
         },
@@ -68,12 +86,15 @@ describe('Shared Issuance Flows', () => {
           enc_values_supported: ['A256GCM'],
           encryption_required: false,
         },
-      }))
-      .withArgs(sinon.match(/private-key\.pem/)).returns(validPrivateKeyPem)
-      .withArgs(sinon.match(/public-key\.pem/)).returns(validPublicKeyPem)
-      .withArgs(sinon.match(/x509EC.*ec_private_pkcs8\.key/)).returns(validPrivateKeyPem)
-      .withArgs(sinon.match(/x509EC.*client_certificate\.crt/)).returns('-----BEGIN CERTIFICATE-----\nMIIBkTCB+wIJAKexample\n-----END CERTIFICATE-----')
-      .withArgs(sinon.match(/x509EC/)).returns(validPrivateKeyPem);
+      });
+      if (/private-key\.pem/.test(normalizedPath)) return validPrivateKeyPem;
+      if (/public-key\.pem/.test(normalizedPath)) return validPublicKeyPem;
+      if (/x509EC.*(?:ec_private_pkcs8\.key|client_certificate\.crt)/.test(normalizedPath)) {
+        return originalReadFileSync(filePath, ...args);
+      }
+      if (/x509EC/.test(normalizedPath)) return validPrivateKeyPem;
+      return originalReadFileSync(filePath, ...args);
+    });
     
     // Import the real router and dependencies AFTER stubbing
     cacheServiceRedis = await import('../services/cacheServiceRedis.js');
@@ -81,6 +102,7 @@ describe('Shared Issuance Flows', () => {
     tokenUtils = await import('../utils/tokenUtils.js');
     credGenerationUtils = await import('../utils/credGenerationUtils.js');
     sharedModule = await import('../routes/issue/sharedIssuanceFlows.js');
+    codeFlowModule = await import('../routes/issue/codeFlowSdJwtRoutes.js');
     
     // Wait for Redis to be ready if available
     if (cacheServiceRedis.client) {
@@ -100,6 +122,8 @@ describe('Shared Issuance Flows', () => {
     if (globalSandbox) {
       globalSandbox.restore();
     }
+    if (previousServerUrl === undefined) delete process.env.SERVER_URL;
+    else process.env.SERVER_URL = previousServerUrl;
   });
 
   beforeEach(async () => {
@@ -123,14 +147,598 @@ describe('Shared Issuance Flows', () => {
     app.use(bodyParser.text({ type: (req) => req.is('application/jwt'), limit: '10mb' }));
     app.use(bodyParser.json({ limit: '10mb' }));
     app.use(express.urlencoded({ extended: true }));
+    app.use('/', codeFlowModule.default);
     app.use('/', sharedModule.default);
   });
 
   afterEach(() => {
     sandbox.restore();
+    issuerConfigOverride = null;
+    resetStatusListTestHooks();
+  });
+
+  const installBusinessStatusFixtures = async ({ kaSigningKey = null } = {}) => {
+    const providerPrivate = await jose.importPKCS8(testKeys.privateKeyPem, 'ES256');
+    const kaPrivate = kaSigningKey?.privateKey || providerPrivate;
+    const kaPublic = kaSigningKey?.publicJwk || testKeys.publicKeyJwk;
+    const now = Math.floor(Date.now() / 1000);
+    const signList = (privateKey, uri, header = {}) => signStatusListToken({
+      privateKey,
+      uri,
+      statuses: [0],
+      iat: now,
+      exp: now + 3600,
+      header,
+    });
+    const lists = new Map([
+      [WIA_STATUS_LIST_URI, await signList(providerPrivate, WIA_STATUS_LIST_URI)],
+      [KA_STATUS_LIST_URI, await signList(kaPrivate, KA_STATUS_LIST_URI, kaSigningKey?.header || {})],
+    ]);
+    installStatusListTestHooks({
+      fetchImpl: async (uri) => ({
+        ok: true,
+        status: 200,
+        headers: { get: () => 'application/statuslist+jwt' },
+        arrayBuffer: async () => Buffer.from(lists.get(String(uri)) || ''),
+      }),
+    });
+    return { providerPrivate, now };
+  };
+
+  const buildBusinessSession = async ({ accessToken, nonce, providerJwk = testKeys.publicKeyJwk, credentialId = 'test-cred-config' }) => {
+    const now = Math.floor(Date.now() / 1000);
+    const statusEvidence = {
+      uri: WIA_STATUS_LIST_URI,
+      idx: 0,
+      verificationJwk: providerJwk,
+      checkedAt: Date.now(),
+    };
+    const sessionKey = `test-cs05-session-${uuidv4()}`;
+    await cacheServiceRedis.storePreAuthSession(sessionKey, {
+      status: 'success',
+      isDeferred: false,
+      accessToken,
+      c_nonce: nonce,
+      requiresWua: true,
+      credentialConfigurationId: credentialId,
+      walletAttestationProfile: 'auto',
+      walletAttestation: {
+        requestedProfile: 'auto',
+        resolvedProfile: 'cs05',
+        clientId: 'business-wallet-instance',
+        businessIdentity: { ebwoidId: 'REG.123', legalName: 'Example Ltd' },
+        clientKeyThumbprint: 'session-client-thumbprint',
+        instanceAttestationDigest: 'session-bwia-digest',
+        statusList: statusEvidence,
+        maintenanceExpirations: { clientStatus: now + 60 * 86400 },
+        trustEvaluation: { state: 'not_evaluated' },
+      },
+      wiaStatusList: statusEvidence,
+    });
+    return sessionKey;
+  };
+
+  const buildBusinessSka = async ({ providerPrivate, providerJwk = testKeys.publicKeyJwk, attestedKeys = [testKeys.publicKeyJwk] }) => {
+    const now = Math.floor(Date.now() / 1000);
+    return new jose.SignJWT({
+      iat: now,
+      exp: now + 3600,
+      attested_keys: attestedKeys,
+      key_storage: ['iso_18045_high'],
+      user_authentication: ['iso_18045_high'],
+      certification: 'https://wallet-provider.example/certification',
+      key_storage_status: {
+        status: { status_list: { uri: KA_STATUS_LIST_URI, idx: 0 } },
+        exp: now + 60 * 86400,
+      },
+    })
+      .setProtectedHeader({ alg: 'ES256', typ: 'key-attestation+jwt', jwk: providerJwk })
+      .sign(providerPrivate);
+  };
+
+  const buildBusinessProof = async ({ holderPrivate, holderJwk, nonce, ska }) => new jose.SignJWT({
+    nonce,
+    aud: process.env.SERVER_URL,
+  })
+    .setProtectedHeader({
+      alg: 'ES256',
+      typ: 'openid4vci-proof+jwt',
+      jwk: holderJwk,
+      key_attestation: ska,
+    })
+    .sign(holderPrivate);
+
+  const getX509ProviderMaterial = async () => {
+    const privatePem = fs.readFileSync('./x509EC/ec_private_pkcs8.key', 'utf8');
+    const certificatePem = fs.readFileSync('./x509EC/client_certificate.crt', 'utf8');
+    const x5c = certificatePem.replace(/-----BEGIN CERTIFICATE-----|-----END CERTIFICATE-----|\s/g, '');
+    const privateKey = await jose.importPKCS8(privatePem, 'ES256');
+    const publicKey = await jose.importX509(certificatePem, 'ES256');
+    return { privateKey, publicJwk: await jose.exportJWK(publicKey), x5c };
+  };
+
+  const buildBusinessClientAttestationPair = async ({ provider, clientKey, clientId, business = true }) => {
+    const now = Math.floor(Date.now() / 1000);
+    const wia = await new jose.SignJWT({
+      sub: clientId,
+      iat: now,
+      exp: now + 3600,
+      cnf: { jwk: clientKey.publicJwk },
+      wallet_name: 'Acceptance Test BWU',
+      wallet_version: '1.0.0',
+      wallet_solution_certification_information: { scheme: 'test' },
+      ...(business ? { ebwoid_id: 'REG.123', legal_name: 'Example Ltd' } : {}),
+      client_status: {
+        status: { status_list: { uri: WIA_STATUS_LIST_URI, idx: 0 } },
+        exp: now + 60 * 86400,
+      },
+    })
+      .setProtectedHeader({ alg: 'ES256', typ: 'oauth-client-attestation+jwt', x5c: [provider.x5c] })
+      .sign(provider.privateKey);
+    const pop = await new jose.SignJWT({
+      iss: clientId,
+      aud: process.env.SERVER_URL,
+      iat: now,
+      exp: now + 300,
+      jti: uuidv4(),
+    })
+      .setProtectedHeader({ alg: 'ES256', typ: 'oauth-client-attestation-pop+jwt' })
+      .sign(clientKey.privateKey);
+    return { wia, pop };
+  };
+
+  const buildTokenDpopProof = async ({ key, nonce = null }) => {
+    const claims = {
+      htm: 'POST',
+      htu: `${process.env.SERVER_URL}/token_endpoint`,
+      iat: Math.floor(Date.now() / 1000),
+      jti: uuidv4(),
+      ...(nonce ? { nonce } : {}),
+    };
+    return new jose.SignJWT(claims)
+      .setProtectedHeader({ alg: 'ES256', typ: 'dpop+jwt', jwk: key.publicJwk })
+      .sign(key.privateKey);
+  };
+
+  describe('POST /par', () => {
+    const setupBusinessPar = async () => {
+      const provider = await getX509ProviderMaterial();
+      const clientPair = await jose.generateKeyPair('ES256', { extractable: true });
+      const clientKey = { privateKey: clientPair.privateKey, publicJwk: await jose.exportJWK(clientPair.publicKey) };
+      const clientId = `business-par-client-${uuidv4()}`;
+      const pair = await buildBusinessClientAttestationPair({ provider, clientKey, clientId });
+      const statusToken = await signStatusListToken({
+        privateKey: provider.privateKey,
+        uri: WIA_STATUS_LIST_URI,
+        statuses: [0],
+      });
+      installStatusListTestHooks({
+        fetchImpl: async () => ({
+          ok: true,
+          status: 200,
+          headers: { get: () => 'application/statuslist+jwt' },
+          arrayBuffer: async () => Buffer.from(statusToken),
+        }),
+      });
+      const sessionId = `test-cs05-par-${uuidv4()}`;
+      const { createCodeFlowSession } = await import('../utils/routeUtils.js');
+      await cacheServiceRedis.storeCodeFlowSession(sessionId, createCodeFlowSession('redirect_uri', 'code', false, false, null, {
+        walletAttestationProfile: 'auto',
+        credentialType: 'VerifiablePIDSDJWTWUA',
+      }));
+      const parDpop = (key) => new jose.SignJWT({
+        htm: 'POST',
+        htu: `${process.env.SERVER_URL}/par`,
+        iat: Math.floor(Date.now() / 1000),
+        jti: uuidv4(),
+      }).setProtectedHeader({ alg: 'ES256', typ: 'dpop+jwt', jwk: key.publicJwk }).sign(key.privateKey);
+      const send = ({ body = {}, dpop } = {}) => {
+        let req = request(app)
+          .post('/par')
+          .set('OAuth-Client-Attestation', pair.wia)
+          .set('OAuth-Client-Attestation-PoP', pair.pop);
+        if (dpop) req = req.set('DPoP', dpop);
+        return req.send({
+          client_id: clientId,
+          issuer_state: sessionId,
+          scope: 'VerifiablePIDSDJWTWUA',
+          response_type: 'code',
+          redirect_uri: 'https://wallet.example/callback',
+          code_challenge: 'challenge-value',
+          code_challenge_method: 'S256',
+          ...body,
+        });
+      };
+      return { clientKey, parDpop, send, sessionId };
+    };
+
+    it('accepts a CS-05 PAR that binds the BWIA key with a DPoP proof header instead of dpop_jkt', async () => {
+      const { clientKey, parDpop, send } = await setupBusinessPar();
+
+      const response = await send({ dpop: await parDpop(clientKey) });
+
+      expect(response.status, JSON.stringify(response.body)).to.be.within(200, 201);
+      expect(response.body).to.have.property('request_uri');
+    });
+
+    it('rejects a CS-05 PAR whose DPoP proof key differs from dpop_jkt or from the BWIA key', async () => {
+      const { clientKey, parDpop, send } = await setupBusinessPar();
+      const otherPair = await jose.generateKeyPair('ES256', { extractable: true });
+      const otherKey = { privateKey: otherPair.privateKey, publicJwk: await jose.exportJWK(otherPair.publicKey) };
+      const bwiaJkt = await jose.calculateJwkThumbprint(clientKey.publicJwk, 'sha256');
+
+      const conflicting = await send({ dpop: await parDpop(otherKey), body: { dpop_jkt: bwiaJkt } });
+      expect(conflicting.status).to.equal(400);
+      expect(conflicting.body).to.have.property('error', 'invalid_dpop_proof');
+
+      const wrongKey = await send({ dpop: await parDpop(otherKey) });
+      expect(wrongKey.status).to.equal(400);
+      expect(wrongKey.body).to.have.property('error', 'invalid_request');
+      expect(wrongKey.body.error_description).to.match(/must match the BWIA/i);
+    });
+
+    it('validates a PAR DPoP proof header for a natural-person session instead of ignoring it', async () => {
+      const sessionId = `test-cs04-par-${uuidv4()}`;
+      const { createCodeFlowSession } = await import('../utils/routeUtils.js');
+      await cacheServiceRedis.storeCodeFlowSession(sessionId, createCodeFlowSession('redirect_uri', 'code', false, false, null, {
+        walletAttestationProfile: 'auto',
+      }));
+      const keyPair = await jose.generateKeyPair('ES256', { extractable: true });
+      const key = { privateKey: keyPair.privateKey, publicJwk: await jose.exportJWK(keyPair.publicKey) };
+      const wrongHtu = await new jose.SignJWT({
+        htm: 'POST',
+        htu: `${process.env.SERVER_URL}/not-par`,
+        iat: Math.floor(Date.now() / 1000),
+        jti: uuidv4(),
+      }).setProtectedHeader({ alg: 'ES256', typ: 'dpop+jwt', jwk: key.publicJwk }).sign(key.privateKey);
+
+      const response = await request(app)
+        .post('/par')
+        .set('DPoP', wrongHtu)
+        .send({
+          client_id: 'natural-person-wallet',
+          issuer_state: sessionId,
+          scope: 'test-cred-config',
+          response_type: 'code',
+          redirect_uri: 'https://wallet.example/callback',
+          code_challenge: 'challenge-value',
+          code_challenge_method: 'S256',
+        });
+
+      expect(response.status, JSON.stringify(response.body)).to.equal(400);
+      expect(response.body).to.have.property('error', 'invalid_dpop_proof');
+      expect(response.body.error_description).to.match(/htu/i);
+    });
+
+    it('rejects a CS-05 dpop_jkt that is not the BWIA confirmation key', async () => {
+      const provider = await getX509ProviderMaterial();
+      const clientPair = await jose.generateKeyPair('ES256', { extractable: true });
+      const clientKey = { privateKey: clientPair.privateKey, publicJwk: await jose.exportJWK(clientPair.publicKey) };
+      const clientId = `business-par-client-${uuidv4()}`;
+      const pair = await buildBusinessClientAttestationPair({ provider, clientKey, clientId });
+      const statusToken = await signStatusListToken({
+        privateKey: provider.privateKey,
+        uri: WIA_STATUS_LIST_URI,
+        statuses: [0],
+      });
+      installStatusListTestHooks({
+        fetchImpl: async () => ({
+          ok: true,
+          status: 200,
+          headers: { get: () => 'application/statuslist+jwt' },
+          arrayBuffer: async () => Buffer.from(statusToken),
+        }),
+      });
+      const sessionId = `test-cs05-par-${uuidv4()}`;
+      const { createCodeFlowSession } = await import('../utils/routeUtils.js');
+      const session = createCodeFlowSession('redirect_uri', 'code', false, false, null, {
+        walletAttestationProfile: 'auto',
+        credentialType: 'VerifiablePIDSDJWTWUA',
+      });
+      await cacheServiceRedis.storeCodeFlowSession(sessionId, session);
+
+      const response = await request(app)
+        .post('/par')
+        .set('OAuth-Client-Attestation', pair.wia)
+        .set('OAuth-Client-Attestation-PoP', pair.pop)
+        .send({
+          client_id: clientId,
+          issuer_state: sessionId,
+          scope: 'VerifiablePIDSDJWTWUA',
+          response_type: 'code',
+          redirect_uri: 'https://wallet.example/callback',
+          code_challenge: 'challenge-value',
+          code_challenge_method: 'S256',
+          dpop_jkt: 'thumbprint-of-a-different-key',
+        })
+        .expect(400);
+
+      expect(response.body).to.have.property('error', 'invalid_request');
+      expect(response.body.error_description).to.match(/must match the BWIA/i);
+      const unchangedSession = await cacheServiceRedis.getCodeFlowSession(sessionId);
+      expect(unchangedSession.walletAttestation.requestedProfile).to.equal('auto');
+      expect(unchangedSession.walletAttestation.resolvedProfile).to.equal(null);
+    });
+
+    it('rejects an offer request that changes an existing session profile with invalid_request, not server_error', async () => {
+      const sessionId = `test-cs05-offer-${uuidv4()}`;
+      await request(app)
+        .get('/offer-code-sd-jwt')
+        .query({ sessionId, walletAttestationProfile: 'cs05' })
+        .expect(200);
+
+      const response = await request(app)
+        .get('/offer-code-sd-jwt')
+        .query({ sessionId, walletAttestationProfile: 'cs04' })
+        .expect(400);
+
+      expect(response.body).to.have.property('error', 'invalid_request');
+      expect((await cacheServiceRedis.getCodeFlowSession(sessionId)).walletAttestationProfile).to.equal('cs05');
+    });
   });
 
   describe('POST /token_endpoint', () => {
+    it('auto-detects BWIA at a pre-authorized token request and challenges DPoP before consuming the grant', async () => {
+      const provider = await getX509ProviderMaterial();
+      const clientPair = await jose.generateKeyPair('ES256', { extractable: true });
+      const clientKey = { privateKey: clientPair.privateKey, publicJwk: await jose.exportJWK(clientPair.publicKey) };
+      const clientId = `business-client-${uuidv4()}`;
+      const { wia } = await buildBusinessClientAttestationPair({ provider, clientKey, clientId });
+      const providerList = await signStatusListToken({
+        privateKey: provider.privateKey,
+        uri: WIA_STATUS_LIST_URI,
+        statuses: [0],
+        exp: Math.floor(Date.now() / 1000) + 3600,
+      });
+      installStatusListTestHooks({
+        fetchImpl: async () => ({
+          ok: true,
+          status: 200,
+          headers: { get: () => 'application/statuslist+jwt' },
+          arrayBuffer: async () => Buffer.from(providerList),
+        }),
+      });
+      const makePop = async () => new jose.SignJWT({
+        iss: clientId,
+        aud: process.env.SERVER_URL,
+        iat: Math.floor(Date.now() / 1000),
+        exp: Math.floor(Date.now() / 1000) + 300,
+        jti: uuidv4(),
+      }).setProtectedHeader({ alg: 'ES256', typ: 'oauth-client-attestation-pop+jwt' }).sign(clientKey.privateKey);
+      const preAuthCode = `test-cs05-auto-token-${uuidv4()}`;
+      await cacheServiceRedis.storePreAuthSession(preAuthCode, {
+        status: 'pending',
+        requiresWua: true,
+        credentialConfigurationId: 'VerifiablePIDSDJWTWUA',
+        walletAttestationProfile: 'auto',
+      });
+      const commonHeaders = {
+        'OAuth-Client-Attestation': wia,
+      };
+      const dpopWithoutNonce = await buildTokenDpopProof({ key: clientKey });
+      const challenge = await request(app)
+        .post('/token_endpoint')
+        .set(commonHeaders)
+        .set('OAuth-Client-Attestation-PoP', await makePop())
+        .set('DPoP', dpopWithoutNonce)
+        .send({
+          grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
+          'pre-authorized_code': preAuthCode,
+          client_id: clientId,
+        })
+        .expect(400);
+
+      expect(challenge.body).to.have.property('error', 'use_dpop_nonce');
+      expect(challenge.headers).to.have.property('dpop-nonce');
+      const unconsumed = await cacheServiceRedis.getPreAuthSession(preAuthCode);
+      expect(unconsumed).to.not.have.property('accessToken');
+      expect(unconsumed.walletAttestation.resolvedProfile).to.equal('cs05');
+
+      const retry = await request(app)
+        .post('/token_endpoint')
+        .set(commonHeaders)
+        .set('OAuth-Client-Attestation-PoP', await makePop())
+        .set('DPoP', await buildTokenDpopProof({ key: clientKey, nonce: challenge.headers['dpop-nonce'] }))
+        .send({
+          grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
+          'pre-authorized_code': preAuthCode,
+          client_id: clientId,
+        })
+        .expect(200);
+      expect(retry.body.token_type).to.equal('DPoP');
+      expect((await cacheServiceRedis.getPreAuthSession(preAuthCode)).accessToken).to.equal(retry.body.access_token);
+
+      const secondGrant = `test-cs05-reuse-${uuidv4()}`;
+      await cacheServiceRedis.storePreAuthSession(secondGrant, {
+        status: 'pending',
+        requiresWua: true,
+        credentialConfigurationId: 'VerifiablePIDSDJWTWUA',
+        walletAttestationProfile: 'auto',
+      });
+      const secondChallenge = await request(app)
+        .post('/token_endpoint')
+        .set(commonHeaders)
+        .set('OAuth-Client-Attestation-PoP', await makePop())
+        .set('DPoP', await buildTokenDpopProof({ key: clientKey }))
+        .send({
+          grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
+          'pre-authorized_code': secondGrant,
+          client_id: clientId,
+        })
+        .expect(400);
+      const crossSessionReuse = await request(app)
+        .post('/token_endpoint')
+        .set(commonHeaders)
+        .set('OAuth-Client-Attestation-PoP', await makePop())
+        .set('DPoP', await buildTokenDpopProof({ key: clientKey, nonce: secondChallenge.headers['dpop-nonce'] }))
+        .send({
+          grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
+          'pre-authorized_code': secondGrant,
+          client_id: clientId,
+        })
+        .expect(401);
+      expect(crossSessionReuse.body).to.have.property('error', 'invalid_client');
+      expect((await cacheServiceRedis.getPreAuthSession(secondGrant))).to.not.have.property('accessToken');
+    });
+
+    const setupBusinessTokenRequest = async (sessionProps = {}, { business = true } = {}) => {
+      const provider = await getX509ProviderMaterial();
+      const clientPair = await jose.generateKeyPair('ES256', { extractable: true });
+      const clientKey = { privateKey: clientPair.privateKey, publicJwk: await jose.exportJWK(clientPair.publicKey) };
+      const clientId = `business-client-${uuidv4()}`;
+      const { wia } = await buildBusinessClientAttestationPair({ provider, clientKey, clientId, business });
+      const providerList = await signStatusListToken({
+        privateKey: provider.privateKey,
+        uri: WIA_STATUS_LIST_URI,
+        statuses: [0],
+        exp: Math.floor(Date.now() / 1000) + 3600,
+      });
+      installStatusListTestHooks({
+        fetchImpl: async () => ({
+          ok: true,
+          status: 200,
+          headers: { get: () => 'application/statuslist+jwt' },
+          arrayBuffer: async () => Buffer.from(providerList),
+        }),
+      });
+      const makePop = async (claims = {}) => new jose.SignJWT({
+        iss: clientId,
+        aud: process.env.SERVER_URL,
+        iat: Math.floor(Date.now() / 1000),
+        exp: Math.floor(Date.now() / 1000) + 300,
+        jti: uuidv4(),
+        ...claims,
+      }).setProtectedHeader({ alg: 'ES256', typ: 'oauth-client-attestation-pop+jwt' }).sign(clientKey.privateKey);
+      const preAuthCode = `test-cs05-token-${uuidv4()}`;
+      await cacheServiceRedis.storePreAuthSession(preAuthCode, {
+        status: 'pending',
+        requiresWua: true,
+        credentialConfigurationId: 'VerifiablePIDSDJWTWUA',
+        walletAttestationProfile: 'auto',
+        ...sessionProps,
+      });
+      const send = async ({ dpopKey = clientKey, nonce = null, pop, withAttestation = true } = {}) => {
+        let req = request(app).post('/token_endpoint')
+          .set('DPoP', await buildTokenDpopProof({ key: dpopKey, nonce }));
+        if (withAttestation) {
+          req = req.set('OAuth-Client-Attestation', wia)
+            .set('OAuth-Client-Attestation-PoP', pop || await makePop());
+        }
+        return req.send({
+          grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
+          'pre-authorized_code': preAuthCode,
+          client_id: clientId,
+        });
+      };
+      return { clientKey, makePop, preAuthCode, send };
+    };
+
+    it('rejects a CS-05 pre-authorized token whose DPoP key is not the BWIA cnf key, without consuming the grant', async () => {
+      const { preAuthCode, send } = await setupBusinessTokenRequest();
+      const otherPair = await jose.generateKeyPair('ES256', { extractable: true });
+      const otherKey = { privateKey: otherPair.privateKey, publicJwk: await jose.exportJWK(otherPair.publicKey) };
+
+      const challenge = await send({ dpopKey: otherKey });
+      expect(challenge.status).to.equal(400);
+      expect(challenge.body).to.have.property('error', 'use_dpop_nonce');
+      const response = await send({ dpopKey: otherKey, nonce: challenge.headers['dpop-nonce'] });
+
+      expect(response.status).to.equal(400);
+      expect(response.body).to.have.property('error', 'invalid_dpop_proof');
+      expect(response.body.error_description).to.match(/BWIA cnf/i);
+      expect(await cacheServiceRedis.getPreAuthSession(preAuthCode)).to.not.have.property('accessToken');
+    });
+
+    it('rejects a CS-04 token whose DPoP key is not the WIA cnf key instead of only warning', async () => {
+      const { preAuthCode, send } = await setupBusinessTokenRequest({}, { business: false });
+      const otherPair = await jose.generateKeyPair('ES256', { extractable: true });
+      const otherKey = { privateKey: otherPair.privateKey, publicJwk: await jose.exportJWK(otherPair.publicKey) };
+
+      const rejected = await send({ dpopKey: otherKey });
+      expect(rejected.status, JSON.stringify(rejected.body)).to.equal(400);
+      expect(rejected.body).to.have.property('error', 'invalid_dpop_proof');
+      expect(rejected.body.error_description).to.match(/Wallet Instance Attestation cnf/i);
+      expect(await cacheServiceRedis.getPreAuthSession(preAuthCode)).to.not.have.property('accessToken');
+
+      const accepted = await send();
+      expect(accepted.status, JSON.stringify(accepted.body)).to.equal(200);
+    });
+
+    it('rejects an authorization_code token whose DPoP key differs from the key bound at PAR, for any profile', async () => {
+      const code = `test-par-bound-code-${uuidv4()}`;
+      const parPair = await jose.generateKeyPair('ES256', { extractable: true });
+      const parJkt = await jose.calculateJwkThumbprint(await jose.exportJWK(parPair.publicKey), 'sha256');
+      await cacheServiceRedis.storeCodeFlowSession(`test-par-bound-session-${uuidv4()}`, {
+        status: 'pending',
+        walletAttestationProfile: 'auto',
+        parDpopJkt: parJkt,
+        requests: { sessionId: code },
+      });
+      const otherPair = await jose.generateKeyPair('ES256', { extractable: true });
+      const otherKey = { privateKey: otherPair.privateKey, publicJwk: await jose.exportJWK(otherPair.publicKey) };
+
+      const response = await request(app)
+        .post('/token_endpoint')
+        .set('DPoP', await buildTokenDpopProof({ key: otherKey }))
+        .send({ grant_type: 'authorization_code', code, code_verifier: 'verifier' });
+
+      expect(response.status).to.equal(400);
+      expect(response.body).to.have.property('error', 'invalid_dpop_proof');
+      expect(response.body.error_description).to.match(/bound at PAR/i);
+    });
+
+    it('re-challenges a wrong or replayed CS-05 DPoP nonce instead of issuing a token', async () => {
+      const { preAuthCode, send } = await setupBusinessTokenRequest();
+
+      const wrong = await send({ nonce: 'not-an-issued-nonce' });
+      expect(wrong.status).to.equal(400);
+      expect(wrong.body).to.have.property('error', 'use_dpop_nonce');
+      expect(await cacheServiceRedis.getPreAuthSession(preAuthCode)).to.not.have.property('accessToken');
+
+      const accepted = await send({ nonce: wrong.headers['dpop-nonce'] });
+      expect(accepted.status).to.equal(200);
+
+      const replayed = await send({ nonce: wrong.headers['dpop-nonce'] });
+      expect(replayed.status).to.equal(400);
+      expect(replayed.body).to.have.property('error', 'use_dpop_nonce');
+    });
+
+    it('rejects a CS-05 client-attestation PoP with the wrong issuer or audience', async () => {
+      const { makePop, send } = await setupBusinessTokenRequest();
+
+      const wrongIss = await send({ pop: await makePop({ iss: 'someone-else' }) });
+      expect(wrongIss.status).to.equal(401);
+      expect(wrongIss.body).to.have.property('error', 'invalid_client');
+
+      const wrongAud = await send({ pop: await makePop({ aud: 'https://other-as.example' }) });
+      expect(wrongAud.status).to.equal(401);
+      expect(wrongAud.body).to.have.property('error', 'invalid_client');
+    });
+
+    it('requires a BWIA for an explicit CS-05 session instead of falling back to an unattested token', async () => {
+      const { preAuthCode, send } = await setupBusinessTokenRequest({ walletAttestationProfile: 'cs05' });
+
+      const response = await send({ withAttestation: false });
+
+      expect(response.status).to.equal(401);
+      expect(response.body).to.have.property('error', 'invalid_client');
+      expect(await cacheServiceRedis.getPreAuthSession(preAuthCode)).to.not.have.property('accessToken');
+    });
+
+    it('does not let a CS-05 profile bypass enforced Wallet Provider trust', async () => {
+      const { preAuthCode, send } = await setupBusinessTokenRequest({
+        walletAttestationProfile: 'cs05',
+        trustPolicy: { mode: 'webuild', profile: 'webuild-wp4-pilot' },
+      });
+
+      const response = await send();
+
+      expect(response.status).to.equal(401);
+      expect(response.body).to.have.property('error', 'invalid_client');
+      expect(response.body.error_description).to.match(/trust rejected/i);
+      expect(await cacheServiceRedis.getPreAuthSession(preAuthCode)).to.not.have.property('accessToken');
+    });
+
     it('should handle pre-authorized code flow successfully', async () => {
       const preAuthCode = 'test-pre-auth-code-' + uuidv4();
       const preAuthSession = {
@@ -1193,6 +1801,122 @@ describe('Shared Issuance Flows', () => {
   });
 
   describe('POST /credential', () => {
+    it('requires SKA for a CS-05 session even when SCA WIA/KA checks are disabled', async () => {
+      const previous = process.env.DISABLE_SCA_WIA_KA_CHECKS;
+      process.env.DISABLE_SCA_WIA_KA_CHECKS = 'true';
+      try {
+        const credentialId = 'https://webuildconsortium.eu/sca/sca-iban/1.0';
+        issuerConfigOverride = JSON.stringify({
+          credential_configurations_supported: {
+            [credentialId]: {
+              format: 'dc+sd-jwt',
+              proof_types_supported: { jwt: { proof_signing_alg_values_supported: ['ES256'] } },
+            },
+          },
+          default_signing_kid: 'test-kid',
+          credential_response_encryption: { alg_values_supported: ['ECDH-ES'], enc_values_supported: ['A256GCM'] },
+        });
+        await installBusinessStatusFixtures();
+        const accessToken = `test-cs05-sca-${uuidv4()}`;
+        const nonce = cryptoUtils.generateNonce();
+        await buildBusinessSession({ accessToken, nonce, credentialId });
+        await cacheServiceRedis.storeNonce(nonce, 300);
+        const proof = signProofJwt({ nonce, aud: process.env.SERVER_URL });
+
+        const response = await request(app)
+          .post('/credential')
+          .set('Authorization', resourceAuthorizationHeader(accessToken))
+          .send({ credential_configuration_id: credentialId, proofs: { jwt: proof } })
+          .expect(400);
+
+        expect(response.body).to.have.property('error', 'invalid_proof');
+        expect(response.body.error_description).to.match(/Key Attestation.*required/i);
+      } finally {
+        if (previous === undefined) delete process.env.DISABLE_SCA_WIA_KA_CHECKS;
+        else process.env.DISABLE_SCA_WIA_KA_CHECKS = previous;
+      }
+    });
+
+    it('rejects a CS-05 JWT proof batch instead of silently issuing for only the first key', async () => {
+      const { providerPrivate } = await installBusinessStatusFixtures();
+      const accessToken = `test-cs05-batch-${uuidv4()}`;
+      const nonce = cryptoUtils.generateNonce();
+      await buildBusinessSession({ accessToken, nonce });
+      const fakeProof = await new jose.SignJWT({ nonce, aud: process.env.SERVER_URL })
+        .setProtectedHeader({ alg: 'ES256', typ: 'openid4vci-proof+jwt', jwk: testKeys.publicKeyJwk, key_attestation: 'not-validated-before-batch-rejection' })
+        .sign(await jose.importPKCS8(testKeys.privateKeyPem, 'ES256'));
+
+      const response = await request(app)
+        .post('/credential')
+        .set('Authorization', resourceAuthorizationHeader(accessToken))
+        .send({ credential_configuration_id: 'test-cred-config', proofs: { jwt: [fakeProof, fakeProof] } })
+        .expect(400);
+
+      expect(response.body).to.have.property('error', 'invalid_proof');
+      expect(response.body.error_description).to.match(/batch issuance is not supported/i);
+      void providerPrivate;
+    });
+
+    it('issues a credential bound to a non-first SKA key and rejects a self-asserted SKA status-list key', async () => {
+      const holder = await jose.generateKeyPair('ES256', { extractable: true });
+      const holderJwk = await jose.exportJWK(holder.publicKey);
+      const { providerPrivate, now } = await installBusinessStatusFixtures();
+      const ska = await buildBusinessSka({
+        providerPrivate,
+        attestedKeys: [testKeys.publicKeyJwk, holderJwk],
+      });
+      const accessToken = `test-cs05-key-binding-${uuidv4()}`;
+      const nonce = cryptoUtils.generateNonce();
+      await buildBusinessSession({ accessToken, nonce });
+      await cacheServiceRedis.storeNonce(nonce, 300);
+      const proof = await buildBusinessProof({ holderPrivate: holder.privateKey, holderJwk, nonce, ska });
+
+      const response = await request(app)
+        .post('/credential')
+        .set('Authorization', resourceAuthorizationHeader(accessToken))
+        .send({ credential_configuration_id: 'test-cred-config', proofs: { jwt: proof } })
+        .expect(200);
+
+      const compact = response.body.credentials[0].credential.split('~')[0];
+      const issuedPayload = jwt.decode(compact);
+      expect(issuedPayload.cnf).to.have.property('jwk');
+      expect(await jose.calculateJwkThumbprint(issuedPayload.cnf.jwk, 'sha256'))
+        .to.equal(await jose.calculateJwkThumbprint(holderJwk, 'sha256'));
+      expect(issuedPayload.cnf.jwk.x).to.equal(holderJwk.x);
+
+      const attacker = await jose.generateKeyPair('ES256', { extractable: true });
+      const attackerJwk = await jose.exportJWK(attacker.publicKey);
+      const { providerPrivate: providerForAttack } = await installBusinessStatusFixtures({
+        kaSigningKey: { privateKey: attacker.privateKey, header: { jwk: attackerJwk } },
+      });
+      const forgedSkaStatus = await buildBusinessSka({
+        providerPrivate: providerForAttack,
+        attestedKeys: [testKeys.publicKeyJwk],
+      });
+      // The status token is signed by the attacker, while SKA remains signed by the provider.
+      // Rebuild the SKA using the provider key after installing the forged status response.
+      const providerSka = await buildBusinessSka({ providerPrivate, attestedKeys: [testKeys.publicKeyJwk] });
+      const attackAccessToken = `test-cs05-status-key-${uuidv4()}`;
+      const attackNonce = cryptoUtils.generateNonce();
+      await buildBusinessSession({ accessToken: attackAccessToken, nonce: attackNonce });
+      await cacheServiceRedis.storeNonce(attackNonce, 300);
+      const attackProof = await buildBusinessProof({
+        holderPrivate: await jose.importPKCS8(testKeys.privateKeyPem, 'ES256'),
+        holderJwk: testKeys.publicKeyJwk,
+        nonce: attackNonce,
+        ska: providerSka,
+      });
+      const rejected = await request(app)
+        .post('/credential')
+        .set('Authorization', resourceAuthorizationHeader(attackAccessToken))
+        .send({ credential_configuration_id: 'test-cred-config', proofs: { jwt: attackProof } })
+        .expect(400);
+      expect(rejected.body).to.have.property('error', 'invalid_proof');
+      expect(rejected.body.error_description).to.match(/signature|status list/i);
+      expect(now).to.be.a('number');
+      void forgedSkaStatus;
+    });
+
     it('should handle immediate credential issuance successfully', async () => {
       const sessionKey = 'test-session-key-' + uuidv4();
       const accessToken = 'test-access-token-' + uuidv4();
@@ -1356,7 +2080,7 @@ describe('Shared Issuance Flows', () => {
         },
       });
 
-      fs.readFileSync.withArgs(sinon.match(/issuer-config\.json/)).returns(pidIssuerConfigJson);
+      issuerConfigOverride = pidIssuerConfigJson;
 
       try {
         const sessionKey = `test-session-key-ka-meta-${uuidv4()}`;
@@ -1387,7 +2111,7 @@ describe('Shared Issuance Flows', () => {
         expect(response.body).to.have.property('error', 'invalid_proof');
         expect(response.body.error_description).to.match(/Key Attestation \(KA\) is required by issuer metadata/i);
       } finally {
-        fs.readFileSync.withArgs(sinon.match(/issuer-config\.json/)).returns(defaultIssuerConfigJson);
+        issuerConfigOverride = defaultIssuerConfigJson;
       }
     });
 
@@ -2280,6 +3004,37 @@ describe('Shared Issuance Flows', () => {
       }
     });
 
+    it('refuses to sign a CS-05 deferred credential when the SKA status evidence is missing', async () => {
+      const previousReadyAfter = process.env.DEFERRED_CREDENTIAL_READY_AFTER_POLLS;
+      process.env.DEFERRED_CREDENTIAL_READY_AFTER_POLLS = '1';
+      try {
+        const transactionId = 'test-cs05-deferred-' + uuidv4();
+        const accessToken = 'test-cs05-deferred-access-' + uuidv4();
+        const now = Math.floor(Date.now() / 1000);
+        await cacheServiceRedis.storeCodeFlowSession('test-cs05-deferred-session-' + uuidv4(), {
+          ...buildDeferredSession(transactionId, accessToken),
+          walletAttestation: {
+            requestedProfile: 'cs05',
+            resolvedProfile: 'cs05',
+            statusList: { uri: WIA_STATUS_LIST_URI, idx: 0, verificationJwk: testKeys.publicKeyJwk, checkedAt: Date.now() },
+            maintenanceExpirations: { clientStatus: now + 60 * 86400 },
+          },
+        });
+
+        const response = await request(app)
+          .post('/credential_deferred')
+          .set('Authorization', resourceAuthorizationHeader(accessToken))
+          .send({ transaction_id: transactionId });
+
+        expect(response.status).to.equal(400);
+        expect(response.body).to.have.property('error', 'credential_request_denied');
+        expect(response.body).to.not.have.property('credential');
+      } finally {
+        if (previousReadyAfter === undefined) delete process.env.DEFERRED_CREDENTIAL_READY_AFTER_POLLS;
+        else process.env.DEFERRED_CREDENTIAL_READY_AFTER_POLLS = previousReadyAfter;
+      }
+    });
+
     it('should require Bearer access token for deferred polling', async () => {
       const transactionId = 'test-transaction-id-' + uuidv4();
       const sessionId = 'test-session-id-' + uuidv4();
@@ -2493,4 +3248,4 @@ describe('Shared Issuance Flows', () => {
       expect([200, 500]).to.include(response.status);
     });
   });
-}); 
+});

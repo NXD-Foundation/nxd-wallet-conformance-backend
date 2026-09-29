@@ -189,6 +189,42 @@ describe("WUA status-list verifier", () => {
       expect(result.verificationJwk.x).to.equal(statusPublicJwk.x);
     });
 
+    it("does not trust a self-asserted header key when the caller pins the provider key", async () => {
+      const { privateKey: providerPrivate, publicKey: providerPublic } = await jose.generateKeyPair("ES256");
+      const { privateKey: attackerPrivate, publicKey: attackerPublic } = await jose.generateKeyPair("ES256");
+      const providerJwk = await jose.exportJWK(providerPublic);
+      const attackerJwk = await jose.exportJWK(attackerPublic);
+      const uri = "https://example.com/pinned-status";
+      const token = await new jose.SignJWT({
+        sub: uri,
+        iat: Math.floor(Date.now() / 1000),
+        status_list: { bits: 1, lst: "eJxjAAAAAQAB" },
+      }).setProtectedHeader({ alg: "ES256", typ: "statuslist+jwt", jwk: attackerJwk }).sign(attackerPrivate);
+      const fetchImpl = async () => ({
+        ok: true,
+        status: 200,
+        headers: { get: () => "application/statuslist+jwt" },
+        arrayBuffer: async () => Buffer.from(token),
+      });
+
+      let rejected = false;
+      try {
+        await evaluateWuaStatusList({
+          uri,
+          idx: 0,
+          verificationJwk: providerJwk,
+          allowHeaderKey: false,
+          fetchImpl,
+          resolveHostname: async () => [{ address: "93.184.216.34", family: 4 }],
+        });
+      } catch (error) {
+        rejected = true;
+        expect(error).to.be.instanceOf(WuaStatusListValidationError);
+      }
+      expect(rejected).to.equal(true);
+      void providerPrivate;
+    });
+
     it("rejects wrong typ", async () => {
       const { privateKey, publicJwk } = await signer();
       const jwt = await signStatusListToken({

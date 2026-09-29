@@ -214,10 +214,16 @@ export function parseReferencedTokenStatus(statusContainer, { required = false, 
   };
 }
 
-export function buildWiaStatusListEvidence({ uri, idx, exp = null, verificationJwk } = {}) {
+export function buildWiaStatusListEvidence({ uri, idx, exp = null, verificationJwk, checkedAt = null } = {}) {
   const jwk = publicJwkOnly(verificationJwk);
   if (!jwk || typeof uri !== "string" || !Number.isInteger(idx) || idx < 0) return null;
-  return { uri, idx, exp: typeof exp === "number" ? exp : null, verificationJwk: jwk };
+  return {
+    uri,
+    idx,
+    exp: typeof exp === "number" ? exp : null,
+    verificationJwk: jwk,
+    checkedAt: Number.isFinite(checkedAt) ? checkedAt : Date.now(),
+  };
 }
 
 export function applyWiaStatusEvidenceToSession(session, evidence) {
@@ -295,7 +301,7 @@ async function verifyJwtWithJwk(jwt, jwk, alg, clockTolerance) {
   return payload;
 }
 
-async function verifyStatusListJwt(jwt, verificationJwk, { uri, kind, now, clockTolerance = 60 }) {
+async function verifyStatusListJwt(jwt, verificationJwk, { uri, kind, now, clockTolerance = 60, allowHeaderKey = true }) {
   const header = jose.decodeProtectedHeader(jwt);
   const alg = header?.alg;
   if (!alg || !ASYMMETRIC_ALGS.has(alg) || alg === "none" || String(alg).startsWith("HS")) {
@@ -304,7 +310,7 @@ async function verifyStatusListJwt(jwt, verificationJwk, { uri, kind, now, clock
       reason: "invalid_token",
     });
   }
-  if (header.typ && header.typ !== STATUS_LIST_JWT_TYP) {
+  if (header.typ !== STATUS_LIST_JWT_TYP) {
     fail(`${kindLabel(kind)} Status List Token typ must be ${STATUS_LIST_JWT_TYP}`, {
       kind,
       reason: "invalid_token",
@@ -321,13 +327,15 @@ async function verifyStatusListJwt(jwt, verificationJwk, { uri, kind, now, clock
     candidates.push(pub);
   };
   addCandidate(verificationJwk);
-  try {
-    addCandidate(await jwkFromStatusListHeader(header));
-  } catch (error) {
-    fail(`${kindLabel(kind)} Status List Token header key material is invalid (${error.message})`, {
-      kind,
-      reason: "signature_invalid",
-    });
+  if (allowHeaderKey) {
+    try {
+      addCandidate(await jwkFromStatusListHeader(header));
+    } catch (error) {
+      fail(`${kindLabel(kind)} Status List Token header key material is invalid (${error.message})`, {
+        kind,
+        reason: "signature_invalid",
+      });
+    }
   }
   if (!candidates.length) {
     fail(`${kindLabel(kind)} Status List Token cannot be verified without the Wallet Provider public key`, {
@@ -430,6 +438,7 @@ export async function evaluateWuaStatusList({
   allowedHosts,
   now,
   clockTolerance,
+  allowHeaderKey,
 } = {}) {
   const required = parseReferencedTokenStatus(
     { status: { status_list: { uri, idx } } },
@@ -450,6 +459,7 @@ export async function evaluateWuaStatusList({
     kind,
     now,
     clockTolerance,
+    allowHeaderKey,
   });
   const bit = evaluateBit(payload, required.idx, kind);
   return {

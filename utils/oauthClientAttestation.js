@@ -7,7 +7,9 @@
 
 import fs from "fs";
 import path from "path";
+import { createHash } from "node:crypto";
 import * as jose from "jose";
+import { classifyBusinessWalletAttestation } from "./businessWalletProfile.js";
 import {
   buildWiaStatusListEvidence,
   evaluateWuaStatusList,
@@ -309,7 +311,7 @@ export async function resolveWiaVerificationKey(attestationJwt, trustedJwks, pro
  * Structural validation for CS-04 WIA claims (without Trusted List check).
  * @returns {{ warnings: string[] }}
  */
-export function validateWiaStructureClaims(payload, { requireClientStatus = false } = {}) {
+export function validateWiaStructureClaims(payload, { requireClientStatus = false, requestedProfile = "auto" } = {}) {
   const warnings = [];
   if (!payload || typeof payload !== "object") {
     throw new Error(withSpecRef("WIA payload missing or invalid", SPEC_REFS.OAUTH_CLIENT_ATTESTATION));
@@ -333,6 +335,9 @@ export function validateWiaStructureClaims(payload, { requireClientStatus = fals
     );
   }
   const now = Math.floor(Date.now() / 1000);
+  if (payload.iat > now + 60) {
+    warnings.push(`WIA iat is ${payload.iat - now}s in the future (warning only; clock skew tolerated)`);
+  }
   if (payload.exp < now) {
     throw new Error(withSpecRef("WIA JWT has expired", SPEC_REFS.OAUTH_CLIENT_ATTESTATION));
   }
@@ -340,20 +345,22 @@ export function validateWiaStructureClaims(payload, { requireClientStatus = fals
     throw new Error(withSpecRef("WIA missing cnf.jwk", SPEC_REFS.OAUTH_CLIENT_ATTESTATION));
   }
   assertCnfJwkIsPublicOnly(payload.cnf.jwk);
+  const walletProfile = classifyBusinessWalletAttestation(payload, requestedProfile);
+  const requireStatus = requireClientStatus || walletProfile.resolvedProfile === "cs05";
 
   if (!payload.client_status) {
-    if (requireClientStatus) {
+    if (requireStatus) {
       throw new Error(withSpecRef("WIA missing required client_status claim", SPEC_REFS.OAUTH_CLIENT_ATTESTATION));
     }
     warnings.push("WIA missing client_status; revocation maintenance not asserted (warning only)");
   } else {
     const cs = payload.client_status;
-    const parsed = parseReferencedTokenStatus(cs, { required: requireClientStatus, kind: "wia" });
-    if (!requireClientStatus && parsed?.incomplete) {
+    const parsed = parseReferencedTokenStatus(cs, { required: requireStatus, kind: "wia" });
+    if (!requireStatus && parsed?.incomplete) {
       warnings.push("WIA client_status.status_list incomplete (warning only)");
     }
     if (typeof cs.exp !== "number") {
-      if (requireClientStatus) {
+      if (requireStatus) {
         throw new Error(withSpecRef("WIA client_status.exp is missing", SPEC_REFS.OAUTH_CLIENT_ATTESTATION));
       }
       warnings.push("WIA client_status.exp missing (warning only)");
@@ -362,7 +369,7 @@ export function validateWiaStructureClaims(payload, { requireClientStatus = fals
     }
   }
 
-  return { warnings };
+  return { warnings, walletProfile };
 }
 
 /**
@@ -400,6 +407,7 @@ export async function validateOAuthClientAttestationFromRequest({
   /** When undefined, follows requireAttestation. Set false to skip WIA status-list fetch/eval. */
   requireStatusList,
   statusList = {},
+  walletAttestationProfile = "auto",
 }) {
   const enforceStatusList =
     typeof requireStatusList === "boolean" ? requireStatusList : requireAttestation;
@@ -446,6 +454,7 @@ export async function validateOAuthClientAttestationFromRequest({
     let attestationPayload;
     let protectedHeader;
     let verificationJwk = null;
+    let attestationSignatureVerified = false;
     const useStrictSig = strictWiaSignature || requireAttestation;
 
     if (useStrictSig) {
@@ -453,12 +462,14 @@ export async function validateOAuthClientAttestationFromRequest({
       protectedHeader = sig.protectedHeader;
       attestationPayload = jose.decodeJwt(attestationJwt);
       verificationJwk = sig.verificationJwk || null;
+      attestationSignatureVerified = true;
       assertAsymmetricJwtAlg(protectedHeader.alg);
     } else if (jwks?.keys?.length) {
       const verified = await verifyClientAttestationJwt(attestationJwt, jwks, { clockTolerance });
       attestationPayload = verified.payload;
       protectedHeader = verified.protectedHeader;
       verificationJwk = await matchingTrustedAttesterJwk(attestationJwt, jwks, protectedHeader.alg);
+      attestationSignatureVerified = true;
     } else {
       const decoded = decodeClientAttestationJwtPayloadUnverified(attestationJwt);
       attestationPayload = decoded.payload;
@@ -471,9 +482,22 @@ export async function validateOAuthClientAttestationFromRequest({
       }
     }
 
-    const { warnings: wiaWarnings } = validateWiaStructureClaims(attestationPayload, {
+    const { warnings: wiaWarnings, walletProfile } = validateWiaStructureClaims(attestationPayload, {
       requireClientStatus: enforceStatusList,
+      requestedProfile: walletAttestationProfile,
     });
+    if (walletProfile.resolvedProfile === "cs05" && !["ES256", "ES384", "ES512"].includes(protectedHeader.alg)) {
+      throw new Error("BWIA must use ES256, ES384, or ES512");
+    }
+    if (walletProfile.resolvedProfile === "cs05" && (!Array.isArray(protectedHeader.x5c) || protectedHeader.x5c.length === 0)) {
+      throw new Error("CS-05 BWIA must include its provider certificate chain in x5c");
+    }
+    if (walletProfile.resolvedProfile === "cs05" && !attestationSignatureVerified) {
+      if (!verificationJwk) throw new Error("BWIA signature cannot be verified without a provider signing key");
+      const publicKey = await jose.importJWK(verificationJwk, protectedHeader.alg);
+      await jose.jwtVerify(attestationJwt, publicKey, { algorithms: [protectedHeader.alg], typ: CLIENT_ATTESTATION_JWT_TYP, clockTolerance });
+      attestationSignatureVerified = true;
+    }
 
     if (!isWalletProviderTrustedByPolicy(attestationPayload, protectedHeader)) {
       throw new Error(
@@ -489,13 +513,16 @@ export async function validateOAuthClientAttestationFromRequest({
       clockTolerance,
       maxIatAgeSeconds: maxPopIatAgeSeconds,
     });
+    if (walletProfile.resolvedProfile === "cs05" && !["ES256", "ES384", "ES512"].includes(jose.decodeProtectedHeader(popJwt).alg)) {
+      throw new Error("Business client-attestation PoP must use ES256, ES384, or ES512");
+    }
 
     assertClientIdMatchesAttestationSub(clientId, attestationPayload.sub);
     assertPopIssMatchesAttestationSub(popPayload.iss, attestationPayload.sub);
 
     const wiaCnfJkt = await computeWiaCnfJkt(cnfJwk);
     let wiaStatusList = null;
-    if (enforceStatusList) {
+    if (enforceStatusList || walletProfile.resolvedProfile === "cs05") {
       const parsed = parseReferencedTokenStatus(attestationPayload.client_status, {
         required: true,
         kind: "wia",
@@ -509,11 +536,15 @@ export async function validateOAuthClientAttestationFromRequest({
           )
         );
       }
+      // CS-05 binds this status list to the authenticated provider key and
+      // rejects self-asserted key material from the status JWT header.
+      const statusListAllowHeaderKey = walletProfile.resolvedProfile !== "cs05";
       const statusResult = await evaluateWuaStatusList({
         uri: parsed.uri,
         idx: parsed.idx,
         verificationJwk: statusVerificationJwk,
         kind: "wia",
+        allowHeaderKey: statusListAllowHeaderKey,
         ...statusList,
       });
       wiaStatusList = buildWiaStatusListEvidence({
@@ -532,6 +563,9 @@ export async function validateOAuthClientAttestationFromRequest({
       popPayload,
       wiaCnfJkt,
       wiaWarnings,
+      walletProfile,
+      attestationSignatureVerified,
+      attestationDigest: createHash("sha256").update(attestationJwt).digest("base64url"),
       clientStatusPresent: Boolean(attestationPayload.client_status),
       verificationJwk: publicJwkOnly(verificationJwk),
       wiaStatusList,

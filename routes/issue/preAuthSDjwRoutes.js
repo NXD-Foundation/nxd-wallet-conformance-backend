@@ -63,6 +63,13 @@ const manageSession = async (sessionId, sessionData) => {
       return sessionData; // Return the newly created session data
     }
 
+    if ((existingSession.walletAttestationProfile || "auto") !== (sessionData.walletAttestationProfile || "auto")) {
+      const error = new Error("Issuance session wallet attestation profile cannot be changed");
+      error.status = 400;
+      error.errorCode = "invalid_request";
+      throw error;
+    }
+
     // Migrate sessions created by older PID QR/deep links.
     if (existingSession.credentialType === "urn:eudi:pid:lsp:1") {
       const migratedSession = {

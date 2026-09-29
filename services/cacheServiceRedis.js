@@ -97,6 +97,28 @@ export async function getPreAuthSession(sessionKey) {
   }
 }
 
+/** Reserve a BWIA digest for one issuance session; the same session may retry. */
+export async function reserveBusinessWalletAttestation(digest, sessionId, ttlSeconds) {
+  if (!client.isReady || !digest || !sessionId || !Number.isInteger(ttlSeconds) || ttlSeconds <= 0) return false;
+  const key = `issuance:bwia-use:${digest}`;
+  const result = await client.set(key, String(sessionId), { NX: true, EX: ttlSeconds });
+  if (result === "OK") return true;
+  return (await client.get(key)) === String(sessionId);
+}
+
+export async function storeBusinessWalletDpopNonce(nonce, endpoint, jkt, sessionId = null) {
+  if (!client.isReady || !nonce || !endpoint || !jkt) return false;
+  const key = `issuance:bwia-dpop-nonce:${nonce}`;
+  return (await client.set(key, JSON.stringify({ endpoint, jkt, sessionId }), { NX: true, EX: 300 })) === "OK";
+}
+
+export async function consumeBusinessWalletDpopNonce(nonce, endpoint, jkt, sessionId = null) {
+  if (!client.isReady || !nonce || !endpoint || !jkt) return false;
+  const key = `issuance:bwia-dpop-nonce:${nonce}`;
+  const script = "local v=redis.call('GET',KEYS[1]); if not v then return 0 end; local d=cjson.decode(v); if d.endpoint ~= ARGV[1] or d.jkt ~= ARGV[2] or (d.sessionId and d.sessionId ~= ARGV[3]) then return 0 end; redis.call('DEL',KEYS[1]); return 1";
+  return Number(await client.eval(script, { keys: [key], arguments: [endpoint, jkt, sessionId || ""] })) === 1;
+}
+
 // Function to get session key from an access token
 export async function getSessionKeyFromAccessToken(accessToken) {
   try {

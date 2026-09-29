@@ -34,7 +34,17 @@ export function revocationSessionProps(input = {}) {
 }
 
 export function issuanceSessionProps(input = {}) {
-  return { ...trustFrameworkSessionProps(input), ...revocationSessionProps(input) };
+  return { ...trustFrameworkSessionProps(input), ...revocationSessionProps(input), walletAttestationProfile: resolveWalletAttestationProfile(input.walletAttestationProfile ?? input.wallet_attestation_profile) };
+}
+
+export function resolveWalletAttestationProfile(value) {
+  if (value === undefined || value === null) return "auto";
+  const normalized = String(value).trim().toLowerCase();
+  if (["auto", "cs04", "cs05"].includes(normalized)) return normalized;
+  const error = new Error("walletAttestationProfile must be auto, cs04, or cs05");
+  error.status = 400;
+  error.errorCode = "invalid_request";
+  throw error;
 }
 
 export function isTrustFrameworkSession(session) {

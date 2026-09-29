@@ -55,6 +55,10 @@ function buildContext(input = {}) {
     revocation: {
       enabled: resolveRevocationEnabled(source, existing),
     },
+    walletAttestation: clone(source.walletAttestation ?? existing.walletAttestation ?? source.extensions?.issuanceSession?.walletAttestation ?? {
+      requestedProfile: source.walletAttestationProfile ?? "auto",
+      resolvedProfile: null,
+    }),
     correlation: {
       sessionId: source.id ?? existing.correlation?.sessionId ?? null,
       domain: source.domain ?? existing.correlation?.domain ?? "verification",
@@ -104,6 +108,7 @@ class SessionContextBuilder {
       ...(context.trust.policy ? { trustPolicy: context.trust.policy } : {}),
       ...(latestDecision ? { trustDecision: latestDecision } : {}),
       revocationEnabled: context.revocation.enabled,
+      walletAttestation: clone(context.walletAttestation),
       sessionContext: context,
     };
   }
@@ -141,6 +146,13 @@ export function sessionRevocationEnabled(session = {}) {
   return session?.revocationEnabled === true;
 }
 
+export function sessionWalletAttestation(session = {}) {
+  return session?.sessionContext?.walletAttestation || session?.walletAttestation || {
+    requestedProfile: session?.walletAttestationProfile || "auto",
+    resolvedProfile: null,
+  };
+}
+
 export function withCanonicalSessionContext(sessionId, session, domain, flow = null) {
   const existing = sessionContextFor(session);
   const request = existing?.request || {};
@@ -165,5 +177,6 @@ export function withCanonicalSessionContext(sessionId, session, domain, flow = n
     revocationEnabled: typeof existing?.revocation?.enabled === "boolean"
       ? existing.revocation.enabled
       : session?.revocationEnabled,
+    walletAttestation: session?.walletAttestation || existing?.walletAttestation,
   }).toSession(session);
 }

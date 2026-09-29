@@ -6,6 +6,7 @@ import * as jose from "jose";
 import {
   validateWUA,
   proofKeyMatchesWUAAttestedKeys,
+  proofKeyMatchesAnyAttestedKey,
   verifyWuaJwtSignature,
   isWuaWalletProviderTrustedByPolicy,
 } from "../utils/routeUtils.js";
@@ -193,5 +194,12 @@ describe("WUA validation (routeUtils)", () => {
       const wuaPayload = { attested_keys: [j1, j2] };
       expect(proofKeyMatchesWUAAttestedKeys(j2, wuaPayload)).to.equal(false);
     });
+  });
+
+  it("matches a CS-05 proof against any public key listed in the SKA", () => {
+    const first = { kty: "EC", crv: "P-256", x: "x1", y: "y1" };
+    const second = { kty: "EC", crv: "P-256", x: "x2", y: "y2" };
+    expect(proofKeyMatchesAnyAttestedKey(second, { attested_keys: [first, second] })).to.equal(true);
+    expect(proofKeyMatchesAnyAttestedKey({ ...second, x: "wrong" }, { attested_keys: [first, second] })).to.equal(false);
   });
 });

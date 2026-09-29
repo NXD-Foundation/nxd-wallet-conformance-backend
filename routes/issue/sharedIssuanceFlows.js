@@ -1,6 +1,7 @@
 import express from "express";
 import fs from "fs";
 import path from "path";
+import { createHash } from "node:crypto";
 import { v4 as uuidv4 } from "uuid";
 import {
   pemToJWK,
@@ -30,6 +31,9 @@ import {
   storeCodeFlowSession,
   getSessionKeyAuthCode,
   getSessionAccessToken,
+  reserveBusinessWalletAttestation,
+  storeBusinessWalletDpopNonce,
+  consumeBusinessWalletDpopNonce,
   findDeferredSessionByTransactionId,
   storeNonce,
   checkNonce,
@@ -61,6 +65,7 @@ import {
   extractWIAFromTokenRequest,
   extractWUAFromCredentialRequest,
   proofKeyMatchesWUAAttestedKeys,
+  proofKeyMatchesAnyAttestedKey,
   bindSessionLoggingContext,
 } from "../../utils/routeUtils.js";
 import {
@@ -80,6 +85,7 @@ import {
   evaluateWuaStatusList,
   parseReferencedTokenStatus,
   statusListLogDetails,
+  STATUS_VALID,
 } from "../../utils/wuaStatusListVerifier.js";
 import {
   isWuaRequiredCredentialId,
@@ -101,6 +107,7 @@ import {
 } from "../../utils/deferredCredentialPoll.js";
 import { applyIssuerOwnedCredentialStatus, issueDeferredCredentialOnce } from "../../utils/credentialStatusIssuance.js";
 import { sessionRevocationEnabled } from "../../utils/sessionContext.js";
+import { sessionWalletAttestation } from "../../utils/sessionContext.js";
 import {
   parseProofAttestationJwtFromCredentialProofs,
   verifyKeyAttestationProofChain,
@@ -198,9 +205,9 @@ const CREDENTIAL_REQUEST_ERROR_CODES = {
 };
 
 
-async function evaluateRequiredIssuanceStatusList({ uri, idx, verificationJwk, kind, slog, logPrefix }) {
+async function evaluateRequiredIssuanceStatusList({ uri, idx, verificationJwk, kind, slog, logPrefix, allowHeaderKey = true }) {
   try {
-    const result = await evaluateWuaStatusList({ uri, idx, verificationJwk, kind });
+    const result = await evaluateWuaStatusList({ uri, idx, verificationJwk, kind, allowHeaderKey });
     if (slog) {
       try { slog(`${logPrefix} status-list validated`, statusListLogDetails(result)); } catch {}
     }
@@ -1036,9 +1043,13 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
       preAuthSessionForWua = await getPreAuthSession(preAuthorizedCode);
     }
     const tokenTrustSession = codeFlowSessionForWua || preAuthSessionForWua;
+    const tokenWalletAttestation = sessionWalletAttestation(tokenTrustSession);
+    let effectiveWalletProfile = tokenWalletAttestation.resolvedProfile || tokenWalletAttestation.requestedProfile || "auto";
     const tokenScaPolicyParams = { session: tokenTrustSession };
-    const tokenRequiresWua =
+    let tokenRequiresWua =
       isTrustFrameworkSession(tokenTrustSession) ||
+      tokenWalletAttestation.requestedProfile !== "auto" ||
+      tokenWalletAttestation.resolvedProfile === "cs05" ||
       shouldRequireWiaClientAttestation(tokenScaPolicyParams);
     const tokenEnforceStatusLists = shouldEnforceWuaStatusLists(tokenScaPolicyParams);
     if (
@@ -1087,7 +1098,12 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
       requireAttestation: tokenRequiresWua,
       strictWiaSignature: tokenRequiresWua,
       requireStatusList: tokenRequiresWua && tokenEnforceStatusLists,
+      walletAttestationProfile: effectiveWalletProfile,
     });
+    if (attestationResult.ok && attestationResult.walletProfile?.resolvedProfile) {
+      effectiveWalletProfile = attestationResult.walletProfile.resolvedProfile;
+      if (effectiveWalletProfile === "cs05") tokenRequiresWua = true;
+    }
     const isPreAuthorizedGrant = grant_type === PRE_AUTHORIZED_GRANT_TYPE;
     if (tokenRequiresWua && attestationResult.skip) {
       if (isTrustFrameworkSession(tokenTrustSession)) {
@@ -1119,6 +1135,51 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
         error_description: attestationResult.errorDescription,
       });
     }
+    if (attestationResult.ok && attestationResult.walletProfile) {
+      if (attestationResult.walletProfile.resolvedProfile === "cs05") {
+        const maintenanceExp = attestationResult.attestationPayload?.client_status?.exp;
+        if (!Number.isInteger(maintenanceExp) || maintenanceExp < Math.floor(Date.now() / 1000) + 31 * 86400) {
+          return res.status(401).json({ error: "invalid_client", error_description: "BWIA client_status must remain valid for at least 31 days" });
+        }
+      }
+      if (tokenWalletAttestation?.resolvedProfile && tokenWalletAttestation.resolvedProfile !== attestationResult.walletProfile.resolvedProfile) {
+        return res.status(401).json({ error: "invalid_client", error_description: "Wallet attestation profile changed during the issuance session" });
+      }
+      if (tokenWalletAttestation?.instanceAttestationDigest && tokenWalletAttestation.instanceAttestationDigest !== attestationResult.attestationDigest) {
+        return res.status(401).json({ error: "invalid_client", error_description: "A different wallet instance attestation was used during the issuance session" });
+      }
+      if (codeFlowSessionForWua?.walletAttestation?.clientId &&
+          codeFlowSessionForWua.walletAttestation.clientId !== attestationResult.attestationPayload?.sub) {
+        return res.status(401).json({ error: "invalid_client", error_description: "BWIA client identity changed during the issuance session" });
+      }
+      const parBusinessIdentity = codeFlowSessionForWua?.walletAttestation?.businessIdentity;
+      if (parBusinessIdentity && JSON.stringify(parBusinessIdentity) !== JSON.stringify(attestationResult.walletProfile.businessIdentity)) {
+        return res.status(401).json({ error: "invalid_client", error_description: "BWIA business identity changed during the issuance session" });
+      }
+      const nextWalletAttestation = {
+        ...tokenWalletAttestation,
+        ...attestationResult.walletProfile,
+        clientId: attestationResult.attestationPayload?.sub || req.body?.client_id || null,
+        clientKeyThumbprint: attestationResult.wiaCnfJkt,
+        instanceAttestationDigest: attestationResult.attestationDigest,
+        statusList: attestationResult.wiaStatusList || tokenWalletAttestation?.statusList || null,
+        maintenanceExpirations: {
+          ...(tokenWalletAttestation.maintenanceExpirations || {}),
+          clientStatus: attestationResult.attestationPayload?.client_status?.exp || null,
+        },
+        trustEvaluation: isTrustFrameworkSession(tokenTrustSession)
+          ? { state: "pending" }
+          : { state: "not_evaluated", reason: "trust-framework policy is not enabled for this session" },
+      };
+      if (codeFlowSessionForWua) {
+        codeFlowSessionForWua.walletAttestation = nextWalletAttestation;
+        await storeCodeFlowSession(codeFlowSessionKeyForWua, codeFlowSessionForWua);
+      }
+      if (preAuthSessionForWua) {
+        preAuthSessionForWua.walletAttestation = nextWalletAttestation;
+        await storePreAuthSession(preAuthorizedCode, preAuthSessionForWua);
+      }
+    }
     if (isTrustFrameworkSession(tokenTrustSession) && attestationResult.ok) {
       const trustDecision = await checkWalletProviderTrust({
         session: tokenTrustSession,
@@ -1134,6 +1195,12 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
           error_description: `Wallet Provider trust rejected: ${trustDecision.reasonCode}`,
         });
       }
+    } else if (attestationResult.ok && attestationResult.walletProfile?.resolvedProfile === "cs05") {
+      const diag = {
+        ...(tokenTrustSession?.walletAttestation || {}),
+        trustEvaluation: { state: "not_evaluated", reason: "trust-framework policy is not enabled for this session" },
+      };
+      if (tokenTrustSession) tokenTrustSession.walletAttestation = diag;
     }
     if (tokenRequiresWua && attestationResult.ok && attestationResult.wiaWarnings?.length && slog) {
       for (const w of attestationResult.wiaWarnings) {
@@ -1275,14 +1342,19 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
 
           // Optional DPoP nonce challenge/validation for token endpoint
           const requireDpopNonce =
-            process.env.REQUIRE_DPOP_NONCE_FOR_TOKEN === "true";
+            process.env.REQUIRE_DPOP_NONCE_FOR_TOKEN === "true" || effectiveWalletProfile === "cs05";
           if (requireDpopNonce) {
             const endpoint = "/token_endpoint";
+            const presentedJkt = await jose.calculateJwkThumbprint(protectedHeader.jwk, "sha256");
 
             // NONCE-01 / NONCE-03 — missing or wrong nonce -> issue (or re-issue) challenge
             if (!dpopNonce) {
               const newNonce = generateNonce();
-              dpopNonces.set(newNonce, { endpoint, used: false });
+              if (effectiveWalletProfile === "cs05") {
+                if (!(await storeBusinessWalletDpopNonce(newNonce, endpoint, presentedJkt, sessionId || "unknown"))) {
+                  return res.status(503).json({ error: "server_error", error_description: "Unable to persist required DPoP nonce; retry the token request" });
+                }
+              } else dpopNonces.set(newNonce, { endpoint, jkt: presentedJkt, createdAt: Date.now(), used: false });
               if (slog) {
                 try {
                   slog("[TOKEN] DPoP nonce required but missing, issuing challenge", {
@@ -1299,13 +1371,16 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
             }
 
             const existing = dpopNonces.get(dpopNonce);
-            if (
-              !existing ||
-              existing.endpoint !== endpoint ||
-              existing.used
-            ) {
+            const nonceValid = effectiveWalletProfile === "cs05"
+              ? await consumeBusinessWalletDpopNonce(dpopNonce, endpoint, presentedJkt, sessionId || "unknown")
+              : Boolean(existing && existing.endpoint === endpoint && !existing.used);
+            if (!nonceValid) {
               const newNonce = generateNonce();
-              dpopNonces.set(newNonce, { endpoint, used: false });
+              if (effectiveWalletProfile === "cs05") {
+                if (!(await storeBusinessWalletDpopNonce(newNonce, endpoint, presentedJkt, sessionId || "unknown"))) {
+                  return res.status(503).json({ error: "server_error", error_description: "Unable to persist required DPoP nonce; retry the token request" });
+                }
+              } else dpopNonces.set(newNonce, { endpoint, jkt: presentedJkt, createdAt: Date.now(), used: false });
               if (slog) {
                 try {
                   slog(
@@ -1323,7 +1398,9 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
             }
 
             // NONCE-04 — mark nonce as used (single-use per policy)
-            existing.used = true;
+            if (effectiveWalletProfile !== "cs05") {
+              existing.used = true;
+            }
           }
 
           // DPOP-07 — Signature and JWK binding are enforced by jwtVerify above.
@@ -1410,6 +1487,21 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
       });
     }
 
+    const sessionParJkt = codeFlowSessionForWua?.parDpopJkt || null;
+    if (sessionParJkt && sessionParJkt !== dpopCnf?.jkt) {
+      return res.status(400).json({ error: "invalid_dpop_proof", error_description: "Token DPoP key does not match the DPoP key bound at PAR" });
+    }
+
+    if (attestationResult.ok && attestationResult.walletProfile?.resolvedProfile === "cs05") {
+      if (dpopCnf?.jkt !== attestationResult.wiaCnfJkt) {
+        return res.status(400).json({ error: "invalid_dpop_proof", error_description: "Token DPoP key does not match the BWIA cnf.jwk" });
+      }
+      const sessionKeyForUse = codeFlowSessionKeyForWua || preAuthorizedCode;
+      const ttlSeconds = Math.max(1, attestationResult.attestationPayload.exp - Math.floor(Date.now() / 1000));
+      const reserved = await reserveBusinessWalletAttestation(attestationResult.attestationDigest, sessionKeyForUse, ttlSeconds);
+      if (!reserved) return res.status(401).json({ error: "invalid_client", error_description: "BWIA was already used in another issuance session or replay storage is unavailable" });
+    }
+
     if (
       tokenRequiresWua &&
       ((codeFlowSessionForWua?.wiaCnfJkt) || (preAuthSessionForWua && attestationResult?.wiaCnfJkt)) &&
@@ -1418,12 +1510,16 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
     ) {
       if (slog) {
         try {
-          slog("[TOKEN] [WARN] DPoP jkt does not match WIA cnf.jkt from issuance session", {
+          slog("[TOKEN] [ERROR] DPoP jkt does not match WIA cnf.jkt from issuance session", {
             expected: codeFlowSessionForWua?.wiaCnfJkt || attestationResult.wiaCnfJkt,
             received: dpopCnf.jkt,
           });
         } catch {}
       }
+      return res.status(400).json({
+        error: "invalid_dpop_proof",
+        error_description: "Token DPoP key must be the Wallet Instance Attestation cnf key",
+      });
     }
 
     let tokenResponse;
@@ -1602,11 +1698,14 @@ sharedRouter.post("/credential", async (req, res) => {
     // routeUtils.isWuaWalletProviderTrustedByPolicy (stub true). Combined with proofs.jwt PoP → possession + assurance.
     // TS3: https://github.com/eu-digital-identity-wallet/eudi-doc-standards-and-technical-specifications/blob/main/docs/technical-specifications/ts3-wallet-unit-attestation.md
     const wuaJwt = extractWUAFromCredentialRequest(requestBody);
+    const walletProfile = sessionWalletAttestation(sessionObject);
+    const isBusinessWalletSession = walletProfile.resolvedProfile === "cs05" || walletProfile.requestedProfile === "cs05";
     let wuaValidationResult = null;
     const issuerConfigForWua = loadIssuerConfig();
     const credConfigForWua =
       issuerConfigForWua.credential_configurations_supported[effectiveConfigurationId];
     const credentialRequiresWua =
+      isBusinessWalletSession ||
       sessionRequiresWua(sessionObject) ||
       isWuaRequiredCredentialId(effectiveConfigurationId) ||
       isTrustFrameworkSession(sessionObject);
@@ -1617,19 +1716,19 @@ sharedRouter.post("/credential", async (req, res) => {
     const credentialProofType = proofTypeKeyForCredentialRequest(
       requestBody.credentialRequestProofKind
     );
-    const enforceWuaStatusLists =
-      credentialRequiresWua && shouldEnforceWuaStatusLists(scaPolicyParams);
+    const enforceWuaStatusLists = credentialRequiresWua && (isBusinessWalletSession || shouldEnforceWuaStatusLists(scaPolicyParams));
     const metadataRequiresKa = credentialConfigRequiresKeyAttestation(
       credConfigForWua,
       credentialProofType
     );
     const enforceCredentialKa =
+      isBusinessWalletSession ||
       metadataRequiresKa ||
       (credentialRequiresWua && shouldEnforceCredentialKeyAttestation(scaPolicyParams));
 
     if (enforceWuaStatusLists) {
       const wiaEvidence = sessionObject.wiaStatusList;
-      if (!wiaEvidence?.uri || !Number.isInteger(wiaEvidence.idx) || !wiaEvidence.verificationJwk) {
+        if (!wiaEvidence?.uri || !Number.isInteger(wiaEvidence.idx) || !wiaEvidence.verificationJwk) {
         if (slog) {
           try { slog("[CREDENTIAL] [ERROR] Required WIA status-list evidence missing from issuance session"); } catch {}
         }
@@ -1637,12 +1736,13 @@ sharedRouter.post("/credential", async (req, res) => {
           error: "invalid_proof",
           error_description: "Wallet Instance Attestation status list was not validated for this issuance session",
         });
-      }
-      const wiaStatus = await evaluateRequiredIssuanceStatusList({
+        }
+        const wiaStatus = await evaluateRequiredIssuanceStatusList({
         uri: wiaEvidence.uri,
         idx: wiaEvidence.idx,
         verificationJwk: wiaEvidence.verificationJwk,
-        kind: "wia",
+          kind: "wia",
+          allowHeaderKey: !isBusinessWalletSession,
         slog,
         logPrefix: "[CREDENTIAL] WIA",
       });
@@ -1651,6 +1751,10 @@ sharedRouter.post("/credential", async (req, res) => {
           error: "invalid_proof",
           error_description: wiaStatus.error?.message || "Wallet Instance Attestation status-list validation failed",
         });
+      }
+      if (isBusinessWalletSession) {
+        wiaEvidence.checkedAt = Date.now();
+        if (sessionObject.walletAttestation?.statusList) sessionObject.walletAttestation.statusList.checkedAt = wiaEvidence.checkedAt;
       }
     } else if (credentialRequiresWua && slog) {
       try {
@@ -1675,6 +1779,15 @@ sharedRouter.post("/credential", async (req, res) => {
           : "Key Attestation (KA) in proofs.jwt key_attestation header is required for VerifiablePIDSDJWTWUA",
       });
     }
+    if (isBusinessWalletSession && requestBody.credentialRequestProofKind === "attestation") {
+      return res.status(400).json({ error: "invalid_proof", error_description: "CS-05 issuance requires a JWT proof of possession of an SKA-attested key" });
+    }
+    if (isBusinessWalletSession && Array.isArray(requestBody.proofs?.jwt) && requestBody.proofs.jwt.length !== 1) {
+      return res.status(400).json({
+        error: "invalid_proof",
+        error_description: "CS-05 batch issuance is not supported; submit exactly one JWT proof per credential request",
+      });
+    }
     if (credentialRequiresWua && !enforceCredentialKa && !wuaJwt && slog) {
       try {
         slog("[CREDENTIAL] Skipping required KA enforcement for SCA issuance (DISABLE_SCA_WIA_KA_CHECKS)", {
@@ -1693,6 +1806,35 @@ sharedRouter.post("/credential", async (req, res) => {
       }
       wuaValidationResult = await validateWUA(wuaJwt, sessionId, issuerConfigForWua);
       if (wuaValidationResult.valid) {
+        if (isBusinessWalletSession) {
+          const now = Math.floor(Date.now() / 1000);
+          const iat = wuaValidationResult.payload?.iat;
+          const exp = wuaValidationResult.payload?.exp;
+          if (!["ES256", "ES384", "ES512"].includes(wuaValidationResult.header?.alg) || !Number.isInteger(iat) || !Number.isInteger(exp) || iat > now + 60 || exp - iat <= 0 || exp - iat >= 86400) {
+            return res.status(400).json({ error: "invalid_proof", error_description: "SKA must use ES256/ES384/ES512 and have valid iat and exp with a lifetime under 24 hours" });
+          }
+          if (!Number.isInteger(wuaValidationResult.payload?.key_storage_status?.exp) || wuaValidationResult.payload.key_storage_status.exp < now + 31 * 86400) {
+            return res.status(400).json({ error: "invalid_proof", error_description: "SKA key_storage_status must remain valid for at least 31 days" });
+          }
+          if (typeof wuaValidationResult.payload?.key_storage_status?.status?.status_list?.uri !== "string" || !Number.isInteger(wuaValidationResult.payload?.key_storage_status?.status?.status_list?.idx)) {
+            return res.status(400).json({ error: "invalid_proof", error_description: "SKA key_storage_status must include a valid Status List reference" });
+          }
+          if (typeof wuaValidationResult.payload?.certification !== "string" || !wuaValidationResult.payload.certification.trim()) {
+            return res.status(400).json({ error: "invalid_proof", error_description: "CS-05 SKA certification information is required" });
+          }
+          const keyStorageStatus = wuaValidationResult.payload.key_storage_status;
+          requestBody._businessWalletAttestationEvidence = {
+            skaDigest: createHash("sha256").update(wuaJwt).digest("base64url"),
+            attestedKeyThumbprints: await Promise.all((wuaValidationResult.payload.attested_keys || []).map((key) => jose.calculateJwkThumbprint(key, "sha256"))),
+            keyStorageStatus: {
+              uri: keyStorageStatus.status.status_list.uri,
+              idx: keyStorageStatus.status.status_list.idx,
+              maintenanceExp: keyStorageStatus.exp,
+              verificationJwk: wuaValidationResult.jwk,
+              checkedAt: Date.now(),
+            },
+          };
+        }
         if (slog) {
           try { slog("[CREDENTIAL] WUA validated successfully", { wuaIssuer: wuaValidationResult.payload?.iss, wuaExp: wuaValidationResult.payload?.exp, hasAttestedKeys: Array.isArray(wuaValidationResult.payload?.attested_keys) && wuaValidationResult.payload.attested_keys.length > 0 }); } catch {}
         }
@@ -1760,6 +1902,7 @@ sharedRouter.post("/credential", async (req, res) => {
         idx: kaReference.idx,
         verificationJwk: wuaValidationResult.jwk,
         kind: "ka",
+        allowHeaderKey: !isBusinessWalletSession,
         slog,
         logPrefix: "[CREDENTIAL] KA",
       });
@@ -1768,6 +1911,9 @@ sharedRouter.post("/credential", async (req, res) => {
           error: "invalid_proof",
           error_description: kaStatus.error?.message || "Key Attestation status-list validation failed",
         });
+      }
+      if (isBusinessWalletSession && requestBody._businessWalletAttestationEvidence?.keyStorageStatus) {
+        requestBody._businessWalletAttestationEvidence.keyStorageStatus.checkedAt = Date.now();
       }
       const levelCheck = validateKaLevelsAgainstMetadata(
         wuaValidationResult.payload,
@@ -1932,11 +2078,16 @@ sharedRouter.post("/credential", async (req, res) => {
                 });
               } catch {}
             }
-            if (!proofKeyMatchesWUAAttestedKeys(publicKeyForProof, wuaValidationResult.payload)) {
+            const bindingMatches = isBusinessWalletSession
+              ? proofKeyMatchesAnyAttestedKey(publicKeyForProof, wuaValidationResult.payload)
+              : proofKeyMatchesWUAAttestedKeys(publicKeyForProof, wuaValidationResult.payload);
+            if (!bindingMatches) {
               const attestedKeysCount = Array.isArray(wuaValidationResult.payload.attested_keys)
                 ? wuaValidationResult.payload.attested_keys.length
                 : 0;
-              const errorMsg = `invalid_proof: The key used in the proof (credential binding/cnf) must match the first key in the Wallet Unit Attestation attested_keys array (primary attested key).`;
+              const errorMsg = isBusinessWalletSession
+                ? "invalid_proof: The proof key must match one of the SKA attested_keys."
+                : "invalid_proof: The proof key must match the first WUA attested key (primary attested key).";
               if (slog) {
                 try {
                   slog("[CREDENTIAL] [ERROR] Proof key does not match WUA first attested key", {
@@ -2026,6 +2177,20 @@ sharedRouter.post("/credential", async (req, res) => {
 
     // Handle credential issuance
     const wuaExp = wuaValidationResult?.valid ? wuaValidationResult.payload?.exp : null;
+    if (isBusinessWalletSession && wuaValidationResult?.valid && requestBody._businessWalletAttestationEvidence) {
+      const { keyStorageStatus, attestedKeyThumbprints, skaDigest } = requestBody._businessWalletAttestationEvidence;
+      sessionObject.walletAttestation = {
+        ...walletProfile,
+        skaDigest,
+        attestedKeyThumbprints,
+        maintenanceExpirations: {
+          ...(walletProfile.maintenanceExpirations || {}),
+          keyStorageStatus: keyStorageStatus.maintenanceExp,
+        },
+        keyStorageStatus: { ...keyStorageStatus },
+        trustEvaluation: walletProfile.trustEvaluation || { state: "not_evaluated", reason: "trust-framework policy is not enabled for this session" },
+      };
+    }
     if (sessionObject.isDeferred) {
       const response = await handleDeferredCredentialIssuance(
         requestBody,
@@ -2363,6 +2528,43 @@ sharedRouter.post("/credential_deferred", async (req, res) => {
         encParams,
         getCredentialResponseEncryptionMetadata(issuerConfig)
       );
+    }
+
+    const deferredWalletAttestation = sessionWalletAttestation(sessionObject);
+    if (deferredWalletAttestation.resolvedProfile === "cs05") {
+      const nowMs = Date.now();
+      const nowSeconds = Math.floor(nowMs / 1000);
+      const maintenance = deferredWalletAttestation.maintenanceExpirations || {};
+      const wiaEvidence = deferredWalletAttestation.statusList;
+      const skaEvidence = deferredWalletAttestation.keyStorageStatus;
+      if (!Number.isInteger(maintenance.clientStatus) || maintenance.clientStatus < nowSeconds + 31 * 86400 ||
+          !Number.isInteger(skaEvidence?.maintenanceExp) || skaEvidence.maintenanceExp < nowSeconds + 31 * 86400) {
+        return res.status(400).json({ error: "credential_request_denied", error_description: "CS-05 status maintenance must remain valid for at least 31 days at deferred issuance" });
+      }
+      if (!wiaEvidence?.uri || !Number.isInteger(wiaEvidence.idx) || !wiaEvidence.verificationJwk ||
+          !skaEvidence?.uri || !Number.isInteger(skaEvidence.idx) || !skaEvidence.verificationJwk) {
+        return res.status(400).json({ error: "credential_request_denied", error_description: "CS-05 BWIA and SKA status evidence is required for deferred signing" });
+      }
+      const recheckIfStale = async (evidence, kind, logPrefix) => {
+        if (Number.isFinite(evidence.checkedAt) && nowMs - evidence.checkedAt < 24 * 60 * 60 * 1000) return true;
+        const result = await evaluateRequiredIssuanceStatusList({
+          uri: evidence.uri,
+          idx: evidence.idx,
+          verificationJwk: evidence.verificationJwk,
+          kind,
+          allowHeaderKey: false,
+          slog,
+          logPrefix,
+        });
+        if (!result.ok || result.result.status !== STATUS_VALID) return false;
+        evidence.checkedAt = nowMs;
+        return true;
+      };
+      if (!(await recheckIfStale(wiaEvidence, "wia", "[DEFERRED] BWIA")) ||
+          !(await recheckIfStale(skaEvidence, "ka", "[DEFERRED] SKA"))) {
+        return res.status(400).json({ error: "credential_request_denied", error_description: "CS-05 BWIA or SKA status could not be confirmed before deferred signing" });
+      }
+      await persistDeferredSession(sessionObject, sessionId, flowType);
     }
 
     const { credential, reused } = await issueDeferredCredentialOnce(sessionObject, () => {

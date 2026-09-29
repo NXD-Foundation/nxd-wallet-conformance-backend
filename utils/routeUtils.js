@@ -135,6 +135,7 @@ export function createPreAuthSessionData({
     status: session.status,
     trustPolicy: session.trustPolicy,
     revocationEnabled: session.revocationEnabled === true,
+    walletAttestationProfile: session.walletAttestationProfile || "auto",
   }).withIssuanceSession(session).toSession(session);
 }
 
@@ -798,6 +799,7 @@ export const createBaseSession = (flowType = "pre-auth", isHaip = false, signatu
     status: session.status,
     trustPolicy: session.trustPolicy,
     revocationEnabled: session.revocationEnabled === true,
+    walletAttestationProfile: session.walletAttestationProfile || "auto",
   }).withIssuanceSession(session).toSession(session);
 };
 
@@ -844,6 +846,7 @@ export const createCodeFlowSession = (client_id_scheme, flowType, isDynamic = fa
     clientId: client_id_scheme,
     trustPolicy: session.trustPolicy,
     revocationEnabled: session.revocationEnabled === true,
+    walletAttestationProfile: session.walletAttestationProfile || "auto",
   }).withIssuanceSession(session).toSession(session);
 };
 
@@ -1102,7 +1105,11 @@ export const handleRouteError = (error, context, res, sessionId = null) => {
     logUtilityError(`${context} error`, error);
   }
   
-  const errorResponse = createErrorResponse("server_error", error.message, 500, effectiveSessionId);
+  const status = Number.isInteger(error?.status) && error.status >= 400 && error.status < 500
+    ? error.status
+    : 500;
+  const errorCode = status < 500 ? (error?.errorCode || "invalid_request") : "server_error";
+  const errorResponse = createErrorResponse(errorCode, error.message, status, effectiveSessionId);
   res.status(errorResponse.status).json(errorResponse.body);
 };
 
@@ -2075,4 +2082,17 @@ export function proofKeyMatchesWUAAttestedKeys(proofPublicKeyJwk, wuaPayload) {
   const proofNorm = norm(proofPublicKeyJwk);
   if (!proofNorm) return false;
   return norm(first) === proofNorm;
-} 
+}
+
+export function proofKeyMatchesAnyAttestedKey(proofPublicKeyJwk, attestationPayload) {
+  const attested = attestationPayload?.attested_keys;
+  if (!Array.isArray(attested) || !attested.length || !proofPublicKeyJwk) return false;
+  const normalized = (jwk) => {
+    if (!jwk || jwk.kty !== proofPublicKeyJwk.kty) return null;
+    if (jwk.kty === "EC") return [jwk.kty, jwk.crv, jwk.x, jwk.y].join("|");
+    if (jwk.kty === "RSA") return [jwk.kty, jwk.n, jwk.e].join("|");
+    return JSON.stringify(jwk);
+  };
+  const proof = normalized(proofPublicKeyJwk);
+  return Boolean(proof && attested.some((jwk) => normalized(jwk) === proof));
+}

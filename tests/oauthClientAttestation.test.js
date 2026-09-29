@@ -10,7 +10,9 @@ import {
   verifyClientAttestationPopJwt,
   validateOAuthClientAttestationFromRequest,
   getOAuthClientAttestationHeaders,
+  validateWiaStructureClaims,
 } from "../utils/oauthClientAttestation.js";
+import { resolveWalletAttestationProfile } from "../utils/trustFrameworkPolicy.js";
 
 const AS_ISSUER = "http://localhost:3000";
 const ALG = "ES256";
@@ -62,6 +64,16 @@ function corruptJwtSignature(jwt) {
 }
 
 describe("oauthClientAttestation", () => {
+  it("rejects unknown session profiles as invalid_request input", () => {
+    for (const value of ["cs06", ""]) {
+      assert.throws(() => resolveWalletAttestationProfile(value), (error) => {
+        expect(error.status).to.equal(400);
+        expect(error.errorCode).to.equal("invalid_request");
+        return true;
+      });
+    }
+  });
+
   describe("getOAuthClientAttestationHeaders", () => {
     it("reads lowercase Node header names", () => {
       const { attestationJwt, popJwt } = getOAuthClientAttestationHeaders({
@@ -147,6 +159,31 @@ describe("oauthClientAttestation", () => {
   });
 
   describe("validateOAuthClientAttestationFromRequest", () => {
+    it("classifies complete business claims as CS-05 and rejects partial business identity", () => {
+      const now = Math.floor(Date.now() / 1000);
+      const payload = {
+        sub: "bw-instance", iat: now, exp: now + 3600,
+        cnf: { jwk: { kty: "EC", crv: "P-256", x: "x", y: "y" } },
+        ebwoid_id: "REG.123", legal_name: "Example Ltd",
+        wallet_name: "Business Wallet", wallet_version: "1.0",
+        wallet_solution_certification_information: {},
+        client_status: { status: { status_list: { uri: "https://wp.example/list", idx: 1 } }, exp: 9999999999 },
+      };
+      expect(validateWiaStructureClaims(payload).walletProfile.resolvedProfile).to.equal("cs05");
+      expect(() => validateWiaStructureClaims({ ...payload, legal_name: undefined })).to.throw("BWIA legal_name is required");
+      expect(() => validateWiaStructureClaims(payload, { requestedProfile: "cs04" })).to.throw("not allowed in a CS-04");
+    });
+
+    it("warns instead of rejecting a WIA whose iat is more than 60 seconds in the future", () => {
+      const now = Math.floor(Date.now() / 1000);
+      const payload = {
+        sub: "wallet-instance", iat: now + 600, exp: now + 3600,
+        cnf: { jwk: { kty: "EC", crv: "P-256", x: "x", y: "y" } },
+      };
+      const { warnings } = validateWiaStructureClaims(payload);
+      expect(warnings.some((w) => /iat is \d+s in the future/.test(w))).to.equal(true);
+    });
+
     it("skips when no attestation headers are sent", async () => {
       const r = await validateOAuthClientAttestationFromRequest({
         headers: {},

@@ -19,7 +19,7 @@ import {
   updateIssuerStateWithAuthCodeAfterVP,
 } from "../codeFlowJwtRoutes.js";
 
-import { getCodeFlowSession, storeCodeFlowSession, logInfo, logWarn, logError } from "../../services/cacheServiceRedis.js";
+import { getCodeFlowSession, storeCodeFlowSession, reserveBusinessWalletAttestation, logInfo, logWarn, logError } from "../../services/cacheServiceRedis.js";
 import { makeSessionLogger, logHttpRequest, logHttpResponse } from "../../utils/sessionLogger.js";
 import jwt from "jsonwebtoken";
 
@@ -86,7 +86,8 @@ import {
   shouldRequireWiaClientAttestation,
   isScaOnlyWuaIssuance,
 } from "../../utils/wuaEnforcementPolicy.js";
-import { issuanceSessionProps } from "../../utils/trustFrameworkPolicy.js";
+import { issuanceSessionProps, isTrustFrameworkSession } from "../../utils/trustFrameworkPolicy.js";
+import { resolveParDpopJkt } from "../../utils/parDpopBinding.js";
 
 const codeFlowRouterSDJWT = express.Router();
 
@@ -103,7 +104,15 @@ async function manageSession(uuid, sessionData) {
   const existingSession = await getCodeFlowSession(uuid);
   if (!existingSession) {
     await storeCodeFlowSession(uuid, sessionData);
-  } else if (sessionData.trustPolicy && !existingSession.trustPolicy) {
+    return sessionData;
+  }
+  if ((existingSession.walletAttestationProfile || "auto") !== (sessionData.walletAttestationProfile || "auto")) {
+    const error = new Error("Issuance session wallet attestation profile cannot be changed");
+    error.status = 400;
+    error.errorCode = "invalid_request";
+    throw error;
+  }
+  if (sessionData.trustPolicy && !existingSession.trustPolicy) {
     const upgraded = { ...existingSession, trustPolicy: sessionData.trustPolicy };
     await storeCodeFlowSession(uuid, upgraded);
     return upgraded;
@@ -117,6 +126,8 @@ function createPARRequest(requestData) {
   
   parRequests.set(requestURI, {
     client_id: requestData.client_id,
+    dpop_jkt: requestData.dpop_jkt || null,
+    walletAttestation: requestData.walletAttestation || null,
     scope: requestData.scope,
     response_type: requestData.response_type,
     redirect_uri: requestData.redirect_uri,
@@ -261,6 +272,8 @@ function updateSessionForAuthorization(existingCodeSession, requestData) {
     existingCodeSession.clientStatusPresent = requestData.clientStatusPresent === true;
     applyWiaStatusEvidenceToSession(existingCodeSession, requestData.wiaStatusList);
   }
+  if (requestData.walletAttestation) existingCodeSession.walletAttestation = requestData.walletAttestation;
+  existingCodeSession.parDpopJkt = requestData.dpop_jkt || null;
   if (Array.isArray(requestData.requestedCredentialConfigurationIds)) {
     existingCodeSession.requestedCredentialConfigurationIds = requestData.requestedCredentialConfigurationIds;
   }
@@ -614,6 +627,7 @@ codeFlowRouterSDJWT.post(["/par", "/authorize/par"], async (req, res) => {
 
     const requestData = {
       client_id: req.body.client_id,
+      dpop_jkt: req.body.dpop_jkt,
       scope: req.body.scope,
       response_type: req.body.response_type,
       redirect_uri: req.body.redirect_uri,
@@ -637,6 +651,11 @@ codeFlowRouterSDJWT.post(["/par", "/authorize/par"], async (req, res) => {
       try { slog("[ISSUER] [PAR] [START] Processing PAR request", { hasIssuerState: !!issuerState, hasState: !!requestData.state }); } catch {}
     }
 
+    const issuanceSession = issuerState ? await getCodeFlowSession(issuerState) : null;
+    const requestedProfile = issuanceSession?.walletAttestationProfile || "auto";
+    if (requestedProfile === "cs05" && !issuanceSession) {
+      return res.status(400).json({ error: "invalid_request", error_description: "CS-05 issuance requires a valid issuerState session" });
+    }
     const requestedCredentialConfigurationIds = extractRequestedCredentialConfigurationIds({
       scope: req.body.scope,
       authorization_details: req.body.authorization_details,
@@ -646,12 +665,13 @@ codeFlowRouterSDJWT.post(["/par", "/authorize/par"], async (req, res) => {
       scope: req.body.scope,
       authorization_details: req.body.authorization_details,
     });
-    const requiresWua = shouldRequireWiaClientAttestation({
+    let requiresWua = shouldRequireWiaClientAttestation({
       ...scaPolicyParams,
       scope: req.body.scope,
       authorization_details: req.body.authorization_details,
     });
-    const enforceStatusLists = shouldEnforceWuaStatusLists(scaPolicyParams);
+    if (requestedProfile !== "auto") requiresWua = true;
+    let enforceStatusLists = shouldEnforceWuaStatusLists(scaPolicyParams);
 
     if (wuaCredentialRequested && !requiresWua && isScaOnlyWuaIssuance(scaPolicyParams) && slog) {
       try {
@@ -669,6 +689,7 @@ codeFlowRouterSDJWT.post(["/par", "/authorize/par"], async (req, res) => {
       requireAttestation: requiresWua,
       strictWiaSignature: requiresWua,
       requireStatusList: requiresWua && enforceStatusLists,
+      walletAttestationProfile: requestedProfile,
     });
     if (!attestationResult.skip && !attestationResult.ok) {
       if (slog) {
@@ -715,6 +736,47 @@ codeFlowRouterSDJWT.post(["/par", "/authorize/par"], async (req, res) => {
         try { slog("[ISSUER] [PAR] [WARN] WIA validation warning", { warning: w }); } catch {}
       }
     }
+    let parDpopJkt;
+    try {
+      parDpopJkt = await resolveParDpopJkt({
+        dpopHeader: req.get("DPoP"),
+        dpopJkt: req.body.dpop_jkt,
+        expectedHtu: `${SERVER_URL}${req.baseUrl || ""}${req.path}`,
+      });
+    } catch (error) {
+      return res.status(400).json({ error: "invalid_dpop_proof", error_description: error.message });
+    }
+    requestData.dpop_jkt = parDpopJkt;
+
+    if (attestationResult.ok && attestationResult.walletProfile?.resolvedProfile === "cs05") {
+      requiresWua = true;
+      enforceStatusLists = true;
+      const statusMaintenanceExp = attestationResult.attestationPayload?.client_status?.exp;
+      if (!Number.isInteger(statusMaintenanceExp) || statusMaintenanceExp < Math.floor(Date.now() / 1000) + 31 * 86400) {
+        return res.status(401).json({ error: "invalid_client", error_description: "BWIA client_status must remain valid for at least 31 days" });
+      }
+      if (!attestationResult.wiaStatusList) {
+        return res.status(401).json({ error: "invalid_client", error_description: "BWIA client status must be verified at PAR" });
+      }
+      if (parDpopJkt !== attestationResult.wiaCnfJkt) {
+        return res.status(400).json({ error: "invalid_request", error_description: "The PAR DPoP binding (dpop_jkt or DPoP proof key) must match the BWIA cnf.jwk thumbprint" });
+      }
+      const ttlSeconds = Math.max(1, attestationResult.attestationPayload.exp - Math.floor(Date.now() / 1000));
+      const reserved = await reserveBusinessWalletAttestation(attestationResult.attestationDigest, issuerState, ttlSeconds);
+      if (!reserved) return res.status(401).json({ error: "invalid_client", error_description: "BWIA was already used in another issuance session or replay storage is unavailable" });
+      const status = attestationResult.attestationPayload.client_status;
+      requestData.walletAttestation = {
+        ...attestationResult.walletProfile,
+        clientId: attestationResult.attestationPayload.sub || requestData.client_id || null,
+        clientKeyThumbprint: attestationResult.wiaCnfJkt,
+        instanceAttestationDigest: attestationResult.attestationDigest,
+        statusList: attestationResult.wiaStatusList,
+        maintenanceExpirations: { clientStatus: status.exp },
+        trustEvaluation: isTrustFrameworkSession(issuanceSession)
+          ? { state: "pending" }
+          : { state: "not_evaluated", reason: "trust-framework policy is not enabled for this session" },
+      };
+    }
     if (requiresWua && attestationResult.ok && attestationResult.wiaStatusList && slog) {
       try {
         slog("[ISSUER] [PAR] WIA status-list validated", {
@@ -728,6 +790,13 @@ codeFlowRouterSDJWT.post(["/par", "/authorize/par"], async (req, res) => {
     requestData.wiaCnfJkt = attestationResult.wiaCnfJkt || null;
     requestData.clientStatusPresent = attestationResult.clientStatusPresent === true;
     requestData.wiaStatusList = attestationResult.wiaStatusList || null;
+    requestData.walletAttestation = requestData.walletAttestation || (attestationResult.walletProfile ? {
+      ...attestationResult.walletProfile,
+      clientId: attestationResult.attestationPayload?.sub || requestData.client_id || null,
+      clientKeyThumbprint: attestationResult.wiaCnfJkt,
+      instanceAttestationDigest: attestationResult.attestationDigest,
+      statusList: attestationResult.wiaStatusList || null,
+    } : { requestedProfile, resolvedProfile: null });
     requestData.requestedCredentialConfigurationIds = requestedCredentialConfigurationIds;
 
     // Legacy body client_assertion path (optional observability only)
