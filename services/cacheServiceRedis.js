@@ -154,6 +154,65 @@ export async function storeCodeFlowSession(sessionKey, sessionValue) {
     console.error("Error storing session:", err);
   }
 }
+
+function dcApiProgressKeys(sessionKey, flowType) {
+  const flow = flowType === "code" ? "code" : "pre-auth";
+  const root = `dc-api-progress:${flow}:${sessionKey}`;
+  return { session: `${flow === "code" ? "code-flow-sessions" : "pre-auth-sessions"}:${sessionKey}`, issued: `${root}:issued`, notifications: `${root}:notifications`, metadata: `${root}:metadata` };
+}
+
+/** Atomically update progress keys without reserializing the caller's session or claims. */
+export async function updateDcApiIssuanceProgress(sessionKey, flowType, update, redisClient = client) {
+  const keys = dcApiProgressKeys(sessionKey, flowType);
+  const script = `
+    if redis.call('EXISTS', KEYS[1]) == 0 then return 0 end
+    local mode = ARGV[1]
+    if mode == 'issued' then
+      redis.call('SADD', KEYS[2], ARGV[2])
+      redis.call('HSET', KEYS[3], ARGV[3], ARGV[4])
+      if redis.call('HGET', KEYS[4], 'status') ~= 'failed' then redis.call('HSET', KEYS[4], 'status', 'success') end
+    elseif mode == 'notification' then
+      local raw = redis.call('HGET', KEYS[3], ARGV[2])
+      if not raw then return -1 end
+      local entry = cjson.decode(raw)
+      entry.event = ARGV[3]
+      entry.event_description = ARGV[4] ~= '' and ARGV[4] or cjson.null
+      redis.call('HSET', KEYS[3], ARGV[2], cjson.encode(entry))
+      if ARGV[3] == 'credential_failure' or ARGV[3] == 'credential_deleted' then
+        redis.call('HSET', KEYS[4], 'status', 'failed')
+      elseif redis.call('HGET', KEYS[4], 'status') ~= 'failed' then
+        redis.call('HSET', KEYS[4], 'status', 'success')
+      end
+    else
+      return -2
+    end
+    local ttl = redis.call('PTTL', KEYS[1])
+    if ttl >= 0 then
+      for index = 2, 4 do redis.call('PEXPIRE', KEYS[index], math.max(ttl, 1)) end
+    end
+    return 1
+  `;
+  const args = update.mode === "issued"
+    ? ["issued", update.credentialConfigurationId, update.notificationId, JSON.stringify({ credentialConfigurationId: update.credentialConfigurationId, event: "issued" })]
+    : ["notification", update.notificationId, update.event, update.eventDescription || ""];
+  return Number(await redisClient.eval(script, { keys: [keys.session, keys.issued, keys.notifications, keys.metadata], arguments: args }));
+}
+
+export async function getDcApiIssuanceProgress(sessionKey, flowType, redisClient = client) {
+  if (!redisClient.isReady && redisClient === client) return { issuedCredentialConfigurationIds: [], notifications: {}, status: null };
+  const keys = dcApiProgressKeys(sessionKey, flowType);
+  const [issued, notifications, metadata] = await Promise.all([
+    redisClient.sMembers(keys.issued),
+    redisClient.hGetAll(keys.notifications),
+    redisClient.hGetAll(keys.metadata),
+  ]);
+  return {
+    issuedCredentialConfigurationIds: issued || [],
+    notifications: Object.fromEntries(Object.entries(notifications || {}).map(([id, value]) => [id, JSON.parse(value)])),
+    status: metadata?.status || null,
+  };
+}
+
 // Function to retrieve a code-flow session from Redis
 export async function getCodeFlowSession(sessionKey) {
   try {

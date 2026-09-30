@@ -12,6 +12,12 @@
   </select>
 </label>
 <label>Issuer URL <input id="issuer" size="38"></label>
+<label>Credential configuration IDs (comma separated)
+  <input id="configurations" size="50" value="VerifiablePortableDocumentA2SDJWT,VerifiableStudentIDSDJWT">
+</label>
+<label>Claims JSON by configuration ID
+  <textarea id="claims" rows="6" cols="70" placeholder='{"VerifiablePortableDocumentA2SDJWT":{"booking_reference":"REF-123"}}'></textarea>
+</label>
 <button id="prepare">Prepare offer</button>
 <button id="create" disabled>Add to wallet</button>
 <button id="cancel" disabled>Cancel</button>
@@ -20,24 +26,53 @@
 <script type="module">
   import { createDcApiIssuerClient } from "../issuer-client.js";
   let client;
-  let descriptor; let controller;
+  let descriptor; let controller; let prepareController; let polling = false;
   const $ = id => document.getElementById(id);
   const say = value => $("status").textContent = value;
   $("prepare").onclick = async () => {
+    prepareController?.abort();
+    prepareController = new AbortController();
+    const activePreparation = prepareController;
+    descriptor = null; $("create").disabled = true;
     try {
       client = createDcApiIssuerClient({ issuerBaseUrl: $("issuer").value || location.origin });
-      descriptor = await client.prepare({ scenario: $("scenario").value });
-      $("create").disabled = !client.isSupported(); $("cancel").disabled = false;
+      const request = { scenario: $("scenario").value };
+      if ($("claims").value.trim()) {
+        const claims = JSON.parse($("claims").value);
+        request.credentials = $("configurations").value.split(",").map(value => value.trim()).filter(Boolean).map(credential_configuration_id => ({ credential_configuration_id, payload: claims[credential_configuration_id] }));
+      }
+      descriptor = await client.prepare({ ...request, signal: activePreparation.signal });
+      const support = client.getSupport();
+      $("create").disabled = support.state === "unsupported"; $("cancel").disabled = false;
       const link = descriptor.fallback?.deepLink; $("fallback").hidden = !link;
-      if (link) { $("deepLink").href = link; $("deepLink").textContent = "Open wallet link"; $("qr").src = descriptor.fallback.qr; }
-      say(client.isSupported() ? "Ready. Click Add to wallet." : "DC API unavailable; use the fallback link.");
-    } catch (error) { say(`${error.code || "error"}: ${error.message}`); }
+      if (link) { $("deepLink").href = link; $("deepLink").target = "_blank"; $("deepLink").rel = "noopener"; $("deepLink").textContent = "Open wallet link"; $("deepLink").onclick = () => { void pollStatus(); }; $("qr").src = descriptor.fallback.qr; }
+      say(`${support.state === "supported" ? "Ready. Click Add to wallet." : support.state === "unknown" ? "Browser support is unknown. You can try Add to wallet or use the fallback." : "DC API unavailable; use the fallback link."}${descriptor.transactionCode ? ` Synthetic transaction code: ${descriptor.transactionCode}` : ""}`);
+    } catch (error) { if (activePreparation === prepareController && !activePreparation.signal.aborted) say(`${error.code || "error"}: ${error.message}`); }
   };
   $("create").onclick = async () => {
     controller = new AbortController(); $("create").disabled = true;
-    try { await client.create(descriptor, { signal: controller.signal }); say("Browser handoff completed. Check issuer status and wallet for final issuance outcome."); }
+    try { await client.create(descriptor, { signal: controller.signal }); say("Browser handoff completed; checking issuer progress."); await pollStatus(); }
     catch (error) { say(`${error.code || "error"}: ${error.message}`); $("create").disabled = false; }
   };
-  $("cancel").onclick = () => { controller?.abort(); say("Cancelled."); };
+  async function pollStatus() {
+    if (polling) return;
+    polling = true;
+    const activeDescriptor = descriptor;
+    const activeClient = client;
+    const deadline = Date.now() + 5 * 60_000;
+    let finished = false;
+    while (activeDescriptor && descriptor === activeDescriptor && Date.now() < deadline && !controller?.signal.aborted) {
+      try {
+        const status = await activeClient.getStatus(activeDescriptor);
+        say(`Issuer status: ${status.status}${status.issuedCredentialConfigurationIds?.length ? ` (${status.issuedCredentialConfigurationIds.join(", ")})` : ""}`);
+        if (["issued", "failed"].includes(status.status)) { finished = true; break; }
+      } catch (error) { say(`Issuer status unavailable: ${error.message}`); finished = true; break; }
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+    if (!finished && descriptor === activeDescriptor && Date.now() >= deadline) say("Status polling stopped after five minutes. You can prepare a new offer or check again later.");
+    polling = false;
+  }
+  $("cancel").onclick = () => { controller?.abort(); say("Browser request cancelled. An issuer exchange already in progress may continue."); };
+  addEventListener("pagehide", () => { prepareController?.abort(); controller?.abort(); });
   $("issuer").value = new URLSearchParams(location.search).get("issuer") || location.origin;
 </script>

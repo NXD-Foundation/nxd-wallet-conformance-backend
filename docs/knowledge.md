@@ -149,6 +149,15 @@ token.
 Sources: [OpenID4VCI 1.0](./rfc/openid-4-verifiable-credential-issuance-1_0.html)
 Appendix F.1 and §G.3.1.
 
+### CS-07 DC API Issuance
+
+- The issuer exposes pre-flight DC API issuance through `POST /vci/dc-api/offer` and the browser adapter in `clients/dc-api/issuer-client.js`. The adapter prepares first, then invokes `navigator.credentials.create()` with `openid4vci-v1` from the user gesture. Existing OID4VCI endpoints perform the actual issuance.
+- Offers support the configured pre-authorized, transaction-code, and authorization-code PID scenarios. An optional `credentials` list selects advertised SD-JWT configurations and stores caller claims by configuration ID; issuer-owned credential fields and mdoc caller payloads are rejected.
+- The response includes an equivalent same-session offer fallback and a separate bearer capability for read-only status. Server issuance progress comes from credential issuance; browser promise resolution does not mark issuance complete.
+- Automated tests cover the route contract, payload validation, status capability handling, and browser adapter. Native browser/wallet interoperability remains pending because the W3C draft still marks the OpenID4VCI integration as coming soon. The implementation has no native provider in `wallet-client/`.
+
+Source: [CS-07 issuer implementation](./cs07-dc-api-issuer-implementation-plan.md) and [CS-07](./core/cs-07-credential-presentation-dc-api-updated.md) §6.3.
+
 ### CS-04 Key Attestation Interoperability
 
 - CS-04 remains the governing WE BUILD structure for WIA/KA issuance:
@@ -671,6 +680,7 @@ re-entering active protocol directories.
 | [OpenID4VP CS-02 verifier metadata](./openid4vp-cs02-verifier-metadata-model.md) | Which verifier metadata model and endpoints should new work use?                    |
 | [CS-03 verifier flow summary](./cs03-verifier-flow-summary.md)                   | How do inline and OOB signature flows work, including PAdES/CAdES payloads?         |
 | [VP verification wallet matrix](./vp-verification-wallet-matrix.md)              | What does the verifier support versus actually enforce?                             |
+| [CS-07 DC API issuer implementation](./cs07-dc-api-issuer-implementation-plan.md) | Current browser-mediated issuer flow, API, security boundaries, and native acceptance status |
 | [VCI authorization-code matrix](./vci-authorization-code-wallet-matrix.md)       | What a wallet must send and what the issuer enforces in authorization-code issuance |
 | [VCI pre-auth PID X.509 matrix](./vci-preauth-pid-x509-wallet-matrix.md)         | Compatibility-mode pre-authorized PID issuance requirements and gaps                |
 | [mdoc credential generation](./mdoc-credential-generation.md)                    | How issuer-side ISO 18013-5 mdoc construction maps to OID4VCI                       |
@@ -739,6 +749,7 @@ profile interpretation, protocol support claim, or documentation location.
 | Trust framework, LoTL/LoTE, or `trustFramework=true`        | [`docs/trust/SOURCE.md`](./trust/SOURCE.md), UC-TE-03/06, Annex E profile; runtime in `trust/` |
 | VP requests, metadata, response modes, or DCQL              | CS-02, verifier metadata model, VP matrix                                 |
 | Browser-mediated DC API presentation                        | CS-07, pinned W3C DC API draft, OpenID4VP Appendix A, CS-07 verifier plan |
+| Browser-mediated DC API issuance                            | CS-07 §6.3, OpenID4VCI, and the issuer implementation note                  |
 | Remote qualified signing                                    | CS-03 and CS-03 verifier flow summary                                     |
 | SD-JWT holder binding                                       | SD-JWT key-binding fixes                                                  |
 | TS-12 / CS-12 payment SCA and transaction data              | CS-12 SCA payments, then TS-12 SCA with wallet                |

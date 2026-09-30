@@ -81,6 +81,36 @@ equivalent QR/deep-link fallback. Browser handoff does not prove that a wallet
 stored the credential; inspect the returned session status and normal issuer
 flow.
 
+The reusable issuer adapter exposes `getSupport()`, `prepare()`, `create()`,
+and `getStatus()`. Prepare before the user gesture, then call `create()`
+directly in its click handler. `getSupport()` reports `supported`,
+`unsupported`, or `unknown`; `isSupported()` remains a boolean convenience
+check. `getStatus()` sends the private bearer capability returned during
+preparation and returns only issuer progress.
+
+The issuer preparation endpoint accepts optional per-configuration claims for
+up to 16 configured SD-JWT credentials. For example:
+
+```js
+const prepared = await client.prepare({
+  scenario: "pid-pre-authorized",
+  credentials: [{
+    credential_configuration_id: "VerifiablePortableDocumentA2SDJWT",
+    payload: { booking_reference: "REF-123", hotel_name: "Example Hotel" },
+  }],
+});
+
+// Call directly from a user-activation handler.
+const browserResult = await client.create(prepared, { signal });
+const issuerProgress = await client.getStatus(prepared, { signal });
+```
+
+Claim payloads stay in the issuer session and do not appear in the DC API
+request object. The offer endpoint is a testbed interface; configure
+`DC_API_ISSUER_ORIGINS` for a separately served demo. See
+[`docs/cs07-dc-api-issuer-implementation-plan.md`](../../docs/cs07-dc-api-issuer-implementation-plan.md)
+for the current API contract and native interoperability status.
+
 When the page is served by the separate static demo server, point its Issuer
 URL field at the issuer and allow the demo origin on the issuer, for example:
 

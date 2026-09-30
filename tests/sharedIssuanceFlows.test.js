@@ -3204,6 +3204,20 @@ describe('Shared Issuance Flows', function () {
     });
   });
 
+  describe('DC API issuance notification routing', () => {
+    it('selects the pre-authorized session writer for pre-authorized wallet notifications', () => {
+      expect(sharedModule.notificationStoreForFlow('pre-auth')).to.equal(cacheServiceRedis.storePreAuthSession);
+      expect(sharedModule.notificationStoreForFlow('code')).to.equal(cacheServiceRedis.storeCodeFlowSession);
+    });
+
+    it('limits notification event validation to DC API sessions', () => {
+      expect(sharedModule.isNotificationEventAllowedForSession({ dcApi: true }, 'credential_accepted')).to.equal(true);
+      expect(sharedModule.isNotificationEventAllowedForSession({ dcApi: true }, 'legacy_event')).to.equal(false);
+      expect(sharedModule.isNotificationEventAllowedForSession({ dcApi: false }, 'legacy_event')).to.equal(true);
+      expect(sharedModule.isNotificationEventAllowedForSession({}, 'legacy_event')).to.equal(true);
+    });
+  });
+
   describe('Error handling', () => {
     it('should handle token endpoint errors gracefully', async () => {
       // Test with invalid request to trigger error handling

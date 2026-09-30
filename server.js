@@ -69,7 +69,16 @@ app.use(
     type: (req) => req.is("application/jwt"),
   })
 );
-app.use(bodyParser.json({ limit: "10mb" }));
+app.use(bodyParser.json({
+  limit: "10mb",
+  verify(req, _res, buffer) {
+    if (req.path === "/vci/dc-api/offer" && buffer.length > 100 * 1024) {
+      const error = new Error("DC API offer request exceeds 100 KiB");
+      error.status = 413;
+      throw error;
+    }
+  },
+}));
 
 // Global middleware to set session context for console log interception
 // Extracts sessionId from multiple sources
@@ -109,7 +118,7 @@ app.use((req, res, next) => {
 //Middleware to log all requests and responses for issuer endpoints
 app.use((req, res, next) => {
   const startTime = Date.now();
-  const isDcApiRoute = req.path === "/vp/dc-api" || req.path.startsWith("/vp/dc-api/");
+  const isDcApiRoute = req.path === "/vp/dc-api" || req.path.startsWith("/vp/dc-api/") || req.path.startsWith("/vci/dc-api/");
   const sessionId =
     req.sessionLoggingId ||
     req.query.sessionId ||
@@ -120,7 +129,7 @@ app.use((req, res, next) => {
 
   // Log incoming request
   console.log(`[${sessionId}] ---> ${req.method} ${req.url}`, {
-    headers: req.headers,
+    headers: isDcApiRoute ? { ...req.headers, authorization: req.headers.authorization ? "[redacted]" : undefined } : req.headers,
     query: req.query,
     body: isDcApiRoute ? "[redacted: dc-api payload]" : (req.method !== 'GET' ? req.body : undefined),
     userAgent: req.get('User-Agent'),

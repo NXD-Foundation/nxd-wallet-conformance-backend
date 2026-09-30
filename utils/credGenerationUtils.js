@@ -36,6 +36,7 @@ import {
   getPIDSDJWTData,
   getStudentIDSDJWTData,
   getGenericSDJWTData,
+  resolveConfiguredCallerSdJwtPayload,
   getEPassportSDJWTData,
   getVReceiptSDJWTData,
   getVReceiptSDJWTDataWithPayload,
@@ -573,7 +574,11 @@ export async function handleCredentialGenerationBasedOnFormat(
   }
 
   // Determine credential payload based on type
-  switch (credType) {
+  const callerPayload = resolveConfiguredCallerSdJwtPayload(sessionObject, credType, format);
+  if (callerPayload) {
+    credPayload = callerPayload;
+  } else {
+    switch (credType) {
     case "VerifiableIdCardJwtVc":
     case "VerifiablePIDSDJWT":
     case "VerifiablePIDSDJWTAttestation":
@@ -639,6 +644,7 @@ export async function handleCredentialGenerationBasedOnFormat(
       break;
     default:
       throw new Error(`Unsupported credential type: ${credType}`);
+    }
   }
 
   const now = new Date();

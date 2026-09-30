@@ -582,6 +582,22 @@ export const getGenericSDJWTData = (decodedHeaderSubjectDID, credType) => {
   return { claims, disclosureFrame };
 };
 
+export function createCallerSdJwtPayload(claims) {
+  if (!claims || typeof claims !== "object" || Array.isArray(claims) || Object.keys(claims).length === 0) {
+    throw new Error("Caller SD-JWT claims must be a non-empty object");
+  }
+  return { claims: structuredClone(claims), disclosureFrame: { _sd: Object.keys(claims) } };
+}
+
+export function resolveConfiguredCallerSdJwtPayload(session, configurationId, format) {
+  const claims = session?.credentialPayloads?.[configurationId];
+  if (!claims) return null;
+  if (format !== "vc+sd-jwt" && format !== "dc+sd-jwt") {
+    throw new Error("Caller payloads are supported only for SD-JWT credentials");
+  }
+  return createCallerSdJwtPayload(claims);
+}
+
 export const getEPassportSDJWTData = (decodedHeaderSubjectDID) => {
   const claims = {
     id: decodedHeaderSubjectDID || uuidv4(),

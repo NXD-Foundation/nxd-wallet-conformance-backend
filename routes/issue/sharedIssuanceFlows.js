@@ -29,6 +29,7 @@ import {
   getSessionKeyFromAccessToken,
   getCodeFlowSession,
   storeCodeFlowSession,
+  updateDcApiIssuanceProgress,
   getSessionKeyAuthCode,
   getSessionAccessToken,
   reserveBusinessWalletAttestation,
@@ -118,6 +119,7 @@ import {
   recordTrustDecision,
   recordTrustFailure,
 } from "../../utils/trustFrameworkPolicy.js";
+import { offeredCredentialConfigurationIds } from "../../utils/dcApiIssuance.js";
 import {
   applyTokenClientBindingToSession,
   assertOpenid4VciProofIssClaim,
@@ -268,6 +270,14 @@ const extractSessionId = (sessionKey) => {
   const parts = sessionKey.split(':');
   return parts.length > 1 ? parts[parts.length - 1] : sessionKey;
 };
+
+export function notificationStoreForFlow(flowType) {
+  return flowType === "code" ? storeCodeFlowSession : storePreAuthSession;
+}
+
+export function isNotificationEventAllowedForSession(sessionObject, event) {
+  return sessionObject?.dcApi !== true || ["credential_accepted", "credential_failure", "credential_deleted"].includes(event);
+}
 
 // Helper to load issuer configuration
 const loadIssuerConfig = () => {
@@ -1693,6 +1703,13 @@ sharedRouter.post("/credential", async (req, res) => {
       });
     }
 
+    if (sessionObject.dcApi === true) {
+      const selectedConfigurations = offeredCredentialConfigurationIds(sessionObject);
+      if (!selectedConfigurations.includes(effectiveConfigurationId)) {
+        return res.status(400).json({ error: "invalid_credential_request", error_description: "Credential configuration was not selected in this offer" });
+      }
+    }
+
     // Optional key-attestation alongside JWT proof (mode 2): in EUDI this object is the WUA (Wallet
     // Provider–signed). Issuer trust for the WP (e.g. Trusted List) is not enforced yet — see
     // routeUtils.isWuaWalletProviderTrustedByPolicy (stub true). Combined with proofs.jwt PoP → possession + assurance.
@@ -2227,8 +2244,14 @@ sharedRouter.post("/credential", async (req, res) => {
           try {
             sessionObject.status = "success";
             sessionObject.notification_id = response.notification_id;
-
-            if (flowType === "code") {
+            if (sessionObject.dcApi === true && sessionObject.dcApiState) {
+              const updated = await updateDcApiIssuanceProgress(sessionKey, flowType, {
+                mode: "issued",
+                credentialConfigurationId: effectiveConfigurationId,
+                notificationId: response.notification_id,
+              });
+              if (updated !== 1) throw new Error("Unable to persist DC API issuance progress");
+            } else if (flowType === "code") {
               await storeCodeFlowSession(sessionKey, sessionObject);
             } else {
               await storePreAuthSession(sessionKey, sessionObject);
@@ -2666,7 +2689,6 @@ sharedRouter.post("/notification", async (req, res) => {
       });
     }
 
-  
     const authParse = parseAndValidateResourceAuthorizationHeader(req.headers["authorization"]);
     if (!authParse.ok) {
       return res.status(authParse.status).json({
@@ -2689,6 +2711,10 @@ sharedRouter.post("/notification", async (req, res) => {
       });
     }
 
+    if (!isNotificationEventAllowedForSession(sessionObject, event)) {
+      return res.status(400).json({ error: "invalid_notification_request", error_description: "Unsupported notification event" });
+    }
+
     sessionId = extractSessionId(sessionKey);
 
     // Set session context for console interception to capture all logs
@@ -2707,37 +2733,19 @@ sharedRouter.post("/notification", async (req, res) => {
       await logInfo(sessionId, `Notification received: ${event}`, logData).catch(() => {});
     }
 
-    if(event === "credential_failure" || event === "credential_deleted") {
-      const sessionObject = await getCodeFlowSession(sessionId);
-      if (sessionObject) {
-
-        sessionObject.status = "failed";
-        console.error("Credential failure or deletion detected. Marking session as failed. Reason: " + event_description);
-        
-        if(sessionObject.flowType === "code") {
-         
-          await storeCodeFlowSession(sessionKey, sessionObject);
-          return res.status(204).send();
-        }else{
-          await storePreAuthSession(sessionKey, sessionObject);
-          return res.status(204).send();
-        }
-
-        
-      }
-    }
-    if(event === "credential_accepted") {
-      const sessionObject = await getCodeFlowSession(sessionId);
-      if (sessionObject) {
-        sessionObject.status = "success";
-        console.error("credential accepted event received. Marking session as successful.");
-         if(sessionObject.flowType === "code") {
-        await storeCodeFlowSession(sessionKey, sessionObject);
-        
-        }else{
-          await storePreAuthSession(sessionKey, sessionObject);
-        }
-      }
+    const storeSession = notificationStoreForFlow(sessionData.flowType);
+    if (sessionObject.dcApi === true && sessionObject.dcApiState) {
+      const updated = await updateDcApiIssuanceProgress(sessionKey, sessionData.flowType, {
+        mode: "notification",
+        notificationId: notification_id,
+        event,
+        eventDescription: typeof event_description === "string" ? event_description.slice(0, 256) : "",
+      });
+      if (updated !== 1) return res.status(400).json({ error: "invalid_notification_request", error_description: "notification_id is not associated with this issuance" });
+    } else {
+      if (event === "credential_failure" || event === "credential_deleted") sessionObject.status = "failed";
+      else if (sessionObject.status !== "failed") sessionObject.status = "success";
+      await storeSession(sessionKey, sessionObject);
     }
 
 
