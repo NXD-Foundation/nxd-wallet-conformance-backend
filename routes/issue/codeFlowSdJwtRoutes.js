@@ -992,7 +992,7 @@ codeFlowRouterSDJWT.get("/authorize", async (req, res) => {
 
     // Handle authorization based on flow type
     let redirectUrl;
-    if (existingCodeSession.isDynamic) {
+    if (existingCodeSession.isDynamic && existingCodeSession.dcApi !== true) {
       redirectUrl = handleDynamicAuthorizationRedirect(existingCodeSession, updatedRequestData);
     } else {
       redirectUrl = await handleNonDynamicAuthorization(existingCodeSession, updatedRequestData);

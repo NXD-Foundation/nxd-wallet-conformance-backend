@@ -189,6 +189,33 @@ describe('PAR shared Redis storage regression', () => {
     assert.match(res.location, /^openid4vp:\/\//);
   });
 
+  it('redirects DC API authorization-code sessions to the client redirect URI without starting VP', async () => {
+    sandbox.stub(cache.client, 'isReady').get(() => true);
+    const redirectUri = 'https://wallet.example/oauth/callback';
+    const par = {
+      client_id: 'wallet', issuerState: 'session', state: 'wallet-state',
+      redirect_uri: redirectUri, response_type: 'code',
+      code_challenge: 'challenge', code_challenge_method: 'S256',
+      authorizationDetails: JSON.stringify([{ type: 'openid_credential', credential_configuration_id: 'urn:eu.europa.ec.eudi:pid:1' }]),
+    };
+    const session = { requests: {}, results: {}, isDynamic: true, dcApi: true, client_id_scheme: 'redirect_uri' };
+    sandbox.stub(cache.client, 'get').callsFake(async key => {
+      if (key === 'par-requests:urn:test:shared') return JSON.stringify(par);
+      if (key === 'code-flow-sessions:session') return JSON.stringify(session);
+      return null;
+    });
+    sandbox.stub(cache.client, 'setEx').resolves();
+    const res = await authorize();
+    assert.equal(res.statusCode, 302);
+    const target = new URL(res.location);
+    assert.equal(target.origin, 'https://wallet.example');
+    assert.equal(target.pathname, '/oauth/callback');
+    assert.ok(target.searchParams.get('code'));
+    assert.equal(target.searchParams.get('state'), 'wallet-state');
+    assert.equal(target.searchParams.get('iss'), process.env.SERVER_URL || 'http://localhost:3000');
+    assert.doesNotMatch(res.location, /^openid4vp:/);
+  });
+
   it('returns a visible 400 for expired or missing PAR instead of an unhandled wallet deep link', async () => {
     sandbox.stub(cache.client, 'isReady').get(() => true);
     sandbox.stub(cache.client, 'get').resolves(null);
