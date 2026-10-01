@@ -12,7 +12,7 @@ import {
   didKeyToJwks,
   jwkFromX5cFirstCert,
   derBase64ToPemCert,
-  loadTrustFrameworkVerifierMaterial,
+  loadTrustFrameworkIssuerMaterial,
 } from "../utils/cryptoUtils.js";
 import { isTrustFrameworkSession } from "../utils/trustFrameworkPolicy.js";
 import {
@@ -83,12 +83,12 @@ const certificatePemX509 = fs.readFileSync(
 );
 
 /**
- * x509 issuance material. trustFramework sessions use the same WRPAC leaf and
- * key as trust-framework VP JARs. Every other session keeps the local x509EC pair.
+ * x509 issuance material. trustFramework sessions use the IDunion PID issuer
+ * certificate. Every other session keeps the local x509EC pair.
  */
 function resolveX509IssuanceMaterial(sessionObject) {
   if (isTrustFrameworkSession(sessionObject)) {
-    const { privateKeyPkcs8, certChain } = loadTrustFrameworkVerifierMaterial();
+    const { privateKeyPkcs8, certChain } = loadTrustFrameworkIssuerMaterial();
     return {
       privateKeyPem: privateKeyPkcs8,
       certificatePem: derBase64ToPemCert(certChain[0]),

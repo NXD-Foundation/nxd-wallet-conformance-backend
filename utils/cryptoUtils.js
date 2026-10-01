@@ -157,23 +157,18 @@ export function loadVerifierP12({ p12Path, passphrase } = {}) {
 
 const DEFAULT_TRUST_WRPAC_CERT = path.resolve(process.cwd(), "certs", "we-build-wrpac.pem");
 const DEFAULT_TRUST_WRPAC_KEY = path.resolve(process.cwd(), "certs", "dev-i4mlab.aegean.gr.key.pem");
+const DEFAULT_TRUST_PID_ISSUER_CERT = path.resolve(process.cwd(), "certs", "id-union-pid-certificate.pem");
+const DEFAULT_TRUST_PID_ISSUER_KEY = DEFAULT_TRUST_WRPAC_KEY;
 
 function resolveMaterialPath(explicitPath, envPath, fallback) {
   const selected = explicitPath || envPath || fallback;
   return path.isAbsolute(selected) ? selected : path.resolve(process.cwd(), selected);
 }
 
-/**
- * Leaf plus issuing CA for VP requests created with trustFramework=true.
- * The preprod verifier P12 remains the signing material for every other request.
- */
-export function loadTrustFrameworkVerifierMaterial({ certPath, keyPath } = {}) {
-  const resolvedCertPath = resolveMaterialPath(certPath, process.env.TRUST_WRPAC_CERT_PATH, DEFAULT_TRUST_WRPAC_CERT);
-  const resolvedKeyPath = resolveMaterialPath(keyPath, process.env.TRUST_WRPAC_KEY_PATH, DEFAULT_TRUST_WRPAC_KEY);
+function loadMatchedCertificateMaterial({ resolvedCertPath, resolvedKeyPath, roleLabel, missingMessage }) {
   if (!fs.existsSync(resolvedCertPath) || !fs.existsSync(resolvedKeyPath)) {
     throw new Error(
-      `Trust-framework verifier certificate is unavailable at ${resolvedCertPath} with key ${resolvedKeyPath}. ` +
-      "trustFramework=true VP requests do not fall back to the preprod verifier certificate."
+      `${roleLabel} certificate is unavailable at ${resolvedCertPath} with key ${resolvedKeyPath}. ${missingMessage}`
     );
   }
 
@@ -184,13 +179,39 @@ export function loadTrustFrameworkVerifierMaterial({ certPath, keyPath } = {}) {
   const keyPublic = crypto.createPublicKey(privateKey).export({ type: "spki", format: "der" });
   const certPublic = leaf.publicKey.export({ type: "spki", format: "der" });
   if (!keyPublic.equals(certPublic)) {
-    throw new Error("Trust-framework WRPAC certificate does not match its private key");
+    throw new Error(`${roleLabel} certificate does not match its private key`);
   }
 
   return {
     privateKeyPkcs8: privateKey.export({ type: "pkcs8", format: "pem" }),
     certChain,
   };
+}
+
+/**
+ * Leaf plus issuing CA for VP requests created with trustFramework=true.
+ * The preprod verifier P12 remains the signing material for every other request.
+ */
+export function loadTrustFrameworkVerifierMaterial({ certPath, keyPath } = {}) {
+  return loadMatchedCertificateMaterial({
+    resolvedCertPath: resolveMaterialPath(certPath, process.env.TRUST_WRPAC_CERT_PATH, DEFAULT_TRUST_WRPAC_CERT),
+    resolvedKeyPath: resolveMaterialPath(keyPath, process.env.TRUST_WRPAC_KEY_PATH, DEFAULT_TRUST_WRPAC_KEY),
+    roleLabel: "Trust-framework WRPAC",
+    missingMessage: "trustFramework=true VP requests do not fall back to the preprod verifier certificate.",
+  });
+}
+
+/**
+ * Leaf plus issuing CA for x509 credentials issued with trustFramework=true.
+ * Sessions without that flag keep the local x509EC certificate.
+ */
+export function loadTrustFrameworkIssuerMaterial({ certPath, keyPath } = {}) {
+  return loadMatchedCertificateMaterial({
+    resolvedCertPath: resolveMaterialPath(certPath, process.env.TRUST_PID_ISSUER_CERT_PATH, DEFAULT_TRUST_PID_ISSUER_CERT),
+    resolvedKeyPath: resolveMaterialPath(keyPath, process.env.TRUST_PID_ISSUER_KEY_PATH, DEFAULT_TRUST_PID_ISSUER_KEY),
+    roleLabel: "Trust-framework PID issuer",
+    missingMessage: "trustFramework=true x509 issuance does not fall back to the local x509EC certificate.",
+  });
 }
 
 export function pemToJWK(pem, keyType) {

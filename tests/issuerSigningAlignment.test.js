@@ -1,4 +1,5 @@
 import assert from "assert";
+import fs from "fs";
 import { X509Certificate } from "node:crypto";
 import * as jose from "jose";
 import {
@@ -38,6 +39,15 @@ async function createHolderProofJwt() {
 function leafSubject(x5cEntry) {
   return new X509Certificate(x5cToPem(x5cEntry)).subject;
 }
+
+function firstCertificateDer(pemPath) {
+  const pem = fs.readFileSync(pemPath, "utf8");
+  const match = pem.match(/-----BEGIN CERTIFICATE-----([\s\S]*?)-----END CERTIFICATE-----/);
+  return match[1].replace(/\s+/g, "");
+}
+
+const PID_ISSUER_LEAF_DER = firstCertificateDer("certs/id-union-pid-certificate.pem");
+const WRPAC_LEAF_DER = firstCertificateDer("certs/we-build-wrpac.pem");
 
 async function issueCredential(signatureType, sessionExtras = {}) {
   return handleCredentialGenerationBasedOnFormat(
@@ -113,14 +123,15 @@ describe("issuer signing alignment", () => {
     assert.strictEqual(payload.iss, "http://localhost:3000");
   });
 
-  it("trust-framework x509 issuance signs with the WRPAC instead of the local x509EC certificate", async () => {
+  it("trust-framework x509 issuance signs with the IDunion PID certificate instead of the local x509EC certificate", async () => {
     const credential = await issueCredential("x509", TRUST_FRAMEWORK_SESSION);
     const issuedJws = extractIssuedJws(credential);
     const header = jose.decodeProtectedHeader(issuedJws);
 
     assert.ok(header.x5c.length > 1);
+    assert.strictEqual(header.x5c[0], PID_ISSUER_LEAF_DER);
+    assert.notStrictEqual(header.x5c[0], WRPAC_LEAF_DER);
     assert.match(leafSubject(header.x5c[0]), /CN=dev-i4mlab\.aegean\.gr/);
-    assert.doesNotMatch(leafSubject(header.x5c[0]), /CN=uaegean\.gr/);
 
     const verifyKey = await jose.importX509(x5cToPem(header.x5c[0]), "ES256");
     const { payload } = await jose.jwtVerify(issuedJws, verifyKey, {
@@ -201,13 +212,14 @@ describe("issuer signing alignment", () => {
     assert.strictEqual(payload.iss, "http://localhost:3000");
   });
 
-  it("trust-framework x509 deferred issuance signs with the WRPAC instead of the local x509EC certificate", async () => {
+  it("trust-framework x509 deferred issuance signs with the IDunion PID certificate instead of the local x509EC certificate", async () => {
     const credential = await issueDeferredCredential("x509", TRUST_FRAMEWORK_SESSION);
     const issuedJws = extractIssuedJws(credential);
     const header = jose.decodeProtectedHeader(issuedJws);
 
     assert.ok(header.x5c.length > 1);
-    assert.match(leafSubject(header.x5c[0]), /CN=dev-i4mlab\.aegean\.gr/);
+    assert.strictEqual(header.x5c[0], PID_ISSUER_LEAF_DER);
+    assert.notStrictEqual(header.x5c[0], WRPAC_LEAF_DER);
 
     const verifyKey = await jose.importX509(x5cToPem(header.x5c[0]), "ES256");
     const { payload } = await jose.jwtVerify(issuedJws, verifyKey, {

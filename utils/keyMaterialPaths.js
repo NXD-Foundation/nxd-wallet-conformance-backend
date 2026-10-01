@@ -14,7 +14,8 @@ export const KEY_MATERIAL_PATHS = Object.freeze({
   verifierSigningP12: "./certs/WE-BUILD-Verifier.p12",
   verifierSigningCa: "./certs/pidissuerca02_eu.pem",
   verifierTrustWrpacCertificate: "./certs/we-build-wrpac.pem",
-  verifierTrustWrpacKey: "./certs/dev-i4mlab.aegean.gr.key.pem", // also signs trustFramework=true x509 issuance
+  verifierTrustWrpacKey: "./certs/dev-i4mlab.aegean.gr.key.pem",
+  trustFrameworkPidIssuerCertificate: "./certs/id-union-pid-certificate.pem",
 });
 
 export const DEPRECATED_KEY_MATERIAL_DIR = "./deprecated";
