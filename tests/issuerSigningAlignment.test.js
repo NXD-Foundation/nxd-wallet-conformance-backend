@@ -1,10 +1,15 @@
 import assert from "assert";
+import { X509Certificate } from "node:crypto";
 import * as jose from "jose";
 import {
   handleCredentialGenerationBasedOnFormat,
   handleCredentialGenerationBasedOnFormatDeferred,
 } from "../utils/credGenerationUtils.js";
 import { convertPemToJwk } from "../utils/didjwks.js";
+
+const TRUST_FRAMEWORK_SESSION = {
+  trustPolicy: { mode: "webuild", profile: "webuild-wp4-pilot" },
+};
 
 function extractIssuedJws(credential) {
   return credential.split("~")[0];
@@ -30,7 +35,11 @@ async function createHolderProofJwt() {
     .sign(privateKey);
 }
 
-async function issueCredential(signatureType) {
+function leafSubject(x5cEntry) {
+  return new X509Certificate(x5cToPem(x5cEntry)).subject;
+}
+
+async function issueCredential(signatureType, sessionExtras = {}) {
   return handleCredentialGenerationBasedOnFormat(
     {
       vct: "test-cred-config",
@@ -40,18 +49,20 @@ async function issueCredential(signatureType) {
       signatureType,
       isHaip: false,
       credentialPayload: {},
+      ...sessionExtras,
     },
     "http://localhost:3000",
     "dc+sd-jwt",
   );
 }
 
-async function issueDeferredCredential(signatureType) {
+async function issueDeferredCredential(signatureType, sessionExtras = {}) {
   return handleCredentialGenerationBasedOnFormatDeferred(
     {
       signatureType,
       isHaip: false,
       credentialPayload: {},
+      ...sessionExtras,
       requestBody: {
         vct: "test-cred-config",
         proofs: { jwt: [await createHolderProofJwt()] },
@@ -59,6 +70,10 @@ async function issueDeferredCredential(signatureType) {
     },
     "http://localhost:3000",
   );
+}
+
+async function issueHaipDeferredCredential(signatureType) {
+  return issueDeferredCredential(signatureType, { isHaip: true });
 }
 
 describe("issuer signing alignment", () => {
@@ -89,6 +104,23 @@ describe("issuer signing alignment", () => {
 
     assert.ok(Array.isArray(header.x5c));
     assert.strictEqual(header.x5c.length, 1);
+    assert.match(leafSubject(header.x5c[0]), /CN=uaegean\.gr/);
+
+    const verifyKey = await jose.importX509(x5cToPem(header.x5c[0]), "ES256");
+    const { payload } = await jose.jwtVerify(issuedJws, verifyKey, {
+      algorithms: ["ES256"],
+    });
+    assert.strictEqual(payload.iss, "http://localhost:3000");
+  });
+
+  it("trust-framework x509 issuance signs with the WRPAC instead of the local x509EC certificate", async () => {
+    const credential = await issueCredential("x509", TRUST_FRAMEWORK_SESSION);
+    const issuedJws = extractIssuedJws(credential);
+    const header = jose.decodeProtectedHeader(issuedJws);
+
+    assert.ok(header.x5c.length > 1);
+    assert.match(leafSubject(header.x5c[0]), /CN=dev-i4mlab\.aegean\.gr/);
+    assert.doesNotMatch(leafSubject(header.x5c[0]), /CN=uaegean\.gr/);
 
     const verifyKey = await jose.importX509(x5cToPem(header.x5c[0]), "ES256");
     const { payload } = await jose.jwtVerify(issuedJws, verifyKey, {
@@ -105,6 +137,31 @@ describe("issuer signing alignment", () => {
 
     assert.strictEqual(header.kid, "did:web:localhost:3000#keys-1");
 
+    const { payload } = await jose.jwtVerify(issuedJws, verifyKey, {
+      algorithms: ["ES256"],
+    });
+    assert.strictEqual(payload.iss, "did:web:localhost:3000");
+  });
+
+  it("trust-framework HAIP did:web deferred issuance does not require WRPAC material", async () => {
+    const certPathEnv = process.env.TRUST_WRPAC_CERT_PATH;
+    const keyPathEnv = process.env.TRUST_WRPAC_KEY_PATH;
+    process.env.TRUST_WRPAC_CERT_PATH = "/missing/wrpac-cert.pem";
+    process.env.TRUST_WRPAC_KEY_PATH = "/missing/wrpac-key.pem";
+    let credential;
+    try {
+      credential = await issueHaipDeferredCredential("did:web", TRUST_FRAMEWORK_SESSION);
+    } finally {
+      if (certPathEnv === undefined) delete process.env.TRUST_WRPAC_CERT_PATH;
+      else process.env.TRUST_WRPAC_CERT_PATH = certPathEnv;
+      if (keyPathEnv === undefined) delete process.env.TRUST_WRPAC_KEY_PATH;
+      else process.env.TRUST_WRPAC_KEY_PATH = keyPathEnv;
+    }
+    const issuedJws = extractIssuedJws(credential);
+    const header = jose.decodeProtectedHeader(issuedJws);
+    const verifyKey = await jose.importJWK(await convertPemToJwk(), "ES256");
+
+    assert.strictEqual(header.kid, "did:web:localhost:3000#keys-1");
     const { payload } = await jose.jwtVerify(issuedJws, verifyKey, {
       algorithms: ["ES256"],
     });
@@ -135,6 +192,22 @@ describe("issuer signing alignment", () => {
 
     assert.ok(Array.isArray(header.x5c));
     assert.strictEqual(header.x5c.length, 1);
+    assert.match(leafSubject(header.x5c[0]), /CN=uaegean\.gr/);
+
+    const verifyKey = await jose.importX509(x5cToPem(header.x5c[0]), "ES256");
+    const { payload } = await jose.jwtVerify(issuedJws, verifyKey, {
+      algorithms: ["ES256"],
+    });
+    assert.strictEqual(payload.iss, "http://localhost:3000");
+  });
+
+  it("trust-framework x509 deferred issuance signs with the WRPAC instead of the local x509EC certificate", async () => {
+    const credential = await issueDeferredCredential("x509", TRUST_FRAMEWORK_SESSION);
+    const issuedJws = extractIssuedJws(credential);
+    const header = jose.decodeProtectedHeader(issuedJws);
+
+    assert.ok(header.x5c.length > 1);
+    assert.match(leafSubject(header.x5c[0]), /CN=dev-i4mlab\.aegean\.gr/);
 
     const verifyKey = await jose.importX509(x5cToPem(header.x5c[0]), "ES256");
     const { payload } = await jose.jwtVerify(issuedJws, verifyKey, {

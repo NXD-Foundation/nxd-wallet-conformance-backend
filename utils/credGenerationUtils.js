@@ -11,7 +11,10 @@ import {
   generateNonce,
   didKeyToJwks,
   jwkFromX5cFirstCert,
+  derBase64ToPemCert,
+  loadTrustFrameworkVerifierMaterial,
 } from "../utils/cryptoUtils.js";
+import { isTrustFrameworkSession } from "../utils/trustFrameworkPolicy.js";
 import {
   computeDidJwkIssuerDidAndKidFromDidKeys,
   getIssuerJwkPairAlignedWithDidDocument,
@@ -78,6 +81,26 @@ const certificatePemX509 = fs.readFileSync(
   "./x509EC/client_certificate.crt",
   "utf8"
 );
+
+/**
+ * x509 issuance material. trustFramework sessions use the same WRPAC leaf and
+ * key as trust-framework VP JARs. Every other session keeps the local x509EC pair.
+ */
+function resolveX509IssuanceMaterial(sessionObject) {
+  if (isTrustFrameworkSession(sessionObject)) {
+    const { privateKeyPkcs8, certChain } = loadTrustFrameworkVerifierMaterial();
+    return {
+      privateKeyPem: privateKeyPkcs8,
+      certificatePem: derBase64ToPemCert(certChain[0]),
+      x5c: certChain,
+    };
+  }
+  return {
+    privateKeyPem: privateKeyPemX509,
+    certificatePem: certificatePemX509,
+    x5c: [pemToBase64Der(certificatePemX509)],
+  };
+}
 // DID Web key pair - must match the keys published in the DID document
 let privateKeyPemDidWeb = null;
 let publicKeyPemDidWeb = null;
@@ -420,6 +443,7 @@ export async function handleCredentialGenerationBasedOnFormat(
 
   let signer, verifier;
   let headerOptions; // Define headerOptions here to be populated based on sig type
+  let x509Material = null;
 
   const effectiveSignatureType =
     sessionObject.isHaip && process.env.ISSUER_SIGNATURE_TYPE === "x509"
@@ -428,13 +452,14 @@ export async function handleCredentialGenerationBasedOnFormat(
 
   if (effectiveSignatureType === "x509") {
     console.log("x509 signature type selected.");
+    x509Material = resolveX509IssuanceMaterial(sessionObject);
     ({ signer, verifier } = await createSignerVerifierX509(
-      privateKeyPemX509,
-      certificatePemX509,
+      x509Material.privateKeyPem,
+      x509Material.certificatePem,
     ));
     headerOptions = {
       header: {
-        x5c: [pemToBase64Der(certificatePemX509)],
+        x5c: x509Material.x5c,
       },
     };
   } else {
@@ -770,7 +795,7 @@ export async function handleCredentialGenerationBasedOnFormat(
     };
 
     const privateKeyForSigning =
-      effectiveSignatureType === "x509" ? privateKeyPemX509 : privateKey;
+      effectiveSignatureType === "x509" ? x509Material.privateKeyPem : privateKey;
 
     const signOptions = {
       algorithm: "ES256",
@@ -858,16 +883,17 @@ async function generateMdlCredentialManually(
       const mDLClaimsMapped = mapClaimsToMsoMdoc(msoMdocClaims, vct);
       
       const devicePublicKeyJwk = cnf.jwk;
+      const issuerX509Material = resolveX509IssuanceMaterial(sessionObject);
       let issuerPrivateKeyForSign, issuerCertificateForSign;
       
       if (currentEffectiveSignatureType === "x509") {
         console.log("Using X.509 for mDL signing.");
-        issuerPrivateKeyForSign = privateKeyPemX509; // Use PEM string directly for crypto operations
-        issuerCertificateForSign = certificatePemX509;
+        issuerPrivateKeyForSign = issuerX509Material.privateKeyPem;
+        issuerCertificateForSign = issuerX509Material.certificatePem;
       } else {
         console.log("Using JWK for mDL signing.");
-        issuerPrivateKeyForSign = privateKeyPemX509; // Use PEM string directly for crypto operations
-        issuerCertificateForSign = certificatePemX509;
+        issuerPrivateKeyForSign = issuerX509Material.privateKeyPem;
+        issuerCertificateForSign = issuerX509Material.certificatePem;
       }
       
       // Create individual claim items manually
@@ -973,7 +999,7 @@ async function generateMdlCredentialManually(
       // Unprotected headers (CBOR map, not encoded) - use Map with integer keys
       // x5c (label 33) MUST be an array per COSE spec (RFC 8152)
       const unprotectedHeadersMap = new Map();
-      unprotectedHeadersMap.set(33, [Buffer.from(pemToBase64Der(issuerCertificateForSign), 'base64')]); // x5c: certificate chain array - integer key 33
+      unprotectedHeadersMap.set(33, issuerX509Material.x5c.map((der) => Buffer.from(der, "base64"))); // x5c: certificate chain array - integer key 33
       
       console.log("COSE Headers Debug:");
       console.log("Protected headers Map keys:", Array.from(protectedHeadersMap.keys()), "values:", Array.from(protectedHeadersMap.values()));
@@ -1161,12 +1187,13 @@ async function generateMdlCredentialWithAuth0Library(
   }
   console.log(`[mdl-issue] Device public key JWK found: kty=${devicePublicKeyJwk.kty}, crv=${devicePublicKeyJwk.crv || 'N/A'}`);
   
+  const issuerX509Material = resolveX509IssuanceMaterial(sessionObject);
   let issuerPrivateKeyForSign, issuerCertificateForSign;
   
   if (currentEffectiveSignatureType === "x509") {
     console.log("[mdl-issue] Using X.509 certificate for mDL signing");
-    issuerPrivateKeyForSign = privateKeyPemX509;
-    issuerCertificateForSign = certificatePemX509;
+    issuerPrivateKeyForSign = issuerX509Material.privateKeyPem;
+    issuerCertificateForSign = issuerX509Material.certificatePem;
     
     if (!issuerPrivateKeyForSign) {
       console.error(`[mdl-issue] Issuer private key (X.509) not found. Received: ${typeof issuerPrivateKeyForSign}, Expected: a PEM string`);
@@ -1179,8 +1206,8 @@ async function generateMdlCredentialWithAuth0Library(
     console.log(`[mdl-issue] Issuer X.509 certificate loaded (length: ${issuerCertificateForSign.length} chars)`);
   } else {
     console.log("[mdl-issue] Using JWK for mDL signing (fallback to X.509 keys)");
-    issuerPrivateKeyForSign = privateKeyPemX509;
-    issuerCertificateForSign = certificatePemX509;
+    issuerPrivateKeyForSign = issuerX509Material.privateKeyPem;
+    issuerCertificateForSign = issuerX509Material.certificatePem;
   }
 
   // Step 6: Create Document using @auth0/mdl library
@@ -1319,10 +1346,9 @@ export async function handleCredentialGenerationBasedOnFormatDeferred(
     serverURL ?? process.env.SERVER_URL ?? "http://localhost:3000";
   const requestBody = sessionObject.requestBody;
   const vct = requestBody.vct;
-  let { signer, verifier } = await createSignerVerifierX509(
-    privateKeyPemX509,
-    certificatePemX509,
-  );
+  let signer;
+  let verifier;
+  let x509Material = null;
   console.log("vc+sd-jwt ", vct);
 
   // Same cnf semantics as handleCredentialGenerationBasedOnFormat (jwt PoP vs attestation attested_keys).
@@ -1365,13 +1391,14 @@ export async function handleCredentialGenerationBasedOnFormatDeferred(
     sessionObject.isHaip && process.env.ISSUER_SIGNATURE_TYPE === "x509"
       ? "x509"
       : sessionObject.signatureType || "kid-jwk";
-  if (!isHaip) {
-    if (effectiveSignatureType === "x509") {
-      ({ signer, verifier } = await createSignerVerifierX509(
-        privateKeyPemX509,
-        certificatePemX509,
-      ));
-    } else {
+  if (effectiveSignatureType === "x509") {
+    x509Material = resolveX509IssuanceMaterial(sessionObject);
+    ({ signer, verifier } = await createSignerVerifierX509(
+      x509Material.privateKeyPem,
+      x509Material.certificatePem,
+    ));
+  }
+  if (effectiveSignatureType !== "x509") {
       let privateJwkForSigning;
       let publicJwkForSigning;
 
@@ -1395,7 +1422,6 @@ export async function handleCredentialGenerationBasedOnFormatDeferred(
         privateJwkForSigning,
         publicJwkForSigning,
       ));
-    }
   }
 
   const sdjwt = new SDJwtVcInstance({
@@ -1490,7 +1516,7 @@ export async function handleCredentialGenerationBasedOnFormatDeferred(
     headerOptions = {
       header: {
         typ: SDJWT_CREDENTIAL_TYP_HEADER,
-        x5c: [pemToBase64Der(certificatePemX509)],
+        x5c: x509Material.x5c,
       },
     };
   } else if (effectiveSignatureType === "did:web") {

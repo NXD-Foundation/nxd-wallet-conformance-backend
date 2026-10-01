@@ -633,11 +633,12 @@ deliberately separate:
   metadata signing material. `certs/pidissuerca02_eu.pem` is the CA used to
   extend the JAR `x5c` chain and the hardcoded `preprod.pki.eudiw.dev` WRPAC
   alternative anchor.
-- `trustFramework=true` x509 VP requests are signed with
-  `certs/we-build-wrpac.pem` and `certs/dev-i4mlab.aegean.gr.key.pem`
-  (`TRUST_WRPAC_CERT_PATH`, `TRUST_WRPAC_KEY_PATH`). Requests without that flag
-  keep the preprod P12. A missing trust-framework certificate fails generation
-  instead of falling back.
+- `trustFramework=true` x509 VP requests, and x509 credential issuance on a
+  session with that flag, are signed with `certs/we-build-wrpac.pem` and
+  `certs/dev-i4mlab.aegean.gr.key.pem` (`TRUST_WRPAC_CERT_PATH`,
+  `TRUST_WRPAC_KEY_PATH`). VP requests without that flag keep the preprod P12.
+  Issuance without that flag keeps `x509EC/client_certificate.crt`. A missing
+  trust-framework certificate fails generation instead of falling back.
 - Wallet-client credentials remain protocol-specific fixtures. DID, X.509,
   EC, CS-03, X25519, wallet-provider, and device keys must not be merged
   unless their protocol role and public-key identity are identical.
