@@ -534,8 +534,17 @@ export function getAuthCodeSessions() {
   };
 }
 
-export function getPushedAuthorizationRequests() {
-  return pushedAuthorizationRequests;
+export const PAR_TTL_SECONDS = 90;
+
+export async function storePushedAuthorizationRequest(requestUri, request, redisClient = client) {
+  if (!redisClient.isReady) throw new Error("Redis unavailable for PAR storage");
+  await redisClient.setEx(`par-requests:${requestUri}`, PAR_TTL_SECONDS, JSON.stringify(request));
+}
+
+export async function getPushedAuthorizationRequest(requestUri, redisClient = client) {
+  if (!redisClient.isReady) throw new Error("Redis unavailable for PAR lookup");
+  const raw = await redisClient.get(`par-requests:${requestUri}`);
+  return raw ? JSON.parse(raw) : null;
 }
 
 export function getSessionsAuthorizationDetail() {

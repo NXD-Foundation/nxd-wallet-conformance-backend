@@ -4,7 +4,6 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { v4 as uuidv4 } from "uuid";
 import {
-  getPushedAuthorizationRequests,
   getSessionsAuthorizationDetail,
   getAuthCodeAuthorizationDetail,
 } from "../../services/cacheService.js";
@@ -20,6 +19,7 @@ import {
 } from "../codeFlowJwtRoutes.js";
 
 import { getCodeFlowSession, storeCodeFlowSession, reserveBusinessWalletAttestation, logInfo, logWarn, logError } from "../../services/cacheServiceRedis.js";
+import { PAR_TTL_SECONDS, storePushedAuthorizationRequest, getPushedAuthorizationRequest } from "../../services/cacheServiceRedis.js";
 import { makeSessionLogger, logHttpRequest, logHttpResponse } from "../../utils/sessionLogger.js";
 import jwt from "jsonwebtoken";
 
@@ -120,11 +120,9 @@ async function manageSession(uuid, sessionData) {
   return existingSession;
 }
 
-function createPARRequest(requestData) {
+async function createPARRequest(requestData) {
   const requestURI = "urn:aegean.gr:" + uuidv4();
-  const parRequests = getPushedAuthorizationRequests();
-  
-  parRequests.set(requestURI, {
+  await storePushedAuthorizationRequest(requestURI, {
     client_id: requestData.client_id,
     dpop_jkt: requestData.dpop_jkt || null,
     walletAttestation: requestData.walletAttestation || null,
@@ -140,6 +138,7 @@ function createPARRequest(requestData) {
     issuerState: requestData.issuerState,
     authorizationDetails: requestData.authorizationDetails,
     clientMetadata: requestData.clientMetadata,
+    nonce: requestData.nonce,
     wallet_issuer_id: requestData.wallet_issuer_id,
     user_hint: requestData.user_hint,
     requiresWua: requestData.requiresWua === true,
@@ -151,7 +150,7 @@ function createPARRequest(requestData) {
 
   return {
     request_uri: requestURI,
-    expires_in: 90,
+    expires_in: PAR_TTL_SECONDS,
   };
 }
 
@@ -233,10 +232,10 @@ function validateAuthorizationRequest(response_type, code_challenge, authorizati
   return errors;
 }
 
-function handlePARRequest(request_uri) {
+async function handlePARRequest(request_uri) {
   if (!request_uri) return null;
 
-  const parRequest = getPushedAuthorizationRequests()?.get(request_uri);
+  const parRequest = await getPushedAuthorizationRequest(request_uri);
   if (!parRequest) {
     console.log(`${ERROR_MESSAGES.PAR_REQUEST_NOT_FOUND}. Received: request_uri '${request_uri}' not found in cache, expected: valid request_uri from PAR endpoint`);
     return null;
@@ -247,6 +246,7 @@ function handlePARRequest(request_uri) {
 
 function updateSessionForAuthorization(existingCodeSession, requestData) {
   existingCodeSession.walletSession = requestData.state;
+  existingCodeSession.nonce = requestData.nonce;
   existingCodeSession.authorizationDetails = requestData.authorizationDetails;
   existingCodeSession.scope = requestData.scope;
   existingCodeSession.requests = {
@@ -635,6 +635,7 @@ codeFlowRouterSDJWT.post(["/par", "/authorize/par"], async (req, res) => {
       code_challenge_method: req.body.code_challenge_method,
       claims: req.body.claims,
       state: req.body.state,
+      nonce: req.body.nonce,
       authorizationHeader: req.get("Authorization"),
       responseType: req.body.response_type,
       issuerState,
@@ -826,7 +827,7 @@ codeFlowRouterSDJWT.post(["/par", "/authorize/par"], async (req, res) => {
       }
     }
 
-    const result = createPARRequest(requestData);
+    const result = await createPARRequest(requestData);
 
     if (slog) {
       logHttpResponse(slog, requestId, "/par", 201, "Created", res.getHeaders(), result);
@@ -887,9 +888,24 @@ codeFlowRouterSDJWT.get("/authorize", async (req, res) => {
     }
 
     // Handle PAR request if present
-    const parRequest = handlePARRequest(requestData.request_uri);
+    let parRequest;
+    try {
+      parRequest = await handlePARRequest(requestData.request_uri);
+    } catch (error) {
+      return res.status(503).json({ error: "temporarily_unavailable", error_description: "Authorization request storage is unavailable. Please retry." });
+    }
+    if (requestData.request_uri && !parRequest) {
+      return res.status(400).json({ error: "invalid_request", error_description: "Authorization request expired or was not found. Start a new issuance flow." });
+    }
     if (parRequest) {
-      requestData = { ...requestData, ...parRequest };
+      // A resolved PAR request is authoritative. Do not merge front-channel
+      // parameters into it: JSON serialization omits undefined fields, and
+      // merging would let those query parameters override absent PAR values.
+      requestData = {
+        ...parRequest,
+        client_metadata: parRequest.clientMetadata,
+        request_uri: requestData.request_uri,
+      };
     }
 
     console.log("wallet_issuer_id: " + requestData.wallet_issuer_id);
@@ -939,6 +955,9 @@ codeFlowRouterSDJWT.get("/authorize", async (req, res) => {
 
     const updatedRequestData = {
       ...requestData,
+      // client_id_scheme is issuer session configuration for DC API offers;
+      // the wallet's PAR request need not repeat this private routing detail.
+      client_id_scheme: requestData.client_id_scheme || existingCodeSession.client_id_scheme,
       redirectUri,
       credentialsRequested,
       isPIDIssuanceFlow,

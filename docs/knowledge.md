@@ -85,6 +85,12 @@ Default blocking behaviour (`redirect_uri=openid4vp://`, server-side `/authorize
 fetch) is unchanged when handoff is off. Detail:
 [wallet-client/docs/auth-handoff-itb.md](../wallet-client/docs/auth-handoff-itb.md).
 
+Issuer PAR requests are shared in Redis under `par-requests:<request_uri>`
+with the advertised 90-second TTL, so browser authorization can reach a
+different issuer worker. All workers must use the same Redis database.
+Missing/expired PAR references return HTTP 400 directly; unavailable PAR
+storage returns HTTP 503 at `/authorize` instead of a wallet deep-link error.
+
 ## Authority And Reading Order
 
 When documents disagree, use this order of authority:

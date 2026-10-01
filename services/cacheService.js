@@ -8,7 +8,6 @@ let issuerCodeSessions = [];
 let codeFlowRequests = [];
 let codeFlowRequestsResults = [];
 
-let pushedAuthorizationRequests = new Map();
 let sessionsAuthorizationDetail = new Map();
 let authCodeAuthorizationDetail = new Map();
 
@@ -36,11 +35,6 @@ export function getAuthCodeSessions() {
     results: codeFlowRequestsResults,
   };
 }
-
-export function getPushedAuthorizationRequests() {
-  return pushedAuthorizationRequests;
-}
-
 
 export function getSessionsAuthorizationDetail() {
   return sessionsAuthorizationDetail;

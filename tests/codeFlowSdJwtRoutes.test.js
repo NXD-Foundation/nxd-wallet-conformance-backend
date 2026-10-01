@@ -26,7 +26,14 @@ const mockCryptoUtils = {
 const mockCacheService = {
   getCodeFlowSession: sinon.stub(),
   storeCodeFlowSession: sinon.stub(),
+  // Test-local Map backing for the Redis PAR API used by production routes.
   getPushedAuthorizationRequests: sinon.stub(),
+  storePushedAuthorizationRequest: sinon.stub().callsFake(async (requestUri, request) => {
+    mockCacheService.getPushedAuthorizationRequests().set(requestUri, structuredClone(request));
+  }),
+  getPushedAuthorizationRequest: sinon.stub().callsFake(async requestUri => {
+    return mockCacheService.getPushedAuthorizationRequests().get(requestUri) || null;
+  }),
   getSessionsAuthorizationDetail: sinon.stub(),
   getAuthCodeAuthorizationDetail: sinon.stub()
 };
@@ -247,9 +254,7 @@ testRouter.post(['/par', '/authorize/par'], async (req, res) => {
     }
 
     const requestURI = 'urn:aegean.gr:' + uuidv4();
-    const parRequests = mockCacheService.getPushedAuthorizationRequests();
-    
-    parRequests.set(requestURI, {
+    await mockCacheService.storePushedAuthorizationRequest(requestURI, {
       client_id,
       scope,
       response_type,
@@ -312,8 +317,7 @@ testRouter.get('/authorize', async (req, res) => {
     let finalUserHint = user_hint;
 
     if (request_uri) {
-      const parRequests = mockCacheService.getPushedAuthorizationRequests();
-      const parRequest = parRequests.get(request_uri);
+      const parRequest = await mockCacheService.getPushedAuthorizationRequest(request_uri);
 
       // PAR-04 — Reject unknown request_uri
       if (!parRequest) {
@@ -580,6 +584,14 @@ describe('Code Flow SD-JWT Routes', () => {
     mockCacheService.getCodeFlowSession.reset();
     mockCacheService.storeCodeFlowSession.reset();
     mockCacheService.getPushedAuthorizationRequests.reset();
+    mockCacheService.storePushedAuthorizationRequest.resetBehavior();
+    mockCacheService.getPushedAuthorizationRequest.resetBehavior();
+    mockCacheService.storePushedAuthorizationRequest.callsFake(async (requestUri, request) => {
+      mockCacheService.getPushedAuthorizationRequests().set(requestUri, structuredClone(request));
+    });
+    mockCacheService.getPushedAuthorizationRequest.callsFake(async requestUri => {
+      return mockCacheService.getPushedAuthorizationRequests().get(requestUri) || null;
+    });
     mockCacheService.getSessionsAuthorizationDetail.reset();
     mockCacheService.getAuthCodeAuthorizationDetail.reset();
     mockTokenUtils.buildVPbyValue.reset();
@@ -1738,4 +1750,4 @@ describe('Code Flow SD-JWT Routes', () => {
       expect(authResponse.headers.location).to.include('openid4vp://');
     });
   });
-}); 
+});
