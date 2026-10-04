@@ -91,7 +91,7 @@ export async function createProofJwt({
   }
   const now = Math.floor(Date.now() / 1000);
   const payload = {
-    iss: issuer,
+    ...(issuer ? { iss: issuer } : {}),
     aud: audience,
     iat: now,
     nbf: now - 5,

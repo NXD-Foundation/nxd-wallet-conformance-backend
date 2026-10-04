@@ -213,10 +213,10 @@ export async function exchangeToken({
     );
     challengeState?.updateFromResponse(response.headers);
     lastTokenResponseText = await response.text().catch(() => "");
-    if (response.ok) {
-      tokenBody = JSON.parse(lastTokenResponseText);
-      return { tokenBody, dpopPrivateJwk, dpopPublicJwk };
-    }
+      if (response.ok) {
+        tokenBody = JSON.parse(lastTokenResponseText);
+        return { tokenBody, dpopPrivateJwk, dpopPublicJwk, walletClientId };
+      }
 
     const attestationRetry = shouldRetryWithAttestationChallenge(response, lastTokenResponseText);
     if (attestationRetry.shouldRetry && attestationRetry.challenge && challengeState) {
@@ -251,7 +251,7 @@ export async function exchangeToken({
       lastTokenResponseText = await response.text().catch(() => "");
       if (response.ok) {
         tokenBody = JSON.parse(lastTokenResponseText);
-        return { tokenBody, dpopPrivateJwk, dpopPublicJwk };
+        return { tokenBody, dpopPrivateJwk, dpopPublicJwk, walletClientId };
       }
     }
 
@@ -327,6 +327,8 @@ export async function buildCredentialRequest({
   c_nonce,
   keyPairs,
   selectedAlg,
+  clientId = null,
+  anonymousAccess = false,
   buildCredentialRequestProofs,
   buildCredentialRequestSelector,
   prepareCredentialResponseEncryption,
@@ -338,6 +340,8 @@ export async function buildCredentialRequest({
     c_nonce,
     keyPairs,
     selectedAlg,
+    clientId,
+    anonymousAccess,
   });
   const credentialResponseEncCtx = await prepareCredentialResponseEncryption();
   const credentialRequest = {

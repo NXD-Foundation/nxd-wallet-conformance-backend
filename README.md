@@ -823,7 +823,7 @@ Per OID4VCI v1.0 Section 7.2:
 - **Proof format**: Uses `proofs` (plural) format per V1.0 specification
 - **Proof signing algorithms**: Supports `ES256`, `ES384`, `ES512`, `EdDSA` with algorithm negotiation
 - **Public key embedding**: Embeds JWK in proof JWT header (`jwk` claim)
-- **DID-based issuer**: Uses `did:jwk:` as proof issuer (`iss` claim)
+- **Proof issuer**: Sets the credential proof JWT `iss` to the OAuth `client_id` from the token request (OpenID4VCI 1.0 Appendix F.1). Omits `iss` for anonymous pre-authorized access. The holder key stays in the proof header `jwk`.
 - **Nonce handling**: Includes `c_nonce` from issuer in proof JWT payload
 - **Audience validation**: Sets proof audience to credential issuer identifier
 - **Proof type header**: Uses `typ: "openid4vci-proof+jwt"` in proof JWT header

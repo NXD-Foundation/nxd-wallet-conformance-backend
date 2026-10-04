@@ -50,6 +50,7 @@ describe("WUA credential binding (RFC001 Phase 5)", () => {
 
   it("buildCredentialRequestProofs (jwt): one proof, WUA in key_attestation, signed with first key", async () => {
     const kp = await makeKeyPair();
+    const clientId = "2b176a41-5d2c-40e2-be06-1709e112211a";
     const { proofs, proofJwt, wuaJwt } = await buildCredentialRequestProofs({
       proofMode: "jwt",
       credentialEndpoint: "https://issuer.example/credential",
@@ -57,15 +58,52 @@ describe("WUA credential binding (RFC001 Phase 5)", () => {
       c_nonce: "nonce-1",
       keyPairs: [kp],
       selectedAlg: "ES256",
+      clientId,
     });
     expect(proofs.jwt).to.have.length(1);
     expect(proofs.jwt[0]).to.equal(proofJwt);
+    const payload = decodeJwt(proofJwt);
+    expect(payload.iss).to.equal(clientId);
+    expect(payload.iss).to.not.match(/^did:jwk:/);
     const h = decodeProtectedHeader(proofJwt);
     expect(h.key_attestation).to.equal(wuaJwt);
     const wua = decodeJwt(wuaJwt);
     expect(wua.attested_keys).to.have.length(1);
     expect(wua.nonce).to.equal("nonce-1");
     expect(await publicJwksMatch(wua.attested_keys[0], kp.publicJwk)).to.equal(true);
+  });
+
+  it("omits proof iss for anonymous pre-authorized access", async () => {
+    const kp = await makeKeyPair();
+    const { proofJwt } = await buildCredentialRequestProofs({
+      proofMode: "jwt",
+      credentialEndpoint: "https://issuer.example/credential",
+      aud: "https://issuer.example",
+      c_nonce: "nonce-1",
+      keyPairs: [kp],
+      selectedAlg: "ES256",
+      anonymousAccess: true,
+    });
+    expect(decodeJwt(proofJwt)).to.not.have.property("iss");
+    expect(decodeProtectedHeader(proofJwt).jwk).to.deep.include({ kty: kp.publicJwk.kty, crv: kp.publicJwk.crv });
+  });
+
+  it("rejects a jwt proof when the authenticated client_id is missing", async () => {
+    const kp = await makeKeyPair();
+    let err = null;
+    try {
+      await buildCredentialRequestProofs({
+        proofMode: "jwt",
+        credentialEndpoint: "https://issuer.example/credential",
+        aud: "https://issuer.example",
+        c_nonce: "nonce-1",
+        keyPairs: [kp],
+        selectedAlg: "ES256",
+      });
+    } catch (e) {
+      err = e;
+    }
+    expect(String(err?.message || "")).to.match(/OAuth client_id/);
   });
 
   it("buildCredentialRequestProofs (attestation): exactly one WUA", async () => {

@@ -4,6 +4,7 @@
  * - proofs.attestation: exactly one WUA JWT
  */
 import { createProofJwt } from "./crypto.js";
+import { resolveOpenid4VciProofIssuerClaim } from "./credentialProofBinding.js";
 import { buildWalletUnitAttestationJwt } from "./walletProviderIdentity.js";
 import {
   orderedAttestedPublicJwks,
@@ -26,6 +27,8 @@ export function redactProofsForLog(proofs) {
 /**
  * @param {"jwt"|"attestation"} proofMode
  * @param {{ privateJwk: object, publicJwk: object, didJwk: string }[]} keyPairs — stable order; proof uses index 0
+ * @param {string} [clientId] OAuth client_id from the token request. OpenID4VCI 1.0 F.1 requires this as proof `iss` when the client authenticated.
+ * @param {boolean} [anonymousAccess] Omit proof `iss` for anonymous pre-authorized token access.
  */
 export async function buildCredentialRequestProofs({
   proofMode,
@@ -34,6 +37,8 @@ export async function buildCredentialRequestProofs({
   c_nonce,
   keyPairs,
   selectedAlg,
+  clientId = null,
+  anonymousAccess = false,
 }) {
   const attestPub = orderedAttestedPublicJwks(keyPairs);
   const proofKey = keyPairs[0];
@@ -63,7 +68,7 @@ export async function buildCredentialRequestProofs({
     publicJwk: proofKey.publicJwk,
     audience: aud,
     nonce: c_nonce,
-    issuer: proofKey.didJwk,
+    issuer: resolveOpenid4VciProofIssuerClaim({ clientId, anonymousAccess }),
     typ: "openid4vci-proof+jwt",
     alg: selectedAlg,
     key_attestation: wuaJwt,

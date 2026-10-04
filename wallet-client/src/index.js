@@ -198,6 +198,7 @@ async function main() {
     c_nonce,
     keyPairs,
     selectedAlg: "ES256",
+    clientId: tokenExchange.walletClientId,
     buildCredentialRequestProofs,
     buildCredentialRequestSelector,
     prepareCredentialResponseEncryption: async () => null,
