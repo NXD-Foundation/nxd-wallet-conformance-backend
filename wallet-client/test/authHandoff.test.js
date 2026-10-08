@@ -23,6 +23,7 @@ import {
   CS01_CLIENT_ID,
 } from "./fixtures/cs01Fixtures.js";
 import { WALLET_PROFILES } from "../src/lib/profile.js";
+import { ensureOrCreateEcKeyPair } from "../src/lib/crypto.js";
 
 describe("auth handoff config", () => {
   it("enables handoff from env or request body override", () => {
@@ -208,6 +209,86 @@ describe("authorization code prepare (handoff)", () => {
     expect(tokenParams.code_verifier).to.equal("stored-verifier");
     expect(tokenParams.redirect_uri).to.equal("https://wallet.example/oauth/callback");
     expect(result).to.have.property("credential");
+  });
+
+  it("sends the PAR wallet instance attestation again at the token endpoint", async () => {
+    const cnfKeyPair = await ensureOrCreateEcKeyPair(undefined, "ES256");
+    const parAttestation = {
+      attestationJwt: "wia-from-par",
+      cnfKeyPair,
+    };
+    const calls = [];
+    const tokenResponse = {
+      ok: true,
+      status: 200,
+      headers: { get: () => null, entries: () => [] },
+      json: async () => ({
+        access_token: "at",
+        token_type: "Bearer",
+        c_nonce: "nonce-1",
+        authorization_details: [
+          {
+            type: "openid_credential",
+            credential_configuration_id: "VerifiableIdCard",
+                credential_identifiers: ["cred-id-1", "cred-id-2"],
+          },
+        ],
+      }),
+    };
+    const authCode = createAuthorizationCodeIssuance({
+      discoverAuthorizationServerMetadata: async () => cs01AuthorizationServerMetadata,
+      httpPostFormWithAttestationChallengeRetry: async (args) => {
+        calls.push(args);
+        if (!String(args.url).includes("/token")) {
+          const parResponse = {
+            ok: true,
+            status: 201,
+            parsedBody: { request_uri: "urn:example:par:req-1", expires_in: 300 },
+            headers: { get: () => null, entries: () => [] },
+            json: async () => ({ request_uri: "urn:example:par:req-1", expires_in: 300 }),
+          };
+          Object.defineProperty(parResponse, "sessionClientAttestation", { value: parAttestation });
+          return parResponse;
+        }
+        return tokenResponse;
+      },
+      httpPostJson: async () => ({ ok: true, json: async () => ({}) }),
+      validateAndStoreCredential: async () => {},
+      issueCredentialTargets: async () => ({
+        credentials: [{ credential: "issued" }],
+        proofBindings: [{ senderConstraining: "none" }],
+      }),
+      wrapIssuanceResult: (credential, ctx) => ({ credential, issuanceContext: ctx }),
+      sleep: async () => {},
+      fetchImpl: async () => {
+        throw new Error("authorize fetch should not run");
+      },
+    });
+
+    const prepared = await authCode.prepareAuthorization(
+      {
+        profile: WALLET_PROFILES.COMPATIBILITY,
+        walletClientId: CS01_CLIENT_ID,
+        apiBase: cs01IssuerMetadata.credential_issuer,
+        issuerMeta: { ...cs01IssuerMetadata },
+        configurationId: "VerifiableIdCard",
+        redirectUri: "https://wallet.example/oauth/callback",
+      },
+      "session-wia-reuse",
+    );
+    expect(prepared.sessionClientAttestation.attestationJwt).to.equal("wia-from-par");
+
+    const pending = deserializePendingContext(serializePendingContext(prepared));
+    await authCode.completeAuthorization(
+      pending,
+      { code: "auth-code-1", state: prepared.state },
+      "session-wia-reuse",
+    );
+
+    const tokenCall = calls.find((call) => String(call.url).includes("/token"));
+    expect(tokenCall.reuseAttestationJwt).to.equal("wia-from-par");
+    expect(tokenCall.cnfKeyPair.publicJwk).to.deep.equal(parAttestation.cnfKeyPair.publicJwk);
+    expect(tokenCall.cnfKeyPair.privateJwk).to.deep.equal(parAttestation.cnfKeyPair.privateJwk);
   });
 });
 

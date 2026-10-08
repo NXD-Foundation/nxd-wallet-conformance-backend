@@ -1860,17 +1860,29 @@ export const validateWIA = async (wiaJwt, sessionId = null) => {
       return { valid: false, error: withSpecRef('WIA JWT missing iss claim', WUA_SPEC_REF, OID4VCI_WALLET_ATTESTATION_SPEC_REF) };
     }
 
-    // Per spec: WIA SHALL have a time-to-live of less than 24 hours
-    // I.e., the difference between expiration time exp and the time of issuance SHALL be less than 24 hours
-    if (decoded.payload.exp && decoded.payload.iat) {
+    // draft-ietf-oauth-attestation-based-client-auth-08 §5.1: exp is REQUIRED, iat is OPTIONAL.
+    // CS-04 §7.1 time-to-live under 24 hours is checked only when iat is present.
+    if (typeof decoded.payload.exp !== 'number') {
+      return {
+        valid: false,
+        error: withSpecRef('WIA JWT missing exp claim', WUA_SPEC_REF, OID4VCI_WALLET_ATTESTATION_SPEC_REF),
+      };
+    }
+    if (decoded.payload.iat !== undefined && decoded.payload.iat !== null) {
+      if (typeof decoded.payload.iat !== 'number') {
+        return {
+          valid: false,
+          error: withSpecRef('WIA JWT iat claim must be a number', WUA_SPEC_REF, OID4VCI_WALLET_ATTESTATION_SPEC_REF),
+        };
+      }
       const ttlInSeconds = decoded.payload.exp - decoded.payload.iat;
       const ttlInHours = ttlInSeconds / 3600;
       const maxTtlHours = 24;
-      
+
       if (ttlInSeconds < 0) {
         return { valid: false, error: withSpecRef('WIA JWT has invalid expiration (exp < iat)', WUA_SPEC_REF, OID4VCI_WALLET_ATTESTATION_SPEC_REF) };
       }
-      
+
       if (ttlInHours >= maxTtlHours) {
         return {
           valid: false,
@@ -1881,15 +1893,6 @@ export const validateWIA = async (wiaJwt, sessionId = null) => {
           ),
         };
       }
-    } else if (!decoded.payload.exp || !decoded.payload.iat) {
-      return {
-        valid: false,
-        error: withSpecRef(
-          'WIA JWT missing exp or iat claim required for TTL validation',
-          WUA_SPEC_REF,
-          OID4VCI_WALLET_ATTESTATION_SPEC_REF
-        ),
-      };
     }
 
     // TODO: Verify signature against Wallet Provider's JWKS

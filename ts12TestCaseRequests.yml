@@ -238,6 +238,28 @@ ts12_payment_authorization:
         session_id: "ts12-pay-005"
       spec_reference: "TS12 §4.3.1"
 
+    - id: "TS12-PAY-06"
+      name: "TS12 combined SCA + PID payment authorization"
+      description: >
+        Same classic OID4VP payment request as TS12-PAY-03, plus include_pid=true.
+        DCQL asks for the selected SCA attestation and urn:eu.europa.ec.eudi:pid:1.
+        transaction_data.credential_ids still names only the SCA credential id.
+      method: "POST"
+      path: "/ts12/payment/request"
+      url: "http://localhost:3000/ts12/payment/request"
+      body:
+        session_id: "ts12-pay-iban-pid"
+        attestation_type: "sca-iban"
+        include_pid: true
+        merchant: "Coffee Shop"
+        payee_id: "shop-42"
+        currency: "EUR"
+        amount: 12.34
+        transaction_id: "tx-iban-pid-001"
+        response_mode: "direct_post"
+        request_uri_method: "post"
+      spec_reference: "CS-12 / CS-07 ts12-iban-pid"
+
   request_uri_resolution:
     - id: "TS12-REQ-01"
       name: "Fetch signed authorization request (GET request_uri)"

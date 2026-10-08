@@ -442,6 +442,22 @@ function parseOptionalBoolean(raw) {
   return raw;
 }
 
+/**
+ * Classic `/ts12/payment/request` flag for a combined SCA + PID DCQL query.
+ * Omitted means SCA only. Invalid values are rejected.
+ * @param {unknown} raw
+ * @returns {boolean}
+ */
+export function parseTs12IncludePid(raw) {
+  if (raw === undefined || raw === null || raw === "") return false;
+  if (raw === true || raw === "true" || raw === "1") return true;
+  if (raw === false || raw === "false" || raw === "0") return false;
+  throw new Ts12PaymentValidationError(
+    ["include_pid must be a boolean"],
+    "invalid_ts12_include_pid",
+  );
+}
+
 function optionalBooleanError(field, value, originalInput, errors) {
   const raw = hasOwn(originalInput, field) ? originalInput[field] : value;
   if (raw === undefined || raw === null || raw === "") return;

@@ -105,6 +105,40 @@ describe("wallet-client walletUnitAttestation (Phase 7)", () => {
     expect(payload).to.have.property("iss", "wallet-client");
   });
 
+  it("reuses the same WIA across PAR and token while minting a fresh PoP", async () => {
+    const par = await createWalletUnitAttestationClientAuth({
+      profile: CS01,
+      keyPath: undefined,
+      clientId: "wallet-client",
+      endpointAudience: "https://issuer.example.com/par",
+      authorizationServerIssuer: "https://issuer.example.com",
+      stage: "PAR",
+    });
+    const parWia = par.headers["OAuth-Client-Attestation"];
+    const parPop = par.headers["OAuth-Client-Attestation-PoP"];
+
+    const token = await createWalletUnitAttestationClientAuth({
+      profile: CS01,
+      keyPath: undefined,
+      clientId: "wallet-client",
+      endpointAudience: "https://issuer.example.com/token",
+      authorizationServerIssuer: "https://issuer.example.com",
+      stage: "token request",
+      cnfKeyPair: par.cnfKeyPair,
+      reuseAttestationJwt: parWia,
+      challenge: "token-challenge",
+    });
+
+    expect(token.headers["OAuth-Client-Attestation"]).to.equal(parWia);
+    expect(token.headers["OAuth-Client-Attestation-PoP"]).to.not.equal(parPop);
+    const popPayload = decodeJwt(token.headers["OAuth-Client-Attestation-PoP"]);
+    expect(popPayload).to.have.property("challenge", "token-challenge");
+    expect(popPayload).to.have.property("aud", "https://issuer.example.com");
+    expect(getWalletUnitAttestationLifecycleStateForTests().usedJwtIds).to.deep.equal([
+      decodeJwt(parWia).jti,
+    ]);
+  });
+
   it("omits challenge claim in PoP when no challenge is provided", async () => {
     const result = await createWalletUnitAttestationClientAuth({
       profile: CS01,

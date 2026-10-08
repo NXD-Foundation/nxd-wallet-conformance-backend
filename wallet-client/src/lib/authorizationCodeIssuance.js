@@ -150,6 +150,7 @@ export function serializePendingContext(prepared) {
     scopeResolution: prepared.scopeResolution,
     issuanceContext: prepared.issuanceContext,
     attestationChallenge: prepared.attestationChallengeState?.current ?? null,
+    sessionClientAttestation: prepared.sessionClientAttestation || null,
   };
 }
 
@@ -312,6 +313,7 @@ export function createAuthorizationCodeIssuance(deps) {
     let finalAuthorizeUrl = authorizeUrl.toString();
     let usedPar = false;
     let parExpiresIn = null;
+    let sessionClientAttestation = null;
     if (parEndpoint) {
       try {
         let legacyParBodyClientAssertionJwt = null;
@@ -353,6 +355,9 @@ export function createAuthorizationCodeIssuance(deps) {
           const parBody = parRes.parsedBody || (await parRes.json().catch(() => ({})));
           const requestUri = parBody.request_uri;
           parExpiresIn = parBody.expires_in ?? null;
+          if (parRes.sessionClientAttestation?.attestationJwt) {
+            sessionClientAttestation = parRes.sessionClientAttestation;
+          }
           assertParResponse(profile, {
             ok: true,
             status: parRes.status,
@@ -431,6 +436,7 @@ export function createAuthorizationCodeIssuance(deps) {
       scopeResolution,
       issuanceContext,
       attestationChallengeState,
+      sessionClientAttestation,
       expiresAt,
       ttlSeconds,
     };
@@ -519,10 +525,12 @@ export function createAuthorizationCodeIssuance(deps) {
     let issuanceContext = { ...pending.issuanceContext };
     const attestationChallengeState = pending.attestationChallengeState;
 
+    const sessionClientAttestation = pending.sessionClientAttestation || null;
     const dpopBinding = await createTokenRequestDpopBinding({
       keyPath,
       tokenEndpoint,
       profile,
+      cnfKeyPair: sessionClientAttestation?.cnfKeyPair || null,
     });
     const { dpopJwt } = dpopBinding;
 
@@ -577,6 +585,7 @@ export function createAuthorizationCodeIssuance(deps) {
       stage: "token request",
       challengeState: attestationChallengeState,
       cnfKeyPair: dpopBinding,
+      reuseAttestationJwt: sessionClientAttestation?.attestationJwt || null,
     });
 
     if (!tokenRes.ok) {

@@ -205,6 +205,12 @@ function markAttestationJwtUsedOnce(jwt, label) {
   return jti;
 }
 
+function publicJwkMatches(left, right) {
+  if (!left || !right) return false;
+  const fields = left.kty === "RSA" ? ["kty", "n", "e"] : ["kty", "crv", "x", "y"];
+  return fields.every((field) => left[field] && left[field] === right[field]);
+}
+
 export function resetWalletUnitAttestationLifecycleForTests() {
   issuedAttestationIds.clear();
   resetWuaStatusListForTests();
@@ -223,40 +229,64 @@ async function createLocalKeyWalletUnitAttestationClientAuth({
   challenge = null,
   cnfKeyPair = null,
   cs01 = false,
+  reuseAttestationJwt = null,
 }) {
   const cnfKeys = cnfKeyPair || (await ensureOrCreateEcKeyPair(keyPath, alg));
   const { privateJwk, publicJwk } = cnfKeys;
-  const now = Math.floor(Date.now() / 1000);
-  const walletProvider = cs01 ? loadWalletProviderFixtureMaterial() : null;
-  const clientStatus = cs01 ? await allocateWuaStatusMaintenance({ kind: "wia", now }) : null;
-  const attestationJwt = await createOAuthClientAttestationJwt({
-    privateJwk,
-    privateKeyPem: walletProvider?.privateKeyPem || null,
-    publicJwk,
-    issuer: cs01 ? null : clientId,
-    subject: clientId,
-    audience: endpointAudience,
-    cnfJwk: publicJwk,
-    alg,
-    ttlSeconds: cs01 ? CS01_WIA_TTL_SECONDS : 300,
-    includeJwkHeader: !cs01,
-    headerParams: cs01 ? { x5c: walletProvider.x5c } : null,
-    extraClaims: cs01
-      ? {
-          wallet_name: "Test Wallet Client",
-          wallet_version: "1.0.0",
-          wallet_link: "https://wallet-provider.example/wallet-client",
-          wallet_solution_certification_information: {
-            scheme: "local-dev-fixture",
-            assurance: "not-trust-framework-validated",
-          },
-          client_status: {
-            status: clientStatus.status,
-            exp: clientStatus.exp,
-          },
-        }
-      : null,
-  });
+  let attestationJwt = reuseAttestationJwt || null;
+  let attestationJti = null;
+  if (attestationJwt) {
+    let reusedPayload;
+    try {
+      reusedPayload = decodeJwt(attestationJwt);
+    } catch (error) {
+      throw new AttestationSourceError(`Reused WIA cannot be decoded: ${error?.message || error}`);
+    }
+    if (!publicJwkMatches(reusedPayload?.cnf?.jwk, publicJwk)) {
+      throw new AttestationSourceError("Reused WIA cnf.jwk does not match the session client key");
+    }
+    attestationJti = reusedPayload?.jti || null;
+  } else {
+    const now = Math.floor(Date.now() / 1000);
+    const walletProvider = cs01 ? loadWalletProviderFixtureMaterial() : null;
+    const clientStatus = cs01 ? await allocateWuaStatusMaintenance({ kind: "wia", now }) : null;
+    attestationJwt = await createOAuthClientAttestationJwt({
+      privateJwk,
+      privateKeyPem: walletProvider?.privateKeyPem || null,
+      publicJwk,
+      issuer: cs01 ? null : clientId,
+      subject: clientId,
+      audience: endpointAudience,
+      cnfJwk: publicJwk,
+      alg,
+      ttlSeconds: cs01 ? CS01_WIA_TTL_SECONDS : 300,
+      includeJwkHeader: !cs01,
+      headerParams: cs01 ? { x5c: walletProvider.x5c } : null,
+      extraClaims: cs01
+        ? {
+            wallet_name: "Test Wallet Client",
+            wallet_version: "1.0.0",
+            wallet_link: "https://wallet-provider.example/wallet-client",
+            wallet_solution_certification_information: {
+              scheme: "local-dev-fixture",
+              assurance: "not-trust-framework-validated",
+            },
+            client_status: {
+              status: clientStatus.status,
+              exp: clientStatus.exp,
+            },
+          }
+        : null,
+    });
+    attestationJti = markAttestationJwtUsedOnce(attestationJwt, "WIA");
+    if (clientStatus) {
+      await bindWuaStatusListAttestationJti({
+        kind: "wia",
+        idx: clientStatus.idx,
+        jti: attestationJti,
+      });
+    }
+  }
   const popJwt = await createOAuthClientAttestationPopJwt({
     privateJwk,
     publicJwk,
@@ -266,14 +296,6 @@ async function createLocalKeyWalletUnitAttestationClientAuth({
     challenge,
   });
   assertOutboundClientIdAligned({ clientId, attestationJwt, popJwt });
-  const attestationJti = markAttestationJwtUsedOnce(attestationJwt, "WIA");
-  if (clientStatus) {
-    await bindWuaStatusListAttestationJti({
-      kind: "wia",
-      idx: clientStatus.idx,
-      jti: attestationJti,
-    });
-  }
   return {
     source: ATTESTATION_SOURCES.LOCAL_KEY,
     trustFrameworkIntegrated: false,
@@ -299,6 +321,7 @@ export async function createWalletUnitAttestationClientAuth({
   stage = "client authentication",
   challenge = null,
   cnfKeyPair = null,
+  reuseAttestationJwt = null,
 }) {
   const source = resolveAttestationSource(profile);
   switch (source) {
@@ -313,6 +336,7 @@ export async function createWalletUnitAttestationClientAuth({
           challenge,
           cnfKeyPair,
           cs01: isWebuildCs01Profile(profile),
+          reuseAttestationJwt,
         })),
         stage,
         implementationNote: LOCAL_KEY_ATTESTATION_NOTE,

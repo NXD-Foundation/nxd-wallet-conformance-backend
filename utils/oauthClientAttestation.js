@@ -21,8 +21,8 @@ export const CLIENT_ATTESTATION_JWT_TYP = "oauth-client-attestation+jwt";
 export const CLIENT_ATTESTATION_POP_TYP = "oauth-client-attestation-pop+jwt";
 const SPEC_REFS = {
   HAIP_WALLET_ATTESTATION: "HAIP 1.0 §4.3-4.4.1",
-  OAUTH_CLIENT_ATTESTATION: "draft-ietf-oauth-attestation-based-client-auth-08 §4.1.1",
-  OAUTH_CLIENT_ATTESTATION_POP: "draft-ietf-oauth-attestation-based-client-auth-08 §4.1.2",
+  OAUTH_CLIENT_ATTESTATION: "draft-ietf-oauth-attestation-based-client-auth-08 §5.1",
+  OAUTH_CLIENT_ATTESTATION_POP: "draft-ietf-oauth-attestation-based-client-auth-08 §5.2",
   JWK_PUBLIC_ONLY: "RFC 7517",
 };
 
@@ -319,24 +319,31 @@ export function validateWiaStructureClaims(payload, { requireClientStatus = fals
   if (!payload.sub || typeof payload.sub !== "string") {
     throw new Error(withSpecRef("WIA missing sub claim", SPEC_REFS.OAUTH_CLIENT_ATTESTATION));
   }
-  if (typeof payload.exp !== "number" || typeof payload.iat !== "number") {
-    throw new Error(withSpecRef("WIA missing exp or iat claim", SPEC_REFS.OAUTH_CLIENT_ATTESTATION));
-  }
-  const ttlHours = (payload.exp - payload.iat) / 3600;
-  if (ttlHours < 0) {
-    throw new Error(withSpecRef("WIA has invalid expiration (exp < iat)", SPEC_REFS.OAUTH_CLIENT_ATTESTATION));
-  }
-  if (ttlHours >= 24) {
-    throw new Error(
-      withSpecRef(
-        `WIA TTL (${ttlHours.toFixed(2)} hours) exceeds maximum allowed (24 hours)`,
-        SPEC_REFS.OAUTH_CLIENT_ATTESTATION
-      )
-    );
+  // draft-08 §5.1: exp is REQUIRED; iat is OPTIONAL. CS-04 §7.1 still caps
+  // time-to-live at under 24 hours, which can be measured only when iat is present.
+  if (typeof payload.exp !== "number") {
+    throw new Error(withSpecRef("WIA missing exp claim", SPEC_REFS.OAUTH_CLIENT_ATTESTATION));
   }
   const now = Math.floor(Date.now() / 1000);
-  if (payload.iat > now + 60) {
-    warnings.push(`WIA iat is ${payload.iat - now}s in the future (warning only; clock skew tolerated)`);
+  if (payload.iat !== undefined && payload.iat !== null) {
+    if (typeof payload.iat !== "number") {
+      throw new Error(withSpecRef("WIA iat claim must be a number", SPEC_REFS.OAUTH_CLIENT_ATTESTATION));
+    }
+    const ttlHours = (payload.exp - payload.iat) / 3600;
+    if (ttlHours < 0) {
+      throw new Error(withSpecRef("WIA has invalid expiration (exp < iat)", SPEC_REFS.OAUTH_CLIENT_ATTESTATION));
+    }
+    if (ttlHours >= 24) {
+      throw new Error(
+        withSpecRef(
+          `WIA TTL (${ttlHours.toFixed(2)} hours) exceeds maximum allowed (24 hours)`,
+          SPEC_REFS.OAUTH_CLIENT_ATTESTATION
+        )
+      );
+    }
+    if (payload.iat > now + 60) {
+      warnings.push(`WIA iat is ${payload.iat - now}s in the future (warning only; clock skew tolerated)`);
+    }
   }
   if (payload.exp < now) {
     throw new Error(withSpecRef("WIA JWT has expired", SPEC_REFS.OAUTH_CLIENT_ATTESTATION));

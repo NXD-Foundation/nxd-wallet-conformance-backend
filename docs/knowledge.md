@@ -403,8 +403,11 @@ Sources: [SD-JWT key-binding fixes](./sd-jwt-key-binding-interop.md),
   `urn:eudi:sca:payment:1` is only the payment `transaction_data.type` and
   payload schema id, not a credential `vct`.
 - `/ts12/payment/request` asks for exactly one of those VCTs (default
-  `sca-iban`) and always uses `request_uri_method=post`. The Request Object
-  is encrypted with Wallet Unit `wallet_metadata` JWKs that advertise
+  `sca-iban`) and always uses `request_uri_method=post`. `include_pid=true`
+  also requests `urn:eu.europa.ec.eudi:pid:1` with the same PID Rulebook
+  claims as the CS-07 `ts12-*-pid` profiles. Payment
+  `transaction_data.credential_ids` still names only the SCA DCQL id.
+  The Request Object is encrypted with Wallet Unit `wallet_metadata` JWKs that advertise
   `use=enc`. The outer JWE protected header includes `typ:
   oauth-authz-req+jwt` and `cty: JWT` (RFC 7519 nested JWT). GET on
   `/ts12/payment/x509VPrequest/:id` is always rejected.

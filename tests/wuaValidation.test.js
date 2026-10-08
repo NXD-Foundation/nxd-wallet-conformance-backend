@@ -5,6 +5,7 @@ import jwt from "jsonwebtoken";
 import * as jose from "jose";
 import {
   validateWUA,
+  validateWIA,
   proofKeyMatchesWUAAttestedKeys,
   proofKeyMatchesAnyAttestedKey,
   verifyWuaJwtSignature,
@@ -201,5 +202,51 @@ describe("WUA validation (routeUtils)", () => {
     const second = { kty: "EC", crv: "P-256", x: "x2", y: "y2" };
     expect(proofKeyMatchesAnyAttestedKey(second, { attested_keys: [first, second] })).to.equal(true);
     expect(proofKeyMatchesAnyAttestedKey({ ...second, x: "wrong" }, { attested_keys: [first, second] })).to.equal(false);
+  });
+});
+
+describe("validateWIA", () => {
+  async function signWia(claims) {
+    const { privateKey } = await jose.generateKeyPair("ES256", { extractable: true });
+    return new jose.SignJWT(claims)
+      .setProtectedHeader({ alg: "ES256", typ: "oauth-client-attestation+jwt" })
+      .sign(privateKey);
+  }
+
+  it("accepts a WIA that omits optional iat when exp is present", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const jwt = await signWia({
+      iss: "https://wallet-provider.example",
+      sub: "wallet-instance",
+      exp: now + 3600,
+    });
+    const result = await validateWIA(jwt);
+    expect(result.valid).to.equal(true);
+    expect(result.payload.iat).to.equal(undefined);
+  });
+
+  it("rejects a WIA that omits required exp", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const jwt = await signWia({
+      iss: "https://wallet-provider.example",
+      sub: "wallet-instance",
+      iat: now,
+    });
+    const result = await validateWIA(jwt);
+    expect(result.valid).to.equal(false);
+    expect(result.error).to.match(/missing exp claim/);
+  });
+
+  it("still rejects a WIA whose exp-iat span is 24 hours or more", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const jwt = await signWia({
+      iss: "https://wallet-provider.example",
+      sub: "wallet-instance",
+      iat: now,
+      exp: now + 24 * 3600,
+    });
+    const result = await validateWIA(jwt);
+    expect(result.valid).to.equal(false);
+    expect(result.error).to.match(/exceeds maximum allowed \(24 hours\)/);
   });
 });

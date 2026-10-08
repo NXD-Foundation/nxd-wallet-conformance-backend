@@ -13,11 +13,14 @@ import {
   assertSingleScaAttestationInDcql,
   buildTs12DcqlQuery,
   buildTs12PaymentTransactionData,
+  buildTs12ScaWithPidDcqlQuery,
   encodeTs12TransactionData,
   hasTs12EncryptionJwk,
+  parseTs12IncludePid,
   parseTs12PaymentRequestInput,
   parseTs12WalletMetadata,
   resolveTs12AttestationType,
+  TS12_PID_VCT,
 } from "../../utils/ts12PaymentUtils.js";
 import { makeSessionLogger, logHttpRequest, logHttpResponse } from "../../utils/sessionLogger.js";
 import { trustFrameworkSessionProps } from "../../utils/trustFrameworkPolicy.js";
@@ -43,6 +46,7 @@ const clientMetadata = JSON.parse(
  * - required: amount, currency, merchant/payee.name, payee_id/payee.id, transaction_id
  * - optional: session_id, response_mode (default direct_post)
  * - optional: attestation_type (sca-iban | sca-user | sca-card-dpc, default sca-iban)
+ * - optional: include_pid (true adds urn:eu.europa.ec.eudi:pid:1 to the DCQL query)
  * - optional TS12 fields: execution_date, recurrence, pisp
  */
 async function handleTs12PaymentRequest(req, res) {
@@ -69,7 +73,10 @@ async function handleTs12PaymentRequest(req, res) {
     const attestationType = resolveTs12AttestationType(
       paymentInput.attestation_type || paymentInput.vct,
     );
-    const dcqlQuery = buildTs12DcqlQuery(attestationType.id);
+    const includePid = parseTs12IncludePid(paymentInput.include_pid);
+    const dcqlQuery = includePid
+      ? buildTs12ScaWithPidDcqlQuery(attestationType.id)
+      : buildTs12DcqlQuery(attestationType.id);
     assertSingleScaAttestationInDcql(dcqlQuery);
     const paymentPayload = parseTs12PaymentRequestInput(paymentInput);
     const transactionDataObj = buildTs12PaymentTransactionData(
@@ -86,6 +93,7 @@ async function handleTs12PaymentRequest(req, res) {
       requestUriMethod: "post",
       attestationType: attestationType.id,
       expectedVct: attestationType.vct,
+      includePid,
     });
 
     const result = await generateVPRequest({
@@ -112,6 +120,8 @@ async function handleTs12PaymentRequest(req, res) {
       transactionDataType: transactionDataObj.type,
       attestationType: attestationType.id,
       expectedVct: attestationType.vct,
+      includePid,
+      ...(includePid ? { pidVct: TS12_PID_VCT } : {}),
     };
 
     logHttpResponse(slog, requestId, "/ts12/payment/request", 200, "OK", res.getHeaders(), response);
@@ -120,6 +130,7 @@ async function handleTs12PaymentRequest(req, res) {
         sessionId,
         attestationType: attestationType.id,
         expectedVct: attestationType.vct,
+        includePid,
         transactionId: transactionDataObj.payload.transaction_id,
         amount: transactionDataObj.payload.amount,
         currency: transactionDataObj.payload.currency,

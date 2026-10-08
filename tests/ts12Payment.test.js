@@ -6,13 +6,15 @@ import { expect } from "chai";
 import fs from "fs";
 import express from "express";
 import request from "supertest";
-import { compactDecrypt, decodeProtectedHeader, exportJWK, generateKeyPair } from "jose";
+import { compactDecrypt, decodeJwt, decodeProtectedHeader, exportJWK, generateKeyPair } from "jose";
 import ts12PaymentRouter from "../routes/verify/ts12PaymentRoutes.js";
 import { CONFIG } from "../utils/routeUtils.js";
 import issuerConfig from "../data/issuer-config.json" with { type: "json" };
 import {
   TS12_DCQL_QUERY,
   TS12_PAYMENT_TRANSACTION_TYPE,
+  TS12_PID_CREDENTIAL_ID,
+  TS12_PID_VCT,
   TS12_SCA_CREDENTIAL_ID,
   TS12_SCA_IBAN_VCT,
   TS12_SCA_USER_VCT,
@@ -27,6 +29,7 @@ import {
   hasTs12EncryptionJwk,
   isTs12PaymentRequestUri,
   isTs12ScaCredentialType,
+  parseTs12IncludePid,
   parseTs12PaymentRequestInput,
   resolveTs12AttestationType,
 } from "../utils/ts12PaymentUtils.js";
@@ -138,6 +141,18 @@ describe("TS12 payment helpers", () => {
     const user = buildTs12ScaWithPidDcqlQuery("sca-user");
     expect(user.credentials[0].id).to.equal("sca_user");
     expect(user.credentials[0].meta.vct_values).to.deep.equal([TS12_SCA_USER_VCT]);
+  });
+
+  it("treats omitted include_pid as SCA-only and rejects non-booleans", () => {
+    expect(parseTs12IncludePid(undefined)).to.equal(false);
+    expect(parseTs12IncludePid("")).to.equal(false);
+    expect(parseTs12IncludePid(false)).to.equal(false);
+    expect(parseTs12IncludePid("false")).to.equal(false);
+    expect(parseTs12IncludePid("0")).to.equal(false);
+    expect(parseTs12IncludePid(true)).to.equal(true);
+    expect(parseTs12IncludePid("true")).to.equal(true);
+    expect(parseTs12IncludePid("1")).to.equal(true);
+    expect(() => parseTs12IncludePid("yes")).to.throw(/include_pid must be a boolean/);
   });
 
   it("resolves attestation_type from ids and base VCT URLs", () => {
@@ -718,6 +733,8 @@ describe("TS12 payment routes", () => {
 
     expect(created.body.attestationType).to.equal("sca-user");
     expect(created.body.expectedVct).to.equal(TS12_SCA_USER_VCT);
+    expect(created.body.includePid).to.equal(false);
+    expect(created.body).to.not.have.property("pidVct");
     expect(created.body.sessionId).to.equal("ts12-route-sca-user");
 
     await request(app)
@@ -750,6 +767,67 @@ describe("TS12 payment routes", () => {
     const { plaintext } = await compactDecrypt(jar, privateKey);
     const requestJwt = new TextDecoder().decode(plaintext);
     expect(requestJwt.split(".")).to.have.length(3);
+  });
+
+  it("embeds SCA plus PID in the encrypted request when include_pid is true", async function () {
+    this.timeout(15000);
+
+    const created = await request(app)
+      .post("/ts12/payment/request")
+      .send({
+        ...validPayment,
+        attestation_type: "sca-iban",
+        include_pid: true,
+        session_id: "ts12-route-iban-pid",
+      })
+      .expect(200);
+
+    expect(created.body.includePid).to.equal(true);
+    expect(created.body.pidVct).to.equal(TS12_PID_VCT);
+    expect(created.body.expectedVct).to.equal(TS12_SCA_IBAN_VCT);
+    expect(created.body.attestationType).to.equal("sca-iban");
+
+    const { publicKey, privateKey } = await generateKeyPair("ECDH-ES+A256KW", { extractable: true });
+    const publicJwk = await exportJWK(publicKey);
+    publicJwk.kty = "EC";
+    publicJwk.use = "enc";
+    publicJwk.alg = "ECDH-ES+A256KW";
+
+    const jarResponse = await request(app)
+      .post(`/ts12/payment/x509VPrequest/${created.body.sessionId}`)
+      .type("form")
+      .send({
+        wallet_metadata: JSON.stringify({
+          jwks: { keys: [publicJwk] },
+          authorization_encryption_alg_values_supported: ["ECDH-ES+A256KW"],
+          authorization_encryption_enc_values_supported: ["A256GCM"],
+        }),
+      })
+      .expect(200);
+
+    const { plaintext } = await compactDecrypt(jarResponse.text, privateKey);
+    const payload = decodeJwt(new TextDecoder().decode(plaintext));
+    expect(payload.dcql_query.credentials.map((credential) => credential.id)).to.deep.equal([
+      TS12_SCA_CREDENTIAL_ID,
+      TS12_PID_CREDENTIAL_ID,
+    ]);
+    expect(payload.dcql_query.credentials[1].meta.vct_values).to.deep.equal([TS12_PID_VCT]);
+    const decodedTx = JSON.parse(Buffer.from(payload.transaction_data[0], "base64url").toString("utf8"));
+    expect(decodedTx.credential_ids).to.deep.equal([TS12_SCA_CREDENTIAL_ID]);
+    expect(decodedTx.type).to.equal(TS12_PAYMENT_TRANSACTION_TYPE);
+  });
+
+  it("rejects a non-boolean include_pid on the classic payment request", async () => {
+    const response = await request(app)
+      .post("/ts12/payment/request")
+      .send({
+        ...validPayment,
+        include_pid: "yes",
+        session_id: "ts12-route-bad-include-pid",
+      })
+      .expect(400);
+
+    expect(response.body.code).to.equal("invalid_ts12_include_pid");
   });
 });
 

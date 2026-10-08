@@ -27,12 +27,18 @@ async function mintKeyPairs() {
   return { attester, wallet, attesterPub, walletPub };
 }
 
-async function signAttestation({ attesterPrivateKey, walletPub, clientId = "conf-client", attesterIss = "https://wallet-attester.example" }) {
+async function signAttestation({
+  attesterPrivateKey,
+  walletPub,
+  clientId = "conf-client",
+  attesterIss = "https://wallet-attester.example",
+  includeIat = true,
+}) {
   const now = Math.floor(Date.now() / 1000);
   return new jose.SignJWT({
     iss: attesterIss,
     sub: clientId,
-    iat: now,
+    ...(includeIat ? { iat: now } : {}),
     nbf: now,
     exp: now + 300,
     cnf: { jwk: walletPub },
@@ -174,6 +180,36 @@ describe("oauthClientAttestation", () => {
       expect(() => validateWiaStructureClaims(payload, { requestedProfile: "cs04" })).to.throw("not allowed in a CS-04");
     });
 
+    it("accepts a WIA that omits optional iat when exp is present", () => {
+      const now = Math.floor(Date.now() / 1000);
+      const payload = {
+        sub: "wallet-instance",
+        exp: now + 3600,
+        cnf: { jwk: { kty: "EC", crv: "P-256", x: "x", y: "y" } },
+      };
+      const { warnings } = validateWiaStructureClaims(payload);
+      expect(warnings.some((w) => /iat/i.test(w))).to.equal(false);
+    });
+
+    it("rejects a WIA that omits required exp", () => {
+      const now = Math.floor(Date.now() / 1000);
+      expect(() => validateWiaStructureClaims({
+        sub: "wallet-instance",
+        iat: now,
+        cnf: { jwk: { kty: "EC", crv: "P-256", x: "x", y: "y" } },
+      })).to.throw(/missing exp claim/);
+    });
+
+    it("still rejects a WIA whose exp-iat span is 24 hours or more", () => {
+      const now = Math.floor(Date.now() / 1000);
+      expect(() => validateWiaStructureClaims({
+        sub: "wallet-instance",
+        iat: now,
+        exp: now + 24 * 3600,
+        cnf: { jwk: { kty: "EC", crv: "P-256", x: "x", y: "y" } },
+      })).to.throw(/exceeds maximum allowed \(24 hours\)/);
+    });
+
     it("warns instead of rejecting a WIA whose iat is more than 60 seconds in the future", () => {
       const now = Math.floor(Date.now() / 1000);
       const payload = {
@@ -204,6 +240,32 @@ describe("oauthClientAttestation", () => {
       expect(r.skip).to.equal(false);
       expect(r.ok).to.equal(false);
       expect(r.oauthError).to.equal("invalid_client");
+    });
+
+    it("accepts client attestation that omits optional WIA iat", async () => {
+      const { attester, wallet, attesterPub, walletPub } = await mintKeyPairs();
+      const clientId = "wallet-instance-no-iat";
+      const att = await signAttestation({
+        attesterPrivateKey: attester.privateKey,
+        walletPub,
+        clientId,
+        includeIat: false,
+      });
+      expect(jose.decodeJwt(att).iat).to.equal(undefined);
+      const pop = await signPop({ walletPrivateKey: wallet.privateKey, clientId });
+      const r = await validateOAuthClientAttestationFromRequest({
+        headers: {
+          "oauth-client-attestation": att,
+          "oauth-client-attestation-pop": pop,
+        },
+        clientId,
+        authorizationServerIssuer: AS_ISSUER,
+        trustedJwks: { keys: [attesterPub] },
+      });
+      expect(r.ok).to.equal(true);
+      expect(r.attestationPayload.sub).to.equal(clientId);
+      expect(r.attestationPayload.exp).to.be.a("number");
+      expect(r.attestationPayload.iat).to.equal(undefined);
     });
 
     it("succeeds end-to-end for a valid pair", async () => {

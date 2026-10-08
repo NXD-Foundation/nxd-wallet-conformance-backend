@@ -1266,8 +1266,9 @@ async function createAttestationHeadersForRequest({
   stage,
   challengeState,
   cnfKeyPair = null,
+  reuseAttestationJwt = null,
 }) {
-  const attestation = await createWalletUnitAttestationClientAuth({
+  return createWalletUnitAttestationClientAuth({
     profile,
     keyPath,
     clientId,
@@ -1276,8 +1277,8 @@ async function createAttestationHeadersForRequest({
     stage,
     challenge: challengeState?.consume() ?? null,
     cnfKeyPair,
+    reuseAttestationJwt,
   });
-  return attestation.headers;
 }
 
 async function httpPostFormWithAttestationChallengeRetry({
@@ -1293,8 +1294,9 @@ async function httpPostFormWithAttestationChallengeRetry({
   stage,
   challengeState,
   cnfKeyPair = null,
+  reuseAttestationJwt = null,
 }) {
-  const buildHeaders = () =>
+  const buildAttestation = () =>
     createAttestationHeadersForRequest({
       profile,
       keyPath,
@@ -1304,20 +1306,33 @@ async function httpPostFormWithAttestationChallengeRetry({
       stage,
       challengeState,
       cnfKeyPair,
+      reuseAttestationJwt,
     });
 
-  let headers = await buildHeaders();
-  let res = await httpPostForm(url, params, logSessionId, dpopHeader, headers);
+  let attestation = await buildAttestation();
+  let res = await httpPostForm(url, params, logSessionId, dpopHeader, attestation.headers);
   challengeState?.updateFromResponse(res.headers);
 
   const responseText = typeof res.bodyText === "string" ? res.bodyText : await res.clone().text().catch(() => "");
   const { shouldRetry, challenge } = shouldRetryWithAttestationChallenge(res, responseText);
   if (shouldRetry && challenge) {
     challengeState?.set(challenge);
-    headers = await buildHeaders();
-    res = await httpPostForm(url, params, logSessionId, dpopHeader, headers);
+    attestation = await buildAttestation();
+    res = await httpPostForm(url, params, logSessionId, dpopHeader, attestation.headers);
     challengeState?.updateFromResponse(res.headers);
   }
+
+  const sessionKeys = attestation.cnfKeyPair || {};
+  Object.defineProperty(res, "sessionClientAttestation", {
+    value: {
+      attestationJwt: attestation.headers?.["OAuth-Client-Attestation"] || null,
+      cnfKeyPair: {
+        privateJwk: sessionKeys.privateJwk || null,
+        publicJwk: sessionKeys.publicJwk || null,
+      },
+    },
+    enumerable: false,
+  });
 
   return res;
 }
