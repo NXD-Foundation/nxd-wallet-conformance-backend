@@ -26,7 +26,7 @@ It also notes the attestation-specific verifier variant as an alternative family
 
 | Dimension | Supported in This Repo | Enforced at Runtime |
 |---|---|---|
-| Client ID Scheme | `x509`, `did:web`, `did:jwk` via `/vp/request` | invalid scheme rejected at request generation |
+| Client ID Scheme | strict CS-02: `x509_hash`; compatibility: `x509_san_dns`, `verifier_attestation`, `decentralized_identifier`, `x509_hash`; CS-03: `x509_san_dns` | invalid scheme rejected at request generation and in strict wallet validation |
 | Request URI Method | `get`, `post` | request URL is generated accordingly |
 | Response Mode | `direct_post`, `direct_post.jwt`, `dc_api.jwt`, `dc_api` in JWT builder | invalid `response_mode` rejected by request builder |
 | Credential Query Style | DCQL is supported; presentation-definition-based legacy paths still exist in code | JWT builder rejects `presentation_definition` and requires DCQL for OpenID4VP 1.0 |
@@ -47,10 +47,10 @@ It also notes the attestation-specific verifier variant as an alternative family
 |---|---|---|
 | Request Entry | `/vp/request` | legacy route families under `/verify/x509`, `/verify/did`, `/verify/did-jwk`, verifier attestation routes |
 | Client ID Scheme | `x509` | `did:web`, `did:jwk` |
-| Request Transport | `openid4vp://?request_uri=...` | GET or POST `request_uri_method` |
+| Request Transport | `openid4vp://?request_uri=...`, `eu-eaap://?request_uri=...`, `haip-vp://?request_uri=...` | GET or POST `request_uri_method` |
 | Query Model | `dcql` | `tx`, `mdl`; legacy PEX-style code still present upstream |
 | Credential Profile | `pid` | `mdl` |
-| Response Mode | `direct_post` | `direct_post.jwt`, `dc_api.jwt`, `dc_api` |
+| Response Mode | strict CS-02: `direct_post.jwt` | compatibility `direct_post`, `dc_api.jwt`, `dc_api`; CS-03 wallet path: `direct_post` |
 | Credential Type Handling | SD-JWT / JWT VC | `mso_mdoc` branch |
 | Request Object Protection | signed JAR | encrypted to wallet key when `wallet_metadata.jwks` is supplied |
 | Transaction Data | absent | present and bound to DCQL credential ids |
@@ -60,7 +60,7 @@ It also notes the attestation-specific verifier variant as an alternative family
 From the current codebase, the verifier can generate and process:
 
 - OpenID4VP deep links using `request_uri`
-- X.509 verifier identifiers
+- strict CS-02 `x509_hash` verifier identifiers (compatibility X.509 SAN DNS and attestation schemes when enabled)
 - `did:web` verifier identifiers
 - `did:jwk` verifier identifiers
 - `direct_post` responses
@@ -110,8 +110,8 @@ Key enforcement points:
 
 A wallet unit interacting with these verifier flows should implement:
 
-1. Resolve `request_uri` and process an `openid4vp://` deep link.
-2. Support verifier identifiers based on `x509`, `did:web`, and `did:jwk`.
+1. Resolve `request_uri` and process `openid4vp://`, `eu-eaap://`, or `haip-vp://` deep links.
+2. In strict CS-02, accept only `x509_hash` verifier identifiers (CS-03 may still use `x509_san_dns`).
 3. Support request objects that use DCQL.
 4. Support `direct_post` response mode.
 5. Support `direct_post.jwt` response mode.
@@ -154,3 +154,16 @@ If you want to turn verifier behavior into a wallet interoperability matrix, the
 ## Recommended Single-Line Description
 
 OpenID4VP verifier supporting X.509 and DID client identification, DCQL-based request objects, `direct_post` and JWT-based response modes, SD-JWT key-binding checks, mdoc verification, transaction-data requests, and encrypted wallet responses, with strict nonce/state validation and partial gaps between legacy request-generation code and V1.0-only DCQL enforcement.
+
+Verifier QR/deep-link responses expose a `deepLinks` map keyed by `openid4vp`,
+`eu-eaap`, and `haip-vp`; all entries refer to the same session and query.
+The existing `qr` and `deepLink` fields remain OpenID4VP. CS-03 request routes
+use the separate `CONFIG.CS03_DEFAULT_RESPONSE_MODE` (`direct_post`). A strict
+wallet records the validated response destination before verifier trust policy
+checks so failures at that stage can submit the error form with echoed state.
+
+Request-URI retrieval uses the stored session client identity for signing.
+Standard and TS-12 payment routes default to encrypted `direct_post.jwt` in
+strict mode, retaining explicit overrides and compatibility plaintext defaults.
+Opted-in wallet verifier trust checks include `x509_hash` identities in the
+shared X.509 WRPAC/WRPRC enforcement path.

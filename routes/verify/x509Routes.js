@@ -130,7 +130,8 @@ x509Router.get("/generateVPRequest", async (req, res) => {
   let requestId = null;
   
   try {
-    const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
+    const responseMode = req.query.response_mode ||
+      (parseCs03Query(req.query).enabled ? CONFIG.CS03_DEFAULT_RESPONSE_MODE : CONFIG.DEFAULT_RESPONSE_MODE);
     const jarAlg = req.query.jar_alg || CONFIG.DEFAULT_JAR_ALG;
     
     requestId = logHttpRequest(slog, "GET", "/generateVPRequest", req.headers, req.query);
@@ -172,7 +173,8 @@ x509Router.get("/generateVPRequestGet", async (req, res) => {
   let requestId = null;
   
   try {
-    const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
+    const responseMode = req.query.response_mode ||
+      (parseCs03Query(req.query).enabled ? CONFIG.CS03_DEFAULT_RESPONSE_MODE : CONFIG.DEFAULT_RESPONSE_MODE);
     const jarAlg = req.query.jar_alg || CONFIG.DEFAULT_JAR_ALG;
     
     requestId = logHttpRequest(slog, "GET", "/generateVPRequestGet", req.headers, req.query);
@@ -214,7 +216,8 @@ x509Router.get("/generateVPRequestDCQL", async (req, res) => {
   let requestId = null;
   
   try {
-    const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
+    const responseMode = req.query.response_mode ||
+      (parseCs03Query(req.query).enabled ? CONFIG.CS03_DEFAULT_RESPONSE_MODE : CONFIG.DEFAULT_RESPONSE_MODE);
     const jarAlg = req.query.jar_alg || CONFIG.DEFAULT_JAR_ALG;
     
     requestId = logHttpRequest(slog, "GET", "/generateVPRequestDCQL", req.headers, req.query);
@@ -268,7 +271,8 @@ x509Router.get("/generateVPRequestDCQLGET", async (req, res) => {
   let requestId = null;
   
   try {
-    const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
+    const responseMode = req.query.response_mode ||
+      (parseCs03Query(req.query).enabled ? CONFIG.CS03_DEFAULT_RESPONSE_MODE : CONFIG.DEFAULT_RESPONSE_MODE);
     const jarAlg = req.query.jar_alg || CONFIG.DEFAULT_JAR_ALG;
     
     requestId = logHttpRequest(slog, "GET", "/generateVPRequestDCQLGET", req.headers, req.query);
@@ -322,7 +326,8 @@ x509Router.get("/generateVPRequestTransaction", async (req, res) => {
   let requestId = null;
   
   try {
-    const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
+    const responseMode = req.query.response_mode ||
+      (parseCs03Query(req.query).enabled ? CONFIG.CS03_DEFAULT_RESPONSE_MODE : CONFIG.DEFAULT_RESPONSE_MODE);
     const jarAlg = req.query.jar_alg || CONFIG.DEFAULT_JAR_ALG;
     
     requestId = logHttpRequest(slog, "GET", "/generateVPRequestTransaction", req.headers, req.query);

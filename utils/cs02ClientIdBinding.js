@@ -1,6 +1,8 @@
-import { X509Certificate } from "node:crypto";
+import { createHash, X509Certificate } from "node:crypto";
+import base64url from "base64url";
 
 export const X509_SAN_DNS_PREFIX = "x509_san_dns:";
+export const X509_HASH_PREFIX = "x509_hash:";
 
 export class Cs02ClientIdBindingError extends Error {
   constructor(message, errorCode = "invalid_client") {
@@ -100,6 +102,58 @@ export function assertX509SanDnsResponseUriFqdn(
     );
   }
   return { skipped: false, dns, hostname };
+}
+
+export function parseX509HashClientId(clientId) {
+  if (typeof clientId !== "string" || !clientId.startsWith(X509_HASH_PREFIX)) {
+    return null;
+  }
+  const hash = clientId.slice(X509_HASH_PREFIX.length).trim();
+  return hash.length > 0 ? hash : null;
+}
+
+export function computeX509HashClientIdFromLeafCertBase64(leafCertBase64) {
+  if (typeof leafCertBase64 !== "string" || leafCertBase64.length === 0) {
+    throw new Cs02ClientIdBindingError(
+      "x509_hash leaf certificate is missing",
+      "invalid_client",
+    );
+  }
+  let certDer;
+  try {
+    certDer = Buffer.from(leafCertBase64, "base64");
+  } catch {
+    throw new Cs02ClientIdBindingError(
+      "x509_hash leaf certificate is malformed",
+      "invalid_client",
+    );
+  }
+  if (certDer.length === 0) {
+    throw new Cs02ClientIdBindingError(
+      "x509_hash leaf certificate is malformed",
+      "invalid_client",
+    );
+  }
+  const hashB64Url = base64url.encode(createHash("sha256").update(certDer).digest());
+  return `${X509_HASH_PREFIX}${hashB64Url}`;
+}
+
+export function assertX509HashLeafMatchesClientId(clientId, leafCertBase64) {
+  const expectedHash = parseX509HashClientId(clientId);
+  if (!expectedHash) {
+    throw new Cs02ClientIdBindingError(
+      "x509_hash client_id must include a base64url SHA-256 hash after the prefix",
+      "invalid_client",
+    );
+  }
+  const expectedClientId = computeX509HashClientIdFromLeafCertBase64(leafCertBase64);
+  if (clientId !== expectedClientId) {
+    throw new Cs02ClientIdBindingError(
+      `x509_hash client_id mismatch: expected ${expectedClientId} but got ${clientId}`,
+      "invalid_client",
+    );
+  }
+  return { clientId: expectedClientId };
 }
 
 export function assertX509SanDnsLeafMatchesClientId(clientId, leafCertPem) {

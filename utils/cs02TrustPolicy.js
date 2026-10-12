@@ -110,7 +110,7 @@ export function getCs02CapabilityProfile() {
       verifierAttestationIssuersEnforced: false,
       registryEnforced: false,
     },
-    exclusions: ["alg=none", "RS384", "x509_hash", "redirect_uri", "PID mdoc Rulebook"],
+    exclusions: ["alg=none", "RS384", "redirect_uri", "PID mdoc Rulebook"],
   };
 }
 
@@ -275,6 +275,30 @@ export async function validateX509SanDnsTrustAnchor(_clientId, _header, _leafCer
       }),
   };
   recordTrustPlaceholder("x509_san_dns", result);
+  return result;
+}
+
+export async function validateX509HashTrustAnchor(_clientId, _header, _leafCertPem) {
+  const result = {
+    trusted: true,
+    placeholder: true,
+    enforced: false,
+    trustConfigured: false,
+    futureBehavior:
+      "Validate x5c chain, certificate validity, ES256/P-256 leaf key, and x509_hash client_id binding against configured trust anchors.",
+    clientId: _clientId ?? null,
+    hasX5c: Array.isArray(_header?.x5c) && _header.x5c.length > 0,
+    structureValid:
+      Array.isArray(_header?.x5c) &&
+      _header.x5c.length > 0 &&
+      _header.x5c.every((entry) => {
+        if (typeof entry !== "string" || entry.length === 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(entry)) {
+          return false;
+        }
+        try { return Buffer.from(entry, "base64").length > 0; } catch { return false; }
+      }),
+  };
+  recordTrustPlaceholder("x509_hash", result);
   return result;
 }
 

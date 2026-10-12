@@ -66,6 +66,22 @@ import {
 import { makeSessionLogger } from "./logger.js";
 import { enforceVerifierPresentationTrust } from "./trustFramework.js";
 
+async function submitCs02PresentationErrorResponse(
+  responseUri,
+  { error, errorDescription, state },
+) {
+  if (!responseUri) return;
+  const form = new URLSearchParams();
+  form.append("error", error || "access_denied");
+  if (errorDescription) form.append("error_description", errorDescription);
+  if (state) form.append("state", state);
+  await fetch(responseUri, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: form.toString(),
+  }).catch(() => {});
+}
+
 function parseOpenId4VpDeepLink(deepLink, { cs02Options, log } = {}) {
   console.log("[present] Parsing deep link:", deepLink);
   if (cs02Options?.strict) {
@@ -79,17 +95,18 @@ function parseOpenId4VpDeepLink(deepLink, { cs02Options, log } = {}) {
   }
 
   const url = new URL(deepLink);
-  if (url.protocol !== "openid4vp:")
+  if (!/^(openid4vp|eu-eaap|haip-vp):$/.test(url.protocol)) {
     throw new Error("Unsupported request scheme");
-  if (url.hostname && url.hostname !== OPENID4VP_PRESENT_HOST) {
+  }
+  if (url.hostname && !(url.protocol === "openid4vp:" && url.hostname === OPENID4VP_PRESENT_HOST)) {
     throw new Error(
-      `Unsupported openid4vp authority "${url.hostname}"; expected empty-authority openid4vp:// or compatibility openid4vp://present`,
+      `Unsupported invocation authority "${url.hostname}"; expected empty-authority CS-02 invocation URI or compatibility openid4vp://present`,
     );
   }
   if (isOpenId4VpPresentInvocation(url)) {
     console.log("[present] Compatibility openid4vp://present invocation");
   } else {
-    console.log("[present] CS-02 empty-authority openid4vp:// invocation");
+    console.log(`[present] CS-02 empty-authority ${url.protocol}// invocation`);
   }
   const requestUri = url.searchParams.get("request_uri");
   const clientId = url.searchParams.get("client_id");
@@ -742,6 +759,9 @@ export async function performPresentation(
   logSessionId,
 ) {
   const slog = logSessionId ? makeSessionLogger(logSessionId) : () => {};
+  const cs02Options = resolveCs02ValidationOptions(process.env);
+  let presentationResponseUri = null;
+  let presentationState = null;
   try {
     try {
       slog("[PRESENTATION] [START] Presentation flow", {
@@ -750,7 +770,6 @@ export async function performPresentation(
         credentialType,
       });
     } catch {}
-    const cs02Options = resolveCs02ValidationOptions(process.env);
     const { requestUri, clientId, method, url: deepLinkUrl } = parseOpenId4VpDeepLink(deepLink, {
       cs02Options,
       log: slog,
@@ -784,7 +803,10 @@ export async function performPresentation(
         options: cs02Options,
         log: slog,
       }));
-      x5cSignatureVerified = clientId?.startsWith("x509_san_dns:") || clientId?.startsWith("verifier_attestation:");
+      x5cSignatureVerified =
+        clientId?.startsWith("x509_hash:") ||
+        clientId?.startsWith("x509_san_dns:") ||
+        clientId?.startsWith("verifier_attestation:");
       try {
         slog("[PRESENTATION] CS-02 JAR validated", {
           alg: header?.alg,
@@ -802,6 +824,10 @@ export async function performPresentation(
       }));
     }
 
+    // Only use the response destination after request validation and signature verification.
+    presentationResponseUri = payload.response_uri;
+    presentationState = payload.state;
+
     assertTs12RequestDelivery({ method, encrypted: requestEncrypted, payload });
 
     await enforceVerifierPresentationTrust({
@@ -811,7 +837,8 @@ export async function performPresentation(
       trustEvidenceBound: x5cSignatureVerified,
     });
 
-    let responseMode = payload.response_mode || "direct_post";
+    let responseMode =
+      payload.response_mode || (cs02Options.strict ? "direct_post.jwt" : "direct_post");
     const responseUri = payload.response_uri; // our routes embed this
     // If the response_uri suggests direct_post.jwt, force that mode for compatibility
     if (responseUri && /direct_post\.jwt/i.test(responseUri)) {
@@ -1769,8 +1796,20 @@ export async function performPresentation(
         verifierResponse: result,
       });
     } catch {}
+    if (typeof result?.redirect_uri === "string" && result.redirect_uri.length > 0) {
+      try {
+        await fetch(result.redirect_uri);
+      } catch {}
+    }
     return result;
   } catch (e) {
+    if (cs02Options.strict && presentationResponseUri) {
+      await submitCs02PresentationErrorResponse(presentationResponseUri, {
+        error: e instanceof Cs02ValidationError ? e.errorCode : "server_error",
+        errorDescription: e instanceof Cs02ValidationError ? e.message : e?.message || String(e),
+        state: presentationState,
+      });
+    }
     try {
       const errorPayload =
         e instanceof Cs02ValidationError

@@ -20,12 +20,14 @@ import {
   resolveCs02JarSigningPolicy,
   validateVerifierAttestationForRequestGeneration,
   validateX509SanDnsTrustForRequestGeneration,
+  validateX509HashTrustForRequestGeneration,
   Cs02VerifierRequestError,
   CS02_DEFAULT_AUDIENCE,
 } from "./cs02VerifierRequest.js";
 import { buildStrictCs02ClientMetadata } from "./cs02TrustPolicy.js";
 import { isStrictCs02Base64Url } from "./cs02Encoding.js";
 import { resolveCs07VerifierOrigin } from "./cs07DcApi.js";
+import { computeX509HashClientIdFromLeafCertBase64 } from "./cs02ClientIdBinding.js";
 import { selectTs12EncryptionJwk } from "./ts12PaymentUtils.js";
 
 /**
@@ -607,13 +609,8 @@ export async function buildVpRequestJWT(
       .setProtectedHeader(header)
       .sign(await jose.importPKCS8(privateKey, useEs256 ? "ES256" : "RS256"));
   } else if (effectiveClientId.startsWith("x509_hash:")) {
-    if (cs02Options.strict) {
-      throw new Cs02VerifierRequestError(
-        "x509_hash client identifier scheme is not supported in CS-02 mode",
-        "invalid_client",
-      );
-    }
     const useEs256 =
+      cs02Options.strict ||
       signingPolicy.forceEs256 ||
       (typeof jar_alg === "string" && jar_alg.toUpperCase() === "ES256");
 
@@ -621,8 +618,14 @@ export async function buildVpRequestJWT(
     if (useEs256) {
       const p12 = verifierMaterial();
       privateKey = p12.privateKeyPkcs8;
-      certChain = p12.certChain;
+      certChain = verifierSigningMaterial ? [...p12.certChain] : appendCaCertsIfNeeded([...p12.certChain]);
     } else {
+      if (cs02Options.strict) {
+        throw new Cs02VerifierRequestError(
+          "CS-02 x509_hash requests must use ES256/P-256 signing",
+          "invalid_request",
+        );
+      }
       privateKey = fs.readFileSync("./x509/client_private_pkcs8.key", "utf8");
       const certificate = fs.readFileSync("./x509/client_certificate.crt", "utf8");
       const certBase64 = certificate
@@ -631,17 +634,17 @@ export async function buildVpRequestJWT(
         .replace(/\s+/g, "");
       certChain = [certBase64];
     }
-    
-    // For x509_hash, we need the leaf certificate (first in chain) for hash calculation
+
     const leafCertBase64 = certChain[0];
-    const certDer = Buffer.from(leafCertBase64, "base64");
-    const hash = crypto.createHash("sha256").update(certDer).digest();
-    const hashB64Url = base64url.encode(hash);
-    const expectedClientId = `x509_hash:${hashB64Url}`;
+    const expectedClientId = computeX509HashClientIdFromLeafCertBase64(leafCertBase64);
     if (client_id !== expectedClientId) {
-      throw new Error(
-        `x509_hash client_id mismatch: expected ${expectedClientId} but got ${client_id}`
+      throw new Cs02VerifierRequestError(
+        `x509_hash client_id mismatch: expected ${expectedClientId} but got ${client_id}`,
+        "invalid_client",
       );
+    }
+    if (useEs256) {
+      await validateX509HashTrustForRequestGeneration(client_id, { x5c: certChain });
     }
 
     const header = {

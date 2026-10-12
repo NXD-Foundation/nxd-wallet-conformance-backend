@@ -21,6 +21,7 @@ import {
 import { isWebuildCs02Profile, resolveWalletProfile } from "./profile.js";
 import {
   validateX509SanDnsTrustAnchor,
+  validateX509HashTrustAnchor,
   validateVerifierAttestationTrust,
   validateCs02ClientMetadata,
   validateCs02RequestUriQueryPrecedence,
@@ -31,10 +32,12 @@ import {
 } from "../../../utils/cs02TrustPolicy.js";
 import {
   Cs02ClientIdBindingError,
+  assertX509HashLeafMatchesClientId,
   assertX509SanDnsLeafMatchesClientId,
   assertX509SanDnsResponseUriFqdn,
   parseTrustedX509ClientIds,
 } from "../../../utils/cs02ClientIdBinding.js";
+import { dcqlQueryUsesCs03CredentialFormat } from "../../../utils/cs02VerifierRequest.js";
 import { isStrictCs02Base64Url, decodeStrictCs02Base64Url, isStrictCs02EcP256Jwk } from "../../utils/cs02Encoding.js";
 import { isCompactJwe, TS12_PAYMENT_TRANSACTION_TYPE, isTs12PaymentRequestUri } from "../../utils/ts12PaymentUtils.js";
 
@@ -46,11 +49,24 @@ export {
 export const CS02_JAR_TYP = "oauth-authz-req+jwt";
 export const CS02_ALLOWED_ALGS = new Set(["ES256"]);
 export const CS02_FORBIDDEN_ALGS = new Set(["none", "RS256", "ES256K", "EdDSA"]);
-export const CS02_ALLOWED_CLIENT_ID_SCHEMES = new Set([
+export const CS02_COMPATIBILITY_CLIENT_ID_SCHEMES = new Set([
   "x509_san_dns",
   "verifier_attestation",
   "decentralized_identifier",
+  "x509_hash",
 ]);
+export const CS02_STRICT_CLIENT_ID_SCHEMES = new Set(["x509_hash"]);
+
+export function resolveWalletAllowedClientIdSchemes(options, dcqlQuery = null) {
+  if (!options?.strict) {
+    return CS02_COMPATIBILITY_CLIENT_ID_SCHEMES;
+  }
+  const schemes = new Set(CS02_STRICT_CLIENT_ID_SCHEMES);
+  if (options.allowCs03CredentialFormat && dcqlQueryUsesCs03CredentialFormat(dcqlQuery)) {
+    schemes.add("x509_san_dns");
+  }
+  return schemes;
+}
 export const CS02_DEFAULT_AUDIENCES = ["https://self-issued.me/v2"];
 export const CS02_REQUEST_URI_CONTENT_TYPE = "application/oauth-authz-req+jwt";
 export const CS02_ALLOWED_REQUEST_URI_METHODS = new Set(["get", "post"]);
@@ -149,6 +165,9 @@ export function parseCs02ClientIdScheme(clientId) {
   if (clientId.startsWith("decentralized_identifier:")) {
     return { scheme: "decentralized_identifier", value: clientId };
   }
+  if (clientId.startsWith("x509_hash:")) {
+    return { scheme: "x509_hash", value: clientId };
+  }
   if (clientId.startsWith("did:web:") || clientId.startsWith("did:jwk:")) {
     return { scheme: "legacy_did", value: clientId };
   }
@@ -232,20 +251,21 @@ export function validateCs02DeepLink(deepLink, options, log = () => {}) {
     throw new Cs02ValidationError("Invalid openid4vp deep link", "invalid_request");
   }
 
-  if (url.protocol !== "openid4vp:") {
+  const cs02InvocationProtocols = new Set(["openid4vp:", "eu-eaap:", "haip-vp:"]);
+  if (!cs02InvocationProtocols.has(url.protocol)) {
     logValidationFailure(log, "deep_link_scheme", { protocol: url.protocol });
     throw new Cs02ValidationError("Unsupported request scheme", "invalid_request");
   }
 
-  const emptyAuthority = isOpenId4VpEmptyAuthorityInvocation(url);
-  const presentAuthority = isOpenId4VpPresentInvocation(url);
+  const emptyAuthority = !url.hostname;
+  const presentAuthority = url.protocol === "openid4vp:" && isOpenId4VpPresentInvocation(url);
   const allowPresent = options.allowPresentInvocation || options.allowLegacyInvocation;
   if (!emptyAuthority && !(presentAuthority && allowPresent)) {
     logValidationFailure(log, "deep_link_authority", { authority: url.hostname || "(empty)" });
     throw new Cs02ValidationError(
       presentAuthority
         ? 'Unsupported openid4vp authority "present"; CS-02 requires empty-authority openid4vp://?'
-        : `Unsupported openid4vp authority "${url.hostname || ""}"; CS-02 requires empty-authority openid4vp://?`,
+        : `Unsupported invocation authority "${url.hostname || ""}"; CS-02 requires empty-authority invocation URIs`,
       "invalid_request",
     );
   }
@@ -420,7 +440,7 @@ export function validateCs02JarPayload(payload, options, log = () => {}) {
     throw new Cs02ValidationError("Authorization request audience is not accepted by wallet policy", "invalid_request");
   }
 
-  validateCs02ClientId(payload.client_id, log);
+  validateCs02ClientId(payload.client_id, options, log, payload.dcql_query);
   validateCs02Nonce(payload.nonce, log);
   if (!isCs07DcApiRequest) {
     validateCs02ResponseUri(payload.response_uri, options, log);
@@ -547,9 +567,10 @@ export function validateCs02Nonce(nonce, log = () => {}) {
   return nonce;
 }
 
-export function validateCs02ClientId(clientId, log = () => {}) {
+export function validateCs02ClientId(clientId, options = { strict: true }, log = () => {}, dcqlQuery = null) {
   const { scheme } = parseCs02ClientIdScheme(clientId);
-  if (!CS02_ALLOWED_CLIENT_ID_SCHEMES.has(scheme)) {
+  const allowedSchemes = resolveWalletAllowedClientIdSchemes(options, dcqlQuery);
+  if (!allowedSchemes.has(scheme)) {
     logValidationFailure(log, "client_id_scheme", { scheme, clientId });
     if (scheme === "legacy_did") {
       throw new Cs02ValidationError(
@@ -617,13 +638,13 @@ async function resolveDidWebDocument(did, options = {}) {
 
 function x5cLeafPem(header) {
   if (!Array.isArray(header?.x5c) || header.x5c.length === 0) {
-    throw new Cs02ValidationError("x509_san_dns authorization request must include x5c", "invalid_client");
+    throw new Cs02ValidationError("X.509 authorization request must include x5c", "invalid_client");
   }
   if (header.x5c.some((entry) => {
     if (typeof entry !== "string" || entry.length === 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(entry)) return true;
     try { return Buffer.from(entry, "base64").length === 0; } catch { return true; }
   })) {
-    throw new Cs02ValidationError("x509_san_dns authorization request contains malformed x5c", "invalid_client");
+    throw new Cs02ValidationError("X.509 authorization request contains malformed x5c", "invalid_client");
   }
   const der = header.x5c[0];
   return `-----BEGIN CERTIFICATE-----\n${der.match(/.{1,64}/g).join("\n")}\n-----END CERTIFICATE-----\n`;
@@ -634,7 +655,8 @@ async function verifyJarWithX5cLeaf(requestJwt, header, clientId, context) {
   assertEs256P256Certificate(pem, context);
   const key = await importX509(pem, "ES256");
   const verified = await jwtVerify(requestJwt, key, { clockTolerance: 0 });
-  if (parseCs02ClientIdScheme(clientId).scheme === "x509_san_dns") {
+  const clientIdScheme = parseCs02ClientIdScheme(clientId).scheme;
+  if (clientIdScheme === "x509_san_dns") {
     try {
       assertX509SanDnsLeafMatchesClientId(clientId, pem);
     } catch (error) {
@@ -643,8 +665,20 @@ async function verifyJarWithX5cLeaf(requestJwt, header, clientId, context) {
       }
       throw error;
     }
+    await validateX509SanDnsTrustAnchor(clientId, header, pem);
+  } else if (clientIdScheme === "x509_hash") {
+    try {
+      assertX509HashLeafMatchesClientId(clientId, header.x5c[0]);
+    } catch (error) {
+      if (error instanceof Cs02ClientIdBindingError) {
+        throw new Cs02ValidationError(error.message, error.errorCode);
+      }
+      throw error;
+    }
+    await validateX509HashTrustAnchor(clientId, header, pem);
+  } else {
+    await validateX509SanDnsTrustAnchor(clientId, header, pem);
   }
-  await validateX509SanDnsTrustAnchor(clientId, header, pem);
   return verified;
 }
 
@@ -703,14 +737,15 @@ async function verifyJarWithVerifierAttestation(requestJwt, header, clientId, op
 
 export async function verifyCs02JarSignature(requestJwt, header, payload, options, log = () => {}) {
   const clientId = payload?.client_id;
-  validateCs02ClientId(clientId, log);
+  validateCs02ClientId(clientId, options, log, payload?.dcql_query);
   const { scheme } = parseCs02ClientIdScheme(clientId);
   const didMethod = resolveCs02DidMethod(clientId);
 
   try {
     switch (scheme) {
+      case "x509_hash":
       case "x509_san_dns":
-        return await verifyJarWithX5cLeaf(requestJwt, header, clientId, "x509_san_dns x5c");
+        return await verifyJarWithX5cLeaf(requestJwt, header, clientId, `${scheme} x5c`);
       case "decentralized_identifier":
         if (didMethod === "did:web") {
           return await verifyJarWithDidWeb(requestJwt, header, clientId, options);

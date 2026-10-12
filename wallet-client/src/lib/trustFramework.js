@@ -336,7 +336,7 @@ export async function enforceVerifierPresentationTrust({ sessionId, requestHeade
   const { session, enabled } = await isWalletTrustEnabled(sessionId);
   if (!enabled) return null;
   const clientId = String(requestPayload?.client_id || "");
-  if (!clientId.startsWith("x509_san_dns:") && !clientId.startsWith("verifier_attestation:")) {
+  if (!clientId.startsWith("x509_hash:") && !clientId.startsWith("x509_san_dns:") && !clientId.startsWith("verifier_attestation:")) {
     const decision = { trusted: true, state: "not_applicable", reasonCode: "DID_TRUST_NOT_IMPLEMENTED", evidence: { clientId } };
     await recordWalletTrustDecision(sessionId, decision, "wallet-verify-verifier");
     return decision;

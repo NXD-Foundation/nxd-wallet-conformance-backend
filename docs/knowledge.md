@@ -252,8 +252,19 @@ Section 4.5.
 
 - The current standard verifier path uses DCQL for OpenID4VP 1.0; legacy
 Presentation Exchange paths still exist but are not the current baseline.
-- Supported verifier identities include X.509 and DID-based identifiers using the OpenID4VP `decentralized_identifier` prefix with `did:web` or `did:jwk`.
-Supported response modes include `direct_post`, `direct_post.jwt`,
+- Strict CS-02 (default WE BUILD profile) uses the OpenID4VP `x509_hash`
+  client identifier only. `x509_san_dns`, `verifier_attestation`, and
+  `decentralized_identifier` remain available when `CS02_COMPATIBILITY` or
+  `VERIFIER_CS02_COMPATIBILITY` is set. CS-03 signing keeps `x509_san_dns`.
+- Request-URI retrieval signs with the client identity stored at generation,
+  preserving its binding to the invocation URI across GET and POST. Opted-in
+  wallet trust enforcement routes `x509_hash` through the same WRPAC/WRPRC
+  checks as other X.509 verifier identities.
+- Supported verifier identities in compatibility mode include X.509 SAN DNS,
+  verifier attestation, `x509_hash`, and DID-based identifiers using the
+  OpenID4VP `decentralized_identifier` prefix with `did:web` or `did:jwk`.
+- Strict CS-02 defaults presentation to `direct_post.jwt`. Compatibility mode
+  still allows `direct_post`. Supported response modes include `direct_post`,
 `dc_api`, and `dc_api.jwt`.
 - Verification must distinguish advertised capability from runtime enforcement.
 In particular, state/nonce checks, DCQL response shape, transaction-data
@@ -281,10 +292,16 @@ both `kid` and `alg`, uses that exact `alg`, prefers `A256GCM`, and returns a
   decryption must use this same registry rather than a separate hard-coded key.
 - Verifier metadata should use the OpenID4VP 1.0 verifier-metadata model, not
 older `client_metadata` representations.
-- CS-02 wallet invocation is the empty-authority form
-  `openid4vp://?request_uri=...` (CS-02 §6.1.2 and §8.1). The host `present` is
-  not part of the approved CS-02 text; treat `openid4vp://present?...` as
-  implementation or compatibility-only.
+- CS-02 wallet invocation uses empty-authority
+  `openid4vp://?request_uri=...`, `eu-eaap://?request_uri=...`, and
+  `haip-vp://?request_uri=...` with the same query (CS-02 §8.1). The host
+  `present` is not part of the approved CS-02 text; treat
+  `openid4vp://present?...` as compatibility-only when
+  `CS02_ALLOW_PRESENT_INVOCATION` or legacy compatibility flags are set.
+- Verifier QR responses retain `qr` and `deepLink` for OpenID4VP and expose
+  `deepLinks` keyed by `openid4vp`, `eu-eaap`, and `haip-vp` for the same session.
+- Strict presentation response acknowledgement follows CS-02 §6.1.7: HTTP 200
+  with an optional `redirect_uri` to the verifier UI (not `{ "status": "ok" }`).
 
 Sources: [CS-02](./core/cs-02-credential-presentation%20%281%29.md),
 [verifier metadata model](./openid4vp-cs02-verifier-metadata-model.md), and
@@ -357,6 +374,8 @@ Sources: [CS-07](./core/cs-07-credential-presentation-dc-api-updated.md),
 
 ### CS-03 Remote Qualified Signing Compatibility
 
+- CS-03 routes use `CONFIG.CS03_DEFAULT_RESPONSE_MODE` (`direct_post`),
+  independently of the strict CS-02 encrypted response default.
 - CS-03 request generation remains explicitly selected with `cs03=1` on the
 `/x509/generateVPRequestDCQL` route (and `cs03_oob=1` for callback delivery).
 - The CSC X.509 DCQL format is not part of the strict CS-02 credential-format

@@ -1,12 +1,14 @@
 import { expect } from "chai";
 import fs from "fs";
 import * as jose from "jose";
-import { buildVpRequestJWT } from "../utils/cryptoUtils.js";
+import { buildVpRequestJWT, loadVerifierP12 } from "../utils/cryptoUtils.js";
+import { computeX509HashClientIdFromLeafCertBase64 } from "../utils/cs02ClientIdBinding.js";
 import { DEFAULT_DCQL_QUERY } from "../utils/routeUtils.js";
 import {
   validateCs02Nonce,
   Cs02VerifierRequestError,
   createOpenId4VpRequestUrl,
+  buildCs02InvocationRequestUrl,
   filterClientMetadataForCs02,
   resolveVerifierCs02Options,
   isWaltidDemoMode,
@@ -23,13 +25,18 @@ function encodeTxData(payload) {
   return Buffer.from(JSON.stringify(payload)).toString("base64url");
 }
 
+function strictCs02ClientId() {
+  const { certChain } = loadVerifierP12();
+  return computeX509HashClientIdFromLeafCertBase64(certChain[0]);
+}
+
 async function buildStandardCs02Jar(overrides = {}) {
   const env = { VERIFIER_CS02_COMPATIBILITY: "false", ...overrides.env };
   const previous = { ...process.env };
   Object.assign(process.env, env);
   try {
     return await buildVpRequestJWT(
-      overrides.client_id || "x509_san_dns:dev-i4mlab.aegean.gr",
+      overrides.client_id || strictCs02ClientId(),
       "https://dev-i4mlab.aegean.gr/direct_post/session-1",
       null,
       null,
@@ -40,7 +47,7 @@ async function buildStandardCs02Jar(overrides = {}) {
       "nonce-phase3",
       overrides.dcql_query !== undefined ? overrides.dcql_query : validDcqlQuery(),
       overrides.transaction_data !== undefined ? overrides.transaction_data : null,
-      overrides.response_mode || "direct_post",
+      overrides.response_mode || "direct_post.jwt",
       undefined,
       undefined,
       null,
@@ -73,15 +80,15 @@ describe("CS-02 verifier request generation (Phase 3)", () => {
     })).to.throw(Cs02VerifierRequestError, /HTTPS/);
   });
 
-  it("rejects generated x509_san_dns requests whose response_uri FQDN does not match client_id", () => {
+  it("rejects x509_san_dns client_id in strict CS-02 presentation generation", () => {
     expect(() => validateCs02JarGenerationInput({
       client_id: "x509_san_dns:verifier.example",
-      response_uri: "https://other.example/response",
+      response_uri: "https://verifier.example/response",
       dcql_query: validDcqlQuery(),
-      response_mode: "direct_post",
+      response_mode: "direct_post.jwt",
       nonce: "nonce-1",
       options: { strict: true },
-    })).to.throw(Cs02VerifierRequestError, /FQDN/);
+    })).to.throw(Cs02VerifierRequestError, /Unsupported CS-02 client identifier scheme/);
   });
 
   const originalCompatibility = process.env.VERIFIER_CS02_COMPATIBILITY;
@@ -164,7 +171,8 @@ describe("CS-02 verifier request generation (Phase 3)", () => {
     expect(header.alg).to.equal("ES256");
     expect(header.typ).to.equal("oauth-authz-req+jwt");
     expect(payload.response_type).to.equal("vp_token");
-    expect(payload.response_mode).to.equal("direct_post");
+    expect(payload.response_mode).to.equal("direct_post.jwt");
+    expect(payload.client_id).to.match(/^x509_hash:/);
     expect(payload.dcql_query.credentials[0].id).to.equal("cmwallet");
     expect(payload.state).to.equal("state-phase3");
     expect(payload.exp - payload.iat).to.be.at.most(300);
@@ -178,7 +186,7 @@ describe("CS-02 verifier request generation (Phase 3)", () => {
     await buildStandardCs02Jar();
 
     expect(records.some((record) =>
-      record.kind === "x509_san_dns" &&
+      record.kind === "x509_hash" &&
       record.placeholder === true &&
       record.enforced === false &&
       record.hasX5c === true
@@ -204,13 +212,16 @@ describe("CS-02 verifier request generation (Phase 3)", () => {
     }
   });
 
-  it("accepts decentralized_identifier client_id values with did:web payloads", async () => {
-    const requestJwt = await buildStandardCs02Jar({
-      client_id: "decentralized_identifier:did:web:example.org",
-      kid: "did:web:example.org#keys-1",
-    });
-    const payload = jose.decodeJwt(requestJwt);
-    expect(payload.client_id).to.equal("decentralized_identifier:did:web:example.org");
+  it("rejects decentralized_identifier client_id values in strict CS-02 mode", async () => {
+    try {
+      await buildStandardCs02Jar({
+        client_id: "decentralized_identifier:did:web:example.org",
+        kid: "did:web:example.org#keys-1",
+      });
+      expect.fail("expected strict decentralized_identifier rejection");
+    } catch (error) {
+      expect(error).to.be.instanceOf(Cs02VerifierRequestError);
+    }
   });
 
   it("rejects malformed transaction_data decoding in strict mode", () => {
@@ -316,6 +327,7 @@ describe("CS-02 verifier request generation (Phase 3)", () => {
 
   it("does not reintroduce unsupported metadata formats for direct_post", async () => {
     const requestJwt = await buildStandardCs02Jar({
+      response_mode: "direct_post",
       client_metadata: {
         client_name: "Test Verifier",
         vp_formats_supported: {
@@ -371,5 +383,19 @@ describe("CS-02 verifier request generation (Phase 3)", () => {
       { VERIFIER_CS02_COMPATIBILITY: "true" },
     );
     expect(url.startsWith("openid4vp://present?")).to.equal(true);
+  });
+
+  it("builds eu-eaap and haip-vp invocation URIs with the same query as openid4vp", () => {
+    const requestUri = "https://verifier.example/request/1";
+    const clientId = strictCs02ClientId();
+    const openid = buildCs02InvocationRequestUrl("openid4vp", requestUri, clientId, true);
+    const eaap = buildCs02InvocationRequestUrl("eu-eaap", requestUri, clientId, true);
+    const haip = buildCs02InvocationRequestUrl("haip-vp", requestUri, clientId, true);
+    expect(openid.startsWith("openid4vp://?")).to.equal(true);
+    expect(eaap.startsWith("eu-eaap://?")).to.equal(true);
+    expect(haip.startsWith("haip-vp://?")).to.equal(true);
+    expect(eaap).to.include(encodeURIComponent(requestUri));
+    expect(haip).to.include(encodeURIComponent(clientId));
+    expect(haip).to.include("request_uri_method=post");
   });
 });

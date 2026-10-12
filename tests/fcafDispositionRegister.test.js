@@ -41,8 +41,8 @@ describe("FCAF per-ID disposition tooling", () => {
 
   it("keeps strict-profile exclusions explicit", () => {
     expect(Object.keys(overrides)).to.have.length(301);
-    expect(Object.values(overrides).filter((entry) => entry.disposition === "structural-only")).to.have.length(38);
-    expect(Object.values(overrides).filter((entry) => entry.disposition === "inapplicable-cs02")).to.have.length(70);
+    expect(Object.values(overrides).filter((entry) => entry.disposition === "structural-only")).to.have.length(48);
+    expect(Object.values(overrides).filter((entry) => entry.disposition === "inapplicable-cs02")).to.have.length(60);
     expect(Object.values(overrides).filter((entry) => entry.disposition === "implemented")).to.have.length(192);
     expect(Object.values(overrides).filter((entry) => entry.disposition === "partial")).to.have.length(0);
   });

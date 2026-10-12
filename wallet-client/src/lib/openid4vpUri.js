@@ -1,7 +1,9 @@
 /**
- * CS-02 §6.1.2 / §8.1 wallet invocation is empty-authority `openid4vp://?…`.
+ * CS-02 §6.1.2 / §8.1 wallet invocation uses empty-authority URIs:
+ * `openid4vp://?…`, `eu-eaap://?…`, and optionally `haip-vp://?…`.
  * `openid4vp://present?…` is a non-CS-02 compatibility form.
  */
+export const CS02_INVOCATION_PROTOCOLS = ["openid4vp:", "eu-eaap:", "haip-vp:"];
 export const OPENID4VP_PRESENT_HOST = "present";
 
 /** Compatibility invocation URI with host `present` (not CS-02). */
@@ -16,8 +18,15 @@ export const OPENID4VP_CS02_URI = "openid4vp://";
 /** Prefix for CS-02 by-value VP deep links (`openid4vp://?client_id=…`). */
 export const OPENID4VP_CS02_QUERY_PREFIX = `${OPENID4VP_CS02_URI}?`;
 
+export function isCs02InvocationDeepLink(value) {
+  return (
+    typeof value === "string" &&
+    /^(openid4vp|eu-eaap|haip-vp):\/\//.test(value)
+  );
+}
+
 export function isOpenId4VpDeepLink(value) {
-  return typeof value === "string" && /^openid4vp:\/\//.test(value);
+  return isCs02InvocationDeepLink(value);
 }
 
 /**

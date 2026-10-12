@@ -17,6 +17,8 @@ import {
 } from "../../utils/trustFrameworkPolicy.js";
 import fs from "node:fs/promises";
 import sinon from "sinon";
+import forge from "node-forge";
+import { computeX509HashClientIdFromLeafCertBase64 } from "../../utils/cs02ClientIdBinding.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -295,6 +297,56 @@ describe("wallet WE BUILD trust framework helpers", () => {
         expect(error.message).to.include("non-empty dcql_query.credentials");
       }
     }
+  });
+
+
+  it("rejects hash verifier trust evidence that did not verify the request", async () => {
+    setWalletTrustSessionStorageForTests({
+      get: async () => JSON.stringify({ trustPolicy: { mode: "webuild", profile: "webuild-wp4-pilot" } }),
+      set: async () => {},
+    });
+    let failure;
+    try {
+      await enforceVerifierPresentationTrust({
+        sessionId: "hash-unbound",
+        requestHeader: {},
+        requestPayload: { client_id: "x509_hash:unbound" },
+        trustEvidenceBound: false,
+      });
+    } catch (error) { failure = error; }
+    expect(failure?.message).to.include("WRPAC x5c certificate to verify");
+  });
+
+  it("rejects an untrusted hash verifier through WRPAC evaluation instead of the DID bypass", async () => {
+    const sessions = new Map([["wallet:test-session:hash-untrusted", JSON.stringify({
+      sessionId: "hash-untrusted", status: "pending",
+      trustPolicy: { mode: "webuild", profile: "webuild-wp4-pilot" },
+    })]]);
+    setWalletTrustSessionStorageForTests({
+      get: async key => sessions.get(key),
+      set: async (key, value) => sessions.set(key, value),
+    });
+    // Give the fixture an entity identifier so the test reaches certificate trust evaluation.
+    const certificate = forge.pki.certificateFromPem(await fs.readFile(path.join(TRUST_FIXTURE_DIR, "pid.crt"), "utf8"));
+    certificate.setSubject([...certificate.subject.attributes, { name: "serialNumber", value: "test-verifier-001" }]);
+    certificate.sign(forge.pki.privateKeyFromPem(await fs.readFile(path.join(TRUST_FIXTURE_DIR, "pid.key"), "utf8")), forge.md.sha256.create());
+    const leaf = forge.pki.certificateToPem(certificate).replace(/-----[^-]+-----/g, "").replace(/\s+/g, "");
+    const resolve = sinon.stub().resolves({ trusted: false, state: "not_trusted", reasonCode: "ENTITY_NOT_LISTED" });
+    setTrustResolverForTests({ resolve });
+    let failure;
+    try {
+      await enforceVerifierPresentationTrust({
+        sessionId: "hash-untrusted", requestHeader: { x5c: [leaf] },
+        requestPayload: {
+          client_id: computeX509HashClientIdFromLeafCertBase64(leaf),
+          dcql_query: { credentials: [{ format: "dc+sd-jwt", meta: { vct_values: ["urn:eu.europa.ec.eudi:pid:1"] }, claims: [] }] },
+        },
+      });
+    } catch (error) { failure = error; }
+    expect(failure?.message).to.include("Verifier access certificate trust rejected: ENTITY_NOT_LISTED");
+    expect(resolve.firstCall.args[0].role).to.equal("wrpac-provider");
+    expect(resolve.firstCall.args[0].presentedIdentity.entityId).to.equal("test-verifier-001");
+    expect(JSON.parse(sessions.get("wallet:test-session:hash-untrusted")).trustDecision.trusted).to.equal(false);
   });
 
   it("rejects verifier trust evidence when the WRPAC x5c did not verify the request", async () => {

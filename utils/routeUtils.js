@@ -3,13 +3,22 @@ import { v4 as uuidv4 } from "uuid";
 import qr from "qr-image";
 import imageDataURI from "image-data-uri";
 import { streamToBuffer } from "@jorgeferrero/stream-to-buffer";
-import { generateNonce, buildVpRequestJWT, derBase64ToPemCert, loadTrustFrameworkVerifierMaterial } from "./cryptoUtils.js";
+import {
+  generateNonce,
+  buildVpRequestJWT,
+  derBase64ToPemCert,
+  loadTrustFrameworkVerifierMaterial,
+  loadVerifierP12,
+} from "./cryptoUtils.js";
+import { computeX509HashClientIdFromLeafCertBase64 } from "./cs02ClientIdBinding.js";
 import { certificateFromX5c, certificatesFromX5c } from "../trust/crypto.js";
 import { checkAccessCertificateTrust, isTrustFrameworkSession, loadConfiguredAccessCertificate } from "./trustFrameworkPolicy.js";
 import {
   filterClientMetadataForCs02,
   createOpenId4VpRequestUrl,
   isVerifierCs02StrictMode,
+  CS02_INVOCATION_SCHEMES,
+  buildCs02InvocationRequestUrl,
 } from "./cs02VerifierRequest.js";
 import {
   CS07_DC_API_PROTOCOL,
@@ -174,11 +183,14 @@ export const CONFIG = {
     const hostname = new URL(this.SERVER_URL).hostname;
     return `x509_san_dns:${hostname}`;
   },
+  CS03_DEFAULT_RESPONSE_MODE: "direct_post",
+  get DEFAULT_RESPONSE_MODE() {
+    return isVerifierCs02StrictMode() ? "direct_post.jwt" : "direct_post";
+  },
   get VERIFIER_ATTESTATION_CLIENT_ID() {
     const hostname = new URL(this.SERVER_URL).hostname;
     return `verifier_attestation:${hostname}`;
   },
-  DEFAULT_RESPONSE_MODE: "direct_post",
   // Default JAR signature algorithm for VP requests (CS-02 uses ES256/P-256).
   DEFAULT_JAR_ALG: "ES256",
   DEFAULT_NONCE_LENGTH: 16,
@@ -356,6 +368,19 @@ function getHostnameFromX509ClientId(clientId) {
     return null;
   }
   return clientId.slice("x509_san_dns:".length);
+}
+
+export function resolveCs02PresentationClientId({
+  clientId,
+  cs03Signing = false,
+  strict = isVerifierCs02StrictMode(),
+  verifierSigningMaterial = null,
+} = {}) {
+  if (!strict || cs03Signing) {
+    return clientId;
+  }
+  const material = verifierSigningMaterial || loadVerifierP12();
+  return computeX509HashClientIdFromLeafCertBase64(material.certChain[0]);
 }
 
 export function validateCs03ResponseUriAlignment({ serverURL, clientId, responseURI }) {
@@ -1210,7 +1235,7 @@ export async function generateVPRequest(params) {
   // update this for verifier attestation to include in the jose header the verifier attestation jwt
   const {
     sessionId,
-    responseMode,
+    responseMode: requestedResponseMode,
     jarAlg,
     presentationDefinition,
     clientId,
@@ -1232,9 +1257,21 @@ export async function generateVPRequest(params) {
     cs07ProfileId = null,
     trustPolicy = null,
   } = params;
+  const responseMode = requestedResponseMode ||
+    (cs03Signing ? CONFIG.CS03_DEFAULT_RESPONSE_MODE : CONFIG.DEFAULT_RESPONSE_MODE);
   const cs02StrictMode = isVerifierCs02StrictMode();
   let effectivePresentationDefinition = presentationDefinition;
   let effectiveDcqlQuery = dcqlQuery;
+  const trustFrameworkSigningMaterial =
+    trustPolicy && isTrustFrameworkSession({ trustPolicy })
+      ? loadTrustFrameworkVerifierMaterial()
+      : null;
+  const effectiveClientId = resolveCs02PresentationClientId({
+    clientId,
+    cs03Signing,
+    strict: cs02StrictMode,
+    verifierSigningMaterial: trustFrameworkSigningMaterial,
+  });
 
   if (cs02StrictMode) {
     effectivePresentationDefinition = null;
@@ -1248,7 +1285,7 @@ export async function generateVPRequest(params) {
   await logInfo(sessionId, "Starting VP request generation in routeUtils", {
     responseMode,
     jarAlg: jarAlg || CONFIG.DEFAULT_JAR_ALG,
-    clientId,
+    clientId: effectiveClientId,
     hasDcqlQuery: !!effectiveDcqlQuery,
     hasTransactionData: !!transactionData,
     cs03Signing,
@@ -1276,23 +1313,23 @@ export async function generateVPRequest(params) {
     response_mode: responseMode,
     state: cs07DcApi ? null : state,
     jar_alg: jarAlg || CONFIG.DEFAULT_JAR_ALG,
-    client_id: clientId,
+    client_id: effectiveClientId,
   };
   if (trustPolicy) {
     sessionData.trustPolicy = trustPolicy;
   }
 
   const useTrustWrpac = isTrustFrameworkSession(sessionData)
-    && (String(clientId || "").startsWith("x509_") || cs07DcApi);
+    && (String(effectiveClientId || "").startsWith("x509_") || cs07DcApi);
   const verifierSigningMaterial = useTrustWrpac ? loadTrustFrameworkVerifierMaterial() : null;
 
-  if (isTrustFrameworkSession(sessionData) && String(clientId || "").startsWith("x509_san_")) {
+  if (isTrustFrameworkSession(sessionData) && String(effectiveClientId || "").startsWith("x509_")) {
     const accessCertificatePem = certificateFromX5c(verifierSigningMaterial.certChain);
     const accessDecision = await checkAccessCertificateTrust({
       session: sessionData,
       certificatePem: accessCertificatePem,
       certificateChain: certificatesFromX5c(verifierSigningMaterial.certChain),
-      entityId: clientId,
+      entityId: effectiveClientId,
       role: "wrpac-provider",
       operation: "verify-access-certificate",
     });
@@ -1307,7 +1344,7 @@ export async function generateVPRequest(params) {
       const registrationDecision = await checkAccessCertificateTrust({
         session: sessionData,
         certificatePem: registrationCertificatePem,
-        entityId: clientId,
+        entityId: effectiveClientId,
         role: "wrprc-provider",
         operation: "verify-registration-certificate",
       });
@@ -1396,7 +1433,7 @@ export async function generateVPRequest(params) {
     ? filterClientMetadataForCs02(clientMetadata, responseMode)
     : clientMetadata;
   const vpRequestJWT = await buildVpRequestJWT(
-    clientId,
+    effectiveClientId,
     responseUri,
     effectivePresentationDefinition,
     null, // privateKey - only used for verifier_attestation scheme
@@ -1430,7 +1467,7 @@ export async function generateVPRequest(params) {
 
   // Create OpenID4VP request URL
   const requestUri = `${serverURL}${routePath}/${sessionId}`;
-  const vpRequest = createOpenID4VPRequestUrl(requestUri, clientId, usePostMethod);
+  const vpRequest = createOpenID4VPRequestUrl(requestUri, effectiveClientId, usePostMethod);
   
   await logDebug(sessionId, "Created OpenID4VP request URL", {
     requestUri,
@@ -1503,14 +1540,15 @@ export async function processVPRequest(params) {
     const metadataForRequest = isVerifierCs02StrictMode()
       ? filterClientMetadataForCs02(clientMetadata, vpSession.response_mode)
       : clientMetadata;
-    const requestClientId = clientId || vpSession.client_id;
+    // The session identity is also the client_id published in its invocation URI.
+    const requestClientId = vpSession.client_id || clientId;
     const trustSigningMaterial = isTrustFrameworkSession(vpSession)
       && String(requestClientId || "").startsWith("x509_")
       ? loadTrustFrameworkVerifierMaterial()
       : null;
 
     const vpRequestJWT = await buildVpRequestJWT(
-      clientId,
+      requestClientId,
       responseUri,
       vpSession.presentation_definition,
       null, // privateKey - only used for verifier_attestation scheme
@@ -1646,7 +1684,18 @@ export async function storeVPSessionData(sessionId, sessionData) {
  * @returns {Object} - The response object
  */
 export function createVPRequestResponse(qrCode, deepLink, sessionId) {
+  const invocation = new URL(deepLink);
+  const deepLinks = Object.fromEntries(CS02_INVOCATION_SCHEMES.map((scheme) => [
+    scheme,
+    buildCs02InvocationRequestUrl(
+      scheme,
+      invocation.searchParams.get("request_uri"),
+      invocation.searchParams.get("client_id"),
+      invocation.searchParams.get("request_uri_method") === "post",
+    ),
+  ]));
   return {
+    deepLinks,
     qr: qrCode,
     deepLink,
     sessionId,

@@ -1354,3 +1354,21 @@ export function buildCs02FailedSessionPatch(errorCode, errorDescription) {
 export function resolveCs02ResponseOptions(env = process.env) {
   return resolveVerifierCs02Options(env);
 }
+
+export function buildCs02PresentationAcknowledgement(sessionId, { serverURL, strict = true } = {}) {
+  if (!strict) {
+    return { status: "ok" };
+  }
+  const acknowledgement = {};
+  if (typeof serverURL === "string" && sessionId) {
+    try {
+      const redirectUri = new URL(serverURL);
+      redirectUri.pathname = `${redirectUri.pathname.replace(/\/+$/, "")}/verificationStatus`;
+      redirectUri.search = "";
+      redirectUri.hash = "";
+      redirectUri.searchParams.set("sessionId", sessionId);
+      acknowledgement.redirect_uri = redirectUri.href;
+    } catch {}
+  }
+  return acknowledgement;
+}

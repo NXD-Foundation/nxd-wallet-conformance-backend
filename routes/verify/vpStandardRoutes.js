@@ -65,7 +65,7 @@ vpStandardRouter.get("/vp/request", async (req, res) => {
     const profile = req.query.profile || "dcql";
     const credentialProfile = req.query.credential_profile || "pid";
     const requestUriMethod = req.query.request_uri_method || "post";
-    const responseMode = req.query.response_mode || "direct_post";
+    const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
     const txData = req.query.tx_data === "true";
     const cs02Strict = isVerifierCs02StrictMode();
 

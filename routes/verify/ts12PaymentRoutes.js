@@ -44,7 +44,7 @@ const clientMetadata = JSON.parse(
  *
  * Query/body parameters:
  * - required: amount, currency, merchant/payee.name, payee_id/payee.id, transaction_id
- * - optional: session_id, response_mode (default direct_post)
+ * - optional: session_id, response_mode (strict default direct_post.jwt)
  * - optional: attestation_type (sca-iban | sca-user | sca-card-dpc, default sca-iban)
  * - optional: include_pid (true adds urn:eu.europa.ec.eudi:pid:1 to the DCQL query)
  * - optional TS12 fields: execution_date, recurrence, pisp
@@ -59,7 +59,7 @@ async function handleTs12PaymentRequest(req, res) {
     slog = makeSessionLogger(sessionId);
     bindSessionLoggingContext(req, res, sessionId);
 
-    const responseMode = req.body?.response_mode || req.query.response_mode || "direct_post";
+    const responseMode = req.body?.response_mode || req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
     const requestUriMethod = req.body?.request_uri_method || req.query.request_uri_method || "post";
     const paymentInput = { ...req.query, ...req.body };
 

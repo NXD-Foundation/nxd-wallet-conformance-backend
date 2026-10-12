@@ -86,8 +86,8 @@
     "dispositions": {
       "implemented": 192,
       "partial": 0,
-      "structural-only": 38,
-      "inapplicable-cs02": 70,
+      "structural-only": 48,
+      "inapplicable-cs02": 60,
       "out-of-scope-datamodel": 1
     },
     "by_layer": {

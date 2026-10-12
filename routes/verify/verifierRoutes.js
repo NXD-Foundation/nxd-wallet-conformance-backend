@@ -68,6 +68,7 @@ import {
   validateCs02SdJwtEntriesInVpToken,
   verifyCs02OuterResponseJwt,
   unwrapOpenid4VpAuthorizationResponse,
+  buildCs02PresentationAcknowledgement,
 } from "../../utils/cs02VerifierResponse.js";
 
 const getSessionTranscriptBytes = (
@@ -236,6 +237,12 @@ verifierRouter.use((req, res, next) => {
 
 const serverURL = process.env.SERVER_URL || "http://localhost:3000";
 const proxyPath = process.env.PROXY_PATH || null;
+
+function respondPresentationAcknowledgement(res, sessionId, strict) {
+  return res
+    .status(200)
+    .json(buildCs02PresentationAcknowledgement(sessionId, { serverURL, strict }));
+}
 
 const privateKey = fs.readFileSync("./private-key.pem", "utf-8");
 const publicKeyPem = fs.readFileSync("./public-key.pem", "utf-8");
@@ -877,7 +884,7 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
           claimsCount: Object.keys(claims).length
         });
         
-        return res.status(200).json({ status: "ok" });
+        return respondPresentationAcknowledgement(res, sessionId, cs02ResponseOptions.strict);
 
       } catch (error) {
         await logError(sessionId, "Error processing mDL response", {
@@ -1049,7 +1056,7 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
           claimsCount: Object.keys(claims).length
         });
         
-        return res.status(200).json({ status: "ok" });
+        return respondPresentationAcknowledgement(res, sessionId, cs02ResponseOptions.strict);
 
       } catch (error) {
         await logError(sessionId, "Error processing HAIP dc_api.jwt response", {
@@ -1487,7 +1494,7 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
           claimsCount: Object.keys(claimsFromExtraction || {}).length
         });
         
-        return res.status(200).json({ status: "ok" });
+        return respondPresentationAcknowledgement(res, sessionId, cs02ResponseOptions.strict);
 
       } catch (error) {
         await logError(sessionId, "Error processing JWT response", {
@@ -1702,7 +1709,7 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
               });
             } catch {}
           }
-          return res.status(200).json({ status: "ok" });
+          return respondPresentationAcknowledgement(res, sessionId, cs02ResponseOptions.strict);
         }
 
         await logDebug(sessionId, "Extracting claims from direct_post request");
@@ -2226,13 +2233,17 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
       vpSession.claims = { ...claimsFromExtraction };
       await storeVPSession(sessionId, vpSession);
 
+      const acknowledgement = buildCs02PresentationAcknowledgement(sessionId, {
+        serverURL,
+        strict: cs02ResponseOptions.strict,
+      });
       if (slog) {
         try { slog("[PRESENTATION] direct_post processing completed successfully", { status: "success", claimsCount: Object.keys(claimsFromExtraction || {}).length }); } catch {}
-        logHttpResponse(slog, requestId, `/direct_post/${sessionId}`, 200, "OK", res.getHeaders(), { status: "ok" });
+        logHttpResponse(slog, requestId, `/direct_post/${sessionId}`, 200, "OK", res.getHeaders(), acknowledgement);
         try { slog("[PRESENTATION] [COMPLETE] Processing direct_post VP response", { success: true }); } catch {}
       }
       
-      return res.status(200).json({ status: "ok" });
+      return res.status(200).json(acknowledgement);
     }
   } catch (error) {
     // Get sessionId from request params (sessionId variable might not be in scope if error occurred early)

@@ -9,6 +9,7 @@ import request from "supertest";
 import { compactDecrypt, decodeJwt, decodeProtectedHeader, exportJWK, generateKeyPair } from "jose";
 import ts12PaymentRouter from "../routes/verify/ts12PaymentRoutes.js";
 import { CONFIG } from "../utils/routeUtils.js";
+import { getVPSession } from "../services/cacheServiceRedis.js";
 import issuerConfig from "../data/issuer-config.json" with { type: "json" };
 import {
   TS12_DCQL_QUERY,
@@ -731,6 +732,7 @@ describe("TS12 payment routes", () => {
       })
       .expect(200);
 
+    expect((await getVPSession(created.body.sessionId)).response_mode).to.equal("direct_post.jwt");
     expect(created.body.attestationType).to.equal("sca-user");
     expect(created.body.expectedVct).to.equal(TS12_SCA_USER_VCT);
     expect(created.body.includePid).to.equal(false);
@@ -767,6 +769,9 @@ describe("TS12 payment routes", () => {
     const { plaintext } = await compactDecrypt(jar, privateKey);
     const requestJwt = new TextDecoder().decode(plaintext);
     expect(requestJwt.split(".")).to.have.length(3);
+    const payload = decodeJwt(requestJwt);
+    expect(payload.response_mode).to.equal("direct_post.jwt");
+    expect(payload.client_id).to.equal(new URL(created.body.deepLink).searchParams.get("client_id"));
   });
 
   it("embeds SCA plus PID in the encrypted request when include_pid is true", async function () {

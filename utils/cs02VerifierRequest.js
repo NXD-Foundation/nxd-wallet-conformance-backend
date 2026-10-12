@@ -8,6 +8,7 @@ import { isStrictCs02Base64Url, decodeStrictCs02Base64Url } from "./cs02Encoding
 import {
   buildStrictCs02ClientMetadata,
   validateX509SanDnsTrustAnchor as validateX509SanDnsTrustForRequestGeneration,
+  validateX509HashTrustAnchor as validateX509HashTrustForRequestGeneration,
   validateVerifierAttestationTrust as validateVerifierAttestationForRequestGeneration,
 } from "./cs02TrustPolicy.js";
 import {
@@ -25,12 +26,14 @@ export const CS02_ALLOWED_RESPONSE_MODES = new Set([
   "dc_api",
   "dc_api.jwt",
 ]);
-export const CS02_DEFAULT_RESPONSE_MODE = "direct_post";
-export const CS02_ALLOWED_CLIENT_ID_SCHEMES = new Set([
+export const CS02_DEFAULT_RESPONSE_MODE = "direct_post.jwt";
+export const CS02_COMPATIBILITY_CLIENT_ID_SCHEMES = new Set([
   "x509_san_dns",
   "verifier_attestation",
   "decentralized_identifier",
+  "x509_hash",
 ]);
+export const CS02_STRICT_CLIENT_ID_SCHEMES = new Set(["x509_hash"]);
 export const CS02_SUPPORTED_TRANSACTION_DATA_TYPES = new Set([
   "qes_authorization",
   "payment_data",
@@ -94,6 +97,24 @@ export function resolveVerifierCs02Options(env = process.env) {
 
 export function isVerifierCs02StrictMode(env = process.env) {
   return resolveVerifierCs02Options(env).strict;
+}
+
+export function dcqlQueryUsesCs03CredentialFormat(dcqlQuery) {
+  if (!dcqlQuery || !Array.isArray(dcqlQuery.credentials)) return false;
+  return dcqlQuery.credentials.some(
+    (credential) => credential?.format === CS03_X509_DCQL_FORMAT,
+  );
+}
+
+export function resolveVerifierAllowedClientIdSchemes(options = { strict: true }, dcqlQuery = null) {
+  if (!options.strict) {
+    return new Set(CS02_COMPATIBILITY_CLIENT_ID_SCHEMES);
+  }
+  const schemes = new Set(CS02_STRICT_CLIENT_ID_SCHEMES);
+  if (options.allowCs03CredentialFormat && dcqlQueryUsesCs03CredentialFormat(dcqlQuery)) {
+    schemes.add("x509_san_dns");
+  }
+  return schemes;
 }
 
 export function parseVerifierClientIdScheme(clientId) {
@@ -298,13 +319,8 @@ export function validateCs02JarGenerationInput({
       "invalid_client",
     );
   }
-  if (scheme === "x509_hash" || scheme === "unknown") {
-    throw new Cs02VerifierRequestError(
-      `Unsupported CS-02 client identifier scheme "${scheme}"`,
-      "invalid_client",
-    );
-  }
-  if (!CS02_ALLOWED_CLIENT_ID_SCHEMES.has(scheme)) {
+  const allowedSchemes = resolveVerifierAllowedClientIdSchemes(options, dcql_query);
+  if (!allowedSchemes.has(scheme)) {
     throw new Cs02VerifierRequestError(
       `Unsupported CS-02 client identifier scheme "${scheme}"`,
       "invalid_client",
@@ -442,6 +458,7 @@ export function filterClientMetadataForCs02(clientMetadata, responseMode) {
 
 export {
   validateX509SanDnsTrustForRequestGeneration,
+  validateX509HashTrustForRequestGeneration,
   validateVerifierAttestationForRequestGeneration,
 };
 
@@ -481,16 +498,42 @@ export function resolveCs02JarSigningPolicy({
   };
 }
 
-export function createCs02OpenId4VpRequestUrl(requestUri, clientId, usePostMethod = false) {
-  const base = `openid4vp://?request_uri=${encodeURIComponent(requestUri)}&client_id=${encodeURIComponent(clientId)}`;
+export const CS02_INVOCATION_SCHEMES = ["openid4vp", "eu-eaap", "haip-vp"];
+
+export function buildCs02InvocationRequestUrl(
+  scheme,
+  requestUri,
+  clientId,
+  usePostMethod = false,
+) {
+  const normalized = String(scheme || "openid4vp").replace(/:$/, "");
+  if (!CS02_INVOCATION_SCHEMES.includes(normalized)) {
+    throw new Cs02VerifierRequestError(
+      `Unsupported CS-02 invocation scheme "${scheme}"`,
+      "invalid_request",
+    );
+  }
+  const base =
+    `${normalized}://?request_uri=${encodeURIComponent(requestUri)}` +
+    `&client_id=${encodeURIComponent(clientId)}`;
   return usePostMethod ? `${base}&request_uri_method=post` : base;
 }
 
-export function createOpenId4VpRequestUrl(requestUri, clientId, usePostMethod = false, env = process.env) {
+export function createCs02OpenId4VpRequestUrl(requestUri, clientId, usePostMethod = false) {
+  return buildCs02InvocationRequestUrl("openid4vp", requestUri, clientId, usePostMethod);
+}
+
+export function createOpenId4VpRequestUrl(
+  requestUri,
+  clientId,
+  usePostMethod = false,
+  env = process.env,
+  scheme = "openid4vp",
+) {
   const options = resolveVerifierCs02Options(env);
   if (!options.strict && options.allowLegacyOpenId4VpInvocation) {
     const base = `openid4vp://present?request_uri=${encodeURIComponent(requestUri)}&client_id=${encodeURIComponent(clientId)}`;
     return usePostMethod ? `${base}&request_uri_method=post` : base;
   }
-  return createCs02OpenId4VpRequestUrl(requestUri, clientId, usePostMethod);
+  return buildCs02InvocationRequestUrl(scheme, requestUri, clientId, usePostMethod);
 }

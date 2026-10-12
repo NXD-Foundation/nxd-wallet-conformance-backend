@@ -26,13 +26,59 @@ import {
 import { OPENID4VP_CS02_URI, OPENID4VP_PRESENT_URI } from "../src/lib/openid4vpUri.js";
 import { WALLET_PROFILES } from "../src/lib/profile.js";
 import { setCs02TrustPlaceholderRecorder } from "../../utils/cs02TrustPolicy.js";
+import { CS03_X509_DCQL_FORMAT } from "../../utils/cs02VerifierRequest.js";
+import {
+  computeX509HashClientIdFromLeafCertBase64,
+  dnsNamesFromCertificatePem,
+} from "../../utils/cs02ClientIdBinding.js";
 
 const ecKeyPath = path.join(process.cwd(), "x509EC", "ec_private_pkcs8.key");
 const ecCertPath = path.join(process.cwd(), "x509EC", "client_certificate.crt");
 
+function ecLeafCertBase64() {
+  const pem = fs.readFileSync(ecCertPath, "utf8");
+  return pem
+    .replace(/-----BEGIN CERTIFICATE-----/g, "")
+    .replace(/-----END CERTIFICATE-----/g, "")
+    .replace(/\s+/g, "");
+}
+
+function strictX509HashClientId() {
+  return computeX509HashClientIdFromLeafCertBase64(ecLeafCertBase64());
+}
+
+function cs03StrictOptions(overrides = {}) {
+  return strictOptions({ allowCs03CredentialFormat: true, ...overrides });
+}
+
+function x509SanDnsClientIdFromEcCert() {
+  const pem = fs.readFileSync(ecCertPath, "utf8");
+  const dnsNames = dnsNamesFromCertificatePem(pem);
+  const dns = dnsNames[0] || "dss.aegean.gr";
+  return `x509_san_dns:${dns}`;
+}
+
+function cs03SanDnsJarPayload(overrides = {}) {
+  const clientId = x509SanDnsClientIdFromEcCert();
+  const dns = clientId.slice("x509_san_dns:".length);
+  return baseJarPayload({
+    client_id: clientId,
+    response_uri: `https://${dns}/response`,
+    dcql_query: {
+      credentials: [{
+        id: "signing-cert-01",
+        format: CS03_X509_DCQL_FORMAT,
+        meta: { certificatePolicies: ["0.4.0.2042.1"] },
+      }],
+    },
+    ...overrides,
+  });
+}
+
 function strictOptions(overrides = {}) {
   return {
     strict: true,
+    allowCs03CredentialFormat: false,
     allowHttp: false,
     allowPresentInvocation: false,
     allowLegacyInvocation: false,
@@ -47,7 +93,7 @@ function strictOptions(overrides = {}) {
 function baseJarPayload(overrides = {}) {
   const now = Math.floor(Date.now() / 1000);
   return {
-    client_id: "x509_san_dns:dss.aegean.gr",
+    client_id: strictX509HashClientId(),
     nonce: "nonce-123",
     response_uri: "https://dss.aegean.gr/response",
     response_type: "vp_token",
@@ -124,6 +170,15 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
       const parsed = validateCs02DeepLink(deepLink, strictOptions());
       expect(parsed.requestUri).to.equal("https://verifier.example/request");
       expect(parsed.method).to.equal("get");
+    });
+
+    it("accepts eu-eaap:// and haip-vp:// with the same query rules as openid4vp://", () => {
+      const requestUri = "https://verifier.example/request";
+      for (const prefix of ["eu-eaap://?", "haip-vp://?"]) {
+        const deepLink = `${prefix}request_uri=${encodeURIComponent(requestUri)}`;
+        const parsed = validateCs02DeepLink(deepLink, strictOptions());
+        expect(parsed.requestUri).to.equal(requestUri);
+      }
     });
 
     it("rejects openid4vp://present without override", () => {
@@ -230,7 +285,7 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
     it("requires request-object aud for CS-07 DC API JARs", () => {
       const now = Math.floor(Date.now() / 1000);
       const cs07Payload = {
-        client_id: "x509_san_dns:dss.aegean.gr",
+        client_id: strictX509HashClientId(),
         nonce: "nonce-123",
         response_type: "vp_token",
         response_mode: "dc_api.jwt",
@@ -321,11 +376,11 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
     });
 
     it("rejects unsupported client identifier schemes", () => {
-      expect(() => validateCs02ClientId("redirect_uri:https://example.com/cb")).to.throw(
+      expect(() => validateCs02ClientId("redirect_uri:https://example.com/cb", strictOptions())).to.throw(
         Cs02ValidationError,
       );
       try {
-        validateCs02ClientId("redirect_uri:https://example.com/cb");
+        validateCs02ClientId("redirect_uri:https://example.com/cb", strictOptions());
       } catch (error) {
         expect(error.errorCode).to.equal("invalid_client");
       }
@@ -347,11 +402,14 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
     });
 
     it("rejects bare DID client_id values without decentralized_identifier prefix", () => {
-      expect(() => validateCs02ClientId("did:web:example.org")).to.throw(
+      expect(() => validateCs02ClientId("did:web:example.org", strictOptions())).to.throw(
         'CS-02 DID client_id values must use the "decentralized_identifier:" prefix',
       );
-      expect(() => validateCs02ClientId("did:jwk:eyJrdHkiOiJFQyJ9")).to.throw(
+      expect(() => validateCs02ClientId("did:jwk:eyJrdHkiOiJFQyJ9", strictOptions())).to.throw(
         'CS-02 DID client_id values must use the "decentralized_identifier:" prefix',
+      );
+      expect(() => validateCs02ClientId("x509_san_dns:verifier.example.org", strictOptions())).to.throw(
+        /Unsupported CS-02 client identifier scheme/,
       );
     });
 
@@ -372,7 +430,7 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
       }
     });
 
-    it("accepts a valid ES256 x509_san_dns signed JAR", async () => {
+    it("accepts a valid ES256 x509_hash signed JAR", async () => {
       const records = [];
       setCs02TrustPlaceholderRecorder((record) => records.push(record));
       const requestJwt = await signJar(baseJarPayload());
@@ -381,14 +439,15 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
       });
       expect(verified.payload.response_type).to.equal("vp_token");
       expect(verified.header.typ).to.equal(CS02_JAR_TYP);
+      expect(verified.payload.client_id).to.match(/^x509_hash:/);
       expect(records.some((record) =>
-        record.kind === "x509_san_dns" &&
+        record.kind === "x509_hash" &&
         record.placeholder === true &&
         record.enforced === false
       )).to.equal(true);
     });
 
-    it("accepts a valid did:jwk signed JAR", async () => {
+    it("accepts a valid did:jwk signed JAR in compatibility mode", async () => {
       const privateKey = await importPKCS8(fs.readFileSync(ecKeyPath, "utf8"), "ES256");
       const publicJwk = await exportJWK(privateKey);
       delete publicJwk.d;
@@ -398,7 +457,7 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
         .sign(privateKey);
 
       const verified = await validateAndVerifyCs02AuthorizationRequest(requestJwt, {
-        options: strictOptions(),
+        options: strictOptions({ strict: false }),
       });
       expect(verified.payload.client_id).to.equal(clientId);
     });
@@ -414,7 +473,7 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
       }
     });
 
-    it("rejects x509_san_dns JAR without x5c", async () => {
+    it("rejects x509_hash JAR without x5c", async () => {
       const requestJwt = await signJar(baseJarPayload(), {}, { includeX5c: false });
       try {
         await validateAndVerifyCs02AuthorizationRequest(requestJwt, { options: strictOptions() });
@@ -441,7 +500,9 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
         baseJarPayload({ client_id: "verifier_attestation:verifier-1" }),
       );
       try {
-        await validateAndVerifyCs02AuthorizationRequest(requestJwt, { options: strictOptions() });
+        await validateAndVerifyCs02AuthorizationRequest(requestJwt, {
+          options: strictOptions({ strict: false }),
+        });
         expect.fail("expected missing VA-JWT header rejection");
       } catch (error) {
         expect(error).to.be.instanceOf(Cs02ValidationError);
@@ -465,7 +526,7 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
       );
 
       const verified = await validateAndVerifyCs02AuthorizationRequest(requestJwt, {
-        options: strictOptions(),
+        options: strictOptions({ strict: false }),
       });
 
       expect(verified.payload.client_id).to.equal("verifier_attestation:verifier-1");
@@ -486,7 +547,9 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
         { jwt: vaJwt },
       );
       try {
-        await validateAndVerifyCs02AuthorizationRequest(requestJwt, { options: strictOptions() });
+        await validateAndVerifyCs02AuthorizationRequest(requestJwt, {
+          options: strictOptions({ strict: false }),
+        });
         expect.fail("expected unbound attestation rejection");
       } catch (error) {
         expect(error).to.be.instanceOf(Cs02ValidationError);
@@ -496,6 +559,7 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
   });
 
   describe("did:web and did:jwk trust policy (Phase A)", () => {
+    const compatibilityOptions = (overrides = {}) => strictOptions({ strict: false, ...overrides });
     const didWebDid = "did:web:example.org";
     const didWebClientId = `decentralized_identifier:${didWebDid}`;
     const didWebKid = `${didWebDid}#keys-1`;
@@ -543,7 +607,7 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
     it("accepts a valid did:web signed JAR with exact kid", async () => {
       const requestJwt = await signDidWebJar();
       const verified = await validateAndVerifyCs02AuthorizationRequest(requestJwt, {
-        options: strictOptions({ fetchImpl: mockDidWebFetch(didWebDocument()) }),
+        options: compatibilityOptions({ fetchImpl: mockDidWebFetch(didWebDocument()) }),
       });
       expect(verified.payload.client_id).to.equal(didWebClientId);
       expect(verified.header.kid).to.equal(didWebKid);
@@ -553,7 +617,7 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
       const requestJwt = await signDidWebJar({ kid: undefined });
       try {
         await validateAndVerifyCs02AuthorizationRequest(requestJwt, {
-          options: strictOptions({ fetchImpl: mockDidWebFetch(didWebDocument()) }),
+          options: compatibilityOptions({ fetchImpl: mockDidWebFetch(didWebDocument()) }),
         });
         expect.fail("expected missing did:web kid rejection");
       } catch (error) {
@@ -567,7 +631,7 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
       const requestJwt = await signDidWebJar({ kid: alternateKid });
       try {
         await validateAndVerifyCs02AuthorizationRequest(requestJwt, {
-          options: strictOptions({ fetchImpl: mockDidWebFetch(didWebDocument()) }),
+          options: compatibilityOptions({ fetchImpl: mockDidWebFetch(didWebDocument()) }),
         });
         expect.fail("expected mismatched did:web kid rejection");
       } catch (error) {
@@ -581,7 +645,7 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
       const requestJwt = await signDidWebJar({ kid: attackerKid });
       try {
         await validateAndVerifyCs02AuthorizationRequest(requestJwt, {
-          options: strictOptions({ fetchImpl: mockDidWebFetch(didWebDocument()) }),
+          options: compatibilityOptions({ fetchImpl: mockDidWebFetch(didWebDocument()) }),
         });
         expect.fail("expected cross-DID kid rejection");
       } catch (error) {
@@ -595,7 +659,7 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
       const requestJwt = await signDidWebJar();
       try {
         await validateAndVerifyCs02AuthorizationRequest(requestJwt, {
-          options: strictOptions({
+          options: compatibilityOptions({
             fetchImpl: mockDidWebFetch({ ...didWebDocument(), id: "did:web:attacker.example" }),
           }),
         });
@@ -617,7 +681,7 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
       };
       try {
         await validateAndVerifyCs02AuthorizationRequest(requestJwt, {
-          options: strictOptions({ fetchImpl: mockDidWebFetch(onlyAlternateKeyDoc) }),
+          options: compatibilityOptions({ fetchImpl: mockDidWebFetch(onlyAlternateKeyDoc) }),
         });
         expect.fail("expected rejection without kid fallback");
       } catch (error) {
@@ -634,7 +698,9 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
         .sign(privateKey);
 
       try {
-        await validateAndVerifyCs02AuthorizationRequest(requestJwt, { options: strictOptions() });
+        await validateAndVerifyCs02AuthorizationRequest(requestJwt, {
+          options: compatibilityOptions(),
+        });
         expect.fail("expected non-P-256 did:jwk rejection");
       } catch (error) {
         expect(error).to.be.instanceOf(Cs02ValidationError);
@@ -650,7 +716,7 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
 
       try {
         await validateAndVerifyCs02AuthorizationRequest(requestJwt, {
-          options: strictOptions({ fetchImpl: mockDidWebFetch(didWebDocument()) }),
+          options: compatibilityOptions({ fetchImpl: mockDidWebFetch(didWebDocument()) }),
         });
         expect.fail("expected bare did:web client_id rejection");
       } catch (error) {
@@ -859,22 +925,22 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
     }
   });
 
-  it("ignores client_metadata.redirect_uris and uses x509_san_dns FQDN matching", async () => {
-    const requestJwt = await signJar(baseJarPayload({
+  it("ignores client_metadata.redirect_uris and uses x509_san_dns FQDN matching for CS-03", async () => {
+    const requestJwt = await signJar(cs03SanDnsJarPayload({
       client_metadata: { redirect_uris: ["https://other.example/response"] },
     }));
     const verified = await validateAndVerifyCs02AuthorizationRequest(requestJwt, {
-      options: strictOptions(),
+      options: cs03StrictOptions(),
     });
-    expect(verified.payload.response_uri).to.equal("https://dss.aegean.gr/response");
+    expect(verified.payload.response_uri).to.equal(`https://${x509SanDnsClientIdFromEcCert().slice("x509_san_dns:".length)}/response`);
   });
 
-  it("rejects x509_san_dns response_uri whose FQDN does not match client_id", async () => {
-    const requestJwt = await signJar(baseJarPayload({
+  it("rejects x509_san_dns response_uri whose FQDN does not match client_id for CS-03", async () => {
+    const requestJwt = await signJar(cs03SanDnsJarPayload({
       response_uri: "https://other.example/response",
     }));
     try {
-      await validateAndVerifyCs02AuthorizationRequest(requestJwt, { options: strictOptions() });
+      await validateAndVerifyCs02AuthorizationRequest(requestJwt, { options: cs03StrictOptions() });
       expect.fail("expected FQDN mismatch rejection");
     } catch (error) {
       expect(error).to.be.instanceOf(Cs02ValidationError);
@@ -882,25 +948,25 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
     }
   });
 
-  it("skips x509_san_dns FQDN matching for an explicit trusted client_id", async () => {
-    const requestJwt = await signJar(baseJarPayload({
+  it("skips x509_san_dns FQDN matching for an explicit trusted client_id in CS-03", async () => {
+    const requestJwt = await signJar(cs03SanDnsJarPayload({
       response_uri: "https://other.example/response",
     }));
     const verified = await validateAndVerifyCs02AuthorizationRequest(requestJwt, {
-      options: strictOptions({
-        trustedX509ClientIds: ["x509_san_dns:dss.aegean.gr"],
+      options: cs03StrictOptions({
+        trustedX509ClientIds: [x509SanDnsClientIdFromEcCert()],
       }),
     });
     expect(verified.payload.response_uri).to.equal("https://other.example/response");
   });
 
-  it("rejects x509_san_dns client_id that is not a leaf certificate dNSName SAN", async () => {
-    const requestJwt = await signJar(baseJarPayload({
+  it("rejects x509_san_dns client_id that is not a leaf certificate dNSName SAN for CS-03", async () => {
+    const requestJwt = await signJar(cs03SanDnsJarPayload({
       client_id: "x509_san_dns:verifier.example.org",
       response_uri: "https://verifier.example.org/response",
     }));
     try {
-      await validateAndVerifyCs02AuthorizationRequest(requestJwt, { options: strictOptions() });
+      await validateAndVerifyCs02AuthorizationRequest(requestJwt, { options: cs03StrictOptions() });
       expect.fail("expected SAN mismatch rejection");
     } catch (error) {
       expect(error).to.be.instanceOf(Cs02ValidationError);
