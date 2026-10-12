@@ -500,6 +500,29 @@ export function resolveCs02JarSigningPolicy({
 
 export const CS02_INVOCATION_SCHEMES = ["openid4vp", "eu-eaap", "haip-vp"];
 
+export function resolveCs02InvocationScheme(value) {
+  if (value === undefined) return "openid4vp";
+  if (typeof value !== "string" || !CS02_INVOCATION_SCHEMES.includes(value)) {
+    throw new Cs02VerifierRequestError(
+      "invocation_scheme must be one of openid4vp, eu-eaap, or haip-vp",
+      "invalid_request",
+    );
+  }
+  return value;
+}
+
+export function resolveCs02InvocationSchemeInput(queryValue, bodyValue) {
+  const queryScheme = resolveCs02InvocationScheme(queryValue);
+  const bodyScheme = resolveCs02InvocationScheme(bodyValue);
+  if (queryValue !== undefined && bodyValue !== undefined && queryScheme !== bodyScheme) {
+    throw new Cs02VerifierRequestError(
+      "Conflicting invocation_scheme values in query and body",
+      "invalid_request",
+    );
+  }
+  return bodyValue === undefined ? queryScheme : bodyScheme;
+}
+
 export function buildCs02InvocationRequestUrl(
   scheme,
   requestUri,
@@ -530,8 +553,9 @@ export function createOpenId4VpRequestUrl(
   env = process.env,
   scheme = "openid4vp",
 ) {
+  scheme = resolveCs02InvocationScheme(scheme);
   const options = resolveVerifierCs02Options(env);
-  if (!options.strict && options.allowLegacyOpenId4VpInvocation) {
+  if (scheme === "openid4vp" && !options.strict && options.allowLegacyOpenId4VpInvocation) {
     const base = `openid4vp://present?request_uri=${encodeURIComponent(requestUri)}&client_id=${encodeURIComponent(clientId)}`;
     return usePostMethod ? `${base}&request_uri_method=post` : base;
   }

@@ -1,3 +1,4 @@
+import { validateCs02InvocationScheme } from "../../utils/cs02InvocationRoutes.js";
 import express from "express";
 import { v4 as uuidv4 } from "uuid";
 import {
@@ -42,7 +43,7 @@ const { presentationDefinition, clientMetadata, privateKey } = loadConfiguration
 /**
  * Generate VP request with presentation definition
  */
-didRouter.get("/generateVPRequest", async (req, res) => {
+didRouter.get("/generateVPRequest", validateCs02InvocationScheme, async (req, res) => {
   const sessionId = req.query.sessionId || uuidv4();
   const slog = makeSessionLogger(sessionId);
   let requestId = null;
@@ -55,6 +56,7 @@ didRouter.get("/generateVPRequest", async (req, res) => {
     try { slog("[VERIFIER] [START] DID VP request generation", { responseMode, clientId: client_id, kid }); } catch {}
 
     const result = await generateVPRequest({
+      invocationScheme: req.cs02InvocationScheme,
       sessionId,
       trustPolicy: trustFrameworkSessionProps(req.query).trustPolicy,
       responseMode,
@@ -84,7 +86,7 @@ didRouter.get("/generateVPRequest", async (req, res) => {
 /**
  * Generate VP request for GET method
  */
-didRouter.get("/generateVPRequestGET", async (req, res) => {
+didRouter.get("/generateVPRequestGET", validateCs02InvocationScheme, async (req, res) => {
   const sessionId = req.query.sessionId || uuidv4();
   const slog = makeSessionLogger(sessionId);
   let requestId = null;
@@ -97,6 +99,7 @@ didRouter.get("/generateVPRequestGET", async (req, res) => {
     try { slog("[VERIFIER] [START] DID VP request generation (GET method)", { responseMode, clientId: client_id, kid }); } catch {}
 
     const result = await generateVPRequest({
+      invocationScheme: req.cs02InvocationScheme,
       sessionId,
       trustPolicy: trustFrameworkSessionProps(req.query).trustPolicy,
       responseMode,
@@ -127,7 +130,7 @@ didRouter.get("/generateVPRequestGET", async (req, res) => {
 /**
  * Generate VP request with DCQL query
  */
-didRouter.get("/generateVPRequestDCQL", async (req, res) => {
+didRouter.get("/generateVPRequestDCQL", validateCs02InvocationScheme, async (req, res) => {
   const sessionId = req.query.sessionId || uuidv4();
   const slog = makeSessionLogger(sessionId);
   let requestId = null;
@@ -140,6 +143,7 @@ didRouter.get("/generateVPRequestDCQL", async (req, res) => {
     try { slog("[VERIFIER] [START] DID VP request generation with DCQL", { responseMode, clientId: client_id, kid }); } catch {}
 
     const result = await generateVPRequest({
+      invocationScheme: req.cs02InvocationScheme,
       sessionId,
       trustPolicy: trustFrameworkSessionProps(req.query).trustPolicy,
       responseMode,
@@ -170,7 +174,7 @@ didRouter.get("/generateVPRequestDCQL", async (req, res) => {
 /**
  * Generate VP request with transaction data
  */
-didRouter.get("/generateVPRequestTransaction", async (req, res) => {
+didRouter.get("/generateVPRequestTransaction", validateCs02InvocationScheme, async (req, res) => {
   const sessionId = req.query.sessionId || uuidv4();
   const slog = makeSessionLogger(sessionId);
   let requestId = null;
@@ -187,6 +191,7 @@ didRouter.get("/generateVPRequestTransaction", async (req, res) => {
       .toString("base64url");
 
     const result = await generateVPRequest({
+      invocationScheme: req.cs02InvocationScheme,
       sessionId,
       trustPolicy: trustFrameworkSessionProps(req.query).trustPolicy,
       responseMode,

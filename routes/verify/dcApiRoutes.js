@@ -1,3 +1,4 @@
+import { rejectDcApiInvocationScheme } from "../../utils/cs02InvocationRoutes.js";
 import express from "express";
 import fs from "fs";
 import crypto from "crypto";
@@ -41,6 +42,7 @@ import {
 import TimedArray from "../../utils/timedArray.js";
 
 const dcApiRouter = express.Router();
+dcApiRouter.use("/vp/dc-api", rejectDcApiInvocationScheme);
 // Load and validate once at startup. Profile mappings and DCQL are immutable
 // for the lifetime of this verifier process.
 const CS07_CONFIG = loadCs07Config();

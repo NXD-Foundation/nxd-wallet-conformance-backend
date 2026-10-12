@@ -19,6 +19,8 @@ import {
   isVerifierCs02StrictMode,
   CS02_INVOCATION_SCHEMES,
   buildCs02InvocationRequestUrl,
+  resolveCs02InvocationScheme,
+  Cs02VerifierRequestError,
 } from "./cs02VerifierRequest.js";
 import {
   CS07_DC_API_PROTOCOL,
@@ -1256,7 +1258,12 @@ export async function generateVPRequest(params) {
     cs07VerifierOrigin = null,
     cs07ProfileId = null,
     trustPolicy = null,
+    invocationScheme,
   } = params;
+  if (cs07DcApi && invocationScheme !== undefined) {
+    throw new Cs02VerifierRequestError("invocation_scheme does not apply to the Digital Credentials API", "invalid_request");
+  }
+  const selectedInvocationScheme = resolveCs02InvocationScheme(invocationScheme);
   const responseMode = requestedResponseMode ||
     (cs03Signing ? CONFIG.CS03_DEFAULT_RESPONSE_MODE : CONFIG.DEFAULT_RESPONSE_MODE);
   const cs02StrictMode = isVerifierCs02StrictMode();
@@ -1467,7 +1474,7 @@ export async function generateVPRequest(params) {
 
   // Create OpenID4VP request URL
   const requestUri = `${serverURL}${routePath}/${sessionId}`;
-  const vpRequest = createOpenID4VPRequestUrl(requestUri, effectiveClientId, usePostMethod);
+  const vpRequest = createOpenID4VPRequestUrl(requestUri, effectiveClientId, usePostMethod, selectedInvocationScheme);
   
   await logDebug(sessionId, "Created OpenID4VP request URL", {
     requestUri,
@@ -1628,8 +1635,8 @@ export function createTransactionData(presentationDefinitionOrDcqlQuery) {
  * @param {boolean} usePostMethod - Whether to use POST method
  * @returns {string} - The OpenID4VP request URL
  */
-export function createOpenID4VPRequestUrl(requestUri, clientId, usePostMethod = false) {
-  return createOpenId4VpRequestUrl(requestUri, clientId, usePostMethod, process.env);
+export function createOpenID4VPRequestUrl(requestUri, clientId, usePostMethod = false, invocationScheme) {
+  return createOpenId4VpRequestUrl(requestUri, clientId, usePostMethod, process.env, invocationScheme);
 }
 
 /**

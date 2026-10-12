@@ -1,3 +1,4 @@
+import { validateCs02InvocationScheme } from "../../utils/cs02InvocationRoutes.js";
 import express from "express";
 import { v4 as uuidv4 } from "uuid";
 import fs from "fs";
@@ -50,7 +51,7 @@ vpStandardRouter.use((req, res, next) => {
  * - response_mode: direct_post | direct_post.jwt | dc_api | dc_api.jwt
  * - tx_data: true | false
  */
-vpStandardRouter.get("/vp/request", async (req, res) => {
+vpStandardRouter.get("/vp/request", validateCs02InvocationScheme, async (req, res) => {
   let sessionId;
   let requestId = null;
   let slog = null;
@@ -171,6 +172,7 @@ vpStandardRouter.get("/vp/request", async (req, res) => {
 
     // Generate VP request
     const result = await generateVPRequest({
+      invocationScheme: req.cs02InvocationScheme,
       sessionId,
       trustPolicy: trustFrameworkSessionProps(req.query).trustPolicy,
       responseMode,

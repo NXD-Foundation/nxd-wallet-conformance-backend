@@ -1,3 +1,4 @@
+import { validateCs02InvocationScheme } from "../../utils/cs02InvocationRoutes.js";
 import express from "express";
 import { v4 as uuidv4 } from "uuid";
 import {
@@ -67,7 +68,7 @@ const AGE_VERIFICATION_DCQL_QUERY = {
 /**
  * Generate VP request with presentation definition
  */
-mdlRouter.get("/generateVPRequest", async (req, res) => {
+mdlRouter.get("/generateVPRequest", validateCs02InvocationScheme, async (req, res) => {
   try {
     const sessionId = req.query.sessionId || uuidv4();
     const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
@@ -79,6 +80,7 @@ mdlRouter.get("/generateVPRequest", async (req, res) => {
     });
 
     const result = await generateVPRequest({
+      invocationScheme: req.cs02InvocationScheme,
       sessionId,
       trustPolicy: trustFrameworkSessionProps(req.query).trustPolicy,
       responseMode,
@@ -112,7 +114,7 @@ mdlRouter.get("/generateVPRequest", async (req, res) => {
 /**
  * Generate mDL VP request with age verification DCQL query
  */
-mdlRouter.get("/generateVPRequestDCQL", async (req, res) => {
+mdlRouter.get("/generateVPRequestDCQL", validateCs02InvocationScheme, async (req, res) => {
   const sessionId = req.query.sessionId || uuidv4();
   try {
     const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
@@ -125,6 +127,7 @@ mdlRouter.get("/generateVPRequestDCQL", async (req, res) => {
     });
 
     const result = await generateVPRequest({
+      invocationScheme: req.cs02InvocationScheme,
       sessionId,
       trustPolicy: trustFrameworkSessionProps(req.query).trustPolicy,
       responseMode,

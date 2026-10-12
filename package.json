@@ -68,6 +68,8 @@
     "zlib": "^1.0.5"
   },
   "devDependencies": {
+    "jsqr": "^1.4.0",
+    "pngjs": "^7.0.0",
     "mocha": "^11.5.0",
     "sinon": "^21.0.0",
     "supertest": "^7.1.1"

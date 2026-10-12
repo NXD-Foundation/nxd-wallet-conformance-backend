@@ -1,6 +1,8 @@
 # Plan: select the CS-02 invocation scheme in request generation
 
-Status: proposed backend change, not implemented by this document. Prepared 12 October 2026.
+Status: implemented in the reference backend working tree, 12 October 2026.
+The steps below retain the implementation scope and regression requirements.
+Confirm the deployed build before running catalogue cases.
 
 ## API contract
 
@@ -35,7 +37,7 @@ The existing `deepLinks` map may remain as a backward-compatible supplemental fi
 5. Handle validation errors as HTTP 400 at route boundaries rather than generic 500 responses. Use a consistent `invalid_request` body and useful description.
 6. In compatibility mode, existing legacy OpenID4VP behavior may remain for omitted/default `openid4vp`. An explicit `eu-eaap`/`haip-vp` selection must emit the selected empty-authority scheme rather than being overridden by `openid4vp://present`. Preserve CS-03 SAN DNS/plaintext behavior and do not enable legacy authorities on the new schemes.
 7. CS-07 DC API endpoints must not use this parameter to construct custom invocation URIs. Reject a supplied `invocation_scheme` as inapplicable with HTTP 400; retain browser request descriptors and origin bindings.
-8. Update `docs/knowledge.md`, `docs/vp-verification-wallet-matrix.md`, and the test-suite handoff once behavior is implemented. Do not describe this proposal as current runtime behavior until then.
+8. Update `docs/knowledge.md`, `docs/vp-verification-wallet-matrix.md`, and the test-suite handoff to describe the implemented behavior.
 
 ## Regression coverage
 

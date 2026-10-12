@@ -1,3 +1,4 @@
+import { validateCs02InvocationScheme } from "../../utils/cs02InvocationRoutes.js";
 import express from "express";
 import path from "path";
 import { v4 as uuidv4 } from "uuid";
@@ -124,7 +125,7 @@ const { presentationDefinition, clientMetadata } = loadConfigurationFiles(
 /**
  * Generate VP request with presentation definition
  */
-x509Router.get("/generateVPRequest", async (req, res) => {
+x509Router.get("/generateVPRequest", validateCs02InvocationScheme, async (req, res) => {
   const sessionId = req.query.sessionId || uuidv4();
   const slog = makeSessionLogger(sessionId);
   let requestId = null;
@@ -138,6 +139,7 @@ x509Router.get("/generateVPRequest", async (req, res) => {
     try { slog("[VERIFIER] [START] VP request generation", { responseMode, jarAlg }); } catch {}
 
     const result = await generateVPRequest({
+      invocationScheme: req.cs02InvocationScheme,
       sessionId,
       trustPolicy: trustFrameworkSessionProps(req.query).trustPolicy,
       responseMode,
@@ -167,7 +169,7 @@ x509Router.get("/generateVPRequest", async (req, res) => {
 /**
  * Generate VP request for GET method
  */
-x509Router.get("/generateVPRequestGet", async (req, res) => {
+x509Router.get("/generateVPRequestGet", validateCs02InvocationScheme, async (req, res) => {
   const sessionId = req.query.sessionId || uuidv4();
   const slog = makeSessionLogger(sessionId);
   let requestId = null;
@@ -181,6 +183,7 @@ x509Router.get("/generateVPRequestGet", async (req, res) => {
     try { slog("[VERIFIER] [START] VP request generation (GET method)", { responseMode, jarAlg }); } catch {}
 
     const result = await generateVPRequest({
+      invocationScheme: req.cs02InvocationScheme,
       sessionId,
       trustPolicy: trustFrameworkSessionProps(req.query).trustPolicy,
       responseMode,
@@ -210,7 +213,7 @@ x509Router.get("/generateVPRequestGet", async (req, res) => {
 /**
  * Generate VP request with DCQL query
  */
-x509Router.get("/generateVPRequestDCQL", async (req, res) => {
+x509Router.get("/generateVPRequestDCQL", validateCs02InvocationScheme, async (req, res) => {
   const sessionId = req.query.sessionId || uuidv4();
   const slog = makeSessionLogger(sessionId);
   let requestId = null;
@@ -225,6 +228,7 @@ x509Router.get("/generateVPRequestDCQL", async (req, res) => {
 
     const cs03 = resolveCs03VpOptions(req.query, sessionId, slog);
     const result = await generateVPRequest({
+      invocationScheme: req.cs02InvocationScheme,
       sessionId,
       trustPolicy: trustFrameworkSessionProps(req.query).trustPolicy,
       responseMode,
@@ -265,7 +269,7 @@ x509Router.get("/generateVPRequestDCQL", async (req, res) => {
 /**
  * Generate VP request with DCQL query for GET method
  */
-x509Router.get("/generateVPRequestDCQLGET", async (req, res) => {
+x509Router.get("/generateVPRequestDCQLGET", validateCs02InvocationScheme, async (req, res) => {
   const sessionId = req.query.sessionId || uuidv4();
   const slog = makeSessionLogger(sessionId);
   let requestId = null;
@@ -280,6 +284,7 @@ x509Router.get("/generateVPRequestDCQLGET", async (req, res) => {
 
     const cs03 = resolveCs03VpOptions(req.query, sessionId, slog);
     const result = await generateVPRequest({
+      invocationScheme: req.cs02InvocationScheme,
       sessionId,
       trustPolicy: trustFrameworkSessionProps(req.query).trustPolicy,
       responseMode,
@@ -320,7 +325,7 @@ x509Router.get("/generateVPRequestDCQLGET", async (req, res) => {
 /**
  * Generate VP request with transaction data
  */
-x509Router.get("/generateVPRequestTransaction", async (req, res) => {
+x509Router.get("/generateVPRequestTransaction", validateCs02InvocationScheme, async (req, res) => {
   const sessionId = req.query.sessionId || uuidv4();
   const slog = makeSessionLogger(sessionId);
   let requestId = null;
@@ -357,6 +362,7 @@ x509Router.get("/generateVPRequestTransaction", async (req, res) => {
     }
 
     const result = await generateVPRequest({
+      invocationScheme: req.cs02InvocationScheme,
       sessionId,
       trustPolicy: trustFrameworkSessionProps(req.query).trustPolicy,
       responseMode,

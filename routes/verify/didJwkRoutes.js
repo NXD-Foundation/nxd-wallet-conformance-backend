@@ -1,3 +1,4 @@
+import { validateCs02InvocationScheme } from "../../utils/cs02InvocationRoutes.js";
 import express from "express";
 import { v4 as uuidv4 } from "uuid";
 import {
@@ -45,7 +46,7 @@ const didJwkIdentifier = generateDidJwkIdentifier(privateKey);
 /**
  * Generate VP request with DCQL query
  */
-didJwkRouter.get("/generateVPRequest", async (req, res) => {
+didJwkRouter.get("/generateVPRequest", validateCs02InvocationScheme, async (req, res) => {
   const sessionId = req.query.sessionId || uuidv4();
   const slog = makeSessionLogger(sessionId);
   let requestId = null;
@@ -58,6 +59,7 @@ didJwkRouter.get("/generateVPRequest", async (req, res) => {
     try { slog("[VERIFIER] [START] DID JWK VP request generation", { responseMode, clientId: client_id, kid }); } catch {}
 
     const result = await generateVPRequest({
+      invocationScheme: req.cs02InvocationScheme,
       sessionId,
       trustPolicy: trustFrameworkSessionProps(req.query).trustPolicy,
       responseMode,
@@ -88,7 +90,7 @@ didJwkRouter.get("/generateVPRequest", async (req, res) => {
 /**
  * Generate VP request for GET method with DCQL query
  */
-didJwkRouter.get("/generateVPRequestGET", async (req, res) => {
+didJwkRouter.get("/generateVPRequestGET", validateCs02InvocationScheme, async (req, res) => {
   const sessionId = req.query.sessionId || uuidv4();
   const slog = makeSessionLogger(sessionId);
   let requestId = null;
@@ -101,6 +103,7 @@ didJwkRouter.get("/generateVPRequestGET", async (req, res) => {
     try { slog("[VERIFIER] [START] DID JWK VP request generation (GET method)", { responseMode, clientId: client_id, kid }); } catch {}
 
     const result = await generateVPRequest({
+      invocationScheme: req.cs02InvocationScheme,
       sessionId,
       trustPolicy: trustFrameworkSessionProps(req.query).trustPolicy,
       responseMode,
@@ -131,7 +134,7 @@ didJwkRouter.get("/generateVPRequestGET", async (req, res) => {
 /**
  * Generate VP request with DCQL query
  */
-didJwkRouter.get("/generateVPRequestDCQL", async (req, res) => {
+didJwkRouter.get("/generateVPRequestDCQL", validateCs02InvocationScheme, async (req, res) => {
   const sessionId = req.query.sessionId || uuidv4();
   const slog = makeSessionLogger(sessionId);
   let requestId = null;
@@ -144,6 +147,7 @@ didJwkRouter.get("/generateVPRequestDCQL", async (req, res) => {
     try { slog("[VERIFIER] [START] DID JWK VP request generation with DCQL", { responseMode, clientId: client_id, kid }); } catch {}
 
     const result = await generateVPRequest({
+      invocationScheme: req.cs02InvocationScheme,
       sessionId,
       trustPolicy: trustFrameworkSessionProps(req.query).trustPolicy,
       responseMode,
@@ -174,7 +178,7 @@ didJwkRouter.get("/generateVPRequestDCQL", async (req, res) => {
 /**
  * Generate VP request with DCQL query for GET method
  */
-didJwkRouter.get("/generateVPRequestDCQLGET", async (req, res) => {
+didJwkRouter.get("/generateVPRequestDCQLGET", validateCs02InvocationScheme, async (req, res) => {
   const sessionId = req.query.sessionId || uuidv4();
   const slog = makeSessionLogger(sessionId);
   let requestId = null;
@@ -187,6 +191,7 @@ didJwkRouter.get("/generateVPRequestDCQLGET", async (req, res) => {
     try { slog("[VERIFIER] [START] DID JWK VP request generation with DCQL (GET method)", { responseMode, clientId: client_id, kid }); } catch {}
 
     const result = await generateVPRequest({
+      invocationScheme: req.cs02InvocationScheme,
       sessionId,
       trustPolicy: trustFrameworkSessionProps(req.query).trustPolicy,
       responseMode,
@@ -217,7 +222,7 @@ didJwkRouter.get("/generateVPRequestDCQLGET", async (req, res) => {
 /**
  * Generate VP request with transaction data using DCQL query
  */
-didJwkRouter.get("/generateVPRequestTransaction", async (req, res) => {
+didJwkRouter.get("/generateVPRequestTransaction", validateCs02InvocationScheme, async (req, res) => {
   const sessionId = req.query.sessionId || uuidv4();
   const slog = makeSessionLogger(sessionId);
   let requestId = null;
@@ -234,6 +239,7 @@ didJwkRouter.get("/generateVPRequestTransaction", async (req, res) => {
       .toString("base64url");
 
     const result = await generateVPRequest({
+      invocationScheme: req.cs02InvocationScheme,
       sessionId,
       trustPolicy: trustFrameworkSessionProps(req.query).trustPolicy,
       responseMode,

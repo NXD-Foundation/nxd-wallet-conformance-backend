@@ -1,3 +1,4 @@
+import { validateCs02InvocationScheme } from "../../utils/cs02InvocationRoutes.js";
 import express from "express";
 import fs from "fs";
 import { v4 as uuidv4 } from "uuid";
@@ -97,6 +98,7 @@ async function handleTs12PaymentRequest(req, res) {
     });
 
     const result = await generateVPRequest({
+      invocationScheme: req.cs02InvocationScheme,
       sessionId,
       trustPolicy: trustFrameworkSessionProps(req.query).trustPolicy,
       responseMode,
@@ -168,9 +170,9 @@ async function handleTs12PaymentRequest(req, res) {
   }
 }
 
-ts12PaymentRouter.post("/ts12/payment/request", handleTs12PaymentRequest);
+ts12PaymentRouter.post("/ts12/payment/request", validateCs02InvocationScheme, handleTs12PaymentRequest);
 
-ts12PaymentRouter.get("/ts12/payment/request", handleTs12PaymentRequest);
+ts12PaymentRouter.get("/ts12/payment/request", validateCs02InvocationScheme, handleTs12PaymentRequest);
 
 ts12PaymentRouter
   .route("/ts12/payment/x509VPrequest/:id")

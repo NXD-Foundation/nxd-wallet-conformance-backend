@@ -298,8 +298,12 @@ older `client_metadata` representations.
   `present` is not part of the approved CS-02 text; treat
   `openid4vp://present?...` as compatibility-only when
   `CS02_ALLOW_PRESENT_INVOCATION` or legacy compatibility flags are set.
-- Verifier QR responses retain `qr` and `deepLink` for OpenID4VP and expose
-  `deepLinks` keyed by `openid4vp`, `eu-eaap`, and `haip-vp` for the same session.
+- URI-based verifier generation accepts `invocation_scheme=openid4vp`,
+  `eu-eaap`, or `haip-vp` (default `openid4vp`). The returned `deepLink` and
+  its QR encode that selected scheme. Invalid/empty/repeated values return
+  HTTP 400 before session creation. TS-12 accepts matching query/body values
+  and rejects conflicts. CS-07 DC API rejects this URI-only parameter.
+  The supplemental `deepLinks` map still lists all three schemes for the session.
 - Strict presentation response acknowledgement follows CS-02 §6.1.7: HTTP 200
   with an optional `redirect_uri` to the verifier UI (not `{ "status": "ok" }`).
 

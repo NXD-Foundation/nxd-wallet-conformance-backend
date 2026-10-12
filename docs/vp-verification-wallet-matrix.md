@@ -157,7 +157,11 @@ OpenID4VP verifier supporting X.509 and DID client identification, DCQL-based re
 
 Verifier QR/deep-link responses expose a `deepLinks` map keyed by `openid4vp`,
 `eu-eaap`, and `haip-vp`; all entries refer to the same session and query.
-The existing `qr` and `deepLink` fields remain OpenID4VP. CS-03 request routes
+The `invocation_scheme` parameter selects both `qr` and `deepLink`; omission
+defaults to OpenID4VP. Accepted values are exactly `openid4vp`, `eu-eaap`,
+and `haip-vp`. Invalid selectors return HTTP 400 before session creation.
+TS-12 accepts query/body selection and rejects conflicting values; DC API
+rejects this URI-only selector. CS-03 request routes
 use the separate `CONFIG.CS03_DEFAULT_RESPONSE_MODE` (`direct_post`). A strict
 wallet records the validated response destination before verifier trust policy
 checks so failures at that stage can submit the error form with echoed state.
