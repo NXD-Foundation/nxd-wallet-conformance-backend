@@ -1,3 +1,4 @@
+import { requestWithResourceDpop } from "./dpopIssuanceTransport.js";
 export function resolveDeferredPollIntervalMs(issuerIntervalSeconds, pollIntervalMs) {
   if (Number.isFinite(issuerIntervalSeconds) && issuerIntervalSeconds > 0) {
     return issuerIntervalSeconds * 1000;
@@ -54,12 +55,12 @@ export async function pollDeferredCredentialIssuance({
 
   while (Date.now() - start < timeout) {
     const poll = await buildPollRequest();
-    const defRes = await httpPostJson(
-      deferredEndpoint,
-      poll.body,
-      logSessionId,
-      poll.headers,
-    );
+    const send = (proof) => httpPostJson(deferredEndpoint, poll.body, logSessionId,
+      { ...poll.headers, ...(proof ? { DPoP: proof } : {}) });
+    const defRes = poll.dpopBinding ? await requestWithResourceDpop({
+      url: deferredEndpoint, binding: poll.dpopBinding, profile: poll.profile,
+      tokenBody: poll.tokenBody, accessToken: poll.accessToken, send, log,
+    }) : await send(null);
     log("deferred poll", { status: defRes.status, transactionId });
 
     if (defRes.status === 202) {

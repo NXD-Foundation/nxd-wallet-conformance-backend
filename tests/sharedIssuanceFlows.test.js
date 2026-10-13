@@ -1,3 +1,5 @@
+import { Response as WalletResponse } from "node-fetch";
+import { createDpopNonceState, requestWithDpopNonce } from "../wallet-client/src/lib/dpopNonce.js";
 import { strict as assert } from 'assert';
 import { expect } from 'chai';
 import request from 'supertest';
@@ -1295,6 +1297,41 @@ describe('Shared Issuance Flows', function () {
         expect(successResponse.body).to.have.property('token_type', 'DPoP');
       } finally {
         process.env.REQUIRE_DPOP_NONCE_FOR_TOKEN = prev;
+      }
+    });
+
+    it('NONCE-WALLET — wallet negotiates with the actual issuer and recovers from a used nonce', async () => {
+      const previous = process.env.REQUIRE_DPOP_NONCE_FOR_TOKEN;
+      process.env.REQUIRE_DPOP_NONCE_FOR_TOKEN = 'true';
+      try {
+        const pair = await jose.generateKeyPair('ES256', { extractable: true });
+        const keys = { privateJwk: await jose.exportJWK(pair.privateKey), publicJwk: await jose.exportJWK(pair.publicKey) };
+        const state = createDpopNonceState();
+        const proofs = [];
+        for (let grant = 0; grant < 2; grant++) {
+          const code = 'test-wallet-nonce-' + uuidv4();
+          await cacheServiceRedis.storePreAuthSession(code, { status: 'pending', authorizationDetails: null });
+          const response = await requestWithDpopNonce({
+            url: 'http://localhost:3000/token_endpoint', namespace: 'as', state, ...keys,
+            send: async (proof) => {
+              proofs.push(jose.decodeJwt(proof));
+              const res = await request(app).post('/token_endpoint').set('DPoP', proof).send({
+                grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code', 'pre-authorized_code': code,
+              });
+              return new WalletResponse(JSON.stringify(res.body), { status: res.status, headers: res.headers });
+            },
+          });
+          expect(response.status).to.equal(200);
+          expect((await response.json()).token_type).to.equal('DPoP');
+        }
+        expect(proofs).to.have.length(4);
+        expect(proofs[0]).not.to.have.property('nonce');
+        expect(proofs[2].nonce).to.equal(proofs[1].nonce);
+        expect(proofs[3].nonce).not.to.equal(proofs[2].nonce);
+        expect(new Set(proofs.map(p => p.jti)).size).to.equal(4);
+      } finally {
+        if (previous === undefined) delete process.env.REQUIRE_DPOP_NONCE_FOR_TOKEN;
+        else process.env.REQUIRE_DPOP_NONCE_FOR_TOKEN = previous;
       }
     });
 

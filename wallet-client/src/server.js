@@ -1,3 +1,6 @@
+import { createDpopNonceState } from "./lib/dpopNonce.js";
+import { postFormWithAttestationNonceRetry, requestWithResourceDpop, requestCredentialNonce } from "./lib/dpopIssuanceTransport.js";
+import { redactHttpLog } from "./lib/httpLogRedaction.js";
 import express from "express";
 import fetch from "node-fetch";
 import { createPkcePair } from "./lib/crypto.js";
@@ -1120,8 +1123,8 @@ async function httpPostJson(url, body, logSessionId, extraHeaders = null) {
       url, 
       status: res.status,
       statusText: res.statusText,
-      headers: Object.fromEntries(res.headers.entries()),
-      body: responseBody || responseText
+      headers: redactHttpLog(Object.fromEntries(res.headers.entries())),
+      body: responseBody ? redactHttpLog(responseBody) : (responseText ? "<non-JSON response>" : "")
     }); 
   } catch {}
   return res;
@@ -1183,8 +1186,8 @@ async function httpPostForm(url, params, logSessionId, dpopHeader = null, extraH
       url, 
       status: res.status,
       statusText: res.statusText,
-      headers: Object.fromEntries(res.headers.entries()),
-      body: responseBody || responseText
+      headers: redactHttpLog(Object.fromEntries(res.headers.entries())),
+      body: responseBody ? redactHttpLog(responseBody) : (responseText ? "<non-JSON response>" : "")
     }); 
   } catch {}
   return res;
@@ -1295,46 +1298,19 @@ async function httpPostFormWithAttestationChallengeRetry({
   challengeState,
   cnfKeyPair = null,
   reuseAttestationJwt = null,
+  nonceState = createDpopNonceState(),
 }) {
-  const buildAttestation = () =>
-    createAttestationHeadersForRequest({
-      profile,
-      keyPath,
-      clientId,
-      endpointAudience,
-      authorizationServerIssuer,
-      stage,
-      challengeState,
-      cnfKeyPair,
-      reuseAttestationJwt,
-    });
-
-  let attestation = await buildAttestation();
-  let res = await httpPostForm(url, params, logSessionId, dpopHeader, attestation.headers);
-  challengeState?.updateFromResponse(res.headers);
-
-  const responseText = typeof res.bodyText === "string" ? res.bodyText : await res.clone().text().catch(() => "");
-  const { shouldRetry, challenge } = shouldRetryWithAttestationChallenge(res, responseText);
-  if (shouldRetry && challenge) {
-    challengeState?.set(challenge);
-    attestation = await buildAttestation();
-    res = await httpPostForm(url, params, logSessionId, dpopHeader, attestation.headers);
-    challengeState?.updateFromResponse(res.headers);
-  }
-
-  const sessionKeys = attestation.cnfKeyPair || {};
-  Object.defineProperty(res, "sessionClientAttestation", {
-    value: {
-      attestationJwt: attestation.headers?.["OAuth-Client-Attestation"] || null,
-      cnfKeyPair: {
-        privateJwk: sessionKeys.privateJwk || null,
-        publicJwk: sessionKeys.publicJwk || null,
-      },
-    },
-    enumerable: false,
+  nonceState.authorizationServer = authorizationServerIssuer;
+  return postFormWithAttestationNonceRetry({
+    url, params, keyPath, cnfKeyPair, reuseAttestationJwt, challengeState, nonceState,
+    enabled: isWebuildCs01Profile(profile) || Boolean(dpopHeader),
+    log: logSessionId ? makeSessionLogger(logSessionId) : undefined,
+    postForm: (endpoint, body, proof, headers) => httpPostForm(endpoint, body, logSessionId, proof, headers),
+    buildAttestation: (session) => createAttestationHeadersForRequest({
+      profile, keyPath, clientId, endpointAudience, authorizationServerIssuer, stage, challengeState,
+      ...session,
+    }),
   });
-
-  return res;
 }
 
 async function issueCredentialTargets({
@@ -1379,13 +1355,16 @@ async function issueCredentialTargets({
       profile,
       stage: "credential request",
     });
-    const response = await fetch(credentialEndpoint, {
+    const response = await requestWithResourceDpop({
+      url: credentialEndpoint, binding: dpopBinding, profile, tokenBody, accessToken,
+      send: (proof) => fetch(credentialEndpoint, {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        ...buildResourceRequestHeaders(accessToken, credentialDpop, tokenBody),
+        ...buildResourceRequestHeaders(accessToken, proof, tokenBody),
       },
       body: JSON.stringify(proofBundle.credentialRequest),
+      }),
     });
     const text = await response.text().catch(() => "");
     let body = null;
@@ -1575,6 +1554,9 @@ async function runPreAuthorizedIssuance({ profile = activeWalletProfile, walletC
     tokenEndpoint,
     profile,
   });
+  dpopBinding.nonceState = createDpopNonceState();
+  dpopBinding.nonceState.authorizationServer = authorizationServerIssuer;
+  dpopBinding.nonceState.resourceServer = issuerMeta.credential_issuer || apiBase;
   const { dpopJwt } = dpopBinding;
   console.log("[preauth] DPoP generated for token request"); try { slog("[preauth] DPoP generated", { hasDPoP: !!dpopJwt }); } catch {}
   
@@ -1625,11 +1607,12 @@ async function runPreAuthorizedIssuance({ profile = activeWalletProfile, walletC
     stage: "token request",
     challengeState: attestationChallengeState,
     cnfKeyPair: dpopBinding,
+    nonceState: dpopBinding.nonceState,
   });
   console.log("[preauth] tokenRes.status=", tokenRes.status); 
   try { slog("[preauth] tokenRes.status", { status: tokenRes.status }); } catch {}
-  console.log("[preauth] tokenRes.headers:", Object.fromEntries(tokenRes.headers.entries())); 
-  try { slog("[preauth] tokenRes.headers", { headers: Object.fromEntries(tokenRes.headers.entries()) }); } catch {}
+  console.log("[preauth] tokenRes.headers:", redactHttpLog(Object.fromEntries(tokenRes.headers.entries())));
+  try { slog("[preauth] tokenRes.headers", { headers: redactHttpLog(Object.fromEntries(tokenRes.headers.entries())) }); } catch {}
   
   const tokenResponseText = await tokenRes.text().catch(() => "");
   console.log("[preauth] tokenRes.body length:", tokenResponseText.length); 
@@ -1687,7 +1670,10 @@ async function runPreAuthorizedIssuance({ profile = activeWalletProfile, walletC
   if (!c_nonce && issuerMeta.nonce_endpoint) {
     const nonceEndpoint = issuerMeta.nonce_endpoint;
     console.log("[preauth] nonceEndpoint=", nonceEndpoint); try { slog("[preauth] nonceEndpoint", { nonceEndpoint }); } catch {}
-    const nonceRes = await httpPostJson(nonceEndpoint, {}, logSessionId); try { slog("[preauth] nonce request", { endpoint: nonceEndpoint, status: nonceRes.status }); } catch {}
+    const nonceRes = await requestCredentialNonce({
+      url: nonceEndpoint, binding: dpopBinding, log: slog,
+      send: (proof) => httpPostJson(nonceEndpoint, {}, logSessionId, proof ? { DPoP: proof } : {}),
+    }); try { slog("[preauth] nonce request", { endpoint: nonceEndpoint, status: nonceRes.status }); } catch {}
     if (!nonceRes.ok) {
       const text = await nonceRes.text().catch(() => "");
       console.error("[preauth] nonce error", nonceRes.status, text);
@@ -1771,7 +1757,7 @@ async function runPreAuthorizedIssuance({ profile = activeWalletProfile, walletC
   console.log("[preauth] requesting credential..."); try { slog("[preauth] requesting credential"); } catch {}
   console.log("[preauth] credential request:", JSON.stringify({ ...credReq, proofs: { jwt: ["<redacted>"] } }, null, 2)); try { slog("[preauth] credential request body", { hasBody: true }); } catch {}
   if (accessToken) {
-    console.log("[preauth] access_token:", accessToken); try { slog("[preauth] access_token", { accessToken }); } catch {}
+    console.log("[preauth] access token received"); try { slog("[preauth] access token received", { hasAccessToken: true }); } catch {}
   } else {
     console.warn("[preauth] access_token missing in token response"); try { slog("[preauth] access_token missing"); } catch {}
   }
@@ -1801,10 +1787,12 @@ async function runPreAuthorizedIssuance({ profile = activeWalletProfile, walletC
       body: { ...credReq, proofs: { jwt: ["<redacted>"] } }
     }); 
   } catch {}
-  const credRes = await fetch(credentialEndpoint, {
-    method: "POST",
-    headers: credHeaders,
-    body: credReqBody,
+  const credRes = await requestWithResourceDpop({
+    url: credentialEndpoint, binding: dpopBinding, profile, tokenBody, accessToken, log: slog,
+    send: (proof) => fetch(credentialEndpoint, {
+      method: "POST", body: credReqBody,
+      headers: { "content-type": "application/json", ...buildResourceRequestHeaders(accessToken, proof, tokenBody) },
+    }),
   });
   const responseText = await credRes.text().catch(() => "");
   let responseBody = null;
@@ -1819,15 +1807,15 @@ async function runPreAuthorizedIssuance({ profile = activeWalletProfile, walletC
       endpoint: credentialEndpoint,
       status: credRes.status,
       statusText: credRes.statusText,
-      headers: Object.fromEntries(credRes.headers.entries()),
-      body: responseBody || responseText
+      headers: redactHttpLog(Object.fromEntries(credRes.headers.entries())),
+      body: responseBody ? redactHttpLog(responseBody) : (responseText ? "<non-JSON response>" : "")
     }); 
   } catch {}
 
   if (!credRes.ok) {
     console.error("[preauth] credential error", credRes.status); 
     try { slog("[preauth] credential error start", { status: credRes.status }); } catch {}
-    console.error("[preauth] credential error response headers:", Object.fromEntries(credRes.headers.entries()));
+    console.error("[preauth] credential error response headers:", redactHttpLog(Object.fromEntries(credRes.headers.entries())));
     console.error("[preauth] credential error response body:", responseText);
     
     let err = {};

@@ -1,3 +1,5 @@
+import { createDpopNonceState } from "./dpopNonce.js";
+import { requestWithResourceDpop, requestCredentialNonce } from "./dpopIssuanceTransport.js";
 import fetch from "node-fetch";
 import { createPkcePair } from "./crypto.js";
 import {
@@ -314,6 +316,9 @@ export function createAuthorizationCodeIssuance(deps) {
     let usedPar = false;
     let parExpiresIn = null;
     let sessionClientAttestation = null;
+    const nonceState = createDpopNonceState();
+    nonceState.authorizationServer = authorizationServerIssuer;
+    nonceState.resourceServer = issuerMetaWorking.credential_issuer || apiBase;
     if (parEndpoint) {
       try {
         let legacyParBodyClientAssertionJwt = null;
@@ -349,6 +354,7 @@ export function createAuthorizationCodeIssuance(deps) {
           endpointAudience: parEndpoint,
           authorizationServerIssuer,
           stage: "PAR",
+          nonceState,
           challengeState: attestationChallengeState,
         });
         if (parRes.ok) {
@@ -532,6 +538,9 @@ export function createAuthorizationCodeIssuance(deps) {
       profile,
       cnfKeyPair: sessionClientAttestation?.cnfKeyPair || null,
     });
+    dpopBinding.nonceState = sessionClientAttestation?.nonceState || createDpopNonceState();
+    dpopBinding.nonceState.authorizationServer = authorizationServerIssuer;
+    dpopBinding.nonceState.resourceServer = issuerMeta.credential_issuer || apiBase;
     const { dpopJwt } = dpopBinding;
 
     let legacyTokenBodyClientAssertionJwt = null;
@@ -586,6 +595,7 @@ export function createAuthorizationCodeIssuance(deps) {
       challengeState: attestationChallengeState,
       cnfKeyPair: dpopBinding,
       reuseAttestationJwt: sessionClientAttestation?.attestationJwt || null,
+      nonceState: dpopBinding.nonceState,
     });
 
     if (!tokenRes.ok) {
@@ -631,7 +641,10 @@ export function createAuthorizationCodeIssuance(deps) {
       // use token c_nonce
     } else if (issuerMeta.nonce_endpoint) {
       const nonceEndpoint = issuerMeta.nonce_endpoint;
-      const nonceRes = await httpPostJson(nonceEndpoint, {}, logSessionId);
+      const nonceRes = await requestCredentialNonce({
+        url: nonceEndpoint, binding: dpopBinding, log: slog,
+        send: (proof) => httpPostJson(nonceEndpoint, {}, logSessionId, proof ? { DPoP: proof } : {}),
+      });
       if (!nonceRes.ok) {
         const text = await nonceRes.text().catch(() => "");
         let err = {};
@@ -724,10 +737,12 @@ export function createAuthorizationCodeIssuance(deps) {
       "content-type": "application/json",
       ...buildResourceRequestHeaders(accessToken, credentialDpopJwtCode, tokenBody),
     };
-    const credRes = await fetchImpl(credentialEndpoint, {
-      method: "POST",
-      headers: credHeadersCode,
-      body: credReqBody,
+    const credRes = await requestWithResourceDpop({
+      url: credentialEndpoint, binding: dpopBinding, profile, tokenBody, accessToken, log: slog,
+      send: (proof) => fetchImpl(credentialEndpoint, {
+        method: "POST", body: credReqBody,
+        headers: { "content-type": "application/json", ...buildResourceRequestHeaders(accessToken, proof, tokenBody) },
+      }),
     });
 
     const responseText = await credRes.text().catch(() => "");
