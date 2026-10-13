@@ -150,10 +150,11 @@ function base64url(input) {
  * @param {string} options.htu - HTTP URI (the token endpoint URL, normalized)
  * @param {string} options.htm - HTTP method (default: "POST")
  * @param {string} options.ath - Optional access token hash (for subsequent requests)
+ * @param {string} [options.nonce] - Server-provided DPoP nonce
  * @param {string} options.alg - Signing algorithm (default: ES256)
  * @returns {Promise<string>} - Signed DPoP JWT
  */
-export async function createDPoP({ privateJwk, publicJwk, htu, htm = "POST", ath = null, alg = "ES256" }) {
+export async function createDPoP({ privateJwk, publicJwk, htu, htm = "POST", ath = null, alg = "ES256", nonce = null }) {
   // Normalize the URI per RFC 9449 (remove fragment, normalize path, etc.)
   const normalizedHtu = normalizeUri(htu);
   
@@ -169,6 +170,7 @@ export async function createDPoP({ privateJwk, publicJwk, htu, htm = "POST", ath
     iat: now,
     jti: base64url(crypto.randomBytes(16)),
     ...(ath ? { ath } : {}),
+    ...(typeof nonce === "string" && nonce.length > 0 ? { nonce } : {}),
   };
 
   const key = await importJWK(privateJwk, alg);
@@ -183,12 +185,9 @@ export async function createDPoP({ privateJwk, publicJwk, htu, htm = "POST", ath
 function normalizeUri(uri) {
   try {
     const url = new URL(uri);
-    // Remove fragment
+    // RFC 9449 excludes query and fragment, but preserves the path.
     url.hash = "";
-    // Normalize path (remove trailing slash unless it's the root)
-    if (url.pathname !== "/" && url.pathname.endsWith("/")) {
-      url.pathname = url.pathname.slice(0, -1);
-    }
+    url.search = "";
     return url.toString();
   } catch (e) {
     // If URL parsing fails, return as-is

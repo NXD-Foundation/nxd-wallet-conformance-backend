@@ -106,6 +106,7 @@ export async function createTokenRequestDpopBinding({
   profile,
   alg = "ES256",
   cnfKeyPair = null,
+  nonce = null,
 }) {
   try {
     const { privateJwk, publicJwk } = cnfKeyPair || (await ensureOrCreateEcKeyPair(keyPath, alg));
@@ -113,6 +114,7 @@ export async function createTokenRequestDpopBinding({
       privateJwk,
       publicJwk,
       htu: tokenEndpoint,
+      nonce,
       htm: "POST",
       alg,
     });
@@ -143,6 +145,7 @@ export async function createResourceRequestDpopProof({
   profile,
   alg = "ES256",
   stage = "resource request",
+  nonce = null,
 }) {
   if (!accessToken) {
     assertDpopHeaderOnRequest(profile, null, { stage });
@@ -167,6 +170,7 @@ export async function createResourceRequestDpopProof({
       publicJwk: binding.publicJwk,
       htu,
       htm,
+      nonce,
       ath: computeAthForDpop(accessToken),
       alg,
     });
