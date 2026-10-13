@@ -5,14 +5,14 @@ import { SignJWT, importPKCS8 } from "jose";
 import { performPresentation } from "../src/lib/presentation.js";
 import { setWalletTrustSessionStorageForTests } from "../src/lib/trustFramework.js";
 import { computeX509HashClientIdFromLeafCertBase64 } from "../../utils/cs02ClientIdBinding.js";
+import { pemCertificateChainToX5c } from "../src/lib/crypto.js";
 
 describe("strict wallet presentation error submission", () => {
   it("posts error, description and state when trust checking fails after JAR verification", async () => {
     const previous = { ...process.env };
     Object.assign(process.env, { CS02_COMPATIBILITY: "false", CS02_ALLOW_HTTP: "true" });
-    const leaf = fs.readFileSync("x509EC/client_certificate.crt", "utf8")
-      .replace(/-----[^\n]+-----/g, "").replace(/\s+/g, "");
-    const clientId = computeX509HashClientIdFromLeafCertBase64(leaf);
+    const x5c = pemCertificateChainToX5c(fs.readFileSync("x509EC/client_certificate.crt", "utf8"));
+    const clientId = computeX509HashClientIdFromLeafCertBase64(x5c[0]);
     let jwt;
     let submitted;
     const server = http.createServer(async (req, res) => {
@@ -35,7 +35,7 @@ describe("strict wallet presentation error submission", () => {
         nonce: "nonce-123", response_type: "vp_token", response_mode: "direct_post",
         aud: "https://self-issued.me/v2",
         dcql_query: { credentials: [{ id: "pid", format: "dc+sd-jwt", meta: { vct_values: ["urn:test:pid"] } }] },
-      }).setProtectedHeader({ alg: "ES256", typ: "oauth-authz-req+jwt", x5c: [leaf] })
+      }).setProtectedHeader({ alg: "ES256", typ: "oauth-authz-req+jwt", x5c })
         .setIssuedAt().setExpirationTime("5m").sign(key);
       setWalletTrustSessionStorageForTests({ get: async () => { throw new Error("Verifier trust check failed"); } });
       let failure;

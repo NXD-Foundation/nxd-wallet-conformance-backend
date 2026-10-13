@@ -126,11 +126,43 @@ Unit subject key.
 - Deferred issuance uses `transaction_id`, not `acceptance_token`.
 - General OpenID4VCI compatibility modes may be deliberately less strict. Do
 not describe them as CS-01 conformant.
-- As of the recorded CS-01 v1.0 text, the conformance route is authorization
-code only. The planned relaxation would add issuer-initiated pre-authorized
-code issuance without weakening the high-assurance requirements. It is not
-an implemented or normative rule until the CS-01 wording and implementation
-are updated.
+- The checked-in CS-01 profile text is **v1.3** (August 2026). Initial issuance
+grants are `authorization_code` and `pre-authorized_code`. Pre-authorized
+issuance is normative in v1.3 and implemented for `webuild-cs01` without
+weakening WUA, DPoP, or proof binding.
+- Authorization-code PAR MUST include `dpop_jkt`, the SHA-256 JWK thumbprint of
+the WUA `cnf` key. The wallet sends the same key in the PAR DPoP proof and
+WUA; pre-authorized token requests omit `dpop_jkt` (CS-01 §7.4).
+- Re-issuance uses `grant_type=refresh_token` with the same WUA/DPoP and nonce
+retry behaviour as the authorization-code token request; a `use_dpop_nonce`
+challenge must not consume the refresh token. The issuer rotates refresh
+tokens atomically on each successful refresh and binds them to the DPoP `jkt`,
+client identity, and authorized credential configurations. Current valid WIA
+JWTs may replace the original WIA while retaining those bindings. The
+issuance session is kept for the refresh-token lifetime (30 days by default),
+and a pre-authorized refresh updates that pre-auth session. Access-token expiry
+is enforced independently of session retention, and stale session saves cannot
+undo refresh rotation. Configuration binding follows the token request's
+authorized selection. The wallet-client
+stores refresh metadata with the credential, including issuance through multiple
+credential identifiers, and exposes headless `POST /reissue`
+for manual or pre-expiry re-issuance (CS-01 §6.4, §7.8, §9). It persists the
+rotated token before requesting the replacement, retains the old credential
+until validation succeeds, preserves the original wallet trust policy, and
+uses refreshed credential identifiers when advertised, and returns differences
+between reconstructed SD-JWT claims. Temporary refusals
+use at most three attempts with back-off within the deferred-poll timeout;
+`invalid_grant` immediately requires re-authorization.
+- CS-01 pre-authorized offer endpoints require WUA and always advertise
+`tx_code`. Initial pre-authorized grants expire independently of refresh
+sessions, are redeemed atomically once, and are invalidated after five wrong
+transaction-code attempts by default (`PRE_AUTH_TX_CODE_MAX_ATTEMPTS`).
+Generic compatibility offer endpoints may still omit `tx_code`. The `txCode`
+returned alongside a test offer is an ITB harness output; deployed issuer
+processes must deliver that code to the Holder separately from the offer.
+- The [pre-authorized-flow plan](./cs01-pre-authorized-flow-relaxation-plan.md)
+records the earlier v1.0 reading (authorization-code-only) before v1.3 made
+pre-auth normative.
 
 Sources: [CS-01](./core/cs-01-credential-issuance%20%281%29.md),
 [attestation options](./haip-etsi-wallet-attestation-options.md), and
@@ -747,7 +779,7 @@ coverage before relying on any listed behavior.
 
 | Document                                                                          | Decision or work that remains conditional/pending                                                                           |
 | --------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| [CS-01 pre-auth relaxation plan](./cs01-pre-authorized-flow-relaxation-plan.md)   | Add CS-01 pre-auth only after the specification permits it, preserving HA controls                                          |
+| [CS-01 pre-auth relaxation plan](./cs01-pre-authorized-flow-relaxation-plan.md)   | Historical v1.0 reading; superseded by normative pre-auth support in CS-01 v1.3                                          |
 | [Future WUA stricter enforcement](./futureWUAstricterEnforcements.md)             | Status-list completeness and configured Wallet Provider trust material                                                      |
 | [JAR x5c certificate-chain plan](./jar-x5c-certificate-chain-plan.md)             | Supply an X.509 JAR chain for wallets that validate it                                                                      |
 | [CS-07 DC API verifier plan](./cs07-dc-api-verifier-implementation-plan.md)       | Add browser-mediated `openid4vp-v1-signed` presentation without weakening the CS-02 verification core                       |

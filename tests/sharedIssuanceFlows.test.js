@@ -534,7 +534,7 @@ describe('Shared Issuance Flows', function () {
       expect(challenge.headers).to.have.property('dpop-nonce');
       const unconsumed = await cacheServiceRedis.getPreAuthSession(preAuthCode);
       expect(unconsumed).to.not.have.property('accessToken');
-      expect(unconsumed.walletAttestation.resolvedProfile).to.equal('cs05');
+      expect(unconsumed.walletAttestation.resolvedProfile).to.equal(null);
 
       const retry = await request(app)
         .post('/token_endpoint')
@@ -771,7 +771,7 @@ describe('Shared Issuance Flows', function () {
       expect(response.body).to.have.property('access_token');
       expect(response.body).to.have.property('refresh_token');
       expect(response.body).to.have.property('token_type', 'bearer');
-      expect(response.body).to.have.property('expires_in', 86400);
+      expect(response.body.expires_in).to.equal(jwt.decode(response.body.access_token).exp - jwt.decode(response.body.access_token).iat);
 
       // DPOP-01 — Current profile: missing DPoP header falls back to Bearer access token (no cnf.jkt)
       const decoded = jwt.decode(response.body.access_token);
@@ -1605,6 +1605,7 @@ describe('Shared Issuance Flows', function () {
       if (response.status === 200) {
         if (response.body.c_nonce) {
           expect(response.body.c_nonce).to.be.a('string');
+          expect(await cacheServiceRedis.checkNonce(response.body.c_nonce)).to.equal(true);
           expect(response.body.c_nonce_expires_in).to.be.a('number');
         }
       } else {
@@ -1723,7 +1724,7 @@ describe('Shared Issuance Flows', function () {
         })
         .expect(400);
 
-      expect(response.body).to.have.property('error', 'invalid_grant');
+      expect(response.body).to.have.property('error', 'invalid_request');
       expect(response.body).to.have.property('error_description');
       expect(response.body.error_description).to.match(/tx_code/i);
     });
@@ -1838,6 +1839,67 @@ describe('Shared Issuance Flows', function () {
   });
 
   describe('POST /credential', () => {
+    for (const endpoint of ['/credential', '/credential_deferred']) {
+      it(`rejects an expired access token at ${endpoint} while its refresh session is still alive`, async () => {
+        const key = `expired-access-${uuidv4()}`;
+        const now = Math.floor(Date.now() / 1000);
+        const accessToken = jwt.sign({ iss: process.env.SERVER_URL, aud: process.env.SERVER_URL,
+          iat: now - 7200, exp: now - 3600 }, testKeys.privateKeyPem, { algorithm: 'ES256' });
+        const nonce = cryptoUtils.generateNonce();
+        const transactionId = uuidv4();
+        await cacheServiceRedis.storePreAuthSession(key, { status: 'success', isDeferred: true,
+          accessToken, transaction_id: transactionId, c_nonce: nonce,
+          refreshBinding: { token: 'refresh', dpopJkt: 'key', clientId: 'wallet', expiresAt: Date.now() + 86400000 } });
+        await cacheServiceRedis.storeNonce(nonce, 300);
+        const body = endpoint === '/credential_deferred' ? { transaction_id: transactionId } : {
+          credential_configuration_id: 'test-cred-config', proofs: { jwt: [signProofJwt({ nonce, aud: process.env.SERVER_URL })] },
+        };
+        const response = await request(app).post(endpoint).set('Authorization', `Bearer ${accessToken}`).send(body);
+        expect(response.status, JSON.stringify(response.body)).to.equal(401);
+        expect(response.body.error).to.equal('invalid_token');
+        expect((await cacheServiceRedis.getPreAuthSession(key)).refreshBinding.token).to.equal('refresh');
+      });
+    }
+
+    it('rejects a configuration outside the retained refresh authorization', async () => {
+      issuerConfigOverride = JSON.stringify({ credential_configurations_supported: {
+        'test-cred-config': { format: 'dc+sd-jwt', proof_types_supported: { jwt: { proof_signing_alg_values_supported: ['ES256'] } } },
+        'other-cred-config': { format: 'dc+sd-jwt', proof_types_supported: { jwt: { proof_signing_alg_values_supported: ['ES256'] } } },
+      } });
+      const sessionId = uuidv4();
+      const accessToken = `bound-config-${uuidv4()}`;
+      await cacheServiceRedis.storePreAuthSession(sessionId, { status: 'success', accessToken,
+        accessTokenExpiresAt: Date.now() + 3600000, refreshBinding: { token: 'refresh', dpopJkt: 'jkt', clientId: 'client', credentialConfigurationIds: ['test-cred-config'] } });
+      const response = await request(app).post('/credential').set('Authorization', resourceAuthorizationHeader(accessToken))
+        .send({ credential_configuration_id: 'other-cred-config', proofs: { jwt: [signProofJwt({ aud: process.env.SERVER_URL })] } });
+      expect(response.status, JSON.stringify(response.body)).to.equal(400);
+      expect(response.body.error).to.equal('invalid_credential_request');
+    });
+
+    it('starts a replacement deferred transaction without reusing the previously signed credential', async () => {
+      const sessionKey = `deferred-replacement-${uuidv4()}`;
+      const accessToken = `deferred-access-${uuidv4()}`;
+      const nonce = cryptoUtils.generateNonce();
+      await cacheServiceRedis.storePreAuthSession(sessionKey, {
+        status: 'success', isDeferred: true, accessToken, c_nonce: nonce,
+        issuedCredential: 'the-old-credential', accessTokenExpiresAt: Date.now() + 3600000,
+        refreshBinding: { token: 'refresh', dpopJkt: 'jkt', clientId: 'client', expiresAt: Date.now() + 86400000 },
+      });
+      await cacheServiceRedis.storeNonce(nonce, 300);
+      const proof = signProofJwt({ nonce, aud: process.env.SERVER_URL });
+      const response = await request(app).post('/credential')
+        .set('Authorization', resourceAuthorizationHeader(accessToken))
+        .send({ credential_configuration_id: 'test-cred-config', proofs: { jwt: [proof] } });
+      expect(response.status, JSON.stringify(response.body)).to.equal(202);
+      const saved = await cacheServiceRedis.getPreAuthSession(sessionKey);
+      expect(saved).not.to.have.property('issuedCredential');
+      expect(saved.transaction_id).to.equal(response.body.transaction_id);
+      expect(await cacheServiceRedis.client.ttl(`pre-auth-sessions:${sessionKey}`)).to.be.greaterThan(86000);
+      const { issueDeferredCredentialOnce } = await import('../utils/credentialStatusIssuance.js');
+      const issued = await issueDeferredCredentialOnce(saved, async () => 'replacement-credential');
+      expect(issued).to.deep.equal({ credential: 'replacement-credential', reused: false });
+    });
+
     it('requires SKA for a CS-05 session even when SCA WIA/KA checks are disabled', async () => {
       const previous = process.env.DISABLE_SCA_WIA_KA_CHECKS;
       process.env.DISABLE_SCA_WIA_KA_CHECKS = 'true';
@@ -3299,4 +3361,212 @@ describe('Shared Issuance Flows', function () {
       expect([200, 500]).to.include(response.status);
     });
   });
+  describe('CS-01 refresh token route regressions', () => {
+    const setup = async (flowType = 'pre-auth') => {
+      const provider = await getX509ProviderMaterial();
+      const pair = await jose.generateKeyPair('ES256', { extractable: true });
+      const clientKey = { privateKey: pair.privateKey, publicJwk: await jose.exportJWK(pair.publicKey) };
+      const clientId = `refresh-client-${uuidv4()}`;
+      const sessionKey = `refresh-route-${uuidv4()}`;
+      const refreshToken = uuidv4();
+      const attestation = await buildBusinessClientAttestationPair({ provider, clientKey, clientId, business: false });
+      const statusTokens = new Map();
+      for (const uri of [WIA_STATUS_LIST_URI, KA_STATUS_LIST_URI]) {
+        statusTokens.set(uri, await signStatusListToken({ privateKey: provider.privateKey, uri }));
+      }
+      installStatusListTestHooks({ fetchImpl: async uri => ({ ok: true, status: 200,
+        headers: { get: () => 'application/statuslist+jwt' }, arrayBuffer: async () => Buffer.from(statusTokens.get(String(uri))) }) });
+      const jkt = await jose.calculateJwkThumbprint(clientKey.publicJwk, 'sha256');
+      const session = { status: 'success', requiresWua: true, requests: {},
+        credentialConfigurationId: 'test-cred-config', tokenClientId: clientId,
+        walletAttestation: { requestedProfile: 'cs04', resolvedProfile: 'cs04',
+          clientId, instanceAttestationDigest: 'the-original-WIA-digest' },
+      };
+      const { persistRefreshBindingForIssuance } = await import('../utils/issuanceRefreshToken.js');
+      await persistRefreshBindingForIssuance({ session, sessionKey, flowType, refreshToken,
+        dpopCnf: { jkt }, tokenClientBinding: { tokenClientId: clientId } });
+      const send = async (token = refreshToken, nonce = null, dpopKey = clientKey) => request(app)
+        .post('/token_endpoint').set('OAuth-Client-Attestation', attestation.wia)
+        .set('OAuth-Client-Attestation-PoP', (await buildBusinessClientAttestationPair({ provider, clientKey, clientId, business: false })).pop)
+        .set('DPoP', await buildTokenDpopProof({ key: dpopKey, nonce }))
+        .send({ grant_type: 'refresh_token', refresh_token: token, client_id: clientId });
+      return { send, sessionKey, refreshToken, jkt, flowType, provider, clientKey, clientId };
+    };
+
+    for (const flowType of ['code', 'pre-auth']) {
+      it(`accepts the current WIA and preserves ${flowType} refresh binding through a nonce challenge`, async () => {
+        const original = process.env.REQUIRE_DPOP_NONCE_FOR_TOKEN;
+        process.env.REQUIRE_DPOP_NONCE_FOR_TOKEN = 'true';
+        try {
+          const fixture = await setup(flowType);
+          const redisKey = `${flowType === 'code' ? 'code-flow' : 'pre-auth'}-sessions:${fixture.sessionKey}`;
+          const before = await cacheServiceRedis.client.get(redisKey);
+          const challenge = await fixture.send();
+          expect(challenge.status).to.equal(400);
+          expect(challenge.body.error).to.equal('use_dpop_nonce');
+          expect(await cacheServiceRedis.client.get(redisKey)).to.equal(before);
+          expect(await cacheServiceRedis.lookupIssuanceRefreshToken(fixture.refreshToken)).not.to.equal(null);
+          const response = await fixture.send(fixture.refreshToken, challenge.headers['dpop-nonce']);
+          expect(response.status, JSON.stringify(response.body)).to.equal(200);
+          expect(response.body.refresh_token).not.to.equal(fixture.refreshToken);
+          expect(response.body.c_nonce).to.be.a('string');
+          expect(jose.decodeJwt(response.body.access_token).cnf.jkt).to.equal(fixture.jkt);
+          expect(await cacheServiceRedis.lookupIssuanceRefreshToken(fixture.refreshToken)).to.equal(null);
+          expect(await cacheServiceRedis.client.ttl(redisKey)).to.be.greaterThan(86400 * 29);
+          const replay = await fixture.send(fixture.refreshToken, challenge.headers['dpop-nonce']);
+          // The consumed nonce is challenged first; with a fresh nonce the grant is rejected.
+          const rejected = replay.body.error === 'use_dpop_nonce'
+            ? await fixture.send(fixture.refreshToken, replay.headers['dpop-nonce']) : replay;
+          expect(rejected.body.error).to.equal('invalid_grant');
+        } finally {
+          if (original === undefined) delete process.env.REQUIRE_DPOP_NONCE_FOR_TOKEN;
+          else process.env.REQUIRE_DPOP_NONCE_FOR_TOKEN = original;
+        }
+      });
+    }
+
+    it('mints a replacement using the refreshed access token, registered c_nonce and fresh KA', async () => {
+      const fixture = await setup();
+      const refreshed = await fixture.send();
+      expect(refreshed.status, JSON.stringify(refreshed.body)).to.equal(200);
+      const now = Math.floor(Date.now() / 1000);
+      const ka = await new jose.SignJWT({
+        iat: now, exp: now + 3600, nonce: refreshed.body.c_nonce,
+        attested_keys: [testKeys.publicKeyJwk], key_storage: ['iso_18045_high'],
+        user_authentication: ['iso_18045_high'], certification: 'https://wallet-provider.example/certification',
+        key_storage_status: { status: { status_list: { uri: KA_STATUS_LIST_URI, idx: 0 } }, exp: now + 60 * 86400 },
+      }).setProtectedHeader({ alg: 'ES256', typ: 'key-attestation+jwt', x5c: [fixture.provider.x5c] }).sign(fixture.provider.privateKey);
+      const proof = await new jose.SignJWT({ nonce: refreshed.body.c_nonce, iss: fixture.clientId, aud: process.env.SERVER_URL })
+        .setProtectedHeader({ alg: 'ES256', typ: 'openid4vci-proof+jwt', jwk: testKeys.publicKeyJwk, key_attestation: ka })
+        .sign(await jose.importPKCS8(testKeys.privateKeyPem, 'ES256'));
+      const { createHash } = await import('node:crypto');
+      const dpop = await new jose.SignJWT({ htm: 'POST', htu: `${process.env.SERVER_URL}/credential`,
+        iat: now, jti: uuidv4(), ath: createHash('sha256').update(refreshed.body.access_token).digest('base64url') })
+        .setProtectedHeader({ alg: 'ES256', typ: 'dpop+jwt', jwk: fixture.clientKey.publicJwk }).sign(fixture.clientKey.privateKey);
+      const credential = await request(app).post('/credential')
+        .set('Authorization', `DPoP ${refreshed.body.access_token}`).set('DPoP', dpop)
+        .send({ credential_configuration_id: 'test-cred-config', proofs: { jwt: [proof] } });
+      expect(credential.status, JSON.stringify(credential.body)).to.equal(200);
+      expect(credential.body.credentials[0].credential).to.be.a('string');
+      expect(await cacheServiceRedis.client.ttl(`pre-auth-sessions:${fixture.sessionKey}`)).to.be.greaterThan(86400 * 29);
+      expect(await cacheServiceRedis.checkNonce(refreshed.body.c_nonce)).to.equal(false);
+    });
+
+    it('rejects an unknown refresh token with invalid_grant', async () => {
+      const fixture = await setup();
+      const result = await fixture.send(uuidv4());
+      expect(result.status).to.equal(400);
+      expect(result.body.error).to.equal('invalid_grant');
+    });
+
+    it('rejects refresh using another DPoP key without rotating the token', async () => {
+      const fixture = await setup();
+      const pair = await jose.generateKeyPair('ES256', { extractable: true });
+      const response = await fixture.send(fixture.refreshToken, null,
+        { privateKey: pair.privateKey, publicJwk: await jose.exportJWK(pair.publicKey) });
+      expect(response.status).to.equal(400);
+      expect(response.body.error).to.equal('invalid_dpop_proof');
+      expect(await cacheServiceRedis.lookupIssuanceRefreshToken(fixture.refreshToken)).not.to.equal(null);
+    });
+  });
+
+  describe('pre-authorized single-use and tx_code regressions', () => {
+    it('accepts a selected second configuration instead of binding the token to the offer primary', async () => {
+      issuerConfigOverride = JSON.stringify({ credential_configurations_supported: {
+        'primary': { format: 'dc+sd-jwt', proof_types_supported: { jwt: { proof_signing_alg_values_supported: ['ES256'] } } },
+        'selected': { format: 'dc+sd-jwt', proof_types_supported: { jwt: { proof_signing_alg_values_supported: ['ES256'] } } },
+      } });
+      const key = `selected-config-${uuidv4()}`;
+      await cacheServiceRedis.storePreAuthSession(key, { status: 'pending', credentialConfigurationId: 'primary',
+        requestedCredentialConfigurationIds: ['primary', 'selected'], isDeferred: true });
+      const privateKey = await jose.importPKCS8(testKeys.privateKeyPem, 'ES256');
+      const dpopKey = { privateKey, publicJwk: testKeys.publicKeyJwk };
+      const response = await request(app).post('/token_endpoint')
+        .set('DPoP', await buildTokenDpopProof({ key: dpopKey }))
+        .send({ grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code', 'pre-authorized_code': key,
+          client_id: 'wallet', authorization_details: [{ type: 'openid_credential', credential_configuration_id: 'selected' }] });
+      expect(response.status, JSON.stringify(response.body)).to.equal(200);
+      const saved = await cacheServiceRedis.getPreAuthSession(key);
+      expect(saved.refreshBinding.credentialConfigurationIds).to.deep.equal(['selected']);
+      const nonce = cryptoUtils.generateNonce();
+      await cacheServiceRedis.storeNonce(nonce, 300);
+      const proof = signProofJwt({ nonce, iss: 'wallet', aud: process.env.SERVER_URL });
+      const now = Math.floor(Date.now() / 1000);
+      const { createHash } = await import('node:crypto');
+      const dpop = await new jose.SignJWT({ htm: 'POST', htu: `${process.env.SERVER_URL}/credential`, iat: now,
+        jti: uuidv4(), ath: createHash('sha256').update(response.body.access_token).digest('base64url') })
+        .setProtectedHeader({ alg: 'ES256', typ: 'dpop+jwt', jwk: testKeys.publicKeyJwk }).sign(privateKey);
+      const credential = await request(app).post('/credential')
+        .set('Authorization', `DPoP ${response.body.access_token}`).set('DPoP', dpop)
+        .send({ credential_configuration_id: 'selected', proofs: { jwt: [proof] } });
+      expect(credential.status, JSON.stringify(credential.body)).to.equal(202);
+    });
+
+    it('CS-01 offer creation requires tx_code and rejects token redemption without WIA', async () => {
+      const { default: offers } = await import('../routes/issue/preAuthSDjwRoutes.js');
+      app.use(offers);
+      const sessionId = `cs01-required-wia-${uuidv4()}`;
+      const offer = await request(app).get('/cs01-offer').query({ sessionId, credentialType: 'test-cred-config' });
+      expect(offer.status).to.equal(200);
+      expect(offer.body.deepLink).to.include('credential-offer-tx-code');
+      expect(offer.body.txCode).to.match(/^\d{4}$/);
+      const stored = await cacheServiceRedis.getPreAuthSession(sessionId);
+      expect(stored.requiresWua).to.equal(true);
+      expect(stored.txCodeRequired).to.equal(true);
+      const response = await request(app).post('/token_endpoint').send({
+        grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
+        'pre-authorized_code': sessionId, tx_code: offer.body.txCode,
+      });
+      expect(response.status).to.equal(401);
+      expect(response.body.error).to.equal('invalid_client');
+    });
+
+    const setup = async (props = {}) => {
+      const code = `preauth-regression-${uuidv4()}`;
+      await cacheServiceRedis.storePreAuthSession(code, { status: 'pending', ...props });
+      const send = (txCode) => request(app).post('/token_endpoint').send({
+        grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
+        'pre-authorized_code': code, ...(txCode === undefined ? {} : { tx_code: txCode }),
+      });
+      return { code, send };
+    };
+
+    it('rejects a second redemption even while the issuance session remains alive', async () => {
+      const { send } = await setup();
+      expect((await send()).status).to.equal(200);
+      const replay = await send();
+      expect(replay.status).to.equal(400);
+      expect(replay.body.error).to.equal('invalid_grant');
+    });
+
+    it('only accepts one of two concurrent initial redemptions', async () => {
+      const { send } = await setup();
+      const results = await Promise.all([send(), send()]);
+      expect(results.map(r => r.status).sort()).to.deep.equal([200, 400]);
+      expect(results.find(r => r.status === 400).body.error).to.equal('invalid_grant');
+    });
+
+    it('rejects unexpected tx_code with invalid_request', async () => {
+      const { send } = await setup();
+      const response = await send('1234');
+      expect(response.status).to.equal(400);
+      expect(response.body.error).to.equal('invalid_request');
+    });
+
+    it('invalidates a code after five wrong tx_code attempts', async () => {
+      const { send } = await setup({ txCodeRequired: true, expectedTxCode: '1234' });
+      for (let i = 0; i < 5; i++) expect((await send('wrong')).body.error).to.equal('invalid_grant');
+      const correct = await send('1234');
+      expect(correct.status).to.equal(400);
+      expect(correct.body.error).to.equal('invalid_grant');
+    });
+
+    it('rejects the expired initial grant even if a longer-lived session survives', async () => {
+      const { send } = await setup({ preAuthorizedCodeExpiresAt: Date.now() - 1000 });
+      const response = await send();
+      expect(response.status).to.equal(400);
+      expect(response.body.error).to.equal('invalid_grant');
+    });
+  });
+
 });

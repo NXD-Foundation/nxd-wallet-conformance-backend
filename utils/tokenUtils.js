@@ -2,6 +2,8 @@ import jwt from "jsonwebtoken";
 import crypto from "crypto";
 import { generateNonce } from "../utils/cryptoUtils.js";
 
+export const ISSUANCE_ACCESS_TOKEN_TTL_SECONDS = 3600;
+
 /**
  * Builds an access token.
  *
@@ -19,7 +21,7 @@ export function buildAccessToken(issuerURL, privateKey, cnf = null) {
     iss: issuerURL,
     sub: "user123", // This should be the authenticated user's identifier
     aud: issuerURL, // The identifier of your resource server
-    exp: Math.floor(Date.now() / 1000) + 60 * 60, // Token expiration time (1 hour from now)
+    exp: Math.floor(Date.now() / 1000) + ISSUANCE_ACCESS_TOKEN_TTL_SECONDS, // Token expiration time (1 hour from now)
     iat: Math.floor(Date.now() / 1000), // Current time
     scope: "openid",
   };

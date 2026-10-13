@@ -176,4 +176,36 @@ describe("WE BUILD issuance nonce integration", () => {
     expect(new Set(wias).size).to.equal(1); expect(requests[0].body).to.equal(requests[1].body); expect(stored).to.have.length(1);
   });
 
+  it("retains refresh binding when an authorization-code token returns multiple credential identifiers", async () => {
+    let params, storageMetadata, binding;
+    const flow = createAuthorizationCodeIssuance({
+      discoverAuthorizationServerMetadata: async () => cs01AuthorizationServerMetadata,
+      httpPostFormWithAttestationChallengeRetry: options => postFormWithAttestationNonceRetry({
+        ...options,
+        buildAttestation: session => createWalletUnitAttestationClientAuth({ ...options, ...session }),
+        postForm: async (url, body) => {
+          if (url.endsWith('/par')) { params = body; return json({ request_uri: 'urn:par:multi', expires_in: 300 }); }
+          return json({ access_token: 'opaque', token_type: 'DPoP', refresh_token: 'retained-refresh', c_nonce: 'cn',
+            authorization_details: [{ type: 'openid_credential', credential_configuration_id: 'VerifiableIdCard',
+              credential_identifiers: ['first', 'second'] }] });
+        },
+      }),
+      fetchImpl: async () => new Response(null, { status: 302, headers: { location: `openid4vp://?code=code&state=${params.state}` } }),
+      issueCredentialTargets: async options => {
+        storageMetadata = options.metadata;
+        binding = options.dpopBinding;
+        return { credentials: [{ credential: 'first' }, { credential: 'second' }], proofBindings: [{}] };
+      },
+      httpPostJson: async () => json({}), validateAndStoreCredential: async () => {},
+      wrapIssuanceResult: credential => credential, sleep: async () => {},
+    });
+    const result = await flow.runAuthorizationCodeIssuance({ profile: cs01, walletClientId: 'wallet-client',
+      apiBase: cs01IssuerMetadata.credential_issuer, issuerMeta: { ...cs01IssuerMetadata },
+      configurationId: 'VerifiableIdCard', redirectUri: 'openid4vp://' });
+    expect(result.credentials).to.have.length(2);
+    expect(storageMetadata.reissuanceBinding.refreshToken).to.equal('retained-refresh');
+    expect(storageMetadata.reissuanceBinding.publicJwk).to.deep.equal(binding.publicJwk);
+    expect(storageMetadata.refreshToken.present).to.equal(true);
+  });
+
 });

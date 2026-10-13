@@ -252,7 +252,7 @@ router.get("/credential-offer-no-code/:id", async (req, res) => {
 // ******************************************************************
 
 /**
- * CS-01 pre-authorized offer without tx_code (OpenID4VCI v1.0 grant shape).
+ * CS-01 pre-authorized offer with the mandatory CS-01 v1.3 transaction code.
  */
 router.get("/cs01-offer", async (req, res) => {
   let sessionId;
@@ -262,15 +262,15 @@ router.get("/cs01-offer", async (req, res) => {
 
     const credentialType = getCredentialType(req);
     const signatureType = getSignatureType(req);
-    const sessionData = createPreAuthSessionData({ signatureType, credentialType, additionalProps: issuanceSessionProps(req.query) });
-    await manageSession(sessionId, sessionData);
+    const sessionData = createPreAuthSessionData({ signatureType, credentialType, txCodeRequired: true, additionalProps: { ...issuanceSessionProps(req.query), requiresWua: true } });
+    const storedSession = await manageSession(sessionId, sessionData);
 
     const credentialOffer = createPreAuthCredentialOfferUri(
       sessionId,
       credentialType,
-      "/credential-offer-no-code",
+      "/credential-offer-tx-code",
     );
-    const response = await createCredentialOfferResponse(credentialOffer, sessionId);
+    const response = await createCredentialOfferResponse(credentialOffer, sessionId, storedSession.expectedTxCode);
     res.json(response);
   } catch (error) {
     handleRouteError(error, "CS-01 offer", res, sessionId);
@@ -292,7 +292,7 @@ router.get("/cs01-offer-tx-code", async (req, res) => {
       signatureType,
       credentialType,
       txCodeRequired: true,
-      additionalProps: issuanceSessionProps(req.query),
+      additionalProps: { ...issuanceSessionProps(req.query), requiresWua: true },
     });
     const storedSession = await manageSession(sessionId, sessionData);
 

@@ -8,7 +8,15 @@ describe('PAR shared Redis storage regression', () => {
     cache = await import('../services/cacheServiceRedis.js');
     router = (await import('../routes/issue/codeFlowSdJwtRoutes.js')).default;
   });
-  beforeEach(() => { sandbox = sinon.createSandbox(); });
+  beforeEach(() => {
+    sandbox = sinon.createSandbox();
+    // These route tests inspect serialized writes; rotation races are covered
+    // against real Redis in issuanceRefreshToken.test.js.
+    sandbox.stub(cache.client, 'eval').callsFake(async (_script, options) => {
+      await cache.client.setEx(options.keys[0], Number(options.arguments[1]), options.arguments[0]);
+      return 1;
+    });
+  });
   afterEach(() => sandbox.restore());
 
   it('persists a serialized request with the advertised TTL for another worker to read', async () => {

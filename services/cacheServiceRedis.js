@@ -6,6 +6,9 @@ import { withCanonicalSessionContext } from "../utils/sessionContext.js";
 //
 const VCI_CODE_FLOW_TIMEOUT = process.env.VCI_CODE_FLOW_TIMEOUT || 180;
 const VCI_PRE_AUTH_TIMEOUT = process.env.VCI_PRE_AUTH_TIMEOUT || 180;
+const ISSUANCE_REFRESH_TOKEN_TTL_SECONDS = Number(process.env.ISSUANCE_REFRESH_TOKEN_TTL_SECONDS) || 86400 * 30;
+const ISSUANCE_REFRESH_SESSION_TTL_SECONDS =
+  Math.max(Number(process.env.ISSUANCE_REFRESH_SESSION_TTL_SECONDS) || 0, ISSUANCE_REFRESH_TOKEN_TTL_SECONDS);
 const VP_TIMEOUT = process.env.VP_TIMEOUT || 180;
 const redis_url = process.env.REDIS ? process.env.REDIS : "localhost:6379";
 // Create a Redis client
@@ -59,17 +62,19 @@ pre-auth-sessions : {
 
 
 // Function to store a pre-auth session in Redis
-export async function storePreAuthSession(sessionKey, sessionValue) {
+export async function storePreAuthSession(sessionKey, sessionValue, options = {}) {
   try {
     // Check if Redis client is connected
     if (!client.isReady) {
+      if (sessionValue?.refreshBinding) throw new Error("Redis is unavailable for refresh session storage");
       console.log("Redis not ready, skipping storePreAuthSession");
       return;
     }
     
     const key = `pre-auth-sessions:${sessionKey}`;
-    const ttlInSeconds = VCI_PRE_AUTH_TIMEOUT; // env, default: 3 minutes
-    await client.setEx(key, ttlInSeconds, JSON.stringify(withCanonicalSessionContext(sessionKey, sessionValue, "issuance", "pre-auth"))); // Set with expiration
+    const ttlInSeconds = resolveIssuanceSessionTtl(sessionValue, options, VCI_PRE_AUTH_TIMEOUT);
+    sessionValue.preAuthorizedCodeExpiresAt ??= Date.now() + Number(VCI_PRE_AUTH_TIMEOUT) * 1000;
+    await saveIssuanceSession(key, sessionKey, sessionValue, "pre-auth", ttlInSeconds);
   } catch (err) {
     console.error("Error storing session:", err);
     throw err; // Re-throw the error so calling code knows about the failure
@@ -119,6 +124,132 @@ export async function consumeBusinessWalletDpopNonce(nonce, endpoint, jkt, sessi
   return Number(await client.eval(script, { keys: [key], arguments: [endpoint, jkt, sessionId || ""] })) === 1;
 }
 
+export async function registerIssuanceRefreshToken(refreshToken, record) {
+  if (!client.isReady || !refreshToken || !record?.sessionKey) return false;
+  const key = `issuance:refresh-token:${refreshToken}`;
+  return (await client.setEx(key, ISSUANCE_REFRESH_TOKEN_TTL_SECONDS, JSON.stringify(record))) === "OK";
+}
+
+export async function lookupIssuanceRefreshToken(refreshToken) {
+  if (!client.isReady || !refreshToken) return null;
+  const raw = await client.get(`issuance:refresh-token:${refreshToken}`);
+  return raw ? JSON.parse(raw) : null;
+}
+
+export async function revokeIssuanceRefreshToken(refreshToken) {
+  if (!client.isReady || !refreshToken) return;
+  await client.del(`issuance:refresh-token:${refreshToken}`);
+}
+
+export function issuanceRefreshTokenTtlSeconds() {
+  return ISSUANCE_REFRESH_TOKEN_TTL_SECONDS;
+}
+
+export function issuanceRefreshSessionTtlSeconds() {
+  return ISSUANCE_REFRESH_SESSION_TTL_SECONDS;
+}
+
+export function resolveIssuanceSessionTtl(session, options = {}, initialTtl = VCI_CODE_FLOW_TIMEOUT) {
+  if (session?.refreshBinding) {
+    const expiresAt = session.refreshBinding.expiresAt;
+    return Number.isFinite(expiresAt)
+      ? Math.max(1, Math.ceil((expiresAt - Date.now()) / 1000))
+      : ISSUANCE_REFRESH_SESSION_TTL_SECONDS;
+  }
+  return Number(options.ttlSeconds ?? initialTtl);
+}
+
+/** Reject whole-session snapshots read before rotation, including snapshots with no binding yet. */
+async function saveIssuanceSession(key, sessionKey, session, flow, ttlSeconds) {
+  const value = JSON.stringify(withCanonicalSessionContext(sessionKey, session, "issuance", flow));
+  const script = `
+    local raw = redis.call('GET', KEYS[1])
+    if raw then
+      local current = cjson.decode(raw)
+      local next = cjson.decode(ARGV[1])
+      if type(current.refreshBinding) == 'table' and
+         (type(next.refreshBinding) ~= 'table' or current.refreshBinding.token ~= next.refreshBinding.token) then
+        return 0
+      end
+    end
+    -- Keep JSON verbatim so empty arrays retain their shape.
+    redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2])
+    return 1`;
+  const saved = await client.eval(script, { keys: [key], arguments: [value, String(ttlSeconds)] });
+  if (Number(saved) !== 1) {
+    const error = new Error("Issuance session changed during token rotation; reload before saving");
+    error.errorCode = "stale_issuance_session";
+    throw error;
+  }
+}
+
+/** Compare and rotate in one Redis operation. No worker can redeem the old token twice. */
+export async function rotateIssuanceRefreshToken({ oldToken, newToken, mapping, session, nonceExpiresIn = 86400 }) {
+  if (!client.isReady) throw new Error("Redis is unavailable for refresh token rotation");
+  const flow = mapping.flowType === "code" ? "code" : "pre-auth";
+  const storedSession = withCanonicalSessionContext(mapping.sessionKey, session, "issuance", flow);
+  const script = `
+    local raw = redis.call('GET', KEYS[1])
+    local oldMapping = redis.call('GET', KEYS[2])
+    if not raw or not oldMapping then return 0 end
+    local current = cjson.decode(raw)
+    if not current.refreshBinding or current.refreshBinding.token ~= ARGV[1] then return 0 end
+    local next = cjson.decode(ARGV[3])
+    if current.refreshBinding.dpopJkt ~= next.refreshBinding.dpopJkt or
+       current.refreshBinding.clientId ~= next.refreshBinding.clientId then return 0 end
+    redis.call('SET', KEYS[3], ARGV[4], 'EX', ARGV[5])
+    redis.call('SET', KEYS[1], ARGV[3], 'EX', ARGV[6])
+    redis.call('SET', KEYS[4], '1', 'EX', ARGV[7])
+    redis.call('DEL', KEYS[2])
+    return 1`;
+  return Number(await client.eval(script, {
+    keys: [`${flow === "code" ? "code-flow" : "pre-auth"}-sessions:${mapping.sessionKey}`,
+      `issuance:refresh-token:${oldToken}`, `issuance:refresh-token:${newToken}`, `nonces:${session.c_nonce}`],
+    arguments: [oldToken, newToken, JSON.stringify(storedSession), JSON.stringify(mapping),
+      String(ISSUANCE_REFRESH_TOKEN_TTL_SECONDS), String(resolveIssuanceSessionTtl(session)), String(nonceExpiresIn)],
+  })) === 1;
+}
+
+/** Validate transaction codes, count failures, and consume the initial grant atomically. */
+export async function redeemPreAuthorizedTokenSession(sessionKey, session, txCode) {
+  if (!client.isReady) throw new Error("Redis is unavailable for pre-authorized code redemption");
+  const nextSession = { ...session, preAuthorizedCodeConsumed: true };
+  const script = `
+    local raw = redis.call('GET', KEYS[1])
+    if not raw then return 'invalid_grant' end
+    local current = cjson.decode(raw)
+    if current.preAuthorizedCodeConsumed or current.preAuthorizedCodeInvalidated or
+       tonumber(redis.call('GET', KEYS[2]) or '0') >= tonumber(ARGV[4]) or
+       (current.preAuthorizedCodeExpiresAt and current.preAuthorizedCodeExpiresAt <= tonumber(ARGV[3])) or
+       current.status == 'pending_external' then return 'invalid_grant' end
+    local supplied = ARGV[2] ~= ''
+    if current.txCodeRequired and not supplied then return 'invalid_request' end
+    if not current.txCodeRequired and supplied then return 'invalid_request' end
+    if current.txCodeRequired and ARGV[2] ~= tostring(current.expectedTxCode) then
+      redis.call('INCR', KEYS[2])
+      redis.call('PEXPIRE', KEYS[2], math.max(1, redis.call('PTTL', KEYS[1])))
+      return 'invalid_grant'
+    end
+    -- Preserve the supplied JSON verbatim: Lua cjson would turn empty arrays into objects.
+    redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[5])
+    redis.call('DEL', KEYS[2])
+    return 'ok'`;
+  const code = await client.eval(script, {
+    keys: [`pre-auth-sessions:${sessionKey}`, `issuance:pre-auth-tx-attempts:${sessionKey}`],
+    arguments: [JSON.stringify(withCanonicalSessionContext(sessionKey, nextSession, "issuance", "pre-auth")),
+      txCode == null ? "" : String(txCode), String(Date.now()),
+      String(Math.max(1, Number(process.env.PRE_AUTH_TX_CODE_MAX_ATTEMPTS) || 5)),
+      String(resolveIssuanceSessionTtl(session, {}, VCI_PRE_AUTH_TIMEOUT))],
+  });
+  if (code !== "ok") {
+    const error = new Error(code === "invalid_request"
+      ? "tx_code was provided but not expected, or expected but not provided"
+      : "Pre-authorized code is expired, used, invalidated, not ready, or the Transaction Code is wrong");
+    error.errorCode = code;
+    throw error;
+  }
+}
+
 // Function to get session key from an access token
 export async function getSessionKeyFromAccessToken(accessToken) {
   try {
@@ -140,18 +271,20 @@ export async function getSessionKeyFromAccessToken(accessToken) {
   }
 }
 
-export async function storeCodeFlowSession(sessionKey, sessionValue) {
+export async function storeCodeFlowSession(sessionKey, sessionValue, options = {}) {
   try {
     if (!client.isReady) {
+      if (sessionValue?.refreshBinding) throw new Error("Redis is unavailable for refresh session storage");
       console.log("Redis not ready, skipping storeCodeFlowSession");
       return;
     }
     const key = `code-flow-sessions:${sessionKey}`;
-    const ttlInSeconds = VCI_CODE_FLOW_TIMEOUT; // env, default: 3 minutes
-    await client.setEx(key, ttlInSeconds, JSON.stringify(withCanonicalSessionContext(sessionKey, sessionValue, "issuance", "code"))); // Set with expiration
+    const ttlInSeconds = resolveIssuanceSessionTtl(sessionValue, options, VCI_CODE_FLOW_TIMEOUT);
+    await saveIssuanceSession(key, sessionKey, sessionValue, "code", ttlInSeconds);
     console.log(`Session stored under key: ${key}`);
   } catch (err) {
     console.error("Error storing session:", err);
+    throw err;
   }
 }
 

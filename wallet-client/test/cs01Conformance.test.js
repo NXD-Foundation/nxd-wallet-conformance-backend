@@ -1,6 +1,6 @@
 import { expect } from "chai";
-import { decodeProtectedHeader } from "jose";
-import { createPkcePair } from "../src/lib/crypto.js";
+import { calculateJwkThumbprint, decodeProtectedHeader } from "jose";
+import { createPkcePair, ensureOrCreateEcKeyPair } from "../src/lib/crypto.js";
 import { WALLET_PROFILES, Cs01ProfileError, ParRequiredError, selectVciGrantRoute, assertPreAuthorizedAllowed, assertParEndpointAvailable, assertParResponse, assertNoDirectAuthorizationFallback } from "../src/lib/profile.js";
 import {
   resolveCredentialScope,
@@ -116,6 +116,16 @@ describe("WE BUILD CS-01 conformance suite (Phase 10)", () => {
         offerConfig: cs01IssuerInitiatedOffer,
         scopesSupported: cs01AuthorizationServerMetadata.scopes_supported,
       });
+      const attestationKeyPair = await ensureOrCreateEcKeyPair(undefined, "ES256");
+      const attestation = await createWalletUnitAttestationClientAuth({
+        profile: CS01,
+        keyPath: undefined,
+        clientId: CS01_CLIENT_ID,
+        endpointAudience: cs01AuthorizationServerMetadata.pushed_authorization_request_endpoint,
+        authorizationServerIssuer: cs01AuthorizationServerMetadata.issuer,
+        stage: "PAR",
+        cnfKeyPair: attestationKeyPair,
+      });
       const parParams = {
         response_type: "code",
         client_id: CS01_CLIENT_ID,
@@ -124,15 +134,8 @@ describe("WE BUILD CS-01 conformance suite (Phase 10)", () => {
         code_challenge_method: pkce.codeChallengeMethod,
         redirect_uri: OPENID4VP_CS02_URI,
         state: "state-123",
+        dpop_jkt: await calculateJwkThumbprint(attestationKeyPair.publicJwk, "sha256"),
       };
-      const attestation = await createWalletUnitAttestationClientAuth({
-        profile: CS01,
-        keyPath: undefined,
-        clientId: CS01_CLIENT_ID,
-        endpointAudience: cs01AuthorizationServerMetadata.pushed_authorization_request_endpoint,
-        authorizationServerIssuer: cs01AuthorizationServerMetadata.issuer,
-        stage: "PAR",
-      });
 
       assertCs01ParRequestContract({
         profile: CS01,

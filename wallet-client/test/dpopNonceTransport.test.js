@@ -93,4 +93,12 @@ describe("portable DPoP nonce transport", () => {
     expect(redacted.body.error).to.equal("use_dpop_nonce"); expect(data.body.access_token).to.equal("token");
   });
 
+  it("redacts camel-case refresh tokens in stored recovery metadata", () => {
+    const recovery = { metadata: { reissuanceBinding: { refreshToken: "secret-refresh-token", privateJwk: { d: "secret-key" } } } };
+    const logged = redactHttpLog(recovery);
+    expect(logged.metadata.reissuanceBinding.refreshToken).to.equal("<redacted>");
+    expect(logged.metadata.reissuanceBinding.privateJwk).to.equal("<redacted>");
+    expect(recovery.metadata.reissuanceBinding.refreshToken).to.equal("secret-refresh-token");
+  });
+
 });

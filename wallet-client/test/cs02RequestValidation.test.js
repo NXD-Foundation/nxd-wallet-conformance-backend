@@ -1,6 +1,8 @@
 import { expect } from "chai";
 import fs from "fs";
 import path from "path";
+import { X509Certificate } from "node:crypto";
+import { pemCertificateChainToX5c } from "../src/lib/crypto.js";
 import { SignJWT, importPKCS8, exportJWK, generateKeyPair } from "jose";
 import {
   Cs02ValidationError,
@@ -36,11 +38,7 @@ const ecKeyPath = path.join(process.cwd(), "x509EC", "ec_private_pkcs8.key");
 const ecCertPath = path.join(process.cwd(), "x509EC", "client_certificate.crt");
 
 function ecLeafCertBase64() {
-  const pem = fs.readFileSync(ecCertPath, "utf8");
-  return pem
-    .replace(/-----BEGIN CERTIFICATE-----/g, "")
-    .replace(/-----END CERTIFICATE-----/g, "")
-    .replace(/\s+/g, "");
+  return pemCertificateChainToX5c(fs.readFileSync(ecCertPath, "utf8"))[0];
 }
 
 function strictX509HashClientId() {
@@ -121,11 +119,7 @@ async function signJar(payload, headerOverrides = {}, { includeX5c = true } = {}
     privateKey = await importPKCS8(fs.readFileSync(ecKeyPath, "utf8"), "ES256");
     if (includeX5c && !header.x5c && fs.existsSync(ecCertPath)) {
       const pem = fs.readFileSync(ecCertPath, "utf8");
-      const der = pem
-        .replace(/-----BEGIN CERTIFICATE-----/g, "")
-        .replace(/-----END CERTIFICATE-----/g, "")
-        .replace(/\s+/g, "");
-      header = { ...header, x5c: [der] };
+      header = { ...header, x5c: pemCertificateChainToX5c(pem) };
     }
   } else {
     throw new Error("Missing x509EC test key material");
@@ -428,6 +422,20 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
       if (!fs.existsSync(ecKeyPath)) {
         this.skip();
       }
+    });
+
+    it("keeps each certificate in its own x5c entry and hashes only the leaf when signing a JAR", async () => {
+      const pem = fs.readFileSync(ecCertPath, "utf8");
+      const blocks = pem.match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g);
+      const { header, payload } = decodeJarParts(await signJar(baseJarPayload()));
+      expect(header.x5c).to.have.length(blocks.length);
+      for (const [index, entry] of header.x5c.entries()) {
+        expect(entry).to.match(/^[A-Za-z0-9+/]+={0,2}$/);
+        expect(new X509Certificate(Buffer.from(entry, "base64")).raw)
+          .to.deep.equal(new X509Certificate(blocks[index]).raw);
+      }
+      expect(ecLeafCertBase64()).to.equal(new X509Certificate(blocks[0]).raw.toString("base64"));
+      expect(payload.client_id).to.equal(computeX509HashClientIdFromLeafCertBase64(header.x5c[0]));
     });
 
     it("accepts a valid ES256 x509_hash signed JAR", async () => {

@@ -9,6 +9,7 @@ process.env.ALLOW_NO_REDIS = 'true';
 process.env.SERVER_URL = 'http://localhost:3000';
 
 const TX_CODE_OFFER_ROUTES = [
+  { path: "/cs01-offer", deepLinkScheme: "openid-credential-offer://", credentialOfferPath: "/credential-offer-tx-code/" },
   {
     path: '/offer-tx-code',
     deepLinkScheme: 'openid-credential-offer://',

@@ -1,5 +1,5 @@
 const sensitiveFields = new Set([
-  "access_token", "refresh_token", "id_token", "authorization", "dpop", "dpop-nonce",
+  "access_token", "refresh_token", "refreshtoken", "id_token", "authorization", "dpop", "dpop-nonce",
   "c_nonce", "nonce", "client_assertion", "proof", "proofs", "privatejwk", "privatekey",
   "oauth-client-attestation", "oauth-client-attestation-pop", "oauth-client-attestation-challenge",
 ]);

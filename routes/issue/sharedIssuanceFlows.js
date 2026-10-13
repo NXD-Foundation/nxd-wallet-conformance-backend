@@ -11,6 +11,7 @@ import {
 } from "../../utils/cryptoUtils.js";
 import { resolveProofJwtPublicJwk } from "../../utils/proofJwtResolver.js";
 import {
+  ISSUANCE_ACCESS_TOKEN_TTL_SECONDS as TOKEN_EXPIRES_IN,
   buildAccessToken,
   generateRefreshToken,
   buildIdToken,
@@ -35,6 +36,8 @@ import {
   reserveBusinessWalletAttestation,
   storeBusinessWalletDpopNonce,
   consumeBusinessWalletDpopNonce,
+  lookupIssuanceRefreshToken,
+  redeemPreAuthorizedTokenSession,
   findDeferredSessionByTransactionId,
   storeNonce,
   checkNonce,
@@ -44,6 +47,15 @@ import {
   logWarn,
 } from "../../services/cacheServiceRedis.js";
 import { makeSessionLogger, logHttpRequest, logHttpResponse } from "../../utils/sessionLogger.js";
+import {
+  persistRefreshBindingForIssuance,
+  handleRefreshTokenGrant,
+  resolveTokenSessionPersistence,
+  mapIssuanceTokenError,
+  resolveIssuanceCredentialConfigurationIds,
+} from "../../utils/issuanceRefreshToken.js";
+
+import { assertIssuanceAccessTokenActive } from "../../utils/issuanceAccessToken.js";
 
 import * as jose from "jose";
 import { SDJwtVcInstance } from "@sd-jwt/sd-jwt-vc";
@@ -133,7 +145,6 @@ const sharedRouter = express.Router();
 // Configuration constants
 const getServerUrl = () => process.env.SERVER_URL || "http://localhost:3000";
 const SERVER_URL = getServerUrl(); // Keep for backward compatibility
-const TOKEN_EXPIRES_IN = 86400;
 const NONCE_EXPIRES_IN = 86400;
 const DPOP_MAX_IAT_SKEW_SECONDS = 300; // 5 minutes clock skew window
 const DPOP_MAX_FUTURE_IAT_SKEW_SECONDS = 60; // allow small future skew
@@ -630,6 +641,10 @@ const getSessionFromToken = async (token) => {
     }
   }
 
+  if (sessionObject) {
+    assertIssuanceAccessTokenActive({ accessToken: token, session: sessionObject,
+      publicKey: loadCryptographicKeys().publicKeyPem, issuer: getServerUrl() });
+  }
   return { sessionObject, flowType, sessionKey };
 };
 
@@ -671,22 +686,6 @@ function reportCs01PreAuthWalletAttestationObservability({
   }
 }
 
-function validatePreAuthTxCode(existingPreAuthSession, txCode) {
-  if (!existingPreAuthSession?.txCodeRequired) {
-    return;
-  }
-
-  const submitted = txCode == null ? "" : String(txCode).trim();
-  const expected = String(existingPreAuthSession.expectedTxCode ?? "");
-  if (!submitted || submitted !== expected) {
-    const error = new Error(
-      "Invalid or missing tx_code for pre-authorized issuance when tx_code is advertised in the Credential Offer",
-    );
-    error.errorCode = "invalid_grant";
-    throw error;
-  }
-}
-
 // Handle pre-authorized code flow
 const handlePreAuthorizedCodeFlow = async (
   preAuthorizedCode,
@@ -694,14 +693,13 @@ const handlePreAuthorizedCodeFlow = async (
   dpopCnf = null,
   txCode = null,
   tokenClientBinding = null,
+  validatedSession = null,
 ) => {
-  const existingPreAuthSession = await getPreAuthSession(preAuthorizedCode);
+  const existingPreAuthSession = validatedSession || await getPreAuthSession(preAuthorizedCode);
   
   if (!existingPreAuthSession) {
     throw new Error(`${ERROR_MESSAGES.INVALID_GRANT}. Received: pre-authorized_code '${preAuthorizedCode}' not found or expired, expected: valid, unexpired pre-authorized_code`);
   }
-
-  validatePreAuthTxCode(existingPreAuthSession, txCode);
 
   // OpenID4VCI v1.0 final models waiting after token exchange via
   // /credential -> 202 { transaction_id, interval } and /credential_deferred.
@@ -717,6 +715,8 @@ const handlePreAuthorizedCodeFlow = async (
 
   const parsedAuthDetails = parseAuthorizationDetails(authorizationDetails);
   const chosenCredentialConfigurationId = parsedAuthDetails?.[0]?.credential_configuration_id;
+  const credentialConfigurationIds = resolveIssuanceCredentialConfigurationIds(existingPreAuthSession, parsedAuthDetails);
+  existingPreAuthSession.authorizedCredentialConfigurationIds = credentialConfigurationIds;
 
   const generatedAccessToken = buildAccessToken(
     getServerUrl(),
@@ -727,10 +727,9 @@ const handlePreAuthorizedCodeFlow = async (
 
   // Update session
   existingPreAuthSession.accessToken = generatedAccessToken;
+  existingPreAuthSession.accessTokenExpiresAt = jwt.decode(generatedAccessToken).exp * 1000;
   existingPreAuthSession.c_nonce = cNonceForSession;
   applyTokenClientBindingToSession(existingPreAuthSession, tokenClientBinding);
-
-  await storePreAuthSession(preAuthorizedCode, existingPreAuthSession);
 
   // Prepare response
   const tokenResponse = {
@@ -743,6 +742,21 @@ const handlePreAuthorizedCodeFlow = async (
   if (parsedAuthDetails) {
     parsedAuthDetails.credential_identifiers = [chosenCredentialConfigurationId];
     tokenResponse.authorization_details = parsedAuthDetails;
+  }
+
+  if (dpopCnf?.jkt) {
+    await persistRefreshBindingForIssuance({
+      session: existingPreAuthSession,
+      sessionKey: preAuthorizedCode,
+      flowType: "pre-auth",
+      refreshToken: tokenResponse.refresh_token,
+      credentialConfigurationIds,
+      dpopCnf,
+      tokenClientBinding,
+      commitSession: () => redeemPreAuthorizedTokenSession(preAuthorizedCode, existingPreAuthSession, txCode),
+    });
+  } else {
+    await redeemPreAuthorizedTokenSession(preAuthorizedCode, existingPreAuthSession, txCode);
   }
 
   return tokenResponse;
@@ -797,6 +811,8 @@ const handleAuthorizationCodeFlow = async (
 
   const parsedAuthDetails = parseAuthorizationDetails(authorizationDetails);
   const chosenCredentialConfigurationId = parsedAuthDetails?.[0]?.credential_configuration_id;
+  const credentialConfigurationIds = resolveIssuanceCredentialConfigurationIds(existingCodeSession, parsedAuthDetails);
+  existingCodeSession.authorizedCredentialConfigurationIds = credentialConfigurationIds;
 
   if (existingCodeSession.requiresWua) {
     if (!dpopCnf?.jkt) {
@@ -834,13 +850,9 @@ const handleAuthorizationCodeFlow = async (
 
   // Update session
   existingCodeSession.requests.accessToken = generatedAccessToken;
+  existingCodeSession.accessTokenExpiresAt = jwt.decode(generatedAccessToken).exp * 1000;
   existingCodeSession.c_nonce = cNonceForSession;
   applyTokenClientBindingToSession(existingCodeSession, tokenClientBinding);
-
-  await storeCodeFlowSession(
-    existingCodeSession.results.issuerState,
-    existingCodeSession
-  );
 
   // Prepare response
   const tokenResponse = {
@@ -853,6 +865,21 @@ const handleAuthorizationCodeFlow = async (
   if (parsedAuthDetails) {
     parsedAuthDetails.credential_identifiers = [chosenCredentialConfigurationId];
     tokenResponse.authorization_details = parsedAuthDetails;
+  }
+
+  const codeSessionKey = existingCodeSession.results.issuerState;
+  if (dpopCnf?.jkt) {
+    await persistRefreshBindingForIssuance({
+      session: existingCodeSession,
+      sessionKey: codeSessionKey,
+      flowType: "code",
+      refreshToken: tokenResponse.refresh_token,
+      credentialConfigurationIds,
+      dpopCnf,
+      tokenClientBinding,
+    });
+  } else {
+    await storeCodeFlowSession(codeSessionKey, existingCodeSession);
   }
 
   return tokenResponse;
@@ -933,6 +960,8 @@ const handleDeferredCredentialIssuance = async (
 
   applyScaWuaExpiryHint(requestBody, wuaExp);
 
+  // A new transaction must not reuse the credential signed for the previous one.
+  delete sessionObject.issuedCredential;
   sessionObject.transaction_id = transaction_id;
   sessionObject.notification_id = notification_id;
   sessionObject.requestBody = requestBody;
@@ -1011,17 +1040,25 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
     const {
       grant_type,
       code,
+      refresh_token: refreshTokenParam,
       "pre-authorized_code": preAuthorizedCode,
       code_verifier,
       authorization_details,
       tx_code: txCode,
     } = req.body;
 
+    let refreshMapping = null;
+    if (grant_type === "refresh_token" && refreshTokenParam) {
+      refreshMapping = await lookupIssuanceRefreshToken(refreshTokenParam);
+    }
+
     // Extract sessionId early for logging
     if (preAuthorizedCode) {
       sessionId = preAuthorizedCode;
     } else if (code) {
       sessionId = await getSessionKeyAuthCode(code);
+    } else if (refreshMapping?.sessionKey) {
+      sessionId = refreshMapping.sessionKey;
     }
     
     // Create session logger if we have a sessionId
@@ -1034,6 +1071,7 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
       const logParams = { ...req.body };
       if (logParams.code) logParams.code = "<redacted>";
       if (logParams["pre-authorized_code"]) logParams["pre-authorized_code"] = "<redacted>";
+      if (logParams.refresh_token) logParams.refresh_token = "<redacted>";
       if (logParams.code_verifier) logParams.code_verifier = "<redacted>";
       
       requestId = logHttpRequest(slog, "POST", "/token_endpoint", req.headers, logParams);
@@ -1051,12 +1089,30 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
       }
     } else if (grant_type === PRE_AUTHORIZED_GRANT_TYPE && preAuthorizedCode) {
       preAuthSessionForWua = await getPreAuthSession(preAuthorizedCode);
+    } else if (grant_type === "refresh_token" && refreshMapping) {
+      if (refreshMapping.flowType === "code") {
+        codeFlowSessionKeyForWua = refreshMapping.sessionKey;
+        codeFlowSessionForWua = await getCodeFlowSession(refreshMapping.sessionKey);
+      } else {
+        preAuthSessionForWua = await getPreAuthSession(refreshMapping.sessionKey);
+      }
     }
+    const tokenPersistence = resolveTokenSessionPersistence({
+      grantType: grant_type,
+      preAuthorizedCode,
+      refreshMapping,
+    });
+    // Refresh validation must not write stale snapshots before the atomic rotation.
+    // Nonce challenges and failed requests leave the current refresh session untouched.
+    const tokenSessionStore = (grant_type === "refresh_token" || grant_type === PRE_AUTHORIZED_GRANT_TYPE)
+      ? async () => {}
+      : tokenPersistence.namespace === "pre-auth" ? storePreAuthSession : storeCodeFlowSession;
     const tokenTrustSession = codeFlowSessionForWua || preAuthSessionForWua;
     const tokenWalletAttestation = sessionWalletAttestation(tokenTrustSession);
     let effectiveWalletProfile = tokenWalletAttestation.resolvedProfile || tokenWalletAttestation.requestedProfile || "auto";
     const tokenScaPolicyParams = { session: tokenTrustSession };
     let tokenRequiresWua =
+      grant_type === "refresh_token" ||
       isTrustFrameworkSession(tokenTrustSession) ||
       tokenWalletAttestation.requestedProfile !== "auto" ||
       tokenWalletAttestation.resolvedProfile === "cs05" ||
@@ -1117,8 +1173,7 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
     const isPreAuthorizedGrant = grant_type === PRE_AUTHORIZED_GRANT_TYPE;
     if (tokenRequiresWua && attestationResult.skip) {
       if (isTrustFrameworkSession(tokenTrustSession)) {
-        const store = grant_type === PRE_AUTHORIZED_GRANT_TYPE ? storePreAuthSession : storeCodeFlowSession;
-        await recordTrustFailure({ session: tokenTrustSession, store, sessionKey: sessionId, sessionId, slog, operation: "verify-wia", error: "Wallet Instance Attestation missing" });
+        await recordTrustFailure({ session: tokenTrustSession, store: tokenSessionStore, sessionKey: sessionId, sessionId, slog, operation: "verify-wia", error: "Wallet Instance Attestation missing" });
       }
       if (slog) {
         try { slog("[TOKEN] WUA-required session but WIA headers missing"); } catch {}
@@ -1130,8 +1185,7 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
     }
     if (tokenRequiresWua && !attestationResult.ok) {
       if (isTrustFrameworkSession(tokenTrustSession)) {
-        const store = grant_type === PRE_AUTHORIZED_GRANT_TYPE ? storePreAuthSession : storeCodeFlowSession;
-        await recordTrustFailure({ session: tokenTrustSession, store, sessionKey: sessionId, sessionId, slog, operation: "verify-wia", error: attestationResult.errorDescription });
+        await recordTrustFailure({ session: tokenTrustSession, store: tokenSessionStore, sessionKey: sessionId, sessionId, slog, operation: "verify-wia", error: attestationResult.errorDescription });
       }
       if (slog) {
         try {
@@ -1155,11 +1209,11 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
       if (tokenWalletAttestation?.resolvedProfile && tokenWalletAttestation.resolvedProfile !== attestationResult.walletProfile.resolvedProfile) {
         return res.status(401).json({ error: "invalid_client", error_description: "Wallet attestation profile changed during the issuance session" });
       }
-      if (tokenWalletAttestation?.instanceAttestationDigest && tokenWalletAttestation.instanceAttestationDigest !== attestationResult.attestationDigest) {
+      if (grant_type !== "refresh_token" && tokenWalletAttestation?.instanceAttestationDigest && tokenWalletAttestation.instanceAttestationDigest !== attestationResult.attestationDigest) {
         return res.status(401).json({ error: "invalid_client", error_description: "A different wallet instance attestation was used during the issuance session" });
       }
-      if (codeFlowSessionForWua?.walletAttestation?.clientId &&
-          codeFlowSessionForWua.walletAttestation.clientId !== attestationResult.attestationPayload?.sub) {
+      if (tokenWalletAttestation?.clientId &&
+          tokenWalletAttestation.clientId !== attestationResult.attestationPayload?.sub) {
         return res.status(401).json({ error: "invalid_client", error_description: "BWIA client identity changed during the issuance session" });
       }
       const parBusinessIdentity = codeFlowSessionForWua?.walletAttestation?.businessIdentity;
@@ -1183,11 +1237,11 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
       };
       if (codeFlowSessionForWua) {
         codeFlowSessionForWua.walletAttestation = nextWalletAttestation;
-        await storeCodeFlowSession(codeFlowSessionKeyForWua, codeFlowSessionForWua);
+        await tokenSessionStore(codeFlowSessionKeyForWua, codeFlowSessionForWua);
       }
-      if (preAuthSessionForWua) {
+      if (preAuthSessionForWua && tokenPersistence.preAuthSessionKey) {
         preAuthSessionForWua.walletAttestation = nextWalletAttestation;
-        await storePreAuthSession(preAuthorizedCode, preAuthSessionForWua);
+        await tokenSessionStore(tokenPersistence.preAuthSessionKey, preAuthSessionForWua);
       }
     }
     if (isTrustFrameworkSession(tokenTrustSession) && attestationResult.ok) {
@@ -1197,8 +1251,7 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
         header: attestationResult.protectedHeader,
         operation: "verify-wia",
       });
-      const store = grant_type === PRE_AUTHORIZED_GRANT_TYPE ? storePreAuthSession : storeCodeFlowSession;
-      await recordTrustDecision({ session: tokenTrustSession, decision: trustDecision, store, sessionKey: sessionId, sessionId, slog });
+      await recordTrustDecision({ session: tokenTrustSession, decision: trustDecision, store: tokenSessionStore, sessionKey: sessionId, sessionId, slog });
       if (!trustDecision.trusted) {
         return res.status(401).json({
           error: "invalid_client",
@@ -1225,12 +1278,12 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
       if (codeFlowSessionForWua && codeFlowSessionKeyForWua) {
         applyWiaStatusEvidenceToSession(codeFlowSessionForWua, evidence);
         codeFlowSessionForWua.wiaCnfJkt = attestationResult.wiaCnfJkt || codeFlowSessionForWua.wiaCnfJkt || null;
-        await storeCodeFlowSession(codeFlowSessionKeyForWua, codeFlowSessionForWua);
+        await tokenSessionStore(codeFlowSessionKeyForWua, codeFlowSessionForWua);
       }
-      if (preAuthSessionForWua && preAuthorizedCode) {
+      if (preAuthSessionForWua && tokenPersistence.preAuthSessionKey) {
         applyWiaStatusEvidenceToSession(preAuthSessionForWua, evidence);
         preAuthSessionForWua.wiaCnfJkt = attestationResult.wiaCnfJkt || preAuthSessionForWua.wiaCnfJkt || null;
-        await storePreAuthSession(preAuthorizedCode, preAuthSessionForWua);
+        await tokenSessionStore(tokenPersistence.preAuthSessionKey, preAuthSessionForWua);
       }
       if (slog && attestationResult.wiaStatusList) {
         try {
@@ -1273,7 +1326,14 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
     }
 
     // Validate required parameters
-    if (!(code || preAuthorizedCode)) {
+    if (grant_type === "refresh_token") {
+      if (!refreshTokenParam) {
+        return res.status(400).json({
+          error: "invalid_request",
+          error_description: "The refresh_token parameter is required for the refresh_token grant",
+        });
+      }
+    } else if (!(code || preAuthorizedCode)) {
       if (slog) {
         try { slog("[TOKEN] [ERROR] Missing required parameters", { hasCode: !!code, hasPreAuthCode: !!preAuthorizedCode }); } catch {}
       }
@@ -1498,7 +1558,11 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
     }
 
     const sessionParJkt = codeFlowSessionForWua?.parDpopJkt || null;
-    if (sessionParJkt && sessionParJkt !== dpopCnf?.jkt) {
+    if (
+      grant_type !== "refresh_token" &&
+      sessionParJkt &&
+      sessionParJkt !== dpopCnf?.jkt
+    ) {
       return res.status(400).json({ error: "invalid_dpop_proof", error_description: "Token DPoP key does not match the DPoP key bound at PAR" });
     }
 
@@ -1555,6 +1619,7 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
         dpopCnf,
         txCode,
         tokenClientBinding,
+        preAuthSessionForWua,
       );
     } else if (grant_type === "authorization_code") {
       if (slog) {
@@ -1567,6 +1632,18 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
         dpopCnf,
         tokenClientBinding,
       );
+    } else if (grant_type === "refresh_token") {
+      if (slog) {
+        try { slog("[TOKEN] Processing refresh token grant"); } catch {}
+      }
+      tokenResponse = await handleRefreshTokenGrant({
+        refreshTokenValue: refreshTokenParam,
+        dpopCnf,
+        tokenClientBinding,
+        serverUrl: getServerUrl(),
+        signingPrivateKey: loadCryptographicKeys().privateKey,
+        validatedSession: tokenTrustSession,
+      });
     } else {
       if (slog) {
         try { slog("[TOKEN] [ERROR] Unsupported grant type", { grant_type }); } catch {}
@@ -1615,11 +1692,20 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
       });
     }
 
+    if (error.errorCode === "invalid_request") {
+      return res.status(400).json({ error: "invalid_request", error_description: error.message });
+    }
+
     if (error.errorCode === "invalid_grant") {
       return res.status(400).json({
         error: "invalid_grant",
         error_description: error.message,
       });
+    }
+
+    const mappedClientError = mapIssuanceTokenError(error);
+    if (mappedClientError) {
+      return res.status(mappedClientError.status).json(mappedClientError.body);
     }
 
     if (
@@ -1703,6 +1789,10 @@ sharedRouter.post("/credential", async (req, res) => {
       });
     }
 
+    const refreshConfigurations = sessionObject.authorizedCredentialConfigurationIds || sessionObject.refreshBinding?.credentialConfigurationIds;
+    if (refreshConfigurations?.length && !refreshConfigurations.includes(effectiveConfigurationId)) {
+      return res.status(400).json({ error: "invalid_credential_request", error_description: "Credential configuration is outside the refresh-token authorization" });
+    }
     if (sessionObject.dcApi === true) {
       const selectedConfigurations = offeredCredentialConfigurationIds(sessionObject);
       if (!selectedConfigurations.includes(effectiveConfigurationId)) {
@@ -2304,6 +2394,10 @@ sharedRouter.post("/credential", async (req, res) => {
       }
     }
   } catch (error) {
+    if (error.errorCode === "invalid_token") {
+      return res.status(401).json({ error: "invalid_token", error_description: error.message });
+    }
+
     console.error("Credential endpoint error:", error);
     if (slog) {
       try { slog("[CREDENTIAL] [ERROR] Credential endpoint error", { error: error.message, errorCode: error.errorCode }); } catch {}
@@ -2492,6 +2586,8 @@ sharedRouter.post("/credential_deferred", async (req, res) => {
 
     const accessToken = authParse.accessToken;
     const sessionAccessToken = getDeferredSessionAccessToken(sessionObject, flowType);
+    assertIssuanceAccessTokenActive({ accessToken, session: sessionObject,
+      publicKey: loadCryptographicKeys().publicKeyPem, issuer: getServerUrl() });
     if (!sessionAccessToken || accessToken !== sessionAccessToken) {
       return res.status(401).json({
         error: "invalid_token",
@@ -2614,6 +2710,10 @@ sharedRouter.post("/credential_deferred", async (req, res) => {
     }
     return res.status(200).json(payload);
   } catch (error) {
+    if (error.errorCode === "invalid_token") {
+      return res.status(401).json({ error: "invalid_token", error_description: error.message });
+    }
+
     if (error.errorCode === INVALID_ENCRYPTION_PARAMETERS) {
       return res.status(400).json({
         error: INVALID_ENCRYPTION_PARAMETERS,
@@ -2753,6 +2853,10 @@ sharedRouter.post("/notification", async (req, res) => {
     res.status(204).send();
 
   } catch (error) {
+    if (error.errorCode === "invalid_token") {
+      return res.status(401).json({ error: "invalid_token", error_description: error.message });
+    }
+
     console.error("Notification endpoint error:", error);
 
     if (sessionId) {

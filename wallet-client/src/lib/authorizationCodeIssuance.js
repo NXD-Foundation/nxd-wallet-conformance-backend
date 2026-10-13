@@ -1,7 +1,8 @@
 import { createDpopNonceState } from "./dpopNonce.js";
 import { requestWithResourceDpop, requestCredentialNonce } from "./dpopIssuanceTransport.js";
 import fetch from "node-fetch";
-import { createPkcePair } from "./crypto.js";
+import { calculateJwkThumbprint } from "jose";
+import { createPkcePair, ensureOrCreateEcKeyPair } from "./crypto.js";
 import {
   isWebuildCs01Profile,
   isParMandatory,
@@ -40,6 +41,8 @@ import {
 import { isOpenId4VpDeepLink, OPENID4VP_CS02_URI } from "./openid4vpUri.js";
 import { makeSessionLogger } from "./logger.js";
 import { resolveAuthHandoffTtlSeconds } from "./authHandoffConfig.js";
+import { buildReissuanceBinding } from "./reissuance.js";
+import { describeIssuanceRefreshTokenMetadata } from "./cs01Conformance.js";
 
 function logFlowError(slog, label, error, extra = {}) {
   try {
@@ -321,6 +324,10 @@ export function createAuthorizationCodeIssuance(deps) {
     nonceState.resourceServer = issuerMetaWorking.credential_issuer || apiBase;
     if (parEndpoint) {
       try {
+        let parCnfKeyPair = null;
+        if (isWebuildCs01Profile(profile)) {
+          parCnfKeyPair = await ensureOrCreateEcKeyPair(keyPath, "ES256");
+        }
         let legacyParBodyClientAssertionJwt = null;
         if (allowsLegacyBodyClientAssertion(profile)) {
           try {
@@ -343,6 +350,11 @@ export function createAuthorizationCodeIssuance(deps) {
                 client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
               }
             : {}),
+          ...(parCnfKeyPair
+            ? {
+                dpop_jkt: await calculateJwkThumbprint(parCnfKeyPair.publicJwk, "sha256"),
+              }
+            : {}),
         };
         const parRes = await httpPostFormWithAttestationChallengeRetry({
           url: parEndpoint,
@@ -356,6 +368,7 @@ export function createAuthorizationCodeIssuance(deps) {
           stage: "PAR",
           nonceState,
           challengeState: attestationChallengeState,
+          cnfKeyPair: parCnfKeyPair,
         });
         if (parRes.ok) {
           const parBody = parRes.parsedBody || (await parRes.json().catch(() => ({})));
@@ -624,6 +637,21 @@ export function createAuthorizationCodeIssuance(deps) {
       assertAccessTokenCnfMatchesWia(profile, accessToken, dpopBinding.publicJwk),
     );
 
+    issuanceContext.refreshToken = describeIssuanceRefreshTokenMetadata(tokenBody);
+    const reissuanceBinding = buildReissuanceBinding({
+      profile,
+      refreshToken: tokenBody.refresh_token,
+      dpopBinding,
+      walletClientId,
+      apiBase,
+      issuerMeta,
+      tokenEndpoint,
+      authorizationServerIssuer,
+      keyPath,
+      trustSessionId: logSessionId,
+      configurationId,
+    });
+
     let c_nonce = tokenBody.c_nonce;
     const credentialRequestTargets = runGuardedSync(
       slog,
@@ -683,6 +711,8 @@ export function createAuthorizationCodeIssuance(deps) {
             scope: scopeResolution.scope,
             scopeSource: scopeResolution.source,
             proofBinding: null,
+            reissuanceBinding,
+            refreshToken: issuanceContext.refreshToken,
           },
           clientId: walletClientId,
         },
@@ -795,6 +825,8 @@ export function createAuthorizationCodeIssuance(deps) {
             c_nonce,
             c_nonce_expires_in,
             proofBinding: issuanceContext.proofBinding,
+            reissuanceBinding,
+            refreshToken: issuanceContext.refreshToken,
           },
           authorizationServerMeta: issuerMeta._authorizationServerMeta,
         },
@@ -834,6 +866,8 @@ export function createAuthorizationCodeIssuance(deps) {
           c_nonce,
           c_nonce_expires_in,
           proofBinding: issuanceContext.proofBinding,
+          reissuanceBinding,
+          refreshToken: issuanceContext.refreshToken,
         },
         authorizationServerMeta: issuerMeta._authorizationServerMeta,
       },

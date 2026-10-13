@@ -5,7 +5,8 @@ import express from "express";
 import fetch from "node-fetch";
 import { createPkcePair } from "./lib/crypto.js";
 import { performPresentation, resolveDeepLinkFromEndpoint } from "./lib/presentation.js";
-import { storeWalletCredentialByType, walletRedisClient, getWalletLogs, getGlobalLogs } from "./lib/cache.js";
+import { storeWalletCredentialByType, getWalletCredentialByType, walletRedisClient, getWalletLogs, getGlobalLogs } from "./lib/cache.js";
+import { buildReissuanceBinding, runRefreshTokenReissuance } from "./lib/reissuance.js";
 import { validateCs02CredentialStatusList } from "../../utils/cs02StatusList.js";
 import { jwtVerify, decodeJwt, decodeProtectedHeader, createLocalJWKSet, importJWK, importX509 } from "jose";
 import { decodeSdJwt, getClaims } from "@sd-jwt/decode";
@@ -55,7 +56,7 @@ import {
 import { createWuaStatusListRouter } from "./routes/wuaStatusListRoutes.js";
 import { normalizeTrustFrameworkFlag, trustFrameworkSessionProps } from "../../utils/trustFrameworkPolicy.js";
 import { createWalletContext } from "../../utils/sessionContext.js";
-import { credentialTypeFromJwtVcPayload, enforceIssuedCredentialTrust, resolveIssuerScopeEvidence } from "./lib/trustFramework.js";
+import { credentialTypeFromJwtVcPayload, enforceIssuedCredentialTrust, resolveIssuerScopeEvidence, loadWalletTrustSession } from "./lib/trustFramework.js";
 import {
   buildCredentialProofRequest,
   buildCredentialProofBindingContext,
@@ -114,7 +115,7 @@ export function isDirectWalletTrustEnabled(trustFramework) {
   return normalizeTrustFrameworkFlag(trustFramework);
 }
 
-async function ensureDirectWalletTrustSession({ sessionId, trustFramework, flow }) {
+async function ensureDirectWalletTrustSession({ sessionId, trustFramework, flow, trustPolicy = null }) {
   if (!isDirectWalletTrustEnabled(trustFramework)) return;
   if (!sessionId) {
     const error = new Error("trustFramework=true requires sessionId so wallet trust decisions can be persisted");
@@ -124,7 +125,7 @@ async function ensureDirectWalletTrustSession({ sessionId, trustFramework, flow 
   const key = `wallet:test-session:${sessionId}`;
   const raw = await walletRedisClient.get(key);
   const existing = raw ? JSON.parse(raw) : { sessionId, status: "pending" };
-  const policy = trustFrameworkSessionProps({ trustFramework: true }).trustPolicy;
+  const policy = trustPolicy || trustFrameworkSessionProps({ trustFramework: true }).trustPolicy;
   const next = createWalletContext({
     sessionContext: existing.sessionContext,
     id: sessionId,
@@ -647,6 +648,62 @@ app.post("/session", async (req, res) => {
     const failed = await setStatus("failed", { error: e.message || String(e) });
     return res.status(500).json({ error: "server_error", error_description: e.message || String(e), state: failed });
   }
+  });
+});
+
+// POST /reissue — CS-01 refresh-token re-issuance for a stored credential type
+app.post("/reissue", async (req, res) => {
+  const { configurationId, sessionId, keyPath } = req.body || {};
+  if (!configurationId) {
+    return res.status(400).json({ error: "invalid_request", error_description: "configurationId is required" });
+  }
+  return runWithLogContext(sessionId, async () => {
+    try {
+      if (!isWebuildCs01Profile(activeWalletProfile)) {
+        return res.status(400).json({
+          error: "unsupported_profile",
+          error_description: "Refresh-token re-issuance is supported in webuild-cs01 profile only",
+        });
+      }
+      const stored = await getWalletCredentialByType(configurationId);
+      const binding = stored?.metadata?.reissuanceBinding;
+      if (!binding?.refreshToken) {
+        return res.status(400).json({
+          error: "reauthorization_required",
+          error_description: "No refresh-token binding is stored for this credential; run full issuance again",
+        });
+      }
+      if (keyPath) {
+        binding.keyPath = keyPath;
+      }
+      const trustSessionId = sessionId || binding.trustSessionId;
+      if (binding.trustPolicy) {
+        await ensureDirectWalletTrustSession({ sessionId: trustSessionId, trustFramework: true, flow: "issuance", trustPolicy: binding.trustPolicy });
+      }
+      const result = await runRefreshTokenReissuance({
+        profile: activeWalletProfile,
+        binding,
+        configurationId,
+        httpPostFormWithAttestationNonceRetry: httpPostFormWithAttestationChallengeRetry,
+        persistReissuanceBinding: nextBinding => storeWalletCredentialByType(configurationId, {
+          ...stored, metadata: { ...stored.metadata, reissuanceBinding: nextBinding },
+        }),
+        httpPostJson,
+        fetchImpl: fetch,
+        validateAndStoreCredential,
+        pollTimeoutMs: req.body.pollTimeoutMs,
+        pollIntervalMs: req.body.pollIntervalMs,
+        logSessionId: trustSessionId,
+        previousCredentialEnvelope: stored?.credential,
+      });
+      return res.json({ status: "ok", result });
+    } catch (error) {
+      const status = error.errorCode === "reauthorization_required" ? 400 : 500;
+      return res.status(status).json({
+        error: error.errorCode || "server_error",
+        error_description: error.message || String(error),
+      });
+    }
   });
 });
 
@@ -1666,6 +1723,19 @@ async function runPreAuthorizedIssuance({ profile = activeWalletProfile, walletC
     },
     refreshToken: describeIssuanceRefreshTokenMetadata(tokenBody),
   };
+  const reissuanceBinding = buildReissuanceBinding({
+    profile,
+    refreshToken: tokenBody.refresh_token,
+    dpopBinding,
+    walletClientId,
+    apiBase,
+    issuerMeta,
+    tokenEndpoint,
+    authorizationServerIssuer,
+    keyPath,
+    trustSessionId: logSessionId,
+    configurationId,
+  });
   console.log("[preauth] got access_token=", accessToken ? "yes" : "no", "c_nonce=", c_nonce ? "yes" : "no"); try { slog("[preauth] token received", { hasAccessToken: !!accessToken, hasCNonce: !!c_nonce, refreshToken: issuanceContext.refreshToken }); } catch {}
   if (!c_nonce && issuerMeta.nonce_endpoint) {
     const nonceEndpoint = issuerMeta.nonce_endpoint;
@@ -1709,7 +1779,7 @@ async function runPreAuthorizedIssuance({ profile = activeWalletProfile, walletC
       pollTimeoutMs,
       pollIntervalMs,
       authorizationServerMeta: issuerMeta._authorizationServerMeta,
-      metadata: { configurationId, proofBinding: null },
+      metadata: { configurationId, proofBinding: null, reissuanceBinding, refreshToken: issuanceContext.refreshToken },
       clientId: walletClientId,
     }, logSessionId);
     issuanceContext.proofBinding = multiple.proofBindings[0];
@@ -1879,7 +1949,7 @@ async function runPreAuthorizedIssuance({ profile = activeWalletProfile, walletC
       },
     });
     try { slog("[preauth] deferred ready"); } catch {}
-    await validateAndStoreCredential({ configurationId, credential: defBody, issuerMeta, apiBase, keyBinding: toKeyBindingMaterial(subjectKey), metadata: { configurationId, c_nonce, c_nonce_expires_in, proofBinding: issuanceContext.proofBinding }, authorizationServerMeta: issuerMeta._authorizationServerMeta }, logSessionId);
+    await validateAndStoreCredential({ configurationId, credential: defBody, issuerMeta, apiBase, keyBinding: toKeyBindingMaterial(subjectKey), metadata: { configurationId, c_nonce, c_nonce_expires_in, proofBinding: issuanceContext.proofBinding, reissuanceBinding, refreshToken: issuanceContext.refreshToken }, authorizationServerMeta: issuerMeta._authorizationServerMeta }, logSessionId);
     try { slog("[ISSUANCE] [COMPLETE] Pre-authorized issuance flow (deferred)", { configurationId, success: true }); } catch {}
     return wrapIssuanceResult(defBody, issuanceContext);
   }
@@ -1896,7 +1966,7 @@ async function runPreAuthorizedIssuance({ profile = activeWalletProfile, walletC
   try { slog("[preauth] credential received", { hasCredential: !!credBody }); } catch {}
   
   try {
-    await validateAndStoreCredential({ configurationId, credential: credBody, issuerMeta, apiBase, keyBinding: toKeyBindingMaterial(subjectKey), metadata: { configurationId, c_nonce, c_nonce_expires_in, proofBinding: issuanceContext.proofBinding }, authorizationServerMeta: issuerMeta._authorizationServerMeta }, logSessionId);
+    await validateAndStoreCredential({ configurationId, credential: credBody, issuerMeta, apiBase, keyBinding: toKeyBindingMaterial(subjectKey), metadata: { configurationId, c_nonce, c_nonce_expires_in, proofBinding: issuanceContext.proofBinding, reissuanceBinding, refreshToken: issuanceContext.refreshToken }, authorizationServerMeta: issuerMeta._authorizationServerMeta }, logSessionId);
   } catch (validationError) {
     console.error("[preauth] credential validation failed:", validationError?.message || validationError);
     try { slog("[preauth] credential validation failed", { error: validationError?.message || String(validationError), stack: validationError?.stack }); } catch {}
@@ -2064,6 +2134,12 @@ async function validateAndStoreCredential({ configurationId, credential, issuerM
   // If validation passed, store
   console.log("[validate] credential validation passed, storing"); 
   try { slog("[store] credential", { configurationId, format: detectedFormat, doctype: detectedDoctype }); } catch {}
+  if (metadata?.reissuanceBinding) {
+    const trustSession = await loadWalletTrustSession(logSessionId);
+    metadata.reissuanceBinding.trustSessionId = logSessionId || metadata.reissuanceBinding.trustSessionId;
+    metadata.reissuanceBinding.trustPolicy = trustSession?.trustPolicy || metadata.reissuanceBinding.trustPolicy;
+    metadata.reissuanceBinding.configurationId = configurationId;
+  }
   await storeWalletCredentialByType(configurationId, {
     credential,
     keyBinding,
