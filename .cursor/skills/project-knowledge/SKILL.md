@@ -66,8 +66,11 @@ and implementation detail. Read only what the task needs.
   when a linked decision, profile interpretation, or support claim changes.
 - When a plan is implemented, move its summary from pending to current behaviour
   in `knowledge.md`; keep the plan as historical rationale.
-- When fixing a bug, add or extend an automated test in the same change set
-  that would have failed before the fix. See the repository `AGENTS.md`.
+- Every confirmed bug fix MUST include a focused unit regression test in the
+  same change set that fails before the fix and passes afterward. Keep it in
+  the automated suite to prevent recurrence. Protocol-boundary fixes also need
+  route-level or wallet-client coverage. Run the regression test and nearest
+  existing suite before declaring completion. See the repository `AGENTS.md`.
 
 ## When to update knowledge.md
 

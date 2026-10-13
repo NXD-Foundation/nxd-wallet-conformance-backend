@@ -5,7 +5,9 @@ import path from "path";
 import { execSync } from "child_process";
 import * as jose from "jose";
 import { X509Certificate } from "crypto";
-import { buildVpRequestJWT, loadTrustFrameworkVerifierMaterial } from "../utils/cryptoUtils.js";
+import { buildVpRequestJWT, loadTrustFrameworkVerifierMaterial, loadVerifierP12 } from "../utils/cryptoUtils.js";
+
+import { computeX509HashClientIdFromLeafCertBase64 } from "../utils/cs02ClientIdBinding.js";
 
 function x5cToPem(x5cEntry) {
   return `-----BEGIN CERTIFICATE-----
@@ -17,8 +19,9 @@ ${String(x5cEntry)
 }
 
 async function buildEs256X509Jar(signingMaterial = null) {
+  const material = signingMaterial || loadVerifierP12();
   return buildVpRequestJWT(
-    "x509_san_dns:dev-i4mlab.aegean.gr",
+    computeX509HashClientIdFromLeafCertBase64(material.certChain[0]),
     "https://dev-i4mlab.aegean.gr/callback",
     null,
     null,
@@ -38,7 +41,7 @@ async function buildEs256X509Jar(signingMaterial = null) {
     "ES256",
     false,
     null,
-    signingMaterial,
+    material,
   );
 }
 
@@ -60,18 +63,17 @@ describe("JAR x5c certificate chain", () => {
     }
   });
 
-  it("includes the verifier leaf first and appends the issuing CA for ES256 x509 JARs", async () => {
+  it("excludes the PID trust anchor from ES256 x509_hash JARs", async () => {
     const requestJwt = await buildEs256X509Jar();
     const header = jose.decodeProtectedHeader(requestJwt);
 
     assert.ok(Array.isArray(header.x5c));
-    assert.ok(header.x5c.length >= 2);
+    assert.strictEqual(header.x5c.length, 1);
 
     const leaf = new X509Certificate(x5cToPem(header.x5c[0]));
-    const issuer = new X509Certificate(x5cToPem(header.x5c[1]));
 
     assert.match(leaf.subject, /CN=WE-BUILD Verifier/);
-    assert.match(issuer.subject, /CN=PID Issuer CA 02/);
+    assert.ok(!header.x5c.includes(new X509Certificate(fs.readFileSync("certs/pidissuerca02_eu.pem")).raw.toString("base64")));
   });
 
   it("verifies the emitted leaf against the shipped PID Issuer CA 02 certificate", async () => {
@@ -103,10 +105,12 @@ describe("JAR x5c certificate chain", () => {
     const requestJwt = await buildEs256X509Jar(loadTrustFrameworkVerifierMaterial());
     const header = jose.decodeProtectedHeader(requestJwt);
     const leaf = new X509Certificate(x5cToPem(header.x5c[0]));
-    const issuer = new X509Certificate(x5cToPem(header.x5c[1]));
 
     assert.match(leaf.subject, /CN=dev-i4mlab.aegean.gr/);
-    assert.match(issuer.subject, /CN=https:\/\/webuild-consortium.github.io\//);
+    assert.ok(header.x5c.every((entry) => {
+      const cert = new X509Certificate(Buffer.from(entry, "base64"));
+      return !(cert.ca && cert.checkIssued(cert) && cert.verify(cert.publicKey));
+    }));
     assert.doesNotMatch(leaf.subject, /CN=WE-BUILD Verifier/);
   });
 

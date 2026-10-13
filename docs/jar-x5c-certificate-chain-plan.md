@@ -1,5 +1,9 @@
 # JAR x5c Certificate Chain — Implementation Plan
 
+> Historical plan: the root-inclusion expectations below are superseded.
+> HAIP 1.0 §5 and ETSI TS 119 472-2 §6.4.2 require the trust anchor to be
+> excluded from presentation request `x5c`. Retain the leaf and intermediates.
+
 This note addresses the OID4VP interoperability question around **VP-001 / x509 JAR** validation: wallets receive a signed authorization request whose `x5c` header currently contains only the **leaf verifier certificate**, while chain validation requires the issuing CA **PID Issuer CA 02**.
 
 ## Problem Summary

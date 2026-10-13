@@ -55,6 +55,19 @@ function extractCertificateChain(certPem) {
   });
 }
 
+/** Build a request x5c with the signing leaf and intermediates, excluding roots.
+ * HAIP 1.0 §5 and ETSI TS 119 472-2 §6.4.2 exclude the trust anchor.
+ * Keep the original chain intact for local certificate-path validation.
+ */
+export function buildPresentationRequestX5c(certChain) {
+  return certChain.filter((entry, index) => {
+    const certificate = new crypto.X509Certificate(Buffer.from(entry, "base64"));
+    const selfSigned = certificate.checkIssued(certificate) && certificate.verify(certificate.publicKey);
+    if (index === 0) return true;
+    return !(certificate.ca && selfSigned);
+  });
+}
+
 /**
  * Load certificate chain and private key from WE-BUILD Verifier P12 file.
  * Uses openssl for reliable extraction (node-forge may fail on some p12 formats).
@@ -563,7 +576,7 @@ export async function buildVpRequestJWT(
     const header = {
       alg: "ES256",
       typ: "oauth-authz-req+jwt",
-      x5c: certChain,
+      x5c: buildPresentationRequestX5c(certChain),
     };
 
     signedJwt = await new jose.SignJWT(jwtPayload)
@@ -602,7 +615,7 @@ export async function buildVpRequestJWT(
     const header = {
       alg: useEs256 ? "ES256" : "RS256",
       typ: "oauth-authz-req+jwt",
-      x5c: certChain,
+      x5c: buildPresentationRequestX5c(certChain),
     };
 
     signedJwt = await new jose.SignJWT(jwtPayload)
@@ -650,7 +663,7 @@ export async function buildVpRequestJWT(
     const header = {
       alg: useEs256 ? "ES256" : "RS256",
       typ: "oauth-authz-req+jwt",
-      x5c: certChain,
+      x5c: buildPresentationRequestX5c(certChain),
     };
 
     signedJwt = await new jose.SignJWT(jwtPayload)
@@ -755,7 +768,7 @@ export async function buildVpRequestJWT(
         header = {
           alg: "ES256",
           typ: "oauth-authz-req+jwt",
-          x5c: certChain,
+          x5c: buildPresentationRequestX5c(certChain),
           jwt: va_jwt,
         };
         signedJwt = await new jose.SignJWT(jwtPayload)

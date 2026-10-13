@@ -647,13 +647,12 @@ Source: [WP4 trust snapshot](./trust/SOURCE.md),
 
 ### Certificate Chains For X.509 JAR
 
-The verifier's X.509 JAR flow supports an `x5c` chain, but the current plan
-records a leaf-only verifier P12 as an interoperability gap. The proposed
-remediation is to package the issuer CA PEM, append it only when needed, keep
-the leaf at index zero, and cover the assembly with tests. Check implementation
-status before relying on this plan.
-
-Source: [JAR x5c chain plan](./jar-x5c-certificate-chain-plan.md).
+Presentation request `x5c` headers preserve the signing leaf and intermediate
+certificates, excluding self-signed CA roots (HAIP 1.0 §5; ETSI TS 119 472-2
+§6.4.2). Full loaded chains remain available for local trust validation.
+A leaf issued directly by the trusted root is transmitted alone. The older
+[JAR x5c chain plan](./jar-x5c-certificate-chain-plan.md) is historical; its
+root-inclusion and minimum-two-certificate expectations are superseded.
 
 ### Key And Certificate Inventory
 
