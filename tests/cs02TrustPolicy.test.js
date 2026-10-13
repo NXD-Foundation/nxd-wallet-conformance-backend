@@ -118,6 +118,67 @@ describe("CS-02 trust and metadata policy (Phase 5)", () => {
     ).to.throw(Cs02TrustPolicyError, /unsupported vp format/);
   });
 
+  it("accepts inline client_metadata with OpenID4VP B.3.4 ES256 and ES384 alg lists", () => {
+    const metadata = validateCs02ClientMetadata(
+      {
+        vp_formats_supported: {
+          "dc+sd-jwt": {
+            "sd-jwt_alg_values": ["ES256", "ES384"],
+            "kb-jwt_alg_values": ["ES256", "ES384"],
+          },
+        },
+      },
+      { responseMode: "direct_post", strict: true },
+    );
+    expect(metadata.vp_formats_supported["dc+sd-jwt"]["kb-jwt_alg_values"]).to.deep.equal([
+      "ES256",
+      "ES384",
+    ]);
+  });
+
+  for (const field of ["sd-jwt_alg_values", "kb-jwt_alg_values"]) {
+    for (const value of ["ES384", {}, 256, false, null, [], ["ES256", null], ["ES256", 256]]) {
+      it(`rejects malformed ${field}: ${JSON.stringify(value)} in strict metadata`, () => {
+        expect(() => validateCs02ClientMetadata(
+          { vp_formats_supported: { "dc+sd-jwt": { [field]: value } } },
+          { responseMode: "direct_post", strict: true },
+        )).to.throw(Cs02TrustPolicyError);
+      });
+    }
+  }
+
+  it("rejects kb-jwt_alg_values that omit every CS-02 algorithm", () => {
+    expect(() =>
+      validateCs02ClientMetadata(
+        {
+          vp_formats_supported: {
+            "dc+sd-jwt": {
+              "sd-jwt_alg_values": ["ES256"],
+              "kb-jwt_alg_values": ["ES384"],
+            },
+          },
+        },
+        { responseMode: "direct_post", strict: true },
+      ),
+    ).to.throw(Cs02TrustPolicyError, /kb-jwt_alg_values does not include a CS-02 algorithm/);
+  });
+
+  it("rejects sd-jwt_alg_values that omit every CS-02 algorithm", () => {
+    expect(() =>
+      validateCs02ClientMetadata(
+        {
+          vp_formats_supported: {
+            "dc+sd-jwt": {
+              "sd-jwt_alg_values": ["RS256"],
+              "kb-jwt_alg_values": ["ES256"],
+            },
+          },
+        },
+        { responseMode: "direct_post", strict: true },
+      ),
+    ).to.throw(Cs02TrustPolicyError, /sd-jwt_alg_values does not include a CS-02 algorithm/);
+  });
+
   it("filters verifier metadata to enforced CS-02 formats and algs", () => {
     const filtered = filterClientMetadataForCs02Enforcement(
       {
@@ -479,7 +540,7 @@ describe("CS-02 client_metadata_uri policy (Phase B)", () => {
     }
   });
 
-  it("rejects remote metadata advertising unsupported KB-JWT algs", async () => {
+  it("rejects remote metadata when kb-jwt_alg_values omit CS-02 algorithms", async () => {
     try {
       await validateCs02ClientMetadataUri(metadataUri, {
         fetchImpl: mockMetadataFetch({
@@ -493,11 +554,30 @@ describe("CS-02 client_metadata_uri policy (Phase B)", () => {
         responseMode: "direct_post",
         strict: true,
       });
-      expect.fail("expected unsupported KB-JWT alg rejection");
+      expect.fail("expected KB-JWT alg list without CS-02 algorithm rejection");
     } catch (error) {
       expect(error).to.be.instanceOf(Cs02TrustPolicyError);
-      expect(error.message).to.match(/unsupported KB-JWT alg/);
+      expect(error.message).to.match(/kb-jwt_alg_values does not include a CS-02 algorithm/);
     }
+  });
+
+  it("accepts remote metadata with OpenID4VP B.3.4 ES256 and ES384 alg lists", async () => {
+    const resolved = await validateCs02ClientMetadataUri(metadataUri, {
+      fetchImpl: mockMetadataFetch({
+        vp_formats_supported: {
+          "dc+sd-jwt": {
+            "sd-jwt_alg_values": ["ES256", "ES384"],
+            "kb-jwt_alg_values": ["ES256", "ES384"],
+          },
+        },
+      }),
+      responseMode: "direct_post",
+      strict: true,
+    });
+    expect(resolved.metadata.vp_formats_supported["dc+sd-jwt"]["kb-jwt_alg_values"]).to.deep.equal([
+      "ES256",
+      "ES384",
+    ]);
   });
 
   it("rejects remote metadata advertising encrypted response settings for direct_post", async () => {

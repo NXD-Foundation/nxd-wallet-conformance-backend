@@ -270,6 +270,14 @@ Presentation Exchange paths still exist but are not the current baseline.
 In particular, state/nonce checks, DCQL response shape, transaction-data
 bindings, mdoc claim matching, and SD-JWT key binding each have explicit
 enforcement paths.
+- Strict inbound verifier `client_metadata` may list additional SD-JWT and
+KB-JWT algorithms alongside the CS-02 profile set (OpenID4VP Appendix B.3.4).
+The wallet accepts the request when a profile algorithm is present in each
+advertised list (`sd-jwt_alg_values`: ES256 or ES384; `kb-jwt_alg_values`:
+ES256). Supplied lists must be non-empty arrays of algorithm identifier
+strings; null, scalar, and object values are rejected in strict mode. It still signs the authorization request and KB-JWT with ES256. Strict
+metadata this deployment publishes continues to advertise only algorithms it
+actually verifies (ES256 for KB-JWT).
 - A DCQL `vp_token` is a JSON object keyed by credential-query id. OpenID4VP
 1.0 §8.1 requires every entry to be an array of presentations. When
 `multiple` is omitted or false, that array contains exactly one presentation.

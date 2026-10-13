@@ -807,28 +807,60 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
       }
     });
 
-    it("rejects remote metadata with unsupported KB-JWT algs", async () => {
-      const requestJwt = await signJar(
-        baseJarPayload({ client_metadata_uri: metadataUri }),
-      );
+    it("rejects inline client_metadata when kb-jwt_alg_values omit CS-02 algorithms", () => {
       try {
-        await validateAndVerifyCs02AuthorizationRequest(requestJwt, {
-          options: strictOptions({
-            fetchImpl: mockMetadataFetch({
+        validateCs02JarPayload(
+          baseJarPayload({
+            client_metadata: {
               vp_formats_supported: {
                 "dc+sd-jwt": {
                   "sd-jwt_alg_values": ["ES256"],
                   "kb-jwt_alg_values": ["ES384"],
                 },
               },
-            }),
+            },
           }),
-        });
-        expect.fail("expected unsupported remote KB-JWT alg rejection");
+          strictOptions(),
+          () => {},
+        );
+        expect.fail("expected KB-JWT alg list without CS-02 algorithm rejection");
       } catch (error) {
         expect(error).to.be.instanceOf(Cs02ValidationError);
-        expect(error.message).to.match(/unsupported KB-JWT alg/);
+        expect(error.message).to.match(/kb-jwt_alg_values does not include a CS-02 algorithm/);
       }
+    });
+
+    for (const field of ["sd-jwt_alg_values", "kb-jwt_alg_values"]) {
+      for (const value of ["ES384", {}, null, [], ["ES256", 256]]) {
+        it(`rejects malformed inline ${field}: ${JSON.stringify(value)} at the wallet boundary`, () => {
+          expect(() => validateCs02JarPayload(
+            baseJarPayload({
+              client_metadata: {
+                vp_formats_supported: { "dc+sd-jwt": { [field]: value } },
+              },
+            }),
+            strictOptions(),
+            () => {},
+          )).to.throw(Cs02ValidationError);
+        });
+      }
+    }
+
+    it("accepts inline B.3.4 client_metadata during strict JAR payload validation", () => {
+      validateCs02JarPayload(
+        baseJarPayload({
+          client_metadata: {
+            vp_formats_supported: {
+              "dc+sd-jwt": {
+                "sd-jwt_alg_values": ["ES256", "ES384"],
+                "kb-jwt_alg_values": ["ES256", "ES384"],
+              },
+            },
+          },
+        }),
+        strictOptions(),
+        () => {},
+      );
     });
 
     it("rejects remote metadata advertising direct_post encryption settings", async () => {

@@ -393,6 +393,40 @@ function isPlainObject(value) {
   );
 }
 
+function validateCs02AdvertisedSdJwtAlgValues(algs) {
+  if (algs === undefined) return;
+  // OpenID4VP Appendix B.3.4: supplied algorithm lists must be non-empty arrays.
+  if (!Array.isArray(algs) || !algs.every((alg) => typeof alg === "string" && alg.length > 0)) {
+    throw new Cs02TrustPolicyError(
+      "client_metadata sd-jwt_alg_values must be a non-empty array of algorithm identifiers",
+      "invalid_request",
+    );
+  }
+  if (algs.length === 0 || !algs.some((alg) => CS02_ENFORCED_SD_JWT_ALGS.has(alg))) {
+    throw new Cs02TrustPolicyError(
+      "client_metadata sd-jwt_alg_values does not include a CS-02 algorithm",
+      "invalid_request",
+    );
+  }
+}
+
+function validateCs02AdvertisedKbJwtAlgValues(algs) {
+  if (algs === undefined) return;
+  // OpenID4VP Appendix B.3.4: supplied algorithm lists must be non-empty arrays.
+  if (!Array.isArray(algs) || !algs.every((alg) => typeof alg === "string" && alg.length > 0)) {
+    throw new Cs02TrustPolicyError(
+      "client_metadata kb-jwt_alg_values must be a non-empty array of algorithm identifiers",
+      "invalid_request",
+    );
+  }
+  if (algs.length === 0 || !algs.some((alg) => CS02_ENFORCED_KB_JWT_ALGS.has(alg))) {
+    throw new Cs02TrustPolicyError(
+      "client_metadata kb-jwt_alg_values does not include a CS-02 algorithm",
+      "invalid_request",
+    );
+  }
+}
+
 export function validateCs02ClientMetadata(
   metadata,
   { responseMode, strict = true, allowCs03CredentialFormat = false } = {},
@@ -418,22 +452,8 @@ export function validateCs02ClientMetadata(
     for (const [format, config] of Object.entries(metadata.vp_formats_supported)) {
       if (!isPlainObject(config)) continue;
       if (format === "dc+sd-jwt" || format === "vc+sd-jwt") {
-        for (const alg of config["sd-jwt_alg_values"] || []) {
-          if (!CS02_ENFORCED_SD_JWT_ALGS.has(alg)) {
-            throw new Cs02TrustPolicyError(
-              `client_metadata advertises unsupported SD-JWT alg "${alg}"`,
-              "invalid_request",
-            );
-          }
-        }
-        for (const alg of config["kb-jwt_alg_values"] || []) {
-          if (!CS02_ENFORCED_KB_JWT_ALGS.has(alg)) {
-            throw new Cs02TrustPolicyError(
-              `client_metadata advertises unsupported KB-JWT alg "${alg}"`,
-              "invalid_request",
-            );
-          }
-        }
+        validateCs02AdvertisedSdJwtAlgValues(config["sd-jwt_alg_values"]);
+        validateCs02AdvertisedKbJwtAlgValues(config["kb-jwt_alg_values"]);
       }
     }
   }

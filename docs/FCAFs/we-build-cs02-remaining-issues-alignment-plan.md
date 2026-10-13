@@ -96,7 +96,7 @@ Required tests:
 - Reject `http://` `client_metadata_uri` in strict mode.
 - Reject relative `client_metadata_uri`.
 - Reject remote metadata containing unsupported strict CS-02 formats.
-- Reject remote metadata with unsupported KB-JWT algs.
+- Reject remote metadata when advertised KB-JWT algs omit every CS-02 algorithm (supersedes the earlier closed-set “reject unsupported KB-JWT algs” rule; extra advertised algs such as ES384 beside ES256 are accepted).
 - Reject remote metadata advertising direct_post encryption settings when response mode is `direct_post`.
 - Accept valid HTTPS remote metadata with supported JWKs.
 - Verify inline metadata takes precedence when both inline metadata and URI metadata are present.
