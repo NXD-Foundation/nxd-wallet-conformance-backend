@@ -16,7 +16,6 @@ import {
   renderCallbackHtml,
   pendingKeyForState,
 } from "../src/lib/authHandoffStore.js";
-import { OPENID4VP_CS02_URI } from "../src/lib/openid4vpUri.js";
 import {
   cs01IssuerMetadata,
   cs01AuthorizationServerMetadata,
@@ -51,14 +50,21 @@ describe("auth handoff config", () => {
     ).to.throw(/HTTPS/);
   });
 
-  it("uses openid4vp redirect in blocking mode and HTTPS in handoff mode", () => {
-    expect(resolveRedirectUriForFlow({}, false)).to.equal(OPENID4VP_CS02_URI);
+  it("requires HTTPS configuration in blocking and handoff modes", () => {
+    expect(() => resolveRedirectUriForFlow({}, false)).to.throw(AuthHandoffConfigError);
+    expect(resolveRedirectUriForFlow({ WALLET_OAUTH_REDIRECT_URI: "https://wallet.example/oauth/callback" }, false)).to.equal("https://wallet.example/oauth/callback");
     expect(
       resolveRedirectUriForFlow(
         { WALLET_OAUTH_REDIRECT_URI: "https://wallet.example/oauth/callback" },
         true,
       ),
     ).to.equal("https://wallet.example/oauth/callback");
+  });
+
+  it("rejects custom schemes, fragments and credentials before starting authorization", () => {
+    for (const uri of ["openid4vp://", "openid4vp://present", "https://wallet.example/cb#fragment", "https://wallet.example/cb#", "https://user:pass@wallet.example/cb"]) {
+      expect(() => resolveOAuthRedirectUri({ WALLET_OAUTH_REDIRECT_URI: uri })).to.throw(AuthHandoffConfigError);
+    }
   });
 
   it("caps handoff TTL by PAR expires_in when present", () => {
@@ -108,7 +114,7 @@ describe("authorization code prepare (handoff)", () => {
         headers: { get: () => null, entries: () => [] },
         json: async () => ({ request_uri: "urn:example:par:req-1", expires_in: 300 }),
       }),
-      httpPostJson: async () => ({ ok: true, json: async () => ({}) }),
+      httpPostJson: async () => ({ ok: true, json: async () => ({ c_nonce: "fresh-nonce" }) }),
       validateAndStoreCredential: async () => {},
       issueCredentialTargets: async () => ({ credentials: [], proofBindings: [] }),
       wrapIssuanceResult: (credential, ctx) => ({ credential, issuanceContext: ctx }),
@@ -167,7 +173,7 @@ describe("authorization code prepare (handoff)", () => {
         }
         return { ok: false, status: 400, text: async () => "unexpected" };
       },
-      httpPostJson: async () => ({ ok: true, json: async () => ({}) }),
+      httpPostJson: async () => ({ ok: true, json: async () => ({ c_nonce: "fresh-nonce" }) }),
       validateAndStoreCredential: async () => {},
       issueCredentialTargets: async () => ({
         credentials: [{ credential: "issued" }],

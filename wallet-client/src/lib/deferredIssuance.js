@@ -1,3 +1,5 @@
+import { requestWithDpopNonce } from "./dpopNonce.js";
+import { computeAthForDpop } from "../../utils/tokenUtils.js";
 export function resolveDeferredPollIntervalMs(issuerIntervalSeconds, pollIntervalMs) {
   if (Number.isFinite(issuerIntervalSeconds) && issuerIntervalSeconds > 0) {
     return issuerIntervalSeconds * 1000;
@@ -54,12 +56,15 @@ export async function pollDeferredCredentialIssuance({
 
   while (Date.now() - start < timeout) {
     const poll = await buildPollRequest();
-    const defRes = await httpPostJson(
-      deferredEndpoint,
-      poll.body,
-      logSessionId,
-      poll.headers,
-    );
+    const defRes = await requestWithDpopNonce({
+      url: deferredEndpoint, state: poll.dpopBinding?.nonceState,
+      privateJwk: poll.dpopBinding?.privateJwk, publicJwk: poll.dpopBinding?.publicJwk,
+      enabled: Boolean(poll.headers?.DPoP),
+      ath: poll.accessToken ? computeAthForDpop(poll.accessToken) : null,
+      send: (proof) => httpPostJson(deferredEndpoint, poll.body, logSessionId,
+        { ...poll.headers, ...(proof ? { DPoP: proof } : {}) }),
+      log,
+    });
     log("deferred poll", { status: defRes.status, transactionId });
 
     if (defRes.status === 202) {

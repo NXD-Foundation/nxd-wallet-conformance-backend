@@ -310,7 +310,8 @@ export async function createWiaPopJwt({
  * @returns {Promise<string>} - Signed WUA JWT
  */
 export async function createWUA({ 
-  privateJwk, 
+  privateJwk,
+  privateKeyPem = null,
   publicJwk, 
   issuer, 
   subject = null,
@@ -320,15 +321,19 @@ export async function createWUA({
   status = null,
   nonce = null,
   alg = "ES256",
-  ttlHours = 24 
+  ttlHours = 24,
+  headerParams = null,
+  extraClaims = null,
+  includeJwkHeader = true,
 }) {
   const now = Math.floor(Date.now() / 1000);
   const exp = now + Math.floor(ttlHours * 3600);
   
-  const header = { alg, typ: "key-attestation+jwt", jwk: publicJwk };
+  const header = { alg, typ: "key-attestation+jwt",
+    ...(includeJwkHeader ? { jwk: publicJwk } : {}), ...(headerParams || {}) };
   const keys = Array.isArray(attestedKeys) ? attestedKeys.map((k) => publicJwkWithoutPrivateMaterial(k)) : [];
   const payload = {
-    iss: issuer,
+    ...(issuer ? { iss: issuer } : {}),
     ...(subject ? { sub: subject } : {}),
     aud: audience,
     iat: now,
@@ -338,9 +343,10 @@ export async function createWUA({
     attested_keys: keys,
     ...(typeof nonce === "string" && nonce.length > 0 ? { nonce } : {}),
     ...(status ? { status } : {}),
+    ...(extraClaims || {}),
   };
 
-  const key = await importJWK(privateJwk, alg);
+  const key = privateKeyPem ? await importPKCS8(privateKeyPem, alg) : await importJWK(privateJwk, alg);
   const jwt = await new SignJWT(payload).setProtectedHeader(header).sign(key);
   return jwt;
 }

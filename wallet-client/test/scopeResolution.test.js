@@ -125,7 +125,10 @@ describe("scope resolution (RFC001 Phase 4)", () => {
         authorization_details_types_supported: ["openid_credential"],
       },
     });
-    expect(result).to.deep.equal({ required: true, scope: null });
+    expect(result).to.deep.equal({
+      required: true, scope: null,
+      reason: "issuer_scope_missing", authorizationDetailsType: "openid_credential",
+    });
   });
 
   it("assertAuthorizationDetailsSupport rejects scope-less config when AS omits openid_credential", () => {

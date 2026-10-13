@@ -1,3 +1,5 @@
+import { createDpopNonceState, requestWithDpopNonce } from "./dpopNonce.js";
+import { computeAthForDpop } from "../../utils/tokenUtils.js";
 import fetch from "node-fetch";
 import { createPkcePair } from "./crypto.js";
 import {
@@ -35,9 +37,9 @@ import {
   createAttestationChallengeState,
   fetchAttestationChallenge,
 } from "./attestationChallenge.js";
-import { isOpenId4VpDeepLink, OPENID4VP_CS02_URI } from "./openid4vpUri.js";
+import { isOpenId4VpDeepLink } from "./openid4vpUri.js";
 import { makeSessionLogger } from "./logger.js";
-import { resolveAuthHandoffTtlSeconds } from "./authHandoffConfig.js";
+import { resolveAuthHandoffTtlSeconds, resolveRedirectUriForFlow, validateOAuthRedirectUri } from "./authHandoffConfig.js";
 
 function logFlowError(slog, label, error, extra = {}) {
   try {
@@ -150,6 +152,11 @@ export function serializePendingContext(prepared) {
     scopeResolution: prepared.scopeResolution,
     issuanceContext: prepared.issuanceContext,
     attestationChallenge: prepared.attestationChallengeState?.current ?? null,
+    dpopBinding: prepared.dpopBinding ? {
+      privateJwk: prepared.dpopBinding.privateJwk,
+      publicJwk: prepared.dpopBinding.publicJwk,
+      nonceState: prepared.dpopBinding.nonceState,
+    } : undefined,
   };
 }
 
@@ -189,10 +196,11 @@ export function createAuthorizationCodeIssuance(deps) {
       keyPath,
       pollTimeoutMs,
       pollIntervalMs,
-      redirectUri = OPENID4VP_CS02_URI,
+      redirectUri = resolveRedirectUriForFlow(process.env, false),
     },
     logSessionId,
   ) {
+    validateOAuthRedirectUri(redirectUri);
     const slog = logSessionId ? makeSessionLogger(logSessionId) : (() => {});
     try {
       slog("[codeflow] prepare start", {
@@ -309,6 +317,17 @@ export function createAuthorizationCodeIssuance(deps) {
       { parEndpoint, parRequired },
     );
 
+    const tokenEndpoint = issuerMetaWorking.token_endpoint || tokenEndpointFromAS || null;
+    if (!tokenEndpoint) {
+      throw new Error(
+        "token_endpoint_required: unable to determine token_endpoint from authorization server metadata",
+      );
+    }
+
+    const dpopBinding = await createTokenRequestDpopBinding({ keyPath, tokenEndpoint, profile });
+    dpopBinding.nonceState = createDpopNonceState();
+    dpopBinding.nonceState.authorizationServer = authorizationServerIssuer;
+    dpopBinding.nonceState.resourceServer = issuerMetaWorking.credential_issuer || apiBase;
     let finalAuthorizeUrl = authorizeUrl.toString();
     let usedPar = false;
     let parExpiresIn = null;
@@ -347,6 +366,8 @@ export function createAuthorizationCodeIssuance(deps) {
           endpointAudience: parEndpoint,
           authorizationServerIssuer,
           stage: "PAR",
+          cnfKeyPair: dpopBinding,
+          nonceState: dpopBinding.nonceState,
           challengeState: attestationChallengeState,
         });
         if (parRes.ok) {
@@ -394,12 +415,6 @@ export function createAuthorizationCodeIssuance(deps) {
       finalAuthorizeUrl = authorizeUrl.toString();
     }
 
-    const tokenEndpoint = issuerMetaWorking.token_endpoint || tokenEndpointFromAS || null;
-    if (!tokenEndpoint) {
-      throw new Error(
-        "token_endpoint_required: unable to determine token_endpoint from authorization server metadata",
-      );
-    }
 
     const ttlSeconds = resolveAuthHandoffTtlSeconds(process.env, parExpiresIn);
     const expiresAt = new Date(Date.now() + ttlSeconds * 1000).toISOString();
@@ -431,6 +446,7 @@ export function createAuthorizationCodeIssuance(deps) {
       scopeResolution,
       issuanceContext,
       attestationChallengeState,
+      dpopBinding,
       expiresAt,
       ttlSeconds,
     };
@@ -465,7 +481,7 @@ export function createAuthorizationCodeIssuance(deps) {
     }
 
     const returnedState = redirect.searchParams.get("state");
-    if (returnedState && returnedState !== prepared.state) {
+    if (returnedState !== prepared.state) {
       throw new Error("invalid_state: authorization response state mismatch");
     }
 
@@ -519,11 +535,12 @@ export function createAuthorizationCodeIssuance(deps) {
     let issuanceContext = { ...pending.issuanceContext };
     const attestationChallengeState = pending.attestationChallengeState;
 
-    const dpopBinding = await createTokenRequestDpopBinding({
-      keyPath,
-      tokenEndpoint,
-      profile,
+    const dpopBinding = pending.dpopBinding || await createTokenRequestDpopBinding({
+      keyPath, tokenEndpoint, profile,
     });
+    dpopBinding.nonceState ||= createDpopNonceState();
+    dpopBinding.nonceState.authorizationServer = authorizationServerIssuer;
+    dpopBinding.nonceState.resourceServer = issuerMeta.credential_issuer || apiBase;
     const { dpopJwt } = dpopBinding;
 
     let legacyTokenBodyClientAssertionJwt = null;
@@ -577,6 +594,7 @@ export function createAuthorizationCodeIssuance(deps) {
       stage: "token request",
       challengeState: attestationChallengeState,
       cnfKeyPair: dpopBinding,
+      nonceState: dpopBinding.nonceState,
     });
 
     if (!tokenRes.ok) {
@@ -618,11 +636,14 @@ export function createAuthorizationCodeIssuance(deps) {
     };
     let c_nonce_expires_in = tokenBody.c_nonce_expires_in;
 
-    if (c_nonce) {
-      // use token c_nonce
-    } else if (issuerMeta.nonce_endpoint) {
+    if (issuerMeta.nonce_endpoint) {
       const nonceEndpoint = issuerMeta.nonce_endpoint;
-      const nonceRes = await httpPostJson(nonceEndpoint, {}, logSessionId);
+      const nonceRes = await requestWithDpopNonce({
+        url: nonceEndpoint, state: dpopBinding.nonceState,
+        privateJwk: dpopBinding.privateJwk, publicJwk: dpopBinding.publicJwk,
+        send: (proof) => httpPostJson(nonceEndpoint, {}, logSessionId, proof ? { DPoP: proof } : {}),
+        log: slog,
+      });
       if (!nonceRes.ok) {
         const text = await nonceRes.text().catch(() => "");
         let err = {};
@@ -634,6 +655,7 @@ export function createAuthorizationCodeIssuance(deps) {
       const nonceJson = await nonceRes.json();
       c_nonce = nonceJson.c_nonce;
       c_nonce_expires_in = nonceJson.c_nonce_expires_in;
+      if (!c_nonce) throw new Error("nonce_error: Nonce Endpoint did not return c_nonce");
     } else {
       throw new Error("nonce_error: issuer did not provide c_nonce and no nonce_endpoint is available");
     }
@@ -702,23 +724,19 @@ export function createAuthorizationCodeIssuance(deps) {
       keyAttestation: proofBundle.keyAttestation,
     });
 
-    const credentialDpopJwtCode = await createResourceRequestDpopProof({
-      binding: dpopBinding,
-      tokenBody,
-      accessToken,
-      htu: credentialEndpoint,
-      profile,
-      stage: "credential request",
-    });
     const credReqBody = JSON.stringify(credReq);
-    const credHeadersCode = {
-      "content-type": "application/json",
-      ...buildResourceRequestHeaders(accessToken, credentialDpopJwtCode, tokenBody),
-    };
-    const credRes = await fetchImpl(credentialEndpoint, {
-      method: "POST",
-      headers: credHeadersCode,
-      body: credReqBody,
+    // Validate sender constraining before dispatch, including missing-key failures.
+    const credentialProof = await createResourceRequestDpopProof({
+      binding: dpopBinding, tokenBody, accessToken, htu: credentialEndpoint, profile,
+    });
+    const credRes = await requestWithDpopNonce({
+      url: credentialEndpoint, state: dpopBinding.nonceState,
+      privateJwk: dpopBinding.privateJwk, publicJwk: dpopBinding.publicJwk,
+      enabled: Boolean(credentialProof), ath: computeAthForDpop(accessToken), log: slog,
+      send: (proof) => fetchImpl(credentialEndpoint, {
+        method: "POST", body: credReqBody,
+        headers: { "content-type": "application/json", ...buildResourceRequestHeaders(accessToken, proof, tokenBody) },
+      }),
     });
 
     const responseText = await credRes.text().catch(() => "");
@@ -761,6 +779,8 @@ export function createAuthorizationCodeIssuance(deps) {
         {
           configurationId,
           credential: defBody,
+          accessToken, tokenBody, dpopPrivateJwk: dpopBinding.privateJwk,
+          dpopPublicJwk: dpopBinding.publicJwk, dpopNonceState: dpopBinding.nonceState,
           issuerMeta,
           apiBase,
           keyBinding: toKeyBindingMaterial(subjectKey),
@@ -800,6 +820,8 @@ export function createAuthorizationCodeIssuance(deps) {
       {
         configurationId,
         credential: credBody,
+        accessToken, tokenBody, dpopPrivateJwk: dpopBinding.privateJwk,
+        dpopPublicJwk: dpopBinding.publicJwk, dpopNonceState: dpopBinding.nonceState,
         issuerMeta,
         apiBase,
         keyBinding: toKeyBindingMaterial(subjectKey),

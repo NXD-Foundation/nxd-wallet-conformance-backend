@@ -1,3 +1,4 @@
+import { createDpopNonceState, requestWithDpopNonce } from "./dpopNonce.js";
 /**
  * OAuth attestation challenge handling per draft-ietf-oauth-attestation-based-client-auth-07
  * sections 6.2, 8, and 8.1.
@@ -227,6 +228,8 @@ export async function postFormWithWiaAttestationChallengeRetry({
   resolveWiaForParOrToken,
   wiaOptions,
   challengeState,
+  dpopBinding = null,
+  nonceState = createDpopNonceState(),
 }) {
   const buildHeaders = async () => {
     const wia = await resolveWiaForParOrToken({
@@ -236,16 +239,25 @@ export async function postFormWithWiaAttestationChallengeRetry({
     return wia.wiaHeaders;
   };
 
-  let headers = await buildHeaders();
-  let res = await postForm(url, params, dpopHeader, headers);
+  let headers;
+  const budget = { sends: 0, nonceRetries: 0 };
+  const dispatch = () => dpopBinding ? requestWithDpopNonce({
+    url, namespace: "as", state: nonceState, ...dpopBinding, budget,
+    send: async (proof) => {
+      headers = await buildHeaders();
+      const response = await postForm(url, params, proof, headers);
+      challengeState?.updateFromResponse(response.headers);
+      return response;
+    },
+  }) : (async () => postForm(url, params, dpopHeader, await buildHeaders()))();
+  let res = await dispatch();
   challengeState?.updateFromResponse(res.headers);
 
   const responseText = await readFetchResponseText(res);
   const { shouldRetry, challenge } = shouldRetryWithAttestationChallenge(res, responseText);
   if (shouldRetry && challenge) {
     challengeState?.set(challenge);
-    headers = await buildHeaders();
-    res = await postForm(url, params, dpopHeader, headers);
+    res = await dispatch();
     challengeState?.updateFromResponse(res.headers);
   }
 

@@ -282,6 +282,7 @@ export async function buildDeferredCredentialPollRequest({
   return {
     body: { transaction_id: transactionId },
     headers: buildResourceRequestHeaders(accessToken, dpopJwt, tokenBody),
+    dpopBinding, tokenBody, accessToken,
     senderContextRetained: true,
     walletUnitSubjectKeyRetained: !!subjectKey?.privateJwk,
   };

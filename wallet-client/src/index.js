@@ -170,13 +170,16 @@ async function main() {
       },
       deviceKeyPath,
     });
+  const dpopNonceState = tokenExchange.dpopNonceState;
   const tokenBody = tokenExchange.tokenBody;
   dpopPrivateJwk = tokenExchange.dpopPrivateJwk;
   dpopPublicJwk = tokenExchange.dpopPublicJwk;
   const accessToken = tokenBody.access_token;
   const { c_nonce, c_nonce_expires_in } = await fetchCredentialNonce({
     tokenBody,
-    nonceEndpoint: `${apiBase}/nonce`,
+    nonceEndpoint: issuerMeta?.nonce_endpoint || `${apiBase}/nonce`,
+    dpopNonceState, dpopPrivateJwk, dpopPublicJwk,
+    resourceServer: credential_issuer || apiBase,
     accessToken,
     postJson: httpPostJson,
   });
@@ -205,6 +208,7 @@ async function main() {
   });
 
   const { body: initialCredentialBody, status: credentialStatus } = await postCredentialRequest({
+    dpopNonceState,
     credentialEndpoint,
     credentialRequest: credReq,
     accessToken,
@@ -223,6 +227,7 @@ async function main() {
 
   const credBody = credentialStatus === 202
     ? await pollDeferredCredential({
+        dpopNonceState,
         deferredEndpoint: `${apiBase}/credential_deferred`,
         transactionId: initialCredentialBody.transaction_id,
         initialInterval: initialCredentialBody.interval,
@@ -244,6 +249,7 @@ async function main() {
     : initialCredentialBody;
 
   await notifyCredentialAcceptedIfNeeded({
+    dpopNonceState,
     credentialResponse: credBody,
     issuerMeta: undefined,
     apiBase,

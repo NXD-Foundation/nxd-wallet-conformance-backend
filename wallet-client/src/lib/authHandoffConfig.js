@@ -1,4 +1,3 @@
-import { OPENID4VP_CS02_URI } from "./openid4vpUri.js";
 import { resolveWalletProviderUrl } from "./wuaStatusList.js";
 
 export class AuthHandoffConfigError extends Error {
@@ -16,7 +15,7 @@ export function isAuthHandoffEnabled(env = process.env, body = {}) {
   return raw === "true" || raw === "1";
 }
 
-function validateHttpsRedirectUri(uri) {
+export function validateOAuthRedirectUri(uri) {
   let parsed;
   try {
     parsed = new URL(uri);
@@ -25,9 +24,9 @@ function validateHttpsRedirectUri(uri) {
       `OAuth redirect URI must be an absolute HTTPS URL (got ${JSON.stringify(uri)})`,
     );
   }
-  if (parsed.protocol !== "https:") {
+  if (parsed.protocol !== "https:" || String(uri).includes("#") || parsed.username || parsed.password) {
     throw new AuthHandoffConfigError(
-      "OAuth redirect URI must use HTTPS for ITB auth handoff",
+      "OAuth redirect URI must use HTTPS without a fragment or user credentials",
     );
   }
 }
@@ -35,25 +34,22 @@ function validateHttpsRedirectUri(uri) {
 export function resolveOAuthRedirectUri(env = process.env) {
   const explicit = String(env.WALLET_OAUTH_REDIRECT_URI || "").trim();
   if (explicit) {
-    validateHttpsRedirectUri(explicit);
+    validateOAuthRedirectUri(explicit);
     return explicit;
   }
   const provider = resolveWalletProviderUrl(env);
   if (provider) {
     const uri = `${provider.replace(/\/$/, "")}/oauth/callback`;
-    validateHttpsRedirectUri(uri);
+    validateOAuthRedirectUri(uri);
     return uri;
   }
   throw new AuthHandoffConfigError(
-    "WALLET_OAUTH_REDIRECT_URI or WALLET_PROVIDER_URL (HTTPS) is required for auth handoff",
+    "WALLET_OAUTH_REDIRECT_URI or WALLET_PROVIDER_URL (HTTPS) is required for authorization-code issuance",
   );
 }
 
 export function resolveRedirectUriForFlow(env = process.env, authHandoff = false) {
-  if (authHandoff) {
-    return resolveOAuthRedirectUri(env);
-  }
-  return OPENID4VP_CS02_URI;
+  return resolveOAuthRedirectUri(env);
 }
 
 export function resolveAuthHandoffTtlSeconds(env = process.env, parExpiresIn = null) {

@@ -1,3 +1,7 @@
+import { makeSessionLogger } from "./logger.js";
+import { createDpopNonceState, requestWithDpopNonce } from "./dpopNonce.js";
+import { ensureOrCreateEcKeyPair } from "./crypto.js";
+import { computeAthForDpop } from "../../utils/tokenUtils.js";
 import fetch from "node-fetch";
 import { createAuthorizationCodeIssuance } from "./authorizationCodeIssuance.js";
 import { createWalletUnitAttestationClientAuth } from "./walletUnitAttestation.js";
@@ -25,6 +29,7 @@ export function createAuthCodeIssuanceHost(deps) {
     httpPostJson,
     validateAndStoreCredential,
     sleep,
+    fetchImpl = fetch,
   } = deps;
 
 function wrapIssuanceResult(credential, issuanceContext) {
@@ -106,7 +111,11 @@ async function httpPostFormWithAttestationChallengeRetry({
   stage,
   challengeState,
   cnfKeyPair = null,
+  nonceState = createDpopNonceState(),
 }) {
+  cnfKeyPair ||= await ensureOrCreateEcKeyPair(keyPath, "ES256");
+  nonceState.authorizationServer = authorizationServerIssuer;
+  const budget = { sends: 0, nonceRetries: 0 };
   const buildHeaders = () =>
     createAttestationHeadersForRequest({
       profile,
@@ -119,16 +128,24 @@ async function httpPostFormWithAttestationChallengeRetry({
       cnfKeyPair,
     });
 
-  let headers = await buildHeaders();
-  let res = await httpPostForm(url, params, logSessionId, dpopHeader, headers);
+  const dispatch = () => requestWithDpopNonce({
+    url, namespace: "as", state: nonceState, ...cnfKeyPair, budget,
+    log: logSessionId ? makeSessionLogger(logSessionId) : undefined,
+    send: async (proof) => {
+      const headers = await buildHeaders();
+      const response = await httpPostForm(url, params, logSessionId, proof, headers);
+      challengeState?.updateFromResponse(response.headers);
+      return response;
+    },
+  });
+  let res = await dispatch();
   challengeState?.updateFromResponse(res.headers);
 
   const responseText = typeof res.bodyText === "string" ? res.bodyText : await res.clone().text().catch(() => "");
   const { shouldRetry, challenge } = shouldRetryWithAttestationChallenge(res, responseText);
   if (shouldRetry && challenge) {
     challengeState?.set(challenge);
-    headers = await buildHeaders();
-    res = await httpPostForm(url, params, logSessionId, dpopHeader, headers);
+    res = await dispatch();
     challengeState?.updateFromResponse(res.headers);
   }
 
@@ -177,13 +194,18 @@ async function issueCredentialTargets({
       profile,
       stage: "credential request",
     });
-    const response = await fetch(credentialEndpoint, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        ...buildResourceRequestHeaders(accessToken, credentialDpop, tokenBody),
-      },
-      body: JSON.stringify(proofBundle.credentialRequest),
+    const requestBody = JSON.stringify(proofBundle.credentialRequest);
+    const response = await requestWithDpopNonce({
+      url: credentialEndpoint, state: dpopBinding.nonceState,
+      privateJwk: dpopBinding.privateJwk, publicJwk: dpopBinding.publicJwk,
+      enabled: Boolean(credentialDpop), ath: computeAthForDpop(accessToken),
+      log: logSessionId ? makeSessionLogger(logSessionId) : undefined,
+      send: (proof) => fetchImpl(credentialEndpoint, {
+        method: "POST", headers: {
+          "content-type": "application/json",
+          ...buildResourceRequestHeaders(accessToken, proof, tokenBody),
+        }, body: requestBody,
+      }),
     });
     const text = await response.text().catch(() => "");
     let body = null;
@@ -216,6 +238,8 @@ async function issueCredentialTargets({
     await validateAndStoreCredential({
       configurationId: target.credential_configuration_id,
       credential: body,
+      accessToken, tokenBody, dpopPrivateJwk: dpopBinding.privateJwk,
+      dpopPublicJwk: dpopBinding.publicJwk, dpopNonceState: dpopBinding.nonceState,
       issuerMeta,
       apiBase,
       keyBinding: toKeyBindingMaterial(proofBundle.subjectKey),
@@ -247,7 +271,7 @@ async function issueCredentialTargets({
         issueCredentialTargets,
         wrapIssuanceResult,
         sleep,
-        fetchImpl: fetch,
+        fetchImpl,
       });
     }
     return authCodeIssuanceInstance;

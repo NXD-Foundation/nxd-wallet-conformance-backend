@@ -56,6 +56,7 @@ export async function validateWiaMaterialForParOrToken({
   endpointAudience,
   authorizationServerIssuer,
   clientId,
+  expectedCnfJwk = null,
   clockTolerance = 120,
   maxPopIatAgeSeconds = 600,
 }) {
@@ -138,12 +139,11 @@ export async function validateWiaMaterialForParOrToken({
     throw new Error("wia_pop_iss_mismatch: PoP iss must equal WIA sub (wallet instance id)");
   }
 
-  if (wiaHeader.jwk && cnfJwk) {
-    const tHeader = await calculateJwkThumbprint(wiaHeader.jwk, "sha256");
-    const tCnf = await calculateJwkThumbprint(cnfJwk, "sha256");
-    if (tHeader !== tCnf) {
-      throw new Error("wia_cnf_mismatch: WIA cnf.jwk must match the attestation signing key");
-    }
+  // The provider signs WIA; the wallet confirmation key signs PoP/DPoP.
+  if (expectedCnfJwk) {
+    const expected = await calculateJwkThumbprint(expectedCnfJwk, "sha256");
+    const actual = await calculateJwkThumbprint(cnfJwk, "sha256");
+    if (expected !== actual) throw new Error("wia_cnf_mismatch: WIA cnf.jwk must match the DPoP binding key");
   }
 
   return {

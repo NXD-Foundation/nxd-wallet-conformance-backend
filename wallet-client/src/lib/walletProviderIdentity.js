@@ -117,6 +117,7 @@ export async function buildWiaBundleForParOrToken({
   authorizationServerIssuer,
   wiaTtlSeconds = 3600,
   challenge = null,
+  cnfKeyPair = null,
 }) {
   const { privateJwk, publicJwk } = await ensureWalletProviderKeyPair();
   const providerId = resolveWalletProviderIdSync(publicJwk);
@@ -127,13 +128,13 @@ export async function buildWiaBundleForParOrToken({
     issuer: providerId,
     subject: instanceId,
     audience: endpointAudience,
-    cnfJwk: publicJwk,
+    cnfJwk: cnfKeyPair?.publicJwk || publicJwk,
     ttlSeconds: wiaTtlSeconds,
   });
   // PoP `iss` MUST equal WIA `sub` (wallet instance id), not the Wallet Provider id.
   const wiaPopJwt = await createWiaPopJwt({
-    privateJwk,
-    publicJwk,
+    privateJwk: cnfKeyPair?.privateJwk || privateJwk,
+    publicJwk: cnfKeyPair?.publicJwk || publicJwk,
     issuer: instanceId,
     audience: authorizationServerIssuer,
     challenge,
@@ -162,6 +163,7 @@ export async function resolveWiaForParOrToken({
   wiaTtlSeconds = 3600,
   clientId,
   challenge = null,
+  cnfKeyPair = null,
 }) {
   const ext = readExternalAttestationTokens();
   let wiaJwt;
@@ -184,6 +186,7 @@ export async function resolveWiaForParOrToken({
       authorizationServerIssuer,
       wiaTtlSeconds,
       challenge,
+      cnfKeyPair,
     });
     wiaJwt = bundle.wiaJwt;
     wiaPopJwt = bundle.wiaPopJwt;
@@ -202,6 +205,7 @@ export async function resolveWiaForParOrToken({
     endpointAudience,
     authorizationServerIssuer,
     clientId: effectiveClientId,
+    expectedCnfJwk: cnfKeyPair?.publicJwk,
   });
 
   return {
