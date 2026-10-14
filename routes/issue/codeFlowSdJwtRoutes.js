@@ -192,7 +192,7 @@ function extractCredentialsFromAuthorizationDetails(authorizationDetails) {
       const cred = resolveCredentialIdentifierFromOpenidCredentialEntry(item);
       credentials.push(cred);
       
-      if (cred === "urn:eu.europa.ec.eudi:pid:1" || cred.indexOf("urn:eu.europa.ec.eudi:pid:1") >= 0) {
+      if (cred.includes("urn:eu.europa.ec.eudi:pid:1") || cred.includes("urn:eudi:pid:1")) {
         isPIDIssuanceFlow = true;
       }
       
@@ -210,7 +210,7 @@ function extractCredentialsFromScope(scope) {
   if (scope) {
     console.log("requested credentials: " + scope);
     credentials.push(scope);
-    if (scope.indexOf("urn:eu.europa.ec.eudi:pid:1") >= 0) {
+    if (scope.includes("urn:eu.europa.ec.eudi:pid:1") || scope.includes("urn:eudi:pid:1")) {
       isPIDIssuanceFlow = true;
     }
   }

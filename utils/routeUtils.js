@@ -791,6 +791,9 @@ export const MINIMAL_PID_DCQL_CLAIMS = [
   { path: ["issuing_country"] },
 ];
 
+// Both SD-JWT PID types use the same mock claims and verification presets.
+export const PID_SD_JWT_VCTS = ["urn:eu.europa.ec.eudi:pid:1", "urn:eudi:pid:1"];
+
 // Default DCQL query configuration
 export const DEFAULT_DCQL_QUERY = {
   credentials: [
@@ -798,7 +801,7 @@ export const DEFAULT_DCQL_QUERY = {
       id: "cmwallet",
       format: "dc+sd-jwt",
       meta: {
-        vct_values: ["urn:eu.europa.ec.eudi:pid:1"],
+        vct_values: [...PID_SD_JWT_VCTS],
       },
       claims: MINIMAL_PID_DCQL_CLAIMS,
     },
@@ -812,7 +815,7 @@ export const FULL_PID_DCQL_QUERY = {
       id: "cmwallet",
       format: "dc+sd-jwt",
       meta: {
-        vct_values: ["urn:eu.europa.ec.eudi:pid:1"],
+        vct_values: [...PID_SD_JWT_VCTS],
       },
       claims: [
         { path: ["given_name"] },
@@ -931,7 +934,7 @@ export const BOARDING_PASS_PID_DCQL_QUERY = {
       id: "pid",
       format: "dc+sd-jwt",
       meta: {
-        vct_values: ["urn:eu.europa.ec.eudi:pid:1"],
+        vct_values: [...PID_SD_JWT_VCTS],
       },
       claims: [
         { path: ["given_name"] },
@@ -960,7 +963,7 @@ export const BOOKING_REFERENCE_PID_DCQL_QUERY = {
       id: "pid",
       format: "dc+sd-jwt",
       meta: {
-        vct_values: ["urn:eu.europa.ec.eudi:pid:1"],
+        vct_values: [...PID_SD_JWT_VCTS],
       },
       // Guest-name matching: verifier compares PID family_name with voucher guest.
       claims: [{ path: ["family_name"] }],
@@ -987,7 +990,7 @@ export const BOOKING_REFERENCE_PID_EDC_DCQL_QUERY = {
       id: "pid",
       format: "dc+sd-jwt",
       meta: {
-        vct_values: ["urn:eu.europa.ec.eudi:pid:1"],
+        vct_values: [...PID_SD_JWT_VCTS],
       },
       claims: [{ path: ["family_name"] }],
     },
@@ -1035,7 +1038,7 @@ export const PNR_PID_DCQL_QUERY = {
       id: "pid",
       format: "dc+sd-jwt",
       meta: {
-        vct_values: ["urn:eu.europa.ec.eudi:pid:1"],
+        vct_values: [...PID_SD_JWT_VCTS],
       },
       // The PNR flow needs a minimal PID attribute for identity matching.
       claims: [{ path: ["family_name"] }],
@@ -1589,7 +1592,7 @@ export function resolveVciOfferSignatureType(req, credentialType) {
     const format = cfg?.format;
     if (
       format === "dc+sd-jwt" &&
-      vct === "urn:eu.europa.ec.eudi:pid:1"
+      PID_SD_JWT_VCTS.includes(vct)
     ) {
       return "x509";
     }
@@ -1600,7 +1603,7 @@ export function resolveVciOfferSignatureType(req, credentialType) {
     // fall through to global default
   }
 
-  if (configId === "urn:eu.europa.ec.eudi:pid:1") {
+  if (PID_SD_JWT_VCTS.includes(configId)) {
     return "x509";
   }
 
@@ -3412,7 +3415,7 @@ export function credentialConfigRequiresJwtProofKeyAttestation(credConfig) {
   if (jwtProofType?.key_attestation_required === true) return true;
   if (Object.hasOwn(jwtProofType ?? {}, "key_attestations_required")) return true;
   const vct = credConfig.vct;
-  if (vct !== "urn:eu.europa.ec.eudi:pid:1") return false;
+  if (!PID_SD_JWT_VCTS.includes(vct)) return false;
   const fmt = credConfig.format;
   return fmt === "vc+sd-jwt" || fmt === "vc+jwt" || fmt === "x509_attr";
 }

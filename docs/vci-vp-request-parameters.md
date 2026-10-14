@@ -251,3 +251,9 @@ curl -sS -G "http://localhost:3000/vp/request" \
 
 - [RFC001 — How to initiate VCI test cases](./rfc001-vci-test-case-initiation.md)
 - [VP verification wallet matrix](./vp-verification-wallet-matrix.md)
+
+### PID VCT compatibility on APTITUDE
+
+Both `urn:eu.europa.ec.eudi:pid:1` and `urn:eudi:pid:1` are supported for SD-JWT PID issuance with the same mock PID data. Select the desired type with `credentialType` on `/vci/offer` (or `credential_type` on `/vci/request`). For example: `/vci/offer?credentialType=urn:eudi:pid:1&sessionId=NEW_SESSION`.
+
+The `/vp/request` profiles `pid`, `pidfull`, `pnr_pid`, `boarding_pass_pid`, `booking_pid`, and `booking_pid_edc` accept either PID VCT through the PID query's `vct_values`. Profile names and the other credentials' VCTs are unchanged. For example: `/vp/request?profile=dcql&credential_profile=pnr_pid`.

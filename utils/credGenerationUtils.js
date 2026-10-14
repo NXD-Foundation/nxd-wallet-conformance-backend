@@ -677,6 +677,7 @@ export async function handleCredentialGenerationBasedOnFormat(
     case "VerifiablePIDSDJWT":
     case "VerifiablePIDSDJWTAttestation":
     case "urn:eu.europa.ec.eudi:pid:1":
+    case "urn:eudi:pid:1":
     case "test-cred-config": // For testing purposes
       credPayload =
         format === "mDL" || format === "mdl"
@@ -1574,6 +1575,7 @@ export async function handleCredentialGenerationBasedOnFormatDeferred(
     case "VerifiablePIDSDJWT":
     case "VerifiablePIDSDJWTAttestation":
     case "urn:eu.europa.ec.eudi:pid:1":
+    case "urn:eudi:pid:1":
     case "test-cred-config": // For testing purposes
       credPayload = getPIDSDJWTData();
       break;

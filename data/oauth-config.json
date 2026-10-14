@@ -17,6 +17,7 @@
     "ferryBoardingPassCredential",
     "vReceipt",
     "urn:eu.europa.ec.eudi:pid:1",
+    "urn:eudi:pid:1",
     "urn:eu.europa.ec.eudi:pid:1:mso_mdoc",
     "ETSIRfc001PidVcSdJwt",
     "ETSIRfc001PidVcJwt",

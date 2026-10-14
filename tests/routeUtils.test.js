@@ -177,7 +177,7 @@ describe('Route Utils', () => {
       const [pidQuery] = DEFAULT_DCQL_QUERY.credentials;
 
       expect(pidQuery.format).to.equal('dc+sd-jwt');
-      expect(pidQuery.meta.vct_values).to.deep.equal(['urn:eu.europa.ec.eudi:pid:1']);
+      expect(pidQuery.meta.vct_values).to.deep.equal(['urn:eu.europa.ec.eudi:pid:1', 'urn:eudi:pid:1']);
       expect(pidQuery.claims).to.deep.equal(MINIMAL_PID_DCQL_CLAIMS);
       expect(pidQuery.claims.map(({ path }) => path[0])).to.deep.equal([
         'given_name',
@@ -214,7 +214,7 @@ describe('Route Utils', () => {
         ['reservationReference'],
       ]);
 
-      expect(pidQuery.meta.vct_values).to.deep.equal(['urn:eu.europa.ec.eudi:pid:1']);
+      expect(pidQuery.meta.vct_values).to.deep.equal(['urn:eu.europa.ec.eudi:pid:1', 'urn:eudi:pid:1']);
       expect(pidQuery.claims.map(({ path }) => path)).to.deep.equal([['family_name']]);
     });
   });
@@ -288,6 +288,7 @@ describe('Route Utils', () => {
 
       expect(pidQuery.meta.vct_values).to.deep.equal([
         'urn:eu.europa.ec.eudi:pid:1',
+        'urn:eudi:pid:1',
       ]);
       expect(pidQuery.claims.map(({ path }) => path)).to.deep.equal([
         ['given_name'],
@@ -310,7 +311,7 @@ describe('Route Utils', () => {
         ['reservationReference'],
       ]);
 
-      expect(pidQuery.meta.vct_values).to.deep.equal(['urn:eu.europa.ec.eudi:pid:1']);
+      expect(pidQuery.meta.vct_values).to.deep.equal(['urn:eu.europa.ec.eudi:pid:1', 'urn:eudi:pid:1']);
       expect(pidQuery.claims.map(({ path }) => path)).to.deep.equal([['family_name']]);
 
       expect(edcQuery.id).to.equal(EUROPEAN_DISABILITY_CARD_DCQL_CREDENTIAL_ID);
@@ -345,7 +346,7 @@ describe('Route Utils', () => {
       expect(pnrQuery.meta.vct_values).to.deep.equal([AIRLINE_PNR_VCT]);
       expect(pnrQuery.claims.map(({ path }) => path)).to.deep.equal([['pnr']]);
 
-      expect(pidQuery.meta.vct_values).to.deep.equal(['urn:eu.europa.ec.eudi:pid:1']);
+      expect(pidQuery.meta.vct_values).to.deep.equal(['urn:eu.europa.ec.eudi:pid:1', 'urn:eudi:pid:1']);
       expect(pidQuery.claims.map(({ path }) => path)).to.deep.equal([['family_name']]);
     });
   });
