@@ -6,6 +6,13 @@ import { PROXY_PATH } from "../utils/routeUtils.js";
 import { buildStrictCs02ClientMetadata } from "../utils/cs02TrustPolicy.js";
 const metadataRouter = express.Router();
 
+// Public artwork referenced by credential display metadata.
+metadataRouter.use("/credential-assets", express.static("./data/img/credentials", {
+  dotfiles: "deny",
+  index: false,
+  maxAge: "1h",
+}));
+
 function getServerURL() {
   return process.env.SERVER_URL || "http://localhost:3000";
 }

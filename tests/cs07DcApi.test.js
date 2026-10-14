@@ -588,7 +588,7 @@ describe("CS-07 TS12 payment DC API requests", () => {
     transaction_id: "tx-dc-api-1",
   };
   const dpcDcql = buildTs12DcqlQuery("sca-card-dpc");
-  const dpcPidDcql = buildTs12DpcWithPidDcqlQuery();
+  const dpcPidDcql = buildTs12DpcWithPidDcqlQuery("urn:eudi:pid:1");
   const ibanDcql = buildTs12DcqlQuery("sca-iban");
   const ibanPidDcql = buildTs12ScaWithPidDcqlQuery("sca-iban");
   const userDcql = buildTs12DcqlQuery("sca-user");
@@ -606,7 +606,7 @@ describe("CS-07 TS12 payment DC API requests", () => {
     expect(config.profiles["ts12-payment"].dcql_query).to.deep.equal(dpcDcql);
     expect(dpcPidDcql.credentials.map((c) => c.meta.vct_values[0])).to.deep.equal([
       TS12_SCA_CARD_DPC_VCT,
-      TS12_PID_VCT,
+      "urn:eudi:pid:1",
     ]);
     expect(dpcPidDcql.credentials[1].claims.map((c) => c.path.join("."))).to.deep.equal([
       "given_name",
@@ -633,6 +633,21 @@ describe("CS-07 TS12 payment DC API requests", () => {
     ]);
   });
 
+  it("passes the official PID VCT from the selected DC API profile into the payment request", () => {
+    const origin = "https://rp.example";
+    const config = loadCs07Config({ env: {
+      DC_API_RP_ORIGINS: origin,
+      DC_API_RP_PROFILES: "ts12-dpc-pid",
+    } });
+    const profile = resolveCs07Profile(config, { profileId: "ts12-dpc-pid", origin });
+    const built = buildCs07Ts12PaymentRequest(
+      { ...paymentInput, profile: profile.id }, profile.dcql_query,
+    );
+    expect(built.dcqlQuery.credentials[1].meta.vct_values).to.deep.equal(["urn:eudi:pid:1"]);
+    expect(built.dcqlQuery.credentials[0].meta.vct_values).to.deep.equal([TS12_SCA_CARD_DPC_VCT]);
+    expect(built.transactionDataObj.credential_ids).to.deep.equal(["sca_card_dpc"]);
+  });
+
   it("rejects payment fields on presentation profiles", () => {
     expect(() => assertCs07DcApiRequestBodyKeys({ profile: "pid-basic", amount: "12.34" }, "presentation"))
       .to.throw(Cs07DcApiResponseError, /Only profile and sessionId/);
@@ -656,11 +671,11 @@ describe("CS-07 TS12 payment DC API requests", () => {
     expect(decoded.payload.transaction_id).to.equal("tx-dc-api-1");
   });
 
-  it("keeps DPC plus default PID when the combined profile DCQL is supplied", () => {
+  it("keeps DPC plus official EU PID when the combined profile DCQL is supplied", () => {
     const built = buildCs07Ts12PaymentRequest(paymentInput, dpcPidDcql);
     expect(built.attestationType.vct).to.equal(TS12_SCA_CARD_DPC_VCT);
     expect(built.dcqlQuery.credentials).to.have.length(2);
-    expect(built.dcqlQuery.credentials[1].meta.vct_values).to.deep.equal([TS12_PID_VCT]);
+    expect(built.dcqlQuery.credentials[1].meta.vct_values).to.deep.equal(["urn:eudi:pid:1"]);
     expect(built.transactionDataObj.credential_ids).to.deep.equal(["sca_card_dpc"]);
   });
 

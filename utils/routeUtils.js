@@ -235,6 +235,27 @@ export const DEFAULT_DCQL_QUERY = {
   ],
 };
 
+// PID Rulebook section 4.2 / ARF PID_14: common EU-wide PID base VCT.
+// https://github.com/eu-digital-identity-wallet/eudi-doc-attestation-rulebooks-catalog/blob/main/rulebooks/pid/pid-rulebook.md
+export const TS12_DPC_PID_DCQL_QUERY = {
+  credentials: [
+    {
+      id: "ts12-dpc-pid",
+      format: "dc+sd-jwt",
+      meta: { vct_values: ["urn:eudi:pid:1"] },
+      claims: [
+        { path: ["given_name"] },
+        { path: ["family_name"] },
+        { path: ["birthdate"] },
+        { path: ["place_of_birth"] },
+        { path: ["nationalities"] },
+        { path: ["issuing_authority"] },
+        { path: ["issuing_country"] },
+      ],
+    },
+  ],
+};
+
 /** ARF base PID DCQL (vct urn:eudi:pid:1) with given_name / family_name / birthdate / place_of_birth.country */
 export const ARF_PID_DCQL_QUERY = {
   credentials: [

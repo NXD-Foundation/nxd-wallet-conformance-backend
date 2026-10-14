@@ -60,7 +60,7 @@
           {
             "id": "cmwallet",
             "format": "dc+sd-jwt",
-            "meta": { "vct_values": ["urn:eu.europa.ec.eudi:pid:1"] },
+            "meta": { "vct_values": ["urn:eudi:pid:1"] },
             "claims": [
               { "id": "given_name", "path": ["given_name"] },
               { "id": "family_name", "path": ["family_name"] },

@@ -351,6 +351,12 @@ Sources: [CS-02](./core/cs-02-credential-presentation%20%281%29.md),
 [verifier metadata model](./openid4vp-cs02-verifier-metadata-model.md), and
 [VP verification matrix](./vp-verification-wallet-matrix.md).
 
+DPC issuance responses include the SCA-Card display extension (`display[].card`),
+with embedded PNG `card_art` for GRNET wallet card rendering. This is separate
+from OpenID4VCI issuer discovery display metadata and stays inside encrypted
+credential responses when encryption is requested. See
+[request parameters](./vci-vp-request-parameters.md).
+
 ### CS-07 Digital Credentials API (DC API) Presentation
 
 - The CS-07 target is the W3C Digital Credentials Working Draft dated
@@ -392,7 +398,8 @@ intentionally has no relying parties enabled and must be populated for a deploym
 `ts12-dpc`, `ts12-iban`, and `ts12-user` for the three in-scope VCTs, plus
 `ts12-dpc-pid`, `ts12-iban-pid`, and `ts12-user-pid` which add the default
 SD-JWT PID `urn:eu.europa.ec.eudi:pid:1` (same VCT as `pid-basic`) in the
-same DCQL query. Those combined profiles request PID Rulebook claims
+same DCQL query. The `ts12-dpc-pid` profile instead uses the official EU
+base PID VCT `urn:eudi:pid:1` (PID Rulebook section 4.2). Those combined profiles request PID Rulebook claims
 `given_name`, `family_name`, `birthdate`, and `nationalities` (name, surname,
 date of birth, nationality), with `email`, `phone_number`, and `address`
 optional through DCQL `claim_sets`. Omitting `claims` would ask for no

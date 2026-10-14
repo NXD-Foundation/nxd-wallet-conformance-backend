@@ -54,6 +54,21 @@ describe('OIDC4VCI V1.0 - Metadata Discovery Compliance', () => {
   });
 
   describe('V1.0 Requirement: Well-Known URL Path Discovery', () => {
+    it('keeps DPC color branding with an embedded PNG logo and no download dependency', async () => {
+      const response = await request(app).get('/.well-known/openid-credential-issuer').expect(200);
+      const credential = response.body.credential_configurations_supported[
+        'https://webuildconsortium.eu/sca/sca-card-dpc/1.0'
+      ];
+      const [display] = credential.credential_metadata.display;
+      expect(credential.vct).to.equal('https://webuildconsortium.eu/sca/sca-card-dpc/1.0');
+      expect(display.background_color).to.equal('#000000');
+      expect(display.text_color).to.equal('#FFFFFF');
+      expect(display.logo.uri).to.match(/^data:image\/png;base64,/);
+      expect(display).not.to.have.property('background_image');
+      const logo = Buffer.from(display.logo.uri.split(',')[1], 'base64');
+      expect(logo.subarray(0, 8).toString('hex')).to.equal('89504e470d0a1a0a');
+      expect(logo.equals(fs.readFileSync('./data/img/credentials/mastercard.png'))).to.equal(true);
+    });
     
     it('MUST serve metadata at /.well-known/openid-credential-issuer', async () => {
       const response = await request(app)

@@ -209,9 +209,11 @@ export function buildTs12ScaWithPidDcqlQuery(attestationType) {
   };
 }
 
-/** CS-12 payment DCQL for DPC plus the default PID (non-SCA combined presentation). */
-export function buildTs12DpcWithPidDcqlQuery() {
-  return buildTs12ScaWithPidDcqlQuery("sca-card-dpc");
+/** CS-12 payment DCQL for DPC plus PID; callers can select the PID VCT. */
+export function buildTs12DpcWithPidDcqlQuery(pidVct = TS12_PID_VCT) {
+  const query = buildTs12ScaWithPidDcqlQuery("sca-card-dpc");
+  query.credentials[1].meta.vct_values = [pidVct];
+  return query;
 }
 
 export const TS12_DCQL_QUERY = buildTs12DcqlQuery(TS12_DEFAULT_ATTESTATION_TYPE);

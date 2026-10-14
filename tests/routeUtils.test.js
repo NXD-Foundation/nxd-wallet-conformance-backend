@@ -6,9 +6,22 @@ import {
   createCodeFlowSession,
   generateNumericTxCode,
   DEFAULT_MDL_DCQL_QUERY,
+  TS12_DPC_PID_DCQL_QUERY,
 } from '../utils/routeUtils.js';
 
 describe('Route Utils', () => {
+  it('requests the official EU PID base VCT for ts12-dpc-pid', () => {
+    expect(TS12_DPC_PID_DCQL_QUERY.credentials).to.have.lengthOf(1);
+    const [credential] = TS12_DPC_PID_DCQL_QUERY.credentials;
+    expect(credential.id).to.equal('ts12-dpc-pid');
+    expect(credential.format).to.equal('dc+sd-jwt');
+    expect(credential.meta.vct_values).to.deep.equal(['urn:eudi:pid:1']);
+    expect(credential.claims.map(claim => claim.path)).to.deep.equal([
+      ['given_name'], ['family_name'], ['birthdate'], ['place_of_birth'],
+      ['nationalities'], ['issuing_authority'], ['issuing_country'],
+    ]);
+  });
+
   describe('createCredentialOfferConfig', () => {
     it('should set issuer_state for authorization code flow', () => {
       const config = createCredentialOfferConfig(

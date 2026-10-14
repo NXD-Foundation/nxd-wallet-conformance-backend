@@ -1,3 +1,4 @@
+import { withDpcCardDisplay } from "../../utils/dpcCardDisplay.js";
 import express from "express";
 import fs from "fs";
 import path from "path";
@@ -936,10 +937,7 @@ const handleImmediateCredentialIssuance = async (
   // Generate notification_id for this issuance flow
   const notification_id = uuidv4();
 
-  return {
-    credentials: [{ credential }],
-    notification_id
-  };
+  return withDpcCardDisplay({ credentials: [{ credential }], notification_id }, effectiveConfigurationId);
 };
 
 // Handle deferred credential issuance
@@ -2695,7 +2693,7 @@ sharedRouter.post("/credential_deferred", async (req, res) => {
     });
     if (!reused) await persistDeferredSession(sessionObject, sessionId, flowType);
 
-    const payload = { credential };
+    const payload = withDpcCardDisplay({ credential }, sessionObject.requestBody.vct);
     res.set("Cache-Control", "no-store");
     if (encParams) {
       const jwe = await encryptCredentialResponseToJwe(payload, encParams, issuerConfig);

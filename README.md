@@ -734,7 +734,8 @@ Per OpenID4VP v1.0 Section 7.2.2:
 - **`GET /vp/request`**: Unified endpoint supporting various client identification schemes and query formats
   - `client_id_scheme`: `x509`, `did:web`, `did:jwk`
   - `profile`: `dcql`, `tx`, `mdl`
-  - `credential_profile`: `pid`, `mdl`
+  - `credential_profile`: `pid`, `arf-pid`, `ts12-dpc-pid`, `mdl`
+  - `ts12-dpc-pid` requests minimal PID claims with the official EU base VCT `urn:eudi:pid:1`: `/vp/request?profile=dcql&credential_profile=ts12-dpc-pid`
   - `request_uri_method`: `get`, `post`
   - `response_mode`: `direct_post`, `direct_post.jwt`
   - `tx_data`: `true`, `false`
