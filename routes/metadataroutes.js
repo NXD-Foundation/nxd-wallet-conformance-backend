@@ -102,8 +102,10 @@ metadataRouter.get(
     issuerConfig.nonce_endpoint = issuerBase + "/nonce";
     issuerConfig.notification_endpoint = issuerBase + "/notification";
 
-    // OID4VCI §11.2: if credential_response_encryption is advertised,
-    // credential_request_encryption MUST also be present (EUDI wallet library enforces this).
+    // OID4VCI §8.2: Credential Request encryption MUST be used when the Wallet
+    // includes credential_response_encryption (to prevent substitution). Advertise
+    // credential_request_encryption in metadata (§12.2.4) when response encryption
+    // is supported (EUDI wallet library also expects both).
     if (issuerConfig.credential_response_encryption && !issuerConfig.credential_request_encryption) {
       const encJwk = { ...jwks, kid: `${defaultSigningKid}-agreement`, use: "enc", alg: "ECDH-ES" };
       issuerConfig.credential_request_encryption = {

@@ -40,6 +40,25 @@ describe("credentialResponseEncryption", () => {
     }
   });
 
+  it("unsupported enc error cites OpenID4VCI §8.3 / §12.2.4 / §8.3.1, not Notification §11.2.3", () => {
+    // Regression: draft-era §11.2.3 was wrongly cited; in 1.0, §11.2 is Successful Notification Response.
+    const cre = {
+      jwk: { kty: "EC", crv: "P-256", x: "AQ", y: "AQ", alg: "ECDH-ES" },
+      enc: "A128GCM",
+    };
+    try {
+      validateCredentialResponseEncryptionParams(cre, issuerMeta);
+      expect.fail("expected error");
+    } catch (e) {
+      expect(e.errorCode).to.equal(INVALID_ENCRYPTION_PARAMETERS);
+      expect(e.message).to.include("Unsupported credential response content encryption algorithm");
+      expect(e.message).to.include("OpenID4VCI 1.0 §8.3 / §12.2.4");
+      expect(e.message).to.include("OpenID4VCI 1.0 §8.3.1");
+      expect(e.message).to.not.include("§11.2.3");
+      expect(e.message).to.not.match(/§11\b/);
+    }
+  });
+
   it("encryptCredentialResponseToJwe produces decryptable JWE (ECDH-ES + A256GCM)", async () => {
     const { publicKey, privateKey } = await jose.generateKeyPair("ECDH-ES", { crv: "P-256" });
     const jwk = await jose.exportJWK(publicKey);

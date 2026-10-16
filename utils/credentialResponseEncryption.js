@@ -2,14 +2,18 @@ import * as jose from "jose";
 import { createPrivateKey, createPublicKey } from "crypto";
 
 /**
- * OID4VCI 1.0 — credential_response_encryption (§8.2, §11.2.3).
+ * OID4VCI 1.0 — credential_response_encryption (§8.2 request, §8.3 / §10 response encoding,
+ * §8.3.1 invalid_encryption_parameters, §12.2.4 issuer metadata).
  * Encrypted success responses use compact JWE; plaintext is UTF-8 JSON of the credential response object.
  */
 
 export const INVALID_ENCRYPTION_PARAMETERS = "invalid_encryption_parameters";
 const SPEC_REFS = {
   VCI_CREDENTIAL_REQUEST: "OpenID4VCI 1.0 §8.2",
-  VCI_CREDENTIAL_RESPONSE_ENCRYPTION: "OpenID4VCI 1.0 §11.2.3",
+  // Metadata alg/enc negotiation (§12.2.4) + encrypted Credential Response (§8.3 → §10).
+  // Do not cite §11.x — that is the Notification Endpoint in OpenID4VCI 1.0.
+  VCI_CREDENTIAL_RESPONSE_ENCRYPTION: "OpenID4VCI 1.0 §8.3 / §12.2.4",
+  VCI_CREDENTIAL_ERROR_RESPONSE: "OpenID4VCI 1.0 §8.3.1",
   JWE_COMPACT: "RFC 7516",
 };
 
@@ -94,7 +98,8 @@ export function validateCredentialResponseEncryptionParams(cre, issuerMeta) {
     throw encryptionParametersError(
       withSpecRef(
         "Unsupported credential response encryption algorithm",
-        SPEC_REFS.VCI_CREDENTIAL_RESPONSE_ENCRYPTION
+        SPEC_REFS.VCI_CREDENTIAL_RESPONSE_ENCRYPTION,
+        SPEC_REFS.VCI_CREDENTIAL_ERROR_RESPONSE
       )
     );
   }
@@ -102,7 +107,8 @@ export function validateCredentialResponseEncryptionParams(cre, issuerMeta) {
     throw encryptionParametersError(
       withSpecRef(
         "Unsupported credential response content encryption algorithm",
-        SPEC_REFS.VCI_CREDENTIAL_RESPONSE_ENCRYPTION
+        SPEC_REFS.VCI_CREDENTIAL_RESPONSE_ENCRYPTION,
+        SPEC_REFS.VCI_CREDENTIAL_ERROR_RESPONSE
       )
     );
   }
@@ -113,7 +119,8 @@ export function validateCredentialResponseEncryptionParams(cre, issuerMeta) {
       throw encryptionParametersError(
         withSpecRef(
           "Unsupported credential response compression algorithm",
-          SPEC_REFS.VCI_CREDENTIAL_RESPONSE_ENCRYPTION
+          SPEC_REFS.VCI_CREDENTIAL_RESPONSE_ENCRYPTION,
+          SPEC_REFS.VCI_CREDENTIAL_ERROR_RESPONSE
         )
       );
     }
@@ -142,7 +149,7 @@ export function validateCredentialResponseEncryptionForRequest(requestBody, issu
 }
 
 /**
- * Encrypts credential response JSON object as compact JWE (OID4VCI §11.2.3).
+ * Encrypts credential response JSON object as compact JWE (OID4VCI §8.3 → §10).
  * @param {object} payloadObject — e.g. { credentials: [...], notification_id } or { transaction_id, interval }
  */
 export async function encryptCredentialResponseToJwe(payloadObject, cre, issuerConfig) {
