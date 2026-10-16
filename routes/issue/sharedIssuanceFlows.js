@@ -2096,9 +2096,14 @@ sharedRouter.post("/credential", async (req, res) => {
           try { slog("[CREDENTIAL] WUA validated successfully", { wuaIssuer: wuaValidationResult.payload?.iss, wuaExp: wuaValidationResult.payload?.exp, hasAttestedKeys: Array.isArray(wuaValidationResult.payload?.attested_keys) && wuaValidationResult.payload.attested_keys.length > 0 }); } catch {}
         }
       } else {
+        const kaError = `${ERROR_MESSAGES.INVALID_PROOF}: Wallet Unit Attestation in key_attestation could not be validated. ${wuaValidationResult.error || ""}`.trim();
         if (slog) {
-          try { slog("[CREDENTIAL] [WARN] WUA validation failed (continuing without WUA)", { error: wuaValidationResult.error }); } catch {}
+          try { slog("[CREDENTIAL] [ERROR] WUA validation failed", { error: wuaValidationResult.error }); } catch {}
         }
+        return res.status(400).json({
+          error: "invalid_proof",
+          error_description: kaError,
+        });
       }
     } else {
       if (slog) {
@@ -2169,7 +2174,7 @@ sharedRouter.post("/credential", async (req, res) => {
         // Mode (3): attestation proof — verify key-attestation JWT and bind credential to attested_keys (no holder PoP JWT).
         if (isAttestationProof) {
           try {
-            const { cnf, attestedKeys, signatureVerified } = await verifyKeyAttestationProofChain(
+            const { cnf, attestedKeys } = await verifyKeyAttestationProofChain(
               requestBody.proofAttestationJwt,
               credConfigForProof,
               issuerConfigForProof,
@@ -2179,18 +2184,10 @@ sharedRouter.post("/credential", async (req, res) => {
             requestBody._attestedKeys = attestedKeys;
             requestBody._credentialBindingCnfList = await dedupeAttestedKeysToCnfList(attestedKeys);
             if (sessionId) {
-              if (signatureVerified === false) {
-                await logWarn(sessionId, "Key attestation signature not verified; using attested_keys from JWT payload (test-service relaxed mode)", {
-                  effectiveConfigurationId,
-                  attestedKeysCount: attestedKeys.length,
-                  missingIss: !jwt.decode(requestBody.proofAttestationJwt, { complete: false })?.iss,
-                }).catch(() => {});
-              } else {
-                await logInfo(sessionId, "Key attestation proof validated", {
-                  effectiveConfigurationId,
-                  attestedKeysCount: attestedKeys.length,
-                }).catch(() => {});
-              }
+              await logInfo(sessionId, "Key attestation proof validated", {
+                effectiveConfigurationId,
+                attestedKeysCount: attestedKeys.length,
+              }).catch(() => {});
             }
           } catch (error) {
             if (sessionId) {

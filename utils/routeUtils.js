@@ -22,6 +22,10 @@ import jwt from "jsonwebtoken";
 import path from "path";
 import * as jose from "jose";
 import { assertCnfJwkIsPublicOnly, getOAuthClientAttestationHeaders } from "./oauthClientAttestation.js";
+import {
+  isWalletProviderKeyAttestationTrustedByPolicy,
+  resolveKeyAttestationVerificationJwkFromX5c,
+} from "./keyAttestationX5cVerification.js";
 
 const WUA_SPEC_REF =
   "TS3 Wallet Unit Attestation";
@@ -2896,12 +2900,8 @@ export function generateDidJwkIdentifiers(didJwkIdentifier) {
 //   • proofs.attestation = [ WUA ] — still WP-signed WUA; that proof type does not assert PoP of
 //     the attested key in that request (key-attestation-only path in keyAttestationProof.js).
 //
-// What we implement here vs. not yet:
-// - We verify the JWS cryptographically (using issuer wallet_unit_attestation_jwks or, for dev,
-//   header.jwk) and run structural checks (eudi_wallet_info, exp, etc.).
-// - We do NOT yet validate that payload.iss identifies a Wallet Provider that is on the Trusted
-//   List or otherwise policy-approved. That is isolated in isWuaWalletProviderTrustedByPolicy()
-//   below (currently stubs true) so the trust framework can be plugged in later.
+// Credential-request WUA / key attestation: JWS signature under x5c[0], chain to
+// issuer-config wallet_provider_trust_anchors (HAIP §4.5.1 / RFC001 §7.5.1).
 
 function loadIssuerMetadataForWua() {
   try {
@@ -2914,44 +2914,13 @@ function loadIssuerMetadataForWua() {
 }
 
 /**
- * Public key for verifying the WUA JWS. Prefers configured JWKS; falls back to header.jwk (dev / self-contained WUAs).
+ * Public key for verifying credential-request WUA / key-attestation JWS (x5c + WP trust anchors only).
  * @param {object} decodedHeader - jwt.decode complete.header
- * @param {object} issuerMetadata - issuer-config root (optional wallet_unit_attestation_jwks)
+ * @param {object} issuerMetadata - issuer-config root (wallet_provider_trust_anchors)
  * @returns {object} JWK
  */
 export function resolveWuaVerificationJwk(decodedHeader, issuerMetadata) {
-  const jwks = issuerMetadata?.wallet_unit_attestation_jwks;
-  if (jwks?.keys?.length) {
-    const kid = decodedHeader?.kid;
-    if (kid) {
-      const match = jwks.keys.find((k) => k.kid === kid);
-      if (match) return match;
-    }
-    return jwks.keys[0];
-  }
-  if (decodedHeader?.jwk) return decodedHeader.jwk;
-  if (Array.isArray(decodedHeader?.x5c) && decodedHeader.x5c.length > 0) {
-    try {
-      const der = Buffer.from(String(decodedHeader.x5c[0]).replace(/\s+/g, ""), "base64");
-      const cert = new X509Certificate(der);
-      return cert.publicKey.export({ format: "jwk" });
-    } catch (e) {
-      throw new Error(
-        withSpecRef(
-          `WUA x5c certificate parsing failed: ${e?.message || e}`,
-          WUA_SPEC_REF,
-          OID4VCI_WALLET_ATTESTATION_SPEC_REF
-        )
-      );
-    }
-  }
-  throw new Error(
-    withSpecRef(
-      "Cannot verify WUA signature: set issuer wallet_unit_attestation_jwks or send WUA with jwk or x5c in protected header",
-      WUA_SPEC_REF,
-      OID4VCI_WALLET_ATTESTATION_SPEC_REF
-    )
-  );
+  return resolveKeyAttestationVerificationJwkFromX5c(decodedHeader, issuerMetadata);
 }
 
 /**
@@ -3045,21 +3014,16 @@ export async function verifyWiaJwtSignature(wiaJwt, decodedHeader, issuerMetadat
 }
 
 /**
- * Policy gate: is the WUA issuer (`iss` = Wallet Provider) trusted by this credential issuer?
- *
- * Stub: always returns true. Replace with Trusted List lookup, WP registry, allow-lists keyed by
- * `iss`, certificate policy, etc., when the trust framework is available.
+ * Policy gate: is the WUA / key attestation trusted via x5c to configured Wallet Provider anchors?
  *
  * @param {object} wuaPayload - Decoded WUA JWT payload (after successful JWS verification)
  * @param {object} decodedHeader - Decoded WUA JWT protected header
- * @param {object} issuerMetadata - Issuer configuration root (future: trusted list URIs, pinned WP JWKS)
+ * @param {object} issuerMetadata - Issuer configuration root (wallet_provider_trust_anchors)
  * @returns {boolean}
  */
 export function isWuaWalletProviderTrustedByPolicy(wuaPayload, decodedHeader, issuerMetadata) {
-  void decodedHeader;
-  void issuerMetadata;
   void wuaPayload;
-  return true;
+  return isWalletProviderKeyAttestationTrustedByPolicy(decodedHeader, wuaPayload, issuerMetadata);
 }
 
 // ============================================================================
@@ -3309,7 +3273,6 @@ export const validateWUA = async (wuaJwt, sessionId = null, issuerMetadata = nul
     const hasStatus = !!decoded.payload.status && !!decoded.payload.status.status_list;
 
     const meta = issuerMetadata ?? loadIssuerMetadataForWua();
-    // Cryptographic: WUA must be a valid JWS from a key we resolve (JWKS or dev header.jwk).
     const sigResult = await verifyWuaJwtSignature(wuaJwt, decoded.header, meta);
     if (!sigResult.ok) {
       if (sessionId) {
@@ -3318,7 +3281,6 @@ export const validateWUA = async (wuaJwt, sessionId = null, issuerMetadata = nul
       return { valid: false, error: sigResult.error };
     }
 
-    // Policy: Wallet Provider (`iss`) trusted via Trusted List / registry — not implemented; stub always allows.
     if (!isWuaWalletProviderTrustedByPolicy(decoded.payload, decoded.header, meta)) {
       const msg = withSpecRef(
         "WUA rejected: Wallet Provider (iss) not trusted by issuer policy",
@@ -3345,7 +3307,7 @@ export const validateWUA = async (wuaJwt, sessionId = null, issuerMetadata = nul
         keyStorageInfo,
         attestedKeysCount: decoded.payload.attested_keys?.length || 0,
         signatureVerification: 'verified',
-        walletProviderTrustPolicy: 'stub_true (Trusted List not wired)',
+        walletProviderTrustPolicy: 'x5c_to_wallet_provider_trust_anchors',
         revocationCheck: 'pending'
       }).catch(() => {});
     }

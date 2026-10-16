@@ -329,15 +329,15 @@ verification keys instead of relying on these fallbacks).
 
 | Area | Current behaviour | Normative target | Code |
 | --- | --- | --- | --- |
-| `proofs.attestation` verification | When neither `key_attestation_jwks`, `wallet_unit_attestation_jwks`, nor `header.jwk` is available, the issuer logs a warning and binds the credential from **unverified** `attested_keys` in the decoded JWT (`signatureVerified: false`). | Verify the key-attestation / WUA JWS before issuance; bind only from a **verified** payload. Prefer `key_attestation_jwks` or `wallet_unit_attestation_jwks`, else `header.jwk`. | `utils/keyAttestationProof.js` (`verifyKeyAttestationProofChain`), `routes/issue/sharedIssuanceFlows.js` |
+| Credential key attestation (`proofs.jwt` `key_attestation`, `proofs.attestation`) | Verified under `x5c[0]` with chain validation to `wallet_provider_trust_anchors` in issuer-config (HAIP §4.5.1). `header.jwk` / JWKS fallbacks are rejected; a presented attestation that fails verification returns `invalid_proof` even when metadata omits `key_attestations_required`. | LoTE-backed anchor discovery (RFC003) instead of static PEM anchors only. | `utils/keyAttestationX5cVerification.js`, `utils/keyAttestationProof.js`, `utils/routeUtils.js` (`validateWUA`), `routes/issue/sharedIssuanceFlows.js` |
 | WUA `iss` claim | Missing `iss` logs a warning; validation continues if structure and signature checks pass. | Reject or apply Wallet Provider trust policy on `iss` (Trusted List / registry). | `utils/routeUtils.js` (`validateWUA`) |
 | Pre-authorized token response | Scope-only pre-auth exchange does **not** synthesize `authorization_details` with `credential_identifiers` (avoids EUDI wallet credential-request mismatch). | When returning `credential_identifiers`, wallets must request with `credential_identifier`; metadata should advertise `credential_identifiers_supported: true`. | `routes/issue/sharedIssuanceFlows.js` (`handlePreAuthorizedCodeFlow`) |
 
-**Next alignment pass (TODO):** remove the unverified `attested_keys` fallback;
-require configured WP verification material; re-enforce strict WUA `iss` and
-trust-list policy; restore token `authorization_details` / identifier flow once
-wallet and issuer agree on the identifying-credential path (OpenID4VCI §3.3.4 /
-§8.2).
+**Next alignment pass (TODO):** populate `wallet_provider_trust_anchors` from Wallet
+Provider LoTE (RFC003) instead of static PEM config only; re-enforce strict WUA
+`iss` against registry policy; restore token `authorization_details` / identifier
+flow once wallet and issuer agree on the identifying-credential path (OpenID4VCI
+§3.3.4 / §8.2).
 
 ### RFC001 Boundaries
 
@@ -477,15 +477,20 @@ device engagement or retrieval.
   `cnf`, `status`, `iat`, `nbf`, `exp`) per RFC002 VP-CHECK-05 (`utils/vpHeplers.js`).
 - mdoc MSO `deviceKey` COSE `kid` is encoded as a byte string; encrypted JAR
   protected headers include `cty: "JWT"` when JWE is used.
-- Wallet ITB authorization-code handoff: `POST /session` with `authHandoff: true`
-  returns `AUTHORIZATION_REQUIRED` and an `authorizationUrl`; browser completion
-  uses `GET /oauth/callback` (`wallet-client/src/server.js`, RFC001 §6.1).
+- Wallet ITB authorization-code handoff (opt-in): `POST /session` with
+  `authHandoff: true`, or `WALLET_AUTH_HANDOFF=true`, returns
+  `AUTHORIZATION_REQUIRED` and an `authorizationUrl`. The same fields are on
+  `GET /session-status/:sessionId` until the browser completes
+  `GET /oauth/callback` (RFC001 §6.1). The default path still fetches
+  `/authorize` and expects `code` and `state` on the first redirect. See
+  [wallet-client/docs/auth-handoff-itb.md](../wallet-client/docs/auth-handoff-itb.md).
 
 ## How To Navigate A Change
 
 | Change area | Read first | Then inspect |
 | --- | --- | --- |
 | Offer, grant, PAR, token, credential, nonce, or deferred behavior | RFC001 and local OpenID4VCI | `routes/issue/`, issuer/OAuth config, shared issuance tests |
+| Wallet ITB authorization-code login handoff | [wallet-client/docs/auth-handoff-itb.md](../wallet-client/docs/auth-handoff-itb.md), RFC001 §6.1 | `wallet-client/src/server.js`, `wallet-client/src/lib/authHandoffConfig.js` |
 | Wallet attestation, WIA, WUA, or trust | RFC001, HAIP, ARF, RFC003, RFC004 | `utils/routeUtils.js`, `utils/oauthClientAttestation.js`, `utils/keyAttestationProof.js`, WUA tests |
 | Verifier request, metadata, DCQL, or response mode | RFC002 and local OpenID4VP | `routes/verify/`, verifier config, VP tests |
 | SD-JWT holder binding | RFC002 and OpenID4VP | `utils/sdJwtKeyBinding.js`, `tests/sdJwtKeyBinding.test.js` |

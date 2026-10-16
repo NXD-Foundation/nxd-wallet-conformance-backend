@@ -74,6 +74,10 @@ Redis database for storing credentials and session data.
 | `WALLET_MDL_STRICT` | false | Enable strict MDL verification |
 | `WALLET_POLL_TIMEOUT_MS` | 30000 | Deferred credential polling timeout |
 | `WALLET_POLL_INTERVAL_MS` | 2000 | Deferred credential polling interval (fallback when issuer omits `interval`) |
+| `WALLET_AUTH_HANDOFF` | unset | Set `true` so authorization-code `/session` returns `authorizationUrl` instead of fetching `/authorize` |
+| `WALLET_OAUTH_REDIRECT_URI` | unset | HTTPS OAuth callback for authorization-code issuance (overrides `{WALLET_PROVIDER_URL}/oauth/callback`) |
+| `WALLET_PROVIDER_URL` | unset | Public HTTPS wallet base. Callback defaults to `{base}/oauth/callback` |
+| `WALLET_AUTH_HANDOFF_TTL` | 600 | Pending authorization TTL in seconds (capped by PAR `expires_in` when present) |
 
 ## APTITUDE RFC001/002 profile notes
 
@@ -82,6 +86,18 @@ presentation (DCQL, `openid4vp://present`). It does **not** use WE BUILD CS-01/0
 environment variables (`WALLET_PROFILE=webuild-cs01`, `TRUST_PROFILE_PATH`, etc.).
 
 Use `curl http://localhost:4000/health` to inspect runtime configuration.
+
+### ITB auth handoff (authorization-code `/session`)
+
+Authorization-code issuance requires `WALLET_OAUTH_REDIRECT_URI` or `WALLET_PROVIDER_URL` (HTTPS). The default `/session` path fetches `/authorize` and expects `code` and `state` on the first redirect.
+
+When `WALLET_AUTH_HANDOFF=true`, or the `/session` body includes `"authHandoff": true`, the wallet:
+
+1. Performs PAR and returns **HTTP 200** with `status: "AUTHORIZATION_REQUIRED"` and `authorizationUrl`. It does not fetch `/authorize`.
+2. Stores that session so `GET /session-status/:sessionId` returns `authorizationUrl` while login is pending.
+3. Accepts the browser redirect at **`GET /oauth/callback`**. That URL must be the configured `redirect_uri` and must be reachable from the tester's browser.
+
+ITB polls `GET /session-status/:sessionId` until `status` is `ok` or `failed`. See [docs/auth-handoff-itb.md](./docs/auth-handoff-itb.md).
 
 ## Usage Examples
 

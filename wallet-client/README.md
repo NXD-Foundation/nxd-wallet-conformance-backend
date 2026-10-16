@@ -45,6 +45,8 @@ The selected callback string is retained unchanged through PAR, authorization, t
 
 Blocking headless tests intercept the authorization response's redirect header and extract `code` and `state` without navigating to the callback, so they do not require a reachable callback endpoint. With `WALLET_AUTH_HANDOFF=true`, a browser follows the redirect and the callback must be reachable. Existing deployments that relied on a custom-scheme default must set the callback or provider URL before running authorization-code tests.
 
+Issuers that redirect `/authorize` to a login page need that handoff. The session poll then carries `authorizationUrl` until the callback finishes. See [docs/auth-handoff-itb.md](./docs/auth-handoff-itb.md).
+
 ## DPoP nonce handling
 
 The wallet captures `DPoP-Nonce` from successful responses and explicit nonce challenges. It retries AS HTTP 400 JSON `use_dpop_nonce` errors and resource-server HTTP 401 DPoP authentication challenges, including empty-body responses. Each retry creates a fresh signed DPoP proof using the original binding key, method, URI, and access-token hash. It permits at most two nonce retries and five sends per logical request when combined with attestation or provider-key rotation retries.

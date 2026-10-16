@@ -28,6 +28,9 @@ describe('Shared Issuance Flows', () => {
   let app;
   let sharedModule;
   let cacheServiceRedis;
+  /** CA-signed key-attestation fixtures for x5c + wallet_provider_trust_anchors tests */
+  let wpKaFixtures;
+  let buildSignedKeyAttestationJwt;
   let cryptoUtils;
   let tokenUtils;
   let credGenerationUtils;
@@ -153,6 +156,10 @@ describe('Shared Issuance Flows', () => {
   before(async () => {
     // Create a global sandbox for module-level stubs
     globalSandbox = sinon.createSandbox();
+
+    const wpKaMod = await import('./helpers/wpKeyAttestationCertFixtures.mjs');
+    wpKaFixtures = await wpKaMod.createWalletProviderKeyAttestationCertFixtures();
+    buildSignedKeyAttestationJwt = wpKaMod.buildSignedKeyAttestationJwt;
     
     // Stub fs.readFileSync BEFORE importing modules that use it
     const crypto = await import('crypto');
@@ -162,6 +169,7 @@ describe('Shared Issuance Flows', () => {
     
     globalSandbox.stub(fs, 'readFileSync')
       .withArgs(sinon.match(/issuer-config\.json/)).returns(JSON.stringify({
+        wallet_provider_trust_anchors: wpKaFixtures.issuerConfigAnchors,
         credential_configurations_supported: {
           'test-cred-config': {
             format: 'dc+sd-jwt',
@@ -2064,37 +2072,62 @@ describe('Shared Issuance Flows', () => {
       expect(res.body.error_description).to.match(/key_attestation/i);
     });
 
-    it('accepts attestation proof using attested_keys when no verification key is configured (test-service relaxed)', async function () {
+    it('rejects proofs.jwt with jwk-only key_attestation when metadata does not require KA', async function () {
       if (!cacheServiceRedis.client?.isReady) {
         this.skip();
       }
-      process.env.ENFORCE_ETSI_ISSUANCE_PROFILE = 'false';
-      const sessionKey = 'soft-attestation-proof-' + uuidv4();
-      const accessToken = 'test-access-token-soft-attestation-' + uuidv4();
+      const { privateKey: wpPriv, publicKey: wpPub } = await jose.generateKeyPair('ES256', { extractable: true });
+      const { privateKey: holderPriv, publicKey: holderPub } = await jose.generateKeyPair('ES256', { extractable: true });
+      const wpPubJwk = await jose.exportJWK(wpPub);
+      const holderPubJwk = await jose.exportJWK(holderPub);
+      const wuaJwt = await new jose.SignJWT({
+        iss: 'https://wallet-provider.example',
+        aud: 'https://issuer.example/credential',
+        iat: Math.floor(Date.now() / 1000),
+        exp: Math.floor(Date.now() / 1000) + 3600,
+        jti: 'wua-optional-reject',
+        eudi_wallet_info: {
+          general_info: { name: 'test-wallet' },
+          key_storage_info: { level: 'tee' },
+        },
+        attested_keys: [holderPubJwk],
+        status: { status_list: { uri: 'https://example.com/status', idx: 0 } },
+      })
+        .setProtectedHeader({ alg: 'ES256', typ: 'key-attestation+jwt', jwk: wpPubJwk })
+        .sign(wpPriv);
+
       const nonce = cryptoUtils.generateNonce();
       await cacheServiceRedis.storeNonce(nonce, 300);
+      const base = process.env.SERVER_URL || 'http://localhost:3000';
+      const proofJwt = await new jose.SignJWT({ nonce, iss: 'did:holder:test', aud: base })
+        .setProtectedHeader({
+          alg: 'ES256',
+          typ: 'openid4vci-proof+jwt',
+          jwk: holderPubJwk,
+          key_attestation: wuaJwt,
+        })
+        .sign(holderPriv);
+
+      const sessionKey = 'optional-ka-jwk-reject-' + uuidv4();
+      const accessToken = 'test-access-token-optional-ka-' + uuidv4();
       await cacheServiceRedis.storePreAuthSession(sessionKey, {
         status: 'success',
         isDeferred: false,
         accessToken,
         c_nonce: nonce,
       });
-      const proof = jwt.sign(
-        { nonce, iss: 'did:wallet:test', attested_keys: [testKeys.publicKeyJwk] },
-        testKeys.privateKeyPem,
-        { algorithm: 'ES256', header: { typ: 'key-attestation+jwt' } }
-      );
 
       const res = await request(app)
         .post('/credential')
         .set('Authorization', `Bearer ${accessToken}`)
         .send({
           credential_configuration_id: 'test-cred-config',
-          proofs: { attestation: [proof] },
+          proofs: { jwt: [proofJwt] },
         });
 
-      expect(res.status).to.equal(200);
-      expect(res.body.credentials).to.be.an('array').with.length(1);
+      expect(res.status).to.equal(400);
+      expect(res.body).to.have.property('error', 'invalid_proof');
+      expect(String(res.body.error_description || '')).to.match(/key_attestation|header\.jwk|x5c/i);
     });
 
     it('P1-1b — MUST return invalid_proof when proof signature does not verify with WUA attested_keys[0]', async function () {
@@ -2102,28 +2135,16 @@ describe('Shared Issuance Flows', () => {
       if (!cacheServiceRedis.client?.isReady) {
         this.skip();
       }
-      const { privateKey: wpPriv, publicKey: wpPub } = await jose.generateKeyPair('ES256', { extractable: true });
       const { privateKey: holderA, publicKey: pubA } = await jose.generateKeyPair('ES256', { extractable: true });
       const { privateKey: holderB, publicKey: pubB } = await jose.generateKeyPair('ES256', { extractable: true });
-      const wpPubJwk = await jose.exportJWK(wpPub);
       const holderAPubJwk = await jose.exportJWK(pubA);
       const holderBPubJwk = await jose.exportJWK(pubB);
 
-      const wuaJwt = await new jose.SignJWT({
-        iss: 'https://wallet-provider.example',
-        aud: 'https://issuer.example/credential',
-        iat: Math.floor(Date.now() / 1000),
-        exp: Math.floor(Date.now() / 1000) + 3600,
-        jti: 'wua-p11b',
-        eudi_wallet_info: {
-          general_info: { name: 'test-wallet' },
-          key_storage_info: { level: 'tee' },
-        },
-        attested_keys: [holderAPubJwk],
-        status: { status_list: { uri: 'https://example.com/status', idx: 0 } },
-      })
-        .setProtectedHeader({ alg: 'ES256', typ: 'key-attestation+jwt', jwk: wpPubJwk })
-        .sign(wpPriv);
+      const wuaJwt = await buildSignedKeyAttestationJwt({
+        fixtures: wpKaFixtures,
+        attestedKeys: [holderAPubJwk],
+        claims: { jti: 'wua-p11b' },
+      });
 
       const nonce = cryptoUtils.generateNonce();
       await cacheServiceRedis.storeNonce(nonce, 300);
@@ -2166,30 +2187,18 @@ describe('Shared Issuance Flows', () => {
       if (!cacheServiceRedis.client?.isReady) {
         this.skip();
       }
-      const { privateKey: wpPriv, publicKey: wpPub } = await jose.generateKeyPair('ES256', { extractable: true });
       const { privateKey: h1priv, publicKey: h1pub } = await jose.generateKeyPair('ES256', { extractable: true });
       const { privateKey: _h2, publicKey: h2pub } = await jose.generateKeyPair('ES256', { extractable: true });
       const { privateKey: _h3, publicKey: h3pub } = await jose.generateKeyPair('ES256', { extractable: true });
-      const wpPubJwk = await jose.exportJWK(wpPub);
       const k1 = await jose.exportJWK(h1pub);
       const k2 = await jose.exportJWK(h2pub);
       const k3 = await jose.exportJWK(h3pub);
 
-      const wuaJwt = await new jose.SignJWT({
-        iss: 'https://wallet-provider.example',
-        aud: 'https://issuer.example/credential',
-        iat: Math.floor(Date.now() / 1000),
-        exp: Math.floor(Date.now() / 1000) + 3600,
-        jti: 'wua-p112',
-        eudi_wallet_info: {
-          general_info: { name: 'test-wallet' },
-          key_storage_info: { level: 'tee' },
-        },
-        attested_keys: [k1, k2, k3],
-        status: { status_list: { uri: 'https://example.com/status', idx: 0 } },
-      })
-        .setProtectedHeader({ alg: 'ES256', typ: 'key-attestation+jwt', jwk: wpPubJwk })
-        .sign(wpPriv);
+      const wuaJwt = await buildSignedKeyAttestationJwt({
+        fixtures: wpKaFixtures,
+        attestedKeys: [k1, k2, k3],
+        claims: { jti: 'wua-p112' },
+      });
 
       const nonce = cryptoUtils.generateNonce();
       await cacheServiceRedis.storeNonce(nonce, 300);

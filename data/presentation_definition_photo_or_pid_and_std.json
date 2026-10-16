@@ -50,7 +50,7 @@
               "path": ["$.vct"],
               "filter": {
                 "type": "string",
-                "const": "urn:eu.europa.ec.eudi:pid:1"
+                "enum": ["urn:eu.europa.ec.eudi:pid:1", "urn:eudi:pid:1"]
               }
             }
           ],

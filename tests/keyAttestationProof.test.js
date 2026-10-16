@@ -34,8 +34,18 @@ describe("keyAttestationProof", () => {
     });
   });
 
-  it("isKeyAttestationTrustedByIssuer always returns true (stub)", () => {
-    expect(isKeyAttestationTrustedByIssuer({}, {}, {})).to.equal(true);
+  it("isKeyAttestationTrustedByIssuer requires x5c and configured anchors", async () => {
+    const fixtures = await import("./helpers/wpKeyAttestationCertFixtures.mjs").then((m) =>
+      m.createWalletProviderKeyAttestationCertFixtures()
+    );
+    expect(
+      isKeyAttestationTrustedByIssuer(
+        { alg: "ES256", x5c: fixtures.x5c },
+        {},
+        { wallet_provider_trust_anchors: fixtures.issuerConfigAnchors }
+      )
+    ).to.equal(true);
+    expect(isKeyAttestationTrustedByIssuer({ alg: "ES256", jwk: {} }, {}, {})).to.equal(false);
   });
 
   describe("validateKeyAttestationHeaderForCredentialConfig", () => {
@@ -111,33 +121,33 @@ describe("keyAttestationProof", () => {
   });
 
   describe("resolveKeyAttestationVerificationJwk", () => {
-    it("uses issuer key_attestation_jwks key matching kid", async () => {
-      const { publicKey } = await jose.generateKeyPair("ES256");
-      const pub = await jose.exportJWK(publicKey);
-      pub.kid = "attester-1";
-      const decoded = { header: { kid: "attester-1", alg: "ES256" } };
+    it("resolves JWK from x5c leaf under wallet_provider_trust_anchors", async () => {
+      const fixtures = await import("./helpers/wpKeyAttestationCertFixtures.mjs").then((m) =>
+        m.createWalletProviderKeyAttestationCertFixtures()
+      );
+      const decoded = { header: { alg: "ES256", x5c: fixtures.x5c } };
       const jwk = resolveKeyAttestationVerificationJwk(decoded, {
-        key_attestation_jwks: { keys: [pub] },
+        wallet_provider_trust_anchors: fixtures.issuerConfigAnchors,
       });
-      expect(jwk.kid).to.equal("attester-1");
+      expect(jwk).to.have.property("kty", "EC");
     });
 
-    it("falls back to first JWKS key when kid does not match", async () => {
-      const { publicKey } = await jose.generateKeyPair("ES256");
-      const pub = await jose.exportJWK(publicKey);
-      const decoded = { header: { kid: "unknown", alg: "ES256" } };
-      const jwk = resolveKeyAttestationVerificationJwk(decoded, {
-        key_attestation_jwks: { keys: [pub] },
-      });
-      expect(jwk.x).to.equal(pub.x);
-    });
-
-    it("falls back to header.jwk when no JWKS configured", async () => {
+    it("rejects header.jwk", async () => {
       const { publicKey } = await jose.generateKeyPair("ES256");
       const pub = await jose.exportJWK(publicKey);
       const decoded = { header: { alg: "ES256", jwk: pub } };
-      const jwk = resolveKeyAttestationVerificationJwk(decoded, {});
-      expect(jwk).to.deep.equal(pub);
+      expect(() => resolveKeyAttestationVerificationJwk(decoded, {})).to.throw(/header\.jwk is not accepted/i);
+    });
+
+    it("rejects configured JWKS without x5c", async () => {
+      const { publicKey } = await jose.generateKeyPair("ES256");
+      const pub = await jose.exportJWK(publicKey);
+      const decoded = { header: { kid: "attester-1", alg: "ES256" } };
+      expect(() =>
+        resolveKeyAttestationVerificationJwk(decoded, {
+          key_attestation_jwks: { keys: [pub] },
+        })
+      ).to.throw(/must include x5c/i);
     });
   });
 
@@ -182,16 +192,25 @@ describe("keyAttestationProof", () => {
       }
     });
 
-    it("verifyKeyAttestationProofChain end-to-end with configured JWKS", async () => {
-      const { jwt, attesterPub, holderPub } = await makeSignedAttestationJwt();
+    it("verifyKeyAttestationProofChain end-to-end with x5c and trust anchors", async () => {
+      const { createWalletProviderKeyAttestationCertFixtures, buildSignedKeyAttestationJwt } =
+        await import("./helpers/wpKeyAttestationCertFixtures.mjs");
+      const fixtures = await createWalletProviderKeyAttestationCertFixtures();
+      const holder = await jose.generateKeyPair("ES256");
+      const holderPub = await jose.exportJWK(holder.publicKey);
+      const kaJwt = await buildSignedKeyAttestationJwt({
+        fixtures,
+        attestedKeys: [holderPub],
+        claims: { nonce: "test-nonce-xyz" },
+      });
       const credConfig = {
         proof_types_supported: {
           attestation: { proof_signing_alg_values_supported: ["ES256"] },
         },
       };
-      const issuerConfig = { key_attestation_jwks: { keys: [attesterPub] } };
+      const issuerConfig = { wallet_provider_trust_anchors: fixtures.issuerConfigAnchors };
       const { cnf, attestedKeys, signatureVerified } = await verifyKeyAttestationProofChain(
-        jwt,
+        kaJwt,
         credConfig,
         issuerConfig
       );
@@ -201,30 +220,28 @@ describe("keyAttestationProof", () => {
       expect(cnf).to.deep.equal({ jwk: holderPub });
     });
 
-    it("falls back to attested_keys when no verification key is configured", async () => {
+    it("rejects attestation proof when no trust anchors are configured", async () => {
+      const { createWalletProviderKeyAttestationCertFixtures, buildSignedKeyAttestationJwt } =
+        await import("./helpers/wpKeyAttestationCertFixtures.mjs");
+      const fixtures = await createWalletProviderKeyAttestationCertFixtures();
       const holder = await jose.generateKeyPair("ES256");
       const holderPub = await jose.exportJWK(holder.publicKey);
-      const jwtCompact = await new jose.SignJWT({
-        nonce: "test-nonce-xyz",
-        attested_keys: [holderPub],
-      })
-        .setProtectedHeader({ alg: "ES256", typ: KEY_ATTESTATION_JWT_TYP })
-        .sign(holder.privateKey);
-
+      const kaJwt = await buildSignedKeyAttestationJwt({
+        fixtures,
+        attestedKeys: [holderPub],
+        claims: { nonce: "test-nonce-xyz" },
+      });
       const credConfig = {
         proof_types_supported: {
           attestation: { proof_signing_alg_values_supported: ["ES256"] },
         },
       };
-      const { cnf, attestedKeys, signatureVerified } = await verifyKeyAttestationProofChain(
-        jwtCompact,
-        credConfig,
-        {}
-      );
-      expect(signatureVerified).to.equal(false);
-      expect(attestedKeys).to.have.length(1);
-      expect(attestedKeys[0].x).to.equal(holderPub.x);
-      expect(cnf).to.deep.equal({ jwk: holderPub });
+      try {
+        await verifyKeyAttestationProofChain(kaJwt, credConfig, {});
+        expect.fail("expected rejection");
+      } catch (e) {
+        expect(String(e.message)).to.match(/wallet_provider_trust_anchors|x5c|not trusted by issuer policy/i);
+      }
     });
   });
 });

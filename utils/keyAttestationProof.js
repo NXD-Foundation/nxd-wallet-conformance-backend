@@ -10,7 +10,11 @@
 
 import jwt from "jsonwebtoken";
 import * as jose from "jose";
-import { X509Certificate } from "node:crypto";
+import {
+  isWalletProviderKeyAttestationTrustedByPolicy,
+  resolveKeyAttestationVerificationJwkFromX5c,
+  withKeyAttestationSpecRef,
+} from "./keyAttestationX5cVerification.js";
 
 /** Match sharedIssuanceFlows ERROR_MESSAGES.INVALID_PROOF_* strings for consistent error handling */
 const INVALID_PROOF = "No proof information found";
@@ -23,9 +27,7 @@ const KEY_ATTESTATION_SPEC_REF =
 const HAIP_KEY_ATTESTATION_SPEC_REF = "HAIP 1.0 §4.5.1";
 
 function withSpecRef(message, ...refs) {
-  const present = refs.filter(Boolean);
-  if (present.length === 0) return message;
-  return `${message}${message.endsWith(".") ? "" : "."} See ${present.join(" and ")}.`;
+  return withKeyAttestationSpecRef(message, ...refs);
 }
 
 export const KEY_ATTESTATION_JWT_TYP = "key-attestation+jwt";
@@ -95,63 +97,20 @@ export function parseProofAttestationJwtFromCredentialProofs(proofValue, specRef
 
 /**
  * Policy gate after cryptographic verification of the key-attestation JWT (often WUA in EUDI).
- * Stub: always true. Plug in Wallet Provider / Trusted List checks on payload.iss here, analogous to
- * isWuaWalletProviderTrustedByPolicy in routeUtils.js for the same WUA when carried as key_attestation.
  * @returns {boolean}
  */
-export function isKeyAttestationTrustedByIssuer(_decodedHeader, _decodedPayload, _issuerConfig) {
-  return true;
+export function isKeyAttestationTrustedByIssuer(decodedHeader, decodedPayload, issuerConfig) {
+  return isWalletProviderKeyAttestationTrustedByPolicy(decodedHeader, decodedPayload, issuerConfig);
 }
 
 /**
- * Verification key for the key-attestation JWT signature.
- * Prefers issuer-configured JWKS; falls back to header.jwk only when no JWKS is configured (dev / transitional).
+ * Verification key for the key-attestation JWT signature (x5c leaf under configured WP trust anchors).
  * @param {{ header?: object }} decodedComplete - jwt.decode(..., { complete: true })
- * @param {object} issuerConfig - full issuer metadata object (optional key_attestation_jwks)
+ * @param {object} issuerConfig - full issuer metadata object (wallet_provider_trust_anchors)
  * @returns {object} public JWK
  */
-function resolveConfiguredAttestationJwks(issuerConfig) {
-  const primary = issuerConfig?.key_attestation_jwks;
-  if (primary?.keys?.length) return primary;
-  const wuaJwks = issuerConfig?.wallet_unit_attestation_jwks;
-  if (wuaJwks?.keys?.length) return wuaJwks;
-  return null;
-}
-
 export function resolveKeyAttestationVerificationJwk(decodedComplete, issuerConfig) {
-  const header = decodedComplete?.header;
-  const jwks = resolveConfiguredAttestationJwks(issuerConfig);
-  if (jwks?.keys?.length) {
-    const kid = header?.kid;
-    if (kid) {
-      const match = jwks.keys.find((k) => k.kid === kid);
-      if (match) return match;
-    }
-    return jwks.keys[0];
-  }
-  if (header?.jwk) return header.jwk;
-  if (Array.isArray(header?.x5c) && header.x5c.length > 0 && header.x5c[0]) {
-    try {
-      const der = Buffer.from(String(header.x5c[0]).replace(/\s+/g, ""), "base64");
-      const cert = new X509Certificate(der);
-      return cert.publicKey.export({ format: "jwk" });
-    } catch (e) {
-      throw new Error(
-        withSpecRef(
-          `${INVALID_PROOF_PUBLIC_KEY} Key attestation: x5c certificate parsing failed (${e?.message || e})`,
-          KEY_ATTESTATION_SPEC_REF,
-          HAIP_KEY_ATTESTATION_SPEC_REF
-        )
-      );
-    }
-  }
-  throw new Error(
-    withSpecRef(
-      `${INVALID_PROOF_PUBLIC_KEY} Key attestation: configure issuer key_attestation_jwks or provide header.jwk for signature verification.`,
-      KEY_ATTESTATION_SPEC_REF,
-      HAIP_KEY_ATTESTATION_SPEC_REF
-    )
-  );
+  return resolveKeyAttestationVerificationJwkFromX5c(decodedComplete?.header, issuerConfig);
 }
 
 /**
@@ -283,7 +242,6 @@ export async function verifyKeyAttestationProofChain(
 
   validateKeyAttestationHeaderForCredentialConfig(decodedComplete.header, credConfig, specRef);
 
-  // Wallet Provider trust (Trusted List / iss policy) — stub true; see isKeyAttestationTrustedByIssuer JSDoc.
   if (!isKeyAttestationTrustedByIssuer(decodedComplete.header, decodedComplete.payload, issuerConfig)) {
     throw new Error(
       withSpecRef(
@@ -293,25 +251,7 @@ export async function verifyKeyAttestationProofChain(
     );
   }
 
-  let verificationJwk;
-  try {
-    verificationJwk = resolveKeyAttestationVerificationJwk(decodedComplete, issuerConfig);
-  } catch (resolveError) {
-    const attestedKeys = validateAttestationClaimsAndExtractAttestedKeys(
-      decodedComplete.payload,
-      specRef
-    );
-    if (attestedKeys.length > 0) {
-      return {
-        payload: decodedComplete.payload,
-        attestedKeys,
-        cnf: buildCredentialBindingCnfFromAttestedKeys(attestedKeys),
-        signatureVerified: false,
-      };
-    }
-    throw resolveError;
-  }
-
+  const verificationJwk = resolveKeyAttestationVerificationJwk(decodedComplete, issuerConfig);
   const payload = await verifyKeyAttestationJwtSignature(proofAttestationJwt, verificationJwk);
   const attestedKeys = validateAttestationClaimsAndExtractAttestedKeys(payload, specRef);
   const cnf = buildCredentialBindingCnfFromAttestedKeys(attestedKeys);
