@@ -193,6 +193,7 @@ async function main() {
 
   const credentialEndpoint = `${apiBase}/credential`;
   const { credentialRequest: credReq } = await buildCredentialRequest({
+    issuerMeta,
     configurationId,
     tokenBody,
     proofMode,

@@ -1406,6 +1406,7 @@ async function runPreAuthorizedIssuance(
     proofJwt,
     credentialResponseDecryptionKey,
   } = await buildCredentialRequest({
+    issuerMeta,
     configurationId,
     tokenBody,
     proofMode,
@@ -1835,6 +1836,7 @@ async function runAuthorizationCodeIssuance(
     credentialRequest: credReq,
     credentialResponseDecryptionKey: credentialResponseDecryptionKeyCode,
   } = await buildCredentialRequest({
+    issuerMeta,
     configurationId,
     tokenBody,
     proofMode,

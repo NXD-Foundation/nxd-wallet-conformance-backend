@@ -53,6 +53,7 @@ describe("WUA credential binding (RFC001 Phase 5)", () => {
     const clientId = "2b176a41-5d2c-40e2-be06-1709e112211a";
     const { proofs, proofJwt, wuaJwt } = await buildCredentialRequestProofs({
       proofMode: "jwt",
+      keyAttestationRequired: true,
       credentialEndpoint: "https://issuer.example/credential",
       aud: "https://issuer.example",
       c_nonce: "nonce-1",
@@ -77,6 +78,7 @@ describe("WUA credential binding (RFC001 Phase 5)", () => {
     const kp = await makeKeyPair();
     const { proofJwt } = await buildCredentialRequestProofs({
       proofMode: "jwt",
+      keyAttestationRequired: true,
       credentialEndpoint: "https://issuer.example/credential",
       aud: "https://issuer.example",
       c_nonce: "nonce-1",
@@ -94,6 +96,7 @@ describe("WUA credential binding (RFC001 Phase 5)", () => {
     try {
       await buildCredentialRequestProofs({
         proofMode: "jwt",
+      keyAttestationRequired: true,
         credentialEndpoint: "https://issuer.example/credential",
         aud: "https://issuer.example",
         c_nonce: "nonce-1",
@@ -203,6 +206,7 @@ describe("WUA credential binding (RFC001 Phase 5)", () => {
     try {
       await validateCredentialProofsBeforeDispatch({
         proofMode: "jwt",
+      keyAttestationRequired: true,
         proofs: { jwt: [proofJwt] },
         wuaJwt: "dummy.wua",
         keyPairs: [kp],

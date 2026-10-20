@@ -5,6 +5,7 @@
 
 import { createHash, X509Certificate } from "node:crypto";
 import {
+  BasicConstraintsExtension,
   KeyUsageFlags,
   KeyUsagesExtension,
   X509Certificate as PeculiarX509Certificate,
@@ -130,6 +131,7 @@ export function validateWalletProviderCertificatePath({
 
   const candidates = [...chain.slice(1), ...anchors];
   let current = leaf;
+  let subordinateCaCount = 0;
   const seen = new Set([certificateFingerprintFromPem(current.pem)]);
   for (;;) {
     const exactAnchor = anchors.find(
@@ -159,6 +161,21 @@ export function validateWalletProviderCertificatePath({
       throw new Error(
         withKeyAttestationSpecRef(
           "Key attestation: certificate chain does not terminate at a configured Wallet Provider trust anchor",
+          HAIP_KEY_ATTESTATION_SPEC_REF
+        )
+      );
+    }
+    // RFC 5280: count non-self-issued intermediate CAs below this issuer,
+    // excluding the target signing certificate itself.
+    if (current !== leaf && current.cert.ca && current.cert.subject !== current.cert.issuer) {
+      subordinateCaCount += 1;
+    }
+    const constraints = new PeculiarX509Certificate(issuer.cert.raw)
+      .getExtension(BasicConstraintsExtension);
+    if (constraints?.pathLength != null && subordinateCaCount > constraints.pathLength) {
+      throw new Error(
+        withKeyAttestationSpecRef(
+          "Key attestation: certificate chain exceeds CA pathLenConstraint",
           HAIP_KEY_ATTESTATION_SPEC_REF
         )
       );

@@ -13,6 +13,7 @@ import {
   createWiaPopJwt,
   createWUA,
 } from "./crypto.js";
+import { loadWuaSigningMaterial, validateExternalWuaSignature } from "./wuaSigningMaterial.js";
 import { getOrCreateWalletInstanceId } from "./cache.js";
 import { validateWiaMaterialForParOrToken } from "./wiaParTokenValidation.js";
 
@@ -232,7 +233,10 @@ export async function buildWalletUnitAttestationJwt({
   c_nonce = null,
 }) {
   const ext = readExternalAttestationTokens();
-  if (ext?.wuaJwt) return ext.wuaJwt;
+  if (ext?.wuaJwt) {
+    await validateExternalWuaSignature(ext.wuaJwt);
+    return ext.wuaJwt;
+  }
 
   const keys = proofPublicJwks ?? (proofPublicJwk ? [proofPublicJwk] : []);
   if (!Array.isArray(keys) || keys.length === 0) {
@@ -242,12 +246,16 @@ export async function buildWalletUnitAttestationJwt({
     throw new Error("buildWalletUnitAttestationJwt: at most 32 attested_keys supported");
   }
 
-  const { privateJwk, publicJwk } = await ensureWalletProviderKeyPair();
-  const providerId = resolveWalletProviderIdSync(publicJwk);
+  const { privateKeyPem, publicJwk, x5c } = loadWuaSigningMaterial();
+  // Keep the configured/provider identity stable across WIA and WUA signers.
+  const providerKeys = await ensureWalletProviderKeyPair();
+  const providerId = resolveWalletProviderIdSync(providerKeys.publicJwk);
   const instanceId = await getOrCreateWalletInstanceId();
   return createWUA({
-    privateJwk,
+    privateKeyPem,
     publicJwk,
+    includeJwkHeader: false,
+    headerParams: { x5c },
     issuer: providerId,
     subject: instanceId,
     audience: credentialEndpoint,

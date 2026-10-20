@@ -45,6 +45,19 @@ Issuers that authenticate the user before issuing the code need the handoff flow
 
 A request body `authHandoff: true` or `authHandoff: false` overrides the environment variable for that call.
 
+## Deployment and ITB acceptance checklist
+
+The checked-in `wallet-client/docker-compose.yml` does not set the handoff flag or either public callback setting. Supply them in the actual deployment, or enable handoff in the ITB request body and supply the callback setting separately. An environment variable on the Docker host alone does not pass it into this Compose service unless the deployment explicitly forwards it.
+
+1. Set `WALLET_OAUTH_REDIRECT_URI` to the public HTTPS callback (or set `WALLET_PROVIDER_URL` to the public wallet base). Register that exact redirect URI with the authorization server where client registration is required.
+2. Enable handoff through `WALLET_AUTH_HANDOFF=true` in the wallet container or `authHandoff: true` in the ITB `POST /session` body. Check that the runner does not send `authHandoff: false`, which overrides the environment setting.
+3. Route the public callback path to the wallet's `GET /oauth/callback`, preserving the query parameters. If the public base has a path prefix, the proxy must map that prefix to the service routes.
+4. Start an authorization-code session against an issuer that requires login. Confirm the response and session poll both contain `status: "AUTHORIZATION_REQUIRED"`, a usable `authorizationUrl`, and `expiresAt`. ITB must treat this status as pending, display the link, and continue polling.
+5. Open the link from the tester's browser and finish login/consent. Confirm the browser reaches the public callback and the session poll changes to `ok` (or `failed` with a concrete issuance error). A successful callback page and `ok` session together demonstrate the full integration.
+6. Stop waiting at `expiresAt` and offer a new session if authorization has not completed. Pending authorization expires independently of the longer-lived test session; expiry does not automatically change the stored `AUTHORIZATION_REQUIRED` session to `failed`.
+
+This repository contains the wallet endpoints and tests, but no ITB runner/TDL scriptlets or reverse-proxy configuration. Repository checks alone cannot establish that a deployed runner displays the URL, polls correctly, or can reach the registered callback. Record those checks from an actual ITB run before considering the login-redirect interoperability issue resolved end to end.
+
 ## API surface
 
 | Endpoint | Role |

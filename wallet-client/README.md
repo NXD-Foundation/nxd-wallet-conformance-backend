@@ -54,3 +54,22 @@ The wallet captures `DPoP-Nonce` from successful responses and explicit nonce ch
 Nonce state belongs to the issuance transaction and confirmation key. AS and resource-server nonces remain separate even on the same origin; authorization handoff retains the binding and nonce state. The Nonce Endpoint's resource nonce is used at the Credential Endpoint independently of its JSON `c_nonce`. DPoP retries preserve the credential request body, credential proof/key attestation, and credential `c_nonce`. A fresh `c_nonce` is obtained from the Nonce Endpoint before credential proof construction, including when a legacy token response also contains `c_nonce`.
 
 Nonce negotiation applies to PAR, token, nonce, credential, deferred credential, and DPoP-protected notification requests. Missing nonce headers, exhausted retries, and missing binding keys fail explicitly. Unrelated authentication failures are not retried, and the wallet does not downgrade a DPoP-bound request to Bearer.
+
+### Credential key-attestation policy
+
+In the default `compatibility` profile, JWT credential proofs include
+`key_attestation` only when the selected credential configuration advertises
+`proof_types_supported.jwt.key_attestations_required`. An empty object (`{}`)
+still requires attestation. `webuild-cs01` retains the RFC001 mandatory
+attestation policy even when that metadata field is absent. The `attestation`
+proof type always carries key attestation directly.
+
+Generated key attestations use an ES256 signing certificate chain in `x5c`,
+without an embedded `jwk` header. Configure both `WALLET_WUA_SIGNING_KEY_PATH`
+(PKCS#8 PEM private key) and `WALLET_WUA_SIGNING_CERT_PATH` (PEM chain, signing
+certificate first), and mount these files into the service container. Incomplete,
+missing, or mismatched signing material fails before the credential request.
+When neither is configured, the existing local development certificate and key
+are used. These fixtures do not establish trust with an external issuer: deploy
+material whose chain that issuer accepts. External WUA tokens must also carry
+`x5c` and verify under its first certificate; `jwk`-only WUA tokens are rejected.
