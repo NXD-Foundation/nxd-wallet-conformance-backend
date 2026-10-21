@@ -164,7 +164,7 @@ metadataRouter.get(["/", "/jwks"], (req, res) => {
   res.json({
     keys: [
       { ...jwks, kid: defaultSigningKid, use: "sig" },
-      { ...jwks, kid: `${defaultSigningKid}-agreement`, use: "keyAgreement" },
+      { ...jwks, kid: `${defaultSigningKid}-agreement`, use: "enc" },
     ],
   });
 });
@@ -205,7 +205,7 @@ which contains the Issuer's public keys. The value of this field MUST be a JSON 
       jwks : {
         keys: [
           { ...jwks, kid: defaultSigningKid, use: "sig" },
-          { ...jwks, kid: `${defaultSigningKid}-agreement`, use: "keyAgreement" },
+          { ...jwks, kid: `${defaultSigningKid}-agreement`, use: "enc" },
         ]
       }
 
