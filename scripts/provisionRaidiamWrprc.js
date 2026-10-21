@@ -5,7 +5,7 @@ import path from 'node:path';
 import https from 'node:https';
 import { X509Certificate, createPrivateKey, createPublicKey } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { provisionWrprcs, RAIDiam_ENTITY, RAIDiam_SERVICE } from '../utils/raidiamProvisioning.js';
+import { provisionWrprcs, activateQuarantinedWrprcs, registrarDatasetForRegistration, RAIDiam_ENTITY, RAIDiam_SERVICE } from '../utils/raidiamProvisioning.js';
 import { verifyWrprc, assertQueryScope, assertRegistrarDataset } from '../utils/wrprc.js';
 import { checkAccessCertificateTrust } from '../utils/trustFrameworkPolicy.js';
 
@@ -23,14 +23,36 @@ export async function main(env = process.env, argv = process.argv.slice(2)) {
     console.log(JSON.stringify({ entityId, serviceId, scenarios: bodies.map(b => b.scenario), privacyUrl: 'https://www.aegean.gr/', networkRequests: false }, null, 2));
     return true;
   }
-  if (argv.length) throw new Error('Only --dry-run is supported');
-  const transportDir = path.join(root, 'certs/raidiam/Trust_Registry_API authentication');
-  const cert = await fs.readFile(env.RAIDIAM_TRANSPORT_CERT || path.join(transportDir, 'trust_api_call.pem'));
-  const key = await fs.readFile(env.RAIDIAM_TRANSPORT_KEY || path.join(transportDir, `${serviceId}-rtstransport.key`));
+  const activateOnly = argv.length === 1 && argv[0] === '--activate-quarantined';
+  if (argv.length && !activateOnly) throw new Error('Only --dry-run or --activate-quarantined is supported');
   const access = new X509Certificate(await fs.readFile(resolveProvisioningWrpacPath(env, root)));
   // The WRPAC supplies the fixed relying-party entity/service identity.
   const subject = access.subject.split('\n');
   if (!subject.includes(`organizationIdentifier=${entityId}`) || !subject.includes(`OU=${serviceId}`)) throw new Error('WRPAC entity/service identity mismatch');
+  if (Date.parse(access.validFrom) > Date.now() || Date.parse(access.validTo) <= Date.now()) throw new Error('Local certificate is outside its validity period');
+  const registryUrl = env.RAIDIAM_REGISTRY_URI || `https://data.sandbox.eudi.raidiam.io/wrp/${entityId}/services/${serviceId}`;
+  const verify = async (token, bindings) => {
+    const result = await verifyWrprc(token, { ...bindings, checkTrust: async input => {
+      const decision = await checkAccessCertificateTrust({ session: { trustPolicy: { mode: 'webuild', profile: 'webuild-wp4-pilot' } }, ...input });
+      if (!decision?.trusted) {
+        const reason = /^[A-Z0-9_]+$/.test(decision?.reasonCode || '') ? decision.reasonCode : 'UNKNOWN';
+        throw new Error(`WRPRC: registrar trust rejected (${reason})`);
+      }
+      return decision;
+    } });
+    assertQueryScope({ credentials: bindings.declaration.credentials }, result.intendedUse);
+    const dataset = registrarDatasetForRegistration({ entityId, serviceId, intendedUseId: bindings.intendedUseId, body: bindings.declaration, registration: result.payload, registryUrl });
+    assertRegistrarDataset(dataset, { registration: result.payload, intendedUse: result.intendedUse, ...bindings });
+    return result;
+  };
+  if (activateOnly) {
+    const result = await activateQuarantinedWrprcs({ bodies, manifestPath: env.TRUST_WRPRC_MANIFEST_PATH || path.join(root, 'certs/raidiam/registration/manifest.json'), verify, entityId, serviceId, registryUrl });
+    for (const item of result.results) console.log(`${item.scenario}: ${item.status}${item.error ? ` (${item.error})` : ''}`);
+    return result.ok;
+  }
+  const transportDir = path.join(root, 'certs/raidiam/Trust_Registry_API authentication');
+  const cert = await fs.readFile(env.RAIDIAM_TRANSPORT_CERT || path.join(transportDir, 'trust_api_call.pem'));
+  const key = await fs.readFile(env.RAIDIAM_TRANSPORT_KEY || path.join(transportDir, `${serviceId}-rtstransport.key`));
   const transport = new X509Certificate(cert);
   if (!transport.subject.split('\n').includes(`CN=${serviceId}`)) throw new Error('Transport certificate service mismatch');
   for (const certificate of [access, transport]) if (Date.parse(certificate.validFrom) > Date.now() || Date.parse(certificate.validTo) <= Date.now()) throw new Error('Local certificate is outside its validity period');
@@ -63,22 +85,7 @@ export async function main(env = process.env, argv = process.argv.slice(2)) {
   try {
     const oauth = await send('POST', `${auth}/token`, new URLSearchParams({ grant_type: 'client_credentials', client_id: env.RAIDIAM_CLIENT_ID || serviceId, scope: 'directory:software' }).toString());
     if (!oauth?.access_token) throw new Error('OAuth response omitted access token');
-    const registryUrl = env.RAIDIAM_REGISTRY_URI || `https://data.sandbox.eudi.raidiam.io/wrp/${entityId}/services/${serviceId}`;
     const request = (method, resource, body) => send(method, `${api}${resource}`, body, { authorization: `Bearer ${oauth.access_token}` });
-    const verify = async (token, bindings) => {
-      const result = await verifyWrprc(token, { ...bindings, checkTrust: async input => {
-        const decision = await checkAccessCertificateTrust({ session: { trustPolicy: { mode: 'webuild', profile: 'webuild-wp4-pilot' } }, ...input });
-        if (!decision?.trusted) {
-          const reason = /^[A-Z0-9_]+$/.test(decision?.reasonCode || '') ? decision.reasonCode : 'UNKNOWN';
-          throw new Error(`WRPRC: registrar trust rejected (${reason})`);
-        }
-        return decision;
-      } });
-      assertQueryScope({ credentials: bindings.declaration.credentials }, result.intendedUse);
-      const dataset = { identifier: entityId, serviceId, srvDescription: result.payload.srv_description ?? result.payload.srvDescription ?? [bindings.declaration.purpose], registryURI: result.payload.registry_uri ?? result.payload.registryURI ?? registryUrl, intendedUseIdentifier: bindings.intendedUseId, purpose: bindings.declaration.purpose, policyURI: bindings.declaration.privacyPolicy[0].url };
-      assertRegistrarDataset(dataset, { registration: result.payload, intendedUse: result.intendedUse, ...bindings });
-      return result;
-    };
     const result = await provisionWrprcs({ bodies, manifestPath: env.TRUST_WRPRC_MANIFEST_PATH || path.join(root, 'certs/raidiam/registration/manifest.json'), request, verify, entityId, serviceId, registryUrl });
     for (const item of result.results) console.log(`${item.scenario}: ${item.status}${item.error ? ` (${item.error})` : ''}`);
     return result.ok;

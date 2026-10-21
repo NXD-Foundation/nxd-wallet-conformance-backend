@@ -38,6 +38,17 @@ async function readManifest(file, entityId, serviceId) {
   }
 }
 
+// Convert registry/local multilingual fields to the CS-02 JSON dataset shape.
+export function registrarDatasetForRegistration({ entityId, serviceId, intendedUseId, body, registration = {}, registryUrl }) {
+  const languageValues = values => values.flat().map(item => ({ lang: item.lang, value: item.value ?? item.content }));
+  return {
+    identifier: entityId, serviceId,
+    srvDescription: languageValues(registration.srv_description ?? registration.srvDescription ?? body.purpose),
+    registryURI: registration.registry_uri ?? registration.registryURI ?? registryUrl,
+    intendedUseIdentifier: intendedUseId, purpose: languageValues(body.purpose), policyURI: body.privacyPolicy[0].url,
+  };
+}
+
 // request(method, relativePath, body) returns parsed JSON or a compact JWT.
 // verify(token, bindings) must cryptographically verify signature, registrar trust,
 // scope and WRPAC identity, returning {payload, intendedUse}.
@@ -114,10 +125,7 @@ export async function provisionWrprcs({ bodies, manifestPath, request, verify, e
           await save();
           verified = await verify(token, bindings);
         }
-        const dataset = {
-          identifier: entityId, serviceId, srvDescription: verified.payload.srv_description ?? verified.payload.srvDescription ?? [body.purpose], registryURI: verified.payload.registry_uri ?? verified.payload.registryURI ?? registryUrl,
-          intendedUseIdentifier: intendedUseId, purpose: body.purpose, policyURI: body.privacyPolicy[0].url,
-        };
+        const dataset = registrarDatasetForRegistration({ entityId, serviceId, intendedUseId, body, registration: verified.payload, registryUrl });
         if (!Number.isFinite(verified?.payload?.exp)) throw new Error('Verified certificate omitted expiry');
         const certificateFile = `${scenario}.${now().getTime()}.${randomUUID()}.jwt`;
         await atomic(path.join(directory, certificateFile), `${token}\n`);
@@ -131,4 +139,25 @@ export async function provisionWrprcs({ bodies, manifestPath, request, verify, e
     }
     return { manifest, results, ok: results.every(result => result.status !== 'failed') };
   } finally { await lock.close(); await fs.unlink(`${manifestPath}.lock`); }
+}
+
+
+// Revalidate the retained tokens without OAuth, new registrations or issuance.
+// provisionWrprcs supplies the existing lock, quarantine, backup and atomic
+// activation rules; this adapter never calls the registry and refuses creation or renewal.
+export async function activateQuarantinedWrprcs(options) {
+  const directory = path.resolve(path.dirname(options.manifestPath));
+  const request = async (method, resource) => {
+    if (method !== 'GET' || !resource.endsWith('/registration-certificates')) {
+      throw new Error('Registry quarantine activation cannot create or renew registrations or certificates');
+    }
+    const manifest = await readManifest(options.manifestPath, options.entityId || RAIDiam_ENTITY, options.serviceId || RAIDiam_SERVICE);
+    return Promise.all(Object.values(manifest.scenarios).filter(entry => entry.quarantineFile).map(async entry => {
+      const file = path.resolve(directory, entry.quarantineFile);
+      if (!file.startsWith(directory + path.sep)) throw new Error('Registry quarantine file must be inside manifest directory');
+      return { certId: entry.certificateId, coversIntendedUseId: entry.intendedUseId, status: entry.registryStatus,
+        registrationCertificate: (await fs.readFile(file, 'utf8')).trim() };
+    }));
+  };
+  return provisionWrprcs({ ...options, request });
 }

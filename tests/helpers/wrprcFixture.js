@@ -9,7 +9,7 @@ export const WRPRC_ENTITY = 'VATEL-090264862';
 export const WRPRC_SERVICE = '4c3ecfb0-76ff-4eea-8e51-c8fac931e186';
 
 /** Isolated local registrar; never uses the deployment private keys. */
-export async function createWrprcFixture() {
+export async function createWrprcFixture({ keyUsage, ca = true } = {}) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'wrprc-requests-'));
   const keys = forge.pki.rsa.generateKeyPair(2048);
   const certificate = forge.pki.createCertificate();
@@ -19,7 +19,7 @@ export async function createWrprcFixture() {
   certificate.validity.notAfter = new Date(Date.now() + 86400000);
   const subject = [{ name: 'commonName', value: 'Test WRPRC Registrar' }];
   certificate.setSubject(subject); certificate.setIssuer(subject);
-  certificate.setExtensions([{ name: 'basicConstraints', cA: true }]);
+  certificate.setExtensions([...(ca ? [{ name: 'basicConstraints', cA: true }] : []), ...(keyUsage ? [{ name: 'keyUsage', ...keyUsage }] : [])]);
   certificate.sign(keys.privateKey, forge.md.sha256.create());
   const x5c = [forge.pki.certificateToPem(certificate).replace(/-----[^-]+-----/g, '').replace(/\s+/g, '')];
   const key = await importPKCS8(forge.pki.privateKeyInfoToPem(forge.pki.wrapRsaPrivateKey(forge.pki.privateKeyToAsn1(keys.privateKey))), 'RS256');
@@ -45,6 +45,6 @@ export async function createWrprcFixture() {
   const manifestPath = path.join(directory, 'manifest.json');
   async function save() { await fs.writeFile(manifestPath, JSON.stringify(manifest)); }
   await save();
-  return { directory, manifestPath, manifest, declarations, token, save,
+  return { directory, manifestPath, manifest, declarations, token, save, signerCertificatePem: forge.pki.certificateToPem(certificate),
     cleanup: () => fs.rm(directory, { recursive: true, force: true }) };
 }

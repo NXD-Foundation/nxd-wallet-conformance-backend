@@ -4,7 +4,7 @@ import { KEY_MATERIAL_PATHS } from '../utils/keyMaterialPaths.js';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { provisionWrprcs, declarationHash, listItems, certificateToken } from '../utils/raidiamProvisioning.js';
+import { activateQuarantinedWrprcs, provisionWrprcs, declarationHash, listItems, certificateToken } from '../utils/raidiamProvisioning.js';
 
 const body = { purpose: [{ lang: 'en', content: 'Testing' }], privacyPolicy: [{ type: 'Privacy Statement', url: 'https://www.aegean.gr/' }], credentials: [{ format: 'dc+sd-jwt', meta: { vct_values: ['pid'] }, claims: [{ path: ['family_name'] }] }] };
 describe('Raidiam registration provisioning regressions', () => {
@@ -43,6 +43,8 @@ describe('Raidiam registration provisioning regressions', () => {
     expect(entry.intendedUseId).to.equal('iu-1');
     expect(entry.declarationHash).to.equal(declarationHash(body));
     expect(entry.registrarDataset.policyURI).to.equal('https://www.aegean.gr/');
+    expect(entry.registrarDataset.srvDescription).to.deep.equal([{ lang: 'en', value: 'Testing' }]);
+    expect(entry.registrarDataset.purpose).to.deep.equal([{ lang: 'en', value: 'Testing' }]);
     expect(await fs.readFile(path.join(directory, entry.certificateFile), 'utf8')).to.equal('signed.jwt.signature\n');
     calls.length = 0;
     const repeated = await provisionWrprcs(options);
@@ -124,6 +126,43 @@ describe('Raidiam registration provisioning regressions', () => {
     let error;
     try { await provisionWrprcs(options); } catch (caught) { error = caught; }
     expect(error.code).to.equal('EEXIST');
+    expect(calls).to.have.length(0);
+  });
+  async function retainUntrustedToken() {
+    const originalVerify = options.verify;
+    options.verify = async () => { throw new Error('WRPRC: registrar not yet trusted'); };
+    const retained = await provisionWrprcs(options);
+    expect(retained.ok).to.equal(false);
+    options.verify = originalVerify; calls.length = 0;
+    return retained;
+  }
+  it('activates a retained token only after verification, without registration or issuance calls', async () => {
+    const retained = await retainUntrustedToken();
+    const quarantine = retained.manifest.scenarios['pid-basic'].quarantineFile;
+    const activated = await activateQuarantinedWrprcs(options);
+    expect(activated.ok).to.equal(true);
+    const entry = activated.manifest.scenarios['pid-basic'];
+    expect(await fs.readFile(path.join(directory, entry.certificateFile), 'utf8')).to.equal('signed.jwt.signature\n');
+    expect(await fs.readFile(path.join(directory, quarantine), 'utf8')).to.equal('signed.jwt.signature\n');
+    expect(calls).to.have.length(0);
+  });
+  it('keeps rejected or expired tokens quarantined and never issues replacements during activation', async () => {
+    await retainUntrustedToken();
+    for (const code of [undefined, 'ERR_JWT_EXPIRED']) {
+      options.verify = async () => { const error = new Error('WRPRC: rejected token'); error.code = code; throw error; };
+      const result = await activateQuarantinedWrprcs(options);
+      expect(result.ok).to.equal(false);
+      expect(result.manifest.scenarios['pid-basic']).not.to.have.property('certificateFile');
+      expect(result.manifest.scenarios['pid-basic'].quarantineFile).to.be.a('string');
+    }
+    expect(calls).to.have.length(0);
+  });
+  it('does not register a changed declaration while activating quarantine', async () => {
+    await retainUntrustedToken();
+    options.bodies[0].body = { ...body, purpose: [{ lang: 'en', content: 'Changed purpose' }] };
+    const result = await activateQuarantinedWrprcs(options);
+    expect(result.ok).to.equal(false);
+    expect(result.manifest.scenarios['pid-basic']).not.to.have.property('certificateFile');
     expect(calls).to.have.length(0);
   });
   it('uses canonical declaration hashes independent of object key order', () => {

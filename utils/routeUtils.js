@@ -1295,7 +1295,11 @@ export async function generateVPRequest(params) {
   const useConfiguredWrpac = cs07DcApi
     || String(clientId || "").startsWith("x509_")
     || (cs02StrictMode && !cs03Signing);
-  const verifierSigningMaterial = useConfiguredWrpac ? loadTrustFrameworkVerifierMaterial() : null;
+  const ordinaryCs02 = cs02StrictMode && !cs03Signing && !cs07DcApi &&
+    !isTrustFrameworkSession({ trustPolicy });
+  const verifierSigningMaterial = ordinaryCs02
+    ? loadVerifierP12()
+    : useConfiguredWrpac ? loadTrustFrameworkVerifierMaterial() : null;
   const effectiveClientId = resolveCs02PresentationClientId({
     clientId,
     cs03Signing,
@@ -1344,6 +1348,7 @@ export async function generateVPRequest(params) {
     state: cs07DcApi ? null : state,
     jar_alg: jarAlg || CONFIG.DEFAULT_JAR_ALG,
     client_id: effectiveClientId,
+    verifier_signing_profile: ordinaryCs02 ? "eudi-p12" : "raidiam",
   };
   if (trustPolicy) {
     sessionData.trustPolicy = trustPolicy;
@@ -1375,7 +1380,7 @@ export async function generateVPRequest(params) {
     sessionData.wrprcSelection = selected.selection;
     sessionData.verifier_info = selected.verifierInfo;
     sessionData.registrationCertificateTrust = selected.trustDecision;
-  } else if (cs02StrictMode) {
+  } else if (cs02StrictMode && !ordinaryCs02) {
     if (!verifierSigningMaterial) throw new Error("CS-02 registrar dataset requires WRPAC signing material");
     const selected = await selectRegistrarDataset({
       scenario: wrprcScenario, cs07ProfileId, cs03Signing, query: effectiveDcqlQuery,
@@ -1459,7 +1464,7 @@ export async function generateVPRequest(params) {
   // Build VP request JWT (key is determined from client_id scheme)
   await logDebug(sessionId, "Building VP request JWT");
   const metadataForRequest = isVerifierCs02StrictMode()
-    ? filterClientMetadataForCs02(clientMetadata, responseMode)
+    ? filterClientMetadataForCs02(clientMetadata, responseMode, effectiveDcqlQuery)
     : clientMetadata;
   const vpRequestJWT = await buildVpRequestJWT(
     effectiveClientId,
@@ -1568,12 +1573,14 @@ export async function processVPRequest(params) {
     });
 
     const metadataForRequest = isVerifierCs02StrictMode()
-      ? filterClientMetadataForCs02(clientMetadata, vpSession.response_mode)
+      ? filterClientMetadataForCs02(clientMetadata, vpSession.response_mode, vpSession.dcql_query)
       : clientMetadata;
     // The session identity is also the client_id published in its invocation URI.
     const requestClientId = vpSession.client_id || clientId;
     const trustSigningMaterial = String(requestClientId || "").startsWith("x509_")
-      ? loadTrustFrameworkVerifierMaterial()
+      ? (vpSession.verifier_signing_profile === "eudi-p12"
+        ? loadVerifierP12()
+        : loadTrustFrameworkVerifierMaterial())
       : null;
 
     let verifierInfo = null;
@@ -1584,7 +1591,7 @@ export async function processVPRequest(params) {
         certificatePem: certificateFromX5c(trustSigningMaterial.certChain), session: vpSession,
       });
       verifierInfo = validated.verifierInfo;
-    } else if (isVerifierCs02StrictMode()) {
+    } else if (isVerifierCs02StrictMode() && vpSession.verifier_signing_profile !== "eudi-p12") {
       if (!trustSigningMaterial) throw new Error("CS-02 registrar dataset requires WRPAC signing material");
       verifierInfo = validatePinnedRegistrarDataset({
         selection: vpSession.registrarDatasetSelection, query: vpSession.dcql_query,

@@ -62,6 +62,16 @@ async function buildStandardCs02Jar(overrides = {}) {
 }
 
 describe("CS-02 verifier request generation (Phase 3)", () => {
+  it("loads the EUDI P12 verifier with a signing key verifiable under PID Issuer CA 02", async () => {
+    const material = loadVerifierP12();
+    const cert = `-----BEGIN CERTIFICATE-----\n${material.certChain[0]}\n-----END CERTIFICATE-----`;
+    const key = await jose.importPKCS8(material.privateKeyPkcs8, "ES256");
+    const jwt = await new jose.SignJWT({ test: true }).setProtectedHeader({ alg: "ES256" }).sign(key);
+    const verified = await jose.jwtVerify(jwt, await jose.importX509(cert, "ES256"));
+    expect(verified.payload.test).to.equal(true);
+    expect(material.certChain).to.include(fs.readFileSync("certs/pidissuerca02_eu.pem", "utf8").replace(/-----[^-]+-----|\s/g, ""));
+  });
+
   it("accepts base64url nonces and rejects non-conforming nonce syntax", () => {
     expect(validateCs02Nonce("nonce-phase3_01")).to.equal("nonce-phase3_01");
     expect(() => validateCs02Nonce("nonce with spaces")).to.throw(
@@ -325,6 +335,28 @@ describe("CS-02 verifier request generation (Phase 3)", () => {
     expect(strict).to.not.have.property("encrypted_response_alg_values_supported");
     expect(strict).to.not.have.property("encrypted_response_enc_values_supported");
   });
+
+  for (const flag of ["CS03_COMPATIBILITY", "VERIFIER_CS03_COMPATIBILITY"]) {
+    it(`${flag} scopes CSC metadata to queries that request a signing certificate`, () => {
+      const previous = { ...process.env };
+      delete process.env.VERIFIER_CS03_COMPATIBILITY;
+      Object.assign(process.env, { CS03_COMPATIBILITY: "false", [flag]: "true" });
+      try {
+        const broad = JSON.parse(fs.readFileSync("./data/verifier-config.json", "utf8"));
+        const csc = "https://cloudsignatureconsortium.org/2025/x509";
+        for (const query of [undefined, validDcqlQuery()]) {
+          expect(filterClientMetadataForCs02(broad, "direct_post.jwt", query).vp_formats_supported)
+            .to.not.have.property(csc);
+        }
+        expect(filterClientMetadataForCs02(broad, "direct_post", {
+          credentials: [{ id: "cert", format: csc }],
+        }).vp_formats_supported).to.have.property(csc);
+        expect(broad.vp_formats_supported).to.have.property(csc);
+      } finally {
+        process.env = previous;
+      }
+    });
+  }
 
   it("does not reintroduce unsupported metadata formats for direct_post", async () => {
     const requestJwt = await buildStandardCs02Jar({

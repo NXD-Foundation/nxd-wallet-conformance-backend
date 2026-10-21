@@ -1,4 +1,9 @@
+import { loadVerifierP12 } from "../utils/cryptoUtils.js";
+import { assertX509HashLeafMatchesClientId } from "../utils/cs02ClientIdBinding.js";
 import { expect } from 'chai';
+import { evaluateTrust } from '../trust/evaluate.js';
+import { loadTrustProfile } from '../trust/profile.js';
+import { certificateFingerprint } from '../trust/crypto.js';
 import express from 'express';
 import request from 'supertest';
 import fs from 'node:fs/promises';
@@ -41,17 +46,18 @@ describe('WRPRC signed presentation request integration', function () {
   async function retrieve(sessionId) {
     return request(app).post(`/x509VPrequest/${sessionId}`).type('form').send({ wallet_nonce: 'wrprc-wallet-nonce' });
   }
-  async function verifyJar(token) {
+  async function verifyJar(token, eudiP12 = false) {
     const header = decodeProtectedHeader(token);
     expect(header.alg).to.equal('ES256');
-    const expectedLeaf = (await fs.readFile('certs/raidiam/uAaqzBHXMTOW0maXduvtPyAgFWY2RppjzxH5ucvky7U.pem', 'utf8'))
-      .replace(/-----BEGIN CERTIFICATE-----|-----END CERTIFICATE-----|\s+/g, '');
+    const expectedLeaf = eudiP12 ? loadVerifierP12().certChain[0] : (await fs.readFile('certs/raidiam/uAaqzBHXMTOW0maXduvtPyAgFWY2RppjzxH5ucvky7U.pem', 'utf8'))
+      .match(/-----BEGIN CERTIFICATE-----([\s\S]*?)-----END CERTIFICATE-----/)[1].replace(/\s+/g, '');
     expect(header.x5c[0]).to.equal(expectedLeaf);
-    expect(decodeJwt(token).client_id).to.equal('x509_hash:uAaqzBHXMTOW0maXduvtPyAgFWY2RppjzxH5ucvky7U');
+    assertX509HashLeafMatchesClientId(decodeJwt(token).client_id, header.x5c[0]);
     return (await jwtVerify(token, await importX509(`-----BEGIN CERTIFICATE-----\n${header.x5c[0]}\n-----END CERTIFICATE-----`, header.alg))).payload;
   }
   it('signs the matching base64url WRPRC and registrar dataset into redirect requests', async () => {
     await create('wrprc-redirect'); const res = await retrieve('wrprc-redirect');
+    expect((await getVPSession('wrprc-redirect')).verifier_signing_profile).to.equal('raidiam');
     expect(res.status, res.text).to.equal(200);
     const payload = await verifyJar(res.text);
     expect(payload.wallet_nonce).to.equal('wrprc-wallet-nonce');
@@ -90,34 +96,22 @@ describe('WRPRC signed presentation request integration', function () {
     delete entry.registrarDataset;
     await fixture.save();
   }
-  it('includes only the registrar dataset with trust disabled and the WRPRC quarantined', async () => {
+  it('ordinary CS-02 uses EUDI P12 without Raidiam metadata or registration dependencies', async () => {
     await quarantineScenario();
-    await create('wrprc-disabled', false); const res = await retrieve('wrprc-disabled');
-    expect(res.status, res.text).to.equal(200);
-    const payload = await verifyJar(res.text);
-    expect(payload.verifier_info.map(entry => entry.format)).to.deep.equal(['registrar_dataset']);
-    expect(payload.verifier_info[0].data).to.include({ identifier: WRPRC_ENTITY, intendedUseIdentifier: 'use-pid-basic' });
-    expect(payload.verifier_info[0].data.policyURI).to.equal('https://www.aegean.gr/');
-    expect(fixture.manifest.scenarios['pid-basic']).not.to.have.property('certificateFile');
-    const session = await getVPSession('wrprc-disabled');
-    expect(session).not.to.have.property('wrprcSelection');
-    expect(session).not.to.have.property('registrationCertificateTrust');
-  });
-  it('pins the dataset for trust-disabled retrieval across manifest replacement', async () => {
-    await quarantineScenario(); await create('registrar-pinned', false);
-    const first = await retrieve('registrar-pinned');
     fixture.manifest.scenarios = {}; await fixture.save();
-    const second = await retrieve('registrar-pinned');
-    expect(second.status, second.text).to.equal(200);
-    expect((await verifyJar(second.text)).verifier_info).to.deep.equal((await verifyJar(first.text)).verifier_info);
-  });
-  it('rechecks pinned dataset scope when a trust-disabled request is retrieved', async () => {
-    await create('registrar-scope', false);
-    const session = structuredClone(await getVPSession('registrar-scope'));
-    session.dcql_query.credentials[0].claims.push({ path: ['picture'] });
-    await storeVPSession('registrar-scope', session);
-    const res = await retrieve('registrar-scope');
-    expect(res.status).to.equal(500); expect(res.text).not.to.match(/^eyJ/);
+    await create('eudi-p12-no-registration', false);
+    const first = await retrieve('eudi-p12-no-registration');
+    expect(first.status, first.text).to.equal(200);
+    const payload = await verifyJar(first.text, true);
+    expect(payload).not.to.have.property('verifier_info');
+    expect(decodeProtectedHeader(first.text).x5c).to.deep.equal([loadVerifierP12().certChain[0]]);
+    const session = await getVPSession('eudi-p12-no-registration');
+    expect(session.verifier_signing_profile).to.equal('eudi-p12');
+    expect(session).not.to.have.property('wrprcSelection');
+    expect(session).not.to.have.property('registrarDatasetSelection');
+    const again = await retrieve('eudi-p12-no-registration');
+    expect(again.status).to.equal(200);
+    expect(decodeProtectedHeader(again.text).x5c).to.deep.equal(decodeProtectedHeader(first.text).x5c);
   });
   it('includes the registrar dataset in a trust-disabled CS-07 signed descriptor without opening quarantine', async () => {
     await quarantineScenario();
@@ -145,6 +139,47 @@ describe('WRPRC signed presentation request integration', function () {
       ? trusted() : { trusted: false, state: 'not_trusted', reasonCode: 'ENTITY_NOT_LISTED' } });
     const res = await request(app).get('/generateVPRequestDCQL').query({ sessionId: 'registrar-untrusted', trustFramework: 'true' });
     expect(res.status).to.equal(500); expect(res.text).to.include('registration signing chain is not trusted');
+  });
+  async function useListedSigner(keyUsage) {
+    await fixture.cleanup(); fixture = await createWrprcFixture({ ca: false, keyUsage });
+    process.env.TRUST_WRPRC_MANIFEST_PATH = fixture.manifestPath;
+    const profile = await loadTrustProfile('data/trust/webuild-wp4-pilot.json');
+    const accessPem = await fs.readFile('certs/raidiam/uAaqzBHXMTOW0maXduvtPyAgFWY2RppjzxH5ucvky7U.pem', 'utf8');
+    const snapshot = { profile, profileId: profile.id,
+      lotl: { source: { url: 'https://example.test/lotl' }, format: 'json', scheme: { sequence: 1 }, signer: { fingerprint: 'test-pinned' } },
+      lists: Object.fromEntries([['wrpac-provider', accessPem], ['wrprc-provider', fixture.signerCertificatePem]].map(([role, pem]) => [role, [{
+        source: { url: `https://example.test/${role}` }, format: 'xml', scheme: { sequence: 1 }, entities: [{ id: role, services: [{
+          type: role, status: 'valid', certificates: [certificateFingerprint(pem)], certificatePems: [pem],
+        }] }],
+      }]])) };
+    setTrustResolverForTests({ resolve: async ({ role, operation, presentedIdentity, credentialContext }) =>
+      evaluateTrust({ snapshot, role, operation, presentedIdentity, credentialContext }) });
+    return snapshot;
+  }
+  it('does not apply the absent-Key-Usage exception to WRPAC validation', async () => {
+    const snapshot = await useListedSigner();
+    const certificatePem = fixture.signerCertificatePem;
+    const service = snapshot.lists['wrpac-provider'][0].entities[0].services[0];
+    service.certificates = [certificateFingerprint(certificatePem)]; service.certificatePems = [certificatePem];
+    const result = evaluateTrust({ snapshot, role: 'wrpac-provider', presentedIdentity: {
+      certificateFingerprint: certificateFingerprint(certificatePem), certificateChain: [certificatePem],
+    } });
+    expect(result).to.include({ trusted: false, reasonCode: 'CERTIFICATE_PATH_INVALID' });
+  });
+  it('accepts and retrieves a WRPRC whose directly listed signer omits Key Usage', async () => {
+    await useListedSigner();
+    await create('wrprc-listed-no-ku');
+    const response = await retrieve('wrprc-listed-no-ku');
+    expect(response.status, response.text).to.equal(200);
+    expect((await verifyJar(response.text)).verifier_info.map(entry => entry.format)).to.deep.equal(['registrar_dataset', 'registration_cert']);
+    const session = await getVPSession('wrprc-listed-no-ku');
+    expect(session.registrationCertificateTrust.trusted).to.equal(true);
+    expect(session.registrationCertificateTrust.evidence.certificatePath.keyUsage).to.equal('absent-directly-listed-signer');
+  });
+  it('rejects a WRPRC whose directly listed signer explicitly forbids digital signatures', async () => {
+    await useListedSigner({ keyEncipherment: true });
+    const response = await request(app).get('/generateVPRequestDCQL').query({ sessionId: 'wrprc-listed-denied-ku', trustFramework: 'true' });
+    expect(response.status).to.equal(500); expect(response.text).to.include('registration signing chain is not trusted');
   });
   it('keeps payment overrides within the configured final DPC query and certificate', async () => {
     const res = await request(app).post('/vp/dc-api/request?trustFramework=true').set('Origin', 'https://dev-i4mlab.aegean.gr').send({
@@ -192,10 +227,10 @@ describe('WRPRC signed presentation request integration', function () {
     const modified = structuredClone(result.selection); modified.registrarDataset.policyURI = 'https://other.example/privacy';
     expect(() => validatePinnedRegistrarDataset({ selection: modified, query, certificatePem })).to.throw('privacy policy mismatch');
   });
-  it('does not invent registrar identifiers when the registration record is missing', async () => {
+  it('does not invent registrar identifiers for trust-enabled requests when registration is missing', async () => {
     delete fixture.manifest.scenarios['pid-basic'].intendedUseId; await fixture.save();
-    const res = await request(app).get('/generateVPRequestDCQL').query({ sessionId: 'registrar-missing-id' });
-    expect(res.status).to.equal(500); expect(res.text).to.include('no registered intended use');
+    const res = await request(app).get('/generateVPRequestDCQL').query({ sessionId: 'registrar-missing-id', trustFramework: 'true' });
+    expect(res.status).to.equal(500); expect(res.text).to.include('WRPRC:');
   });
   it('selects and validates all 13 explicit scenarios and every unambiguous exact query default', async () => {
     const certificatePem = await fs.readFile('certs/raidiam/uAaqzBHXMTOW0maXduvtPyAgFWY2RppjzxH5ucvky7U.pem', 'utf8');

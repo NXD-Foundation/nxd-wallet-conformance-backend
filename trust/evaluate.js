@@ -75,7 +75,7 @@ export function evaluateTrust({ snapshot, role, operation = null, presentedIdent
     let certificatePath = null;
     try {
       if (presentedIdentity.certificateChain?.length && service.certificatePems?.length) {
-        certificatePath = validateCertificatePath({ certificateChain: presentedIdentity.certificateChain, anchorCertificates: service.certificatePems, evaluationTime });
+        certificatePath = validateCertificatePath({ certificateChain: presentedIdentity.certificateChain, anchorCertificates: service.certificatePems, evaluationTime, allowMissingKeyUsageForListedLeaf: role === "wrprc-provider" });
       }
     } catch (error) {
       negatives.push(result(snapshot, false, error.reasonCode || TRUST_REASON_CODES.CERTIFICATE_PATH_INVALID, { role, entity: entity.id, service: service.type, operation, credentialContext, list: listEvidence(list) }));

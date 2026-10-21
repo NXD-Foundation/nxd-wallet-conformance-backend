@@ -204,7 +204,20 @@ trusted-list issue is resolved, rerun provisioning to validate and activate the
 existing certificates. Reruns reconcile `coversIntendedUseId` and `certId` from the
 live API rather than issuing duplicates for a trust rejection.
 
-Trust-enabled requests fail until their scenario has an activated certificate.
+On 21 October 2026, the live authenticated IDunion WRPRC-provider LoTE contained
+the exact Raidiam signer. After correcting the distinction between absent and
+explicitly restricted Key Usage for directly listed non-CA WRPRC signers, all 13
+retained JWTs passed verification and were activated. No registrations or tokens
+were reissued. Original quarantine files and manifest backups remain retained.
+See [certificate validation rationale](../../../docs/raidiam-wrprc-signer-validation.md).
+
+To revalidate and activate only retained certificates without OAuth or issuance:
+
+```bash
+node scripts/provisionRaidiamWrprc.js --activate-quarantined
+```
+
+Trust-enabled requests fail if their scenario has no activated, trusted certificate.
 Use `wrprc_scenario=<scenario filename without .json>` on a request URL to select
 an explicit scenario for a custom query. Known route/profile defaults select their
 scenario before checking the finalized query. A changed local declaration requires
@@ -234,5 +247,5 @@ request's registration identity. Sessions created before dataset pinning must be
 recreated. Compatibility mode retains its previous optional-metadata behavior.
 
 With `trustFramework=true`, a trusted activated registration JWT remains required.
-The Raidiam JWTs stay quarantined until their signer is recognised by the configured
-WRPRC-provider trust policy; there is no dataset-only fallback for that mode.
+Only JWTs that pass the configured WRPRC-provider trust policy may be activated;
+failed JWTs remain quarantined. There is no dataset-only fallback for that mode.

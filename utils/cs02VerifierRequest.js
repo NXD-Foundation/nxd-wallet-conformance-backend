@@ -449,10 +449,11 @@ export function validateCs02SignedJar(requestJwt, options = { strict: true }) {
   }
 }
 
-export function filterClientMetadataForCs02(clientMetadata, responseMode) {
+export function filterClientMetadataForCs02(clientMetadata, responseMode, dcqlQuery = null) {
   const options = resolveVerifierCs02Options();
   return buildStrictCs02ClientMetadata(clientMetadata, responseMode, {
-    allowCs03CredentialFormat: options.allowCs03CredentialFormat,
+    allowCs03CredentialFormat: options.allowCs03CredentialFormat &&
+      dcqlQuery?.credentials?.some((credential) => credential.format === CS03_X509_DCQL_FORMAT) === true,
   });
 }
 

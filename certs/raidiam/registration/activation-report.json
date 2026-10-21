@@ -1,0 +1,292 @@
+{
+  "verifiedAt": "2026-10-21T12:45:37.004Z",
+  "profile": "webuild-wp4-pilot",
+  "results": [
+    {
+      "scenario": "age-over-18-mdoc",
+      "trusted": true,
+      "certificateFile": "age-over-18-mdoc.1792586600566.64051f7e-2243-4ed6-b7df-cbd184aa7517.jwt",
+      "expiresAt": "2027-01-18T11:47:14.000Z",
+      "intendedUseId": "2ff98d54-320f-49f2-b963-70a030966848",
+      "signerFingerprint": "7d0be11ca864cee97de61624c34e353a31771588e2009c33da15b2f1258520a7",
+      "keyUsage": "absent-directly-listed-signer",
+      "lotl": {
+        "url": "https://webuild-consortium.github.io/wp4-trust-group/list_of_trusted_lists.json",
+        "format": "json",
+        "sequence": 1,
+        "signerFingerprint": "339753d8aed9b99febc13cc15c87e1e892e391a0dffb1bd3ac820d73219e38e1",
+        "bootstrapMode": "pinned"
+      },
+      "list": {
+        "url": "https://tl-api.dev.idunion.info/api/v1/DblnEVuf/etsi/tl.xml",
+        "format": "xml",
+        "sequence": 1,
+        "signerFingerprint": "2beb18e5eb541aee5070cd2f08caa4d7eb0b2eb5d7707c3f3df8f848ad8389e1"
+      }
+    },
+    {
+      "scenario": "pid-arf",
+      "trusted": true,
+      "certificateFile": "pid-arf.1792586600806.15cad1d2-a26f-445d-b508-838678ba5bb3.jwt",
+      "expiresAt": "2027-01-18T11:47:17.000Z",
+      "intendedUseId": "8fbf7ab8-0fea-4a6d-9f6b-aedf10f6d677",
+      "signerFingerprint": "7d0be11ca864cee97de61624c34e353a31771588e2009c33da15b2f1258520a7",
+      "keyUsage": "absent-directly-listed-signer",
+      "lotl": {
+        "url": "https://webuild-consortium.github.io/wp4-trust-group/list_of_trusted_lists.json",
+        "format": "json",
+        "sequence": 1,
+        "signerFingerprint": "339753d8aed9b99febc13cc15c87e1e892e391a0dffb1bd3ac820d73219e38e1",
+        "bootstrapMode": "pinned"
+      },
+      "list": {
+        "url": "https://tl-api.dev.idunion.info/api/v1/DblnEVuf/etsi/tl.xml",
+        "format": "xml",
+        "sequence": 1,
+        "signerFingerprint": "2beb18e5eb541aee5070cd2f08caa4d7eb0b2eb5d7707c3f3df8f848ad8389e1"
+      }
+    },
+    {
+      "scenario": "pid-basic",
+      "trusted": true,
+      "certificateFile": "pid-basic.1792586601070.a68a98ae-14d2-4d59-8482-e52183e6a8dc.jwt",
+      "expiresAt": "2027-01-18T11:47:20.000Z",
+      "intendedUseId": "95da7781-0a65-4271-bf49-22da0e6ebbf5",
+      "signerFingerprint": "7d0be11ca864cee97de61624c34e353a31771588e2009c33da15b2f1258520a7",
+      "keyUsage": "absent-directly-listed-signer",
+      "lotl": {
+        "url": "https://webuild-consortium.github.io/wp4-trust-group/list_of_trusted_lists.json",
+        "format": "json",
+        "sequence": 1,
+        "signerFingerprint": "339753d8aed9b99febc13cc15c87e1e892e391a0dffb1bd3ac820d73219e38e1",
+        "bootstrapMode": "pinned"
+      },
+      "list": {
+        "url": "https://tl-api.dev.idunion.info/api/v1/DblnEVuf/etsi/tl.xml",
+        "format": "xml",
+        "sequence": 1,
+        "signerFingerprint": "2beb18e5eb541aee5070cd2f08caa4d7eb0b2eb5d7707c3f3df8f848ad8389e1"
+      }
+    },
+    {
+      "scenario": "pid-mdoc",
+      "trusted": true,
+      "certificateFile": "pid-mdoc.1792586601298.e706512f-0404-4b80-a962-c7bcb3596557.jwt",
+      "expiresAt": "2027-01-18T11:47:22.000Z",
+      "intendedUseId": "cf8bc654-333d-4414-9359-77192b782a15",
+      "signerFingerprint": "7d0be11ca864cee97de61624c34e353a31771588e2009c33da15b2f1258520a7",
+      "keyUsage": "absent-directly-listed-signer",
+      "lotl": {
+        "url": "https://webuild-consortium.github.io/wp4-trust-group/list_of_trusted_lists.json",
+        "format": "json",
+        "sequence": 1,
+        "signerFingerprint": "339753d8aed9b99febc13cc15c87e1e892e391a0dffb1bd3ac820d73219e38e1",
+        "bootstrapMode": "pinned"
+      },
+      "list": {
+        "url": "https://tl-api.dev.idunion.info/api/v1/DblnEVuf/etsi/tl.xml",
+        "format": "xml",
+        "sequence": 1,
+        "signerFingerprint": "2beb18e5eb541aee5070cd2f08caa4d7eb0b2eb5d7707c3f3df8f848ad8389e1"
+      }
+    },
+    {
+      "scenario": "pid-sd-jwt-full",
+      "trusted": true,
+      "certificateFile": "pid-sd-jwt-full.1792586601705.88191547-ee9a-4fb1-8f13-31fb64a746cd.jwt",
+      "expiresAt": "2027-01-18T11:47:24.000Z",
+      "intendedUseId": "a873d799-4797-464d-9cdc-42c08f475f70",
+      "signerFingerprint": "7d0be11ca864cee97de61624c34e353a31771588e2009c33da15b2f1258520a7",
+      "keyUsage": "absent-directly-listed-signer",
+      "lotl": {
+        "url": "https://webuild-consortium.github.io/wp4-trust-group/list_of_trusted_lists.json",
+        "format": "json",
+        "sequence": 1,
+        "signerFingerprint": "339753d8aed9b99febc13cc15c87e1e892e391a0dffb1bd3ac820d73219e38e1",
+        "bootstrapMode": "pinned"
+      },
+      "list": {
+        "url": "https://tl-api.dev.idunion.info/api/v1/DblnEVuf/etsi/tl.xml",
+        "format": "xml",
+        "sequence": 1,
+        "signerFingerprint": "2beb18e5eb541aee5070cd2f08caa4d7eb0b2eb5d7707c3f3df8f848ad8389e1"
+      }
+    },
+    {
+      "scenario": "qualified-signing",
+      "trusted": true,
+      "certificateFile": "qualified-signing.1792586601966.e721eab5-2d51-4d7c-9249-444cb29fd84e.jwt",
+      "expiresAt": "2027-01-18T11:47:27.000Z",
+      "intendedUseId": "fc02b55d-f9a0-4f08-9db5-494f5fec0cf9",
+      "signerFingerprint": "7d0be11ca864cee97de61624c34e353a31771588e2009c33da15b2f1258520a7",
+      "keyUsage": "absent-directly-listed-signer",
+      "lotl": {
+        "url": "https://webuild-consortium.github.io/wp4-trust-group/list_of_trusted_lists.json",
+        "format": "json",
+        "sequence": 1,
+        "signerFingerprint": "339753d8aed9b99febc13cc15c87e1e892e391a0dffb1bd3ac820d73219e38e1",
+        "bootstrapMode": "pinned"
+      },
+      "list": {
+        "url": "https://tl-api.dev.idunion.info/api/v1/DblnEVuf/etsi/tl.xml",
+        "format": "xml",
+        "sequence": 1,
+        "signerFingerprint": "2beb18e5eb541aee5070cd2f08caa4d7eb0b2eb5d7707c3f3df8f848ad8389e1"
+      }
+    },
+    {
+      "scenario": "ts12-dpc-pid-standalone",
+      "trusted": true,
+      "certificateFile": "ts12-dpc-pid-standalone.1792586602170.4482c876-1b7a-4b5c-ac68-f0120a8cb3da.jwt",
+      "expiresAt": "2027-01-18T11:47:29.000Z",
+      "intendedUseId": "ee9edc03-2209-47b9-bd02-d92c0c0ba38b",
+      "signerFingerprint": "7d0be11ca864cee97de61624c34e353a31771588e2009c33da15b2f1258520a7",
+      "keyUsage": "absent-directly-listed-signer",
+      "lotl": {
+        "url": "https://webuild-consortium.github.io/wp4-trust-group/list_of_trusted_lists.json",
+        "format": "json",
+        "sequence": 1,
+        "signerFingerprint": "339753d8aed9b99febc13cc15c87e1e892e391a0dffb1bd3ac820d73219e38e1",
+        "bootstrapMode": "pinned"
+      },
+      "list": {
+        "url": "https://tl-api.dev.idunion.info/api/v1/DblnEVuf/etsi/tl.xml",
+        "format": "xml",
+        "sequence": 1,
+        "signerFingerprint": "2beb18e5eb541aee5070cd2f08caa4d7eb0b2eb5d7707c3f3df8f848ad8389e1"
+      }
+    },
+    {
+      "scenario": "ts12-dpc-pid",
+      "trusted": true,
+      "certificateFile": "ts12-dpc-pid.1792586602451.ba593c1e-580f-4b14-b1bd-01514f8a4aee.jwt",
+      "expiresAt": "2027-01-18T11:47:31.000Z",
+      "intendedUseId": "a3517063-87ca-436e-9feb-2ae6f1c8effa",
+      "signerFingerprint": "7d0be11ca864cee97de61624c34e353a31771588e2009c33da15b2f1258520a7",
+      "keyUsage": "absent-directly-listed-signer",
+      "lotl": {
+        "url": "https://webuild-consortium.github.io/wp4-trust-group/list_of_trusted_lists.json",
+        "format": "json",
+        "sequence": 1,
+        "signerFingerprint": "339753d8aed9b99febc13cc15c87e1e892e391a0dffb1bd3ac820d73219e38e1",
+        "bootstrapMode": "pinned"
+      },
+      "list": {
+        "url": "https://tl-api.dev.idunion.info/api/v1/DblnEVuf/etsi/tl.xml",
+        "format": "xml",
+        "sequence": 1,
+        "signerFingerprint": "2beb18e5eb541aee5070cd2f08caa4d7eb0b2eb5d7707c3f3df8f848ad8389e1"
+      }
+    },
+    {
+      "scenario": "ts12-dpc",
+      "trusted": true,
+      "certificateFile": "ts12-dpc.1792586602716.2cfb2f61-0eff-4eeb-a8be-3d823256689d.jwt",
+      "expiresAt": "2027-01-18T11:47:33.000Z",
+      "intendedUseId": "792e8065-3dc7-45cf-98cf-5610c407996a",
+      "signerFingerprint": "7d0be11ca864cee97de61624c34e353a31771588e2009c33da15b2f1258520a7",
+      "keyUsage": "absent-directly-listed-signer",
+      "lotl": {
+        "url": "https://webuild-consortium.github.io/wp4-trust-group/list_of_trusted_lists.json",
+        "format": "json",
+        "sequence": 1,
+        "signerFingerprint": "339753d8aed9b99febc13cc15c87e1e892e391a0dffb1bd3ac820d73219e38e1",
+        "bootstrapMode": "pinned"
+      },
+      "list": {
+        "url": "https://tl-api.dev.idunion.info/api/v1/DblnEVuf/etsi/tl.xml",
+        "format": "xml",
+        "sequence": 1,
+        "signerFingerprint": "2beb18e5eb541aee5070cd2f08caa4d7eb0b2eb5d7707c3f3df8f848ad8389e1"
+      }
+    },
+    {
+      "scenario": "ts12-iban-pid",
+      "trusted": true,
+      "certificateFile": "ts12-iban-pid.1792586602973.cb2fb9ed-d9a1-4d71-b7c5-9a6c38827f28.jwt",
+      "expiresAt": "2027-01-18T11:47:36.000Z",
+      "intendedUseId": "9db414f6-ff7c-4043-9ff1-e224e7349ffb",
+      "signerFingerprint": "7d0be11ca864cee97de61624c34e353a31771588e2009c33da15b2f1258520a7",
+      "keyUsage": "absent-directly-listed-signer",
+      "lotl": {
+        "url": "https://webuild-consortium.github.io/wp4-trust-group/list_of_trusted_lists.json",
+        "format": "json",
+        "sequence": 1,
+        "signerFingerprint": "339753d8aed9b99febc13cc15c87e1e892e391a0dffb1bd3ac820d73219e38e1",
+        "bootstrapMode": "pinned"
+      },
+      "list": {
+        "url": "https://tl-api.dev.idunion.info/api/v1/DblnEVuf/etsi/tl.xml",
+        "format": "xml",
+        "sequence": 1,
+        "signerFingerprint": "2beb18e5eb541aee5070cd2f08caa4d7eb0b2eb5d7707c3f3df8f848ad8389e1"
+      }
+    },
+    {
+      "scenario": "ts12-iban",
+      "trusted": true,
+      "certificateFile": "ts12-iban.1792586603135.245b8964-11cb-43b9-b9ed-86ab3c788452.jwt",
+      "expiresAt": "2027-01-18T11:47:38.000Z",
+      "intendedUseId": "55e0e3f7-0d55-4458-89fa-d1cf9ed858f2",
+      "signerFingerprint": "7d0be11ca864cee97de61624c34e353a31771588e2009c33da15b2f1258520a7",
+      "keyUsage": "absent-directly-listed-signer",
+      "lotl": {
+        "url": "https://webuild-consortium.github.io/wp4-trust-group/list_of_trusted_lists.json",
+        "format": "json",
+        "sequence": 1,
+        "signerFingerprint": "339753d8aed9b99febc13cc15c87e1e892e391a0dffb1bd3ac820d73219e38e1",
+        "bootstrapMode": "pinned"
+      },
+      "list": {
+        "url": "https://tl-api.dev.idunion.info/api/v1/DblnEVuf/etsi/tl.xml",
+        "format": "xml",
+        "sequence": 1,
+        "signerFingerprint": "2beb18e5eb541aee5070cd2f08caa4d7eb0b2eb5d7707c3f3df8f848ad8389e1"
+      }
+    },
+    {
+      "scenario": "ts12-user-pid",
+      "trusted": true,
+      "certificateFile": "ts12-user-pid.1792586603304.f8abeb8c-788f-4d68-add2-3a65e4c3fa91.jwt",
+      "expiresAt": "2027-01-18T11:47:40.000Z",
+      "intendedUseId": "14ece697-679a-412b-90c5-f2fc91562d25",
+      "signerFingerprint": "7d0be11ca864cee97de61624c34e353a31771588e2009c33da15b2f1258520a7",
+      "keyUsage": "absent-directly-listed-signer",
+      "lotl": {
+        "url": "https://webuild-consortium.github.io/wp4-trust-group/list_of_trusted_lists.json",
+        "format": "json",
+        "sequence": 1,
+        "signerFingerprint": "339753d8aed9b99febc13cc15c87e1e892e391a0dffb1bd3ac820d73219e38e1",
+        "bootstrapMode": "pinned"
+      },
+      "list": {
+        "url": "https://tl-api.dev.idunion.info/api/v1/DblnEVuf/etsi/tl.xml",
+        "format": "xml",
+        "sequence": 1,
+        "signerFingerprint": "2beb18e5eb541aee5070cd2f08caa4d7eb0b2eb5d7707c3f3df8f848ad8389e1"
+      }
+    },
+    {
+      "scenario": "ts12-user",
+      "trusted": true,
+      "certificateFile": "ts12-user.1792586603483.204ff868-0035-4eb0-a34e-5eda6f1713e9.jwt",
+      "expiresAt": "2027-01-18T11:47:42.000Z",
+      "intendedUseId": "b50bdedc-6d1a-4454-a6f0-dbee1bd1324b",
+      "signerFingerprint": "7d0be11ca864cee97de61624c34e353a31771588e2009c33da15b2f1258520a7",
+      "keyUsage": "absent-directly-listed-signer",
+      "lotl": {
+        "url": "https://webuild-consortium.github.io/wp4-trust-group/list_of_trusted_lists.json",
+        "format": "json",
+        "sequence": 1,
+        "signerFingerprint": "339753d8aed9b99febc13cc15c87e1e892e391a0dffb1bd3ac820d73219e38e1",
+        "bootstrapMode": "pinned"
+      },
+      "list": {
+        "url": "https://tl-api.dev.idunion.info/api/v1/DblnEVuf/etsi/tl.xml",
+        "format": "xml",
+        "sequence": 1,
+        "signerFingerprint": "2beb18e5eb541aee5070cd2f08caa4d7eb0b2eb5d7707c3f3df8f848ad8389e1"
+      }
+    }
+  ]
+}

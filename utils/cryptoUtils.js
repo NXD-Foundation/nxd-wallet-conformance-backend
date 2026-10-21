@@ -25,7 +25,6 @@ import {
   Cs02VerifierRequestError,
   CS02_DEFAULT_AUDIENCE,
 } from "./cs02VerifierRequest.js";
-import { buildStrictCs02ClientMetadata } from "./cs02TrustPolicy.js";
 import { isStrictCs02Base64Url } from "./cs02Encoding.js";
 import { resolveCs07VerifierOrigin } from "./cs07DcApi.js";
 import { computeX509HashClientIdFromLeafCertBase64 } from "./cs02ClientIdBinding.js";
@@ -263,11 +262,7 @@ function appendWrpacIssuingCa(certChain, caPemPath) {
   return chain;
 }
 
-/**
- * WRPAC leaf plus its issuing CA, used to sign x509 verifier authorization
- * requests. trustFramework=true sessions use the same material. The preprod
- * P12 remains available for callers that pass no WRPAC material.
- */
+/** Raidiam WRPAC and issuing CA for explicit trust sessions, CS-03 and CS-07. */
 export function loadTrustFrameworkVerifierMaterial({ certPath, keyPath } = {}) {
   const material = loadMatchedCertificateMaterial({
     resolvedCertPath: resolveMaterialPath(certPath, process.env.TRUST_WRPAC_CERT_PATH, DEFAULT_TRUST_WRPAC_CERT),
@@ -553,10 +548,10 @@ export async function buildVpRequestJWT(
   // encrypted_response_enc_values_supported MUST be absent when using direct_post (non-JWT) response mode.
   let clientMetadataForPayload = client_metadata;
   if (cs02Options.strict) {
-    clientMetadataForPayload = buildStrictCs02ClientMetadata(
+    clientMetadataForPayload = filterClientMetadataForCs02(
       client_metadata,
       response_mode,
-      { allowCs03CredentialFormat: cs02Options.allowCs03CredentialFormat },
+      dcql_query,
     );
   }
   if (response_mode === "direct_post" && clientMetadataForPayload && typeof clientMetadataForPayload === "object") {

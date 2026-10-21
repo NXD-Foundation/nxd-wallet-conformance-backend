@@ -117,15 +117,17 @@ LoTL content; runtime still fetches the published LoTL and referenced lists.
 
 ### Raidiam relying-party registration certificates
 
-Strict CS-02 verifier requests include a `registrar_dataset` entry in
-`verifier_info` even when trust enforcement is disabled. The dataset uses the
-saved registration ID and submitted intended-use declaration (or a retained
-registrar dataset); no quarantined JWT is read or advertised. Dataset selection
-is pinned in the VP session and its WRPAC identity and finalized DCQL scope are
-revalidated on request retrieval. Missing registration records or inconsistent
-scope fail generation rather than inventing registry identifiers.
+Ordinary remote CS-02 requests use the original EUDI preproduction verifier
+P12 (`certs/WE-BUILD-Verifier.p12`, issued by PID Issuer CA 02) and its
+`certs/pidissuerca02_eu.pem` chain. Their signing profile and derived
+`x509_hash` identity are pinned in the VP session and retained on retrieval.
+They do not attach Raidiam registrar data or WRPRCs: those registrations belong
+to the Raidiam identity. This ordinary EUDI interoperability mode does not satisfy
+CS-02 v1.2's mandatory `verifier_info` requirement; full-profile registration
+coverage uses explicit `trustFramework=true` cases. CS-03 and CS-07 retain their
+existing certificate selection and registration behaviour.
 
-Trust-enabled requests additionally require a locally activated, trusted WRPRC
+Trust-enabled requests require a locally activated, trusted WRPRC
 for the selected scenario and include its base64url-encoded registration token.
 Missing or untrusted certificates still fail request generation; dataset-only
 requests do not bypass this policy. Both selections are pinned in the VP session.
@@ -139,6 +141,14 @@ that fail validation in quarantine, and activates only verified registrations.
 See [registration setup](../data/trust/intended_uses/README.md) for configuration,
 scenario mappings, the test-infrastructure privacy URL and current live trust
 limitations. No automatic trust-anchor fallback is added for Raidiam.
+
+The live IDunion WRPRC-provider LoTE now lists the exact Raidiam registration
+signer. A directly listed non-CA WRPRC signer may omit Key Usage; an explicit
+usage restriction still applies, and WRPAC requirements are unchanged. See
+[signer validation and activation](./raidiam-wrprc-signer-validation.md) for the
+RFC/ETSI rationale, scope, and `--activate-quarantined` command. On 21 October
+2026 all 13 retained WRPRCs passed live trust, signature, expiry, binding, scope
+and dataset checks and were activated; original quarantine files remain retained.
 
 
 
@@ -467,7 +477,9 @@ set. To enable the intentional CS-03 compatibility allowance, set
 `WALLET_CS03_COMPATIBILITY=true`.
 - The flag only permits the CSC X.509 DCQL format through the existing CS-03
 flow. It does not enable CS-03 by itself, relax all CS-02 checks, or make
-trust evaluation effective. Keep it disabled for ordinary CS-02 sessions.
+trust evaluation effective. Outgoing request metadata includes CSC only when
+the DCQL query requests a CSC X.509 credential, so enabling CS-03 alongside
+CS-02 does not add CSC capabilities to ordinary CS-02 requests.
 
 Source: [CS-03 verifier flow summary](./cs03-verifier-flow-summary.md).
 
@@ -742,8 +754,8 @@ deliberately separate:
   metadata signing material. `certs/pidissuerca02_eu.pem` is the CA used to
   extend the JAR `x5c` chain and the hardcoded `preprod.pki.eudiw.dev` WRPAC
   alternative anchor.
-- x509 verifier authorization requests, including `trustFramework=true`
-  sessions, are signed with the Raidiam sandbox WRPAC
+- Explicit `trustFramework=true` verifier requests, CS-03, and CS-07
+  are signed with the Raidiam sandbox WRPAC
   `certs/raidiam/uAaqzBHXMTOW0maXduvtPyAgFWY2RppjzxH5ucvky7U.pem` and its P-256 EC private key
   (`TRUST_WRPAC_CERT_PATH`, `TRUST_WRPAC_KEY_PATH`). The JAR `x5c` is that
   leaf followed by `certs/raidiam/eudi-sandbox-issuing-ca-g1.pem`

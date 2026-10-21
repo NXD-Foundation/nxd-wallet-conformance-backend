@@ -1,0 +1,164 @@
+{
+  "version": 1,
+  "entityId": "VATEL-090264862",
+  "serviceId": "4c3ecfb0-76ff-4eea-8e51-c8fac931e186",
+  "scenarios": {
+    "age-over-18-mdoc": {
+      "declarationHash": "9afc10e617625a7a4b080745b94f9c5ccdf5581264d1bae0e86abfc4216f4644",
+      "intendedUseId": "2ff98d54-320f-49f2-b963-70a030966848",
+      "quarantineFile": "age-over-18-mdoc.unverified.ac636d70d3bb6b54e57ac49f21918e24bdc43864b3a78d65a2e47ab9dec47162.jwt",
+      "certificateId": "b6be1dd4-301d-4c76-8b08-ac286b90a9ae",
+      "registryStatus": "active",
+      "registrarDataset": {
+        "identifier": "VATEL-090264862",
+        "serviceId": "4c3ecfb0-76ff-4eea-8e51-c8fac931e186",
+        "srvDescription": [
+          {
+            "lang": "en",
+            "value": "Verify whether a holder is over 18 in University of the Aegean WE BUILD pilot age-verification tests."
+          }
+        ],
+        "registryURI": "https://data.sandbox.eudi.raidiam.io/",
+        "intendedUseIdentifier": "2ff98d54-320f-49f2-b963-70a030966848",
+        "purpose": [
+          {
+            "lang": "en",
+            "value": "Verify whether a holder is over 18 in University of the Aegean WE BUILD pilot age-verification tests."
+          }
+        ],
+        "policyURI": "https://www.aegean.gr/"
+      },
+      "certificateFile": "age-over-18-mdoc.1792586600566.64051f7e-2243-4ed6-b7df-cbd184aa7517.jwt",
+      "expiresAt": "2027-01-18T11:47:14.000Z",
+      "activatedAt": "2026-10-21T12:43:20.566Z"
+    },
+    "pid-arf": {
+      "declarationHash": "1c8675a18d329137dcdf78fa7d01118e369eefc1ad0bbe9e2ef449ee0a95915e",
+      "intendedUseId": "8fbf7ab8-0fea-4a6d-9f6b-aedf10f6d677",
+      "quarantineFile": "pid-arf.unverified.8f50aa24ae2bfda2b10b87724fa1f2d6505beae86c0a8975aa2ca1cb7f816102.jwt",
+      "certificateId": "dbfd7ce2-1ba6-4475-a660-3c5e28ec9dbd",
+      "registryStatus": "active",
+      "registrarDataset": {
+        "identifier": "VATEL-090264862",
+        "serviceId": "4c3ecfb0-76ff-4eea-8e51-c8fac931e186",
+        "srvDescription": [
+          {
+            "lang": "en",
+            "value": "Verify ARF PID identity presentations for University of the Aegean WE BUILD pilot interoperability testing."
+          }
+        ],
+        "registryURI": "https://data.sandbox.eudi.raidiam.io/",
+        "intendedUseIdentifier": "8fbf7ab8-0fea-4a6d-9f6b-aedf10f6d677",
+        "purpose": [
+          {
+            "lang": "en",
+            "value": "Verify ARF PID identity presentations for University of the Aegean WE BUILD pilot interoperability testing."
+          }
+        ],
+        "policyURI": "https://www.aegean.gr/"
+      },
+      "certificateFile": "pid-arf.1792586600806.15cad1d2-a26f-445d-b508-838678ba5bb3.jwt",
+      "expiresAt": "2027-01-18T11:47:17.000Z",
+      "activatedAt": "2026-10-21T12:43:20.807Z"
+    },
+    "pid-basic": {
+      "declarationHash": "3f68b38e01149d6c62b6e3f2fbba2aed9f05aa6828423b63ba1eb9d1d92711c6",
+      "intendedUseId": "95da7781-0a65-4271-bf49-22da0e6ebbf5",
+      "quarantineFile": "pid-basic.unverified.7129645720441b136e7d32f7adde3ccf4b48027c397eadadb47eb8ee6e80e709.jwt",
+      "certificateId": "f8f43da4-b75d-4b2c-8dee-c0722df5962c",
+      "registryStatus": "active",
+      "registrarDataset": {
+        "identifier": "VATEL-090264862",
+        "serviceId": "4c3ecfb0-76ff-4eea-8e51-c8fac931e186",
+        "srvDescription": [
+          {
+            "lang": "en",
+            "value": "Verify PID surname presentations for University of the Aegean WE BUILD pilot interoperability and conformance testing."
+          }
+        ],
+        "registryURI": "https://data.sandbox.eudi.raidiam.io/",
+        "intendedUseIdentifier": "95da7781-0a65-4271-bf49-22da0e6ebbf5",
+        "purpose": [
+          {
+            "lang": "en",
+            "value": "Verify PID surname presentations for University of the Aegean WE BUILD pilot interoperability and conformance testing."
+          }
+        ],
+        "policyURI": "https://www.aegean.gr/"
+      },
+      "certificateFile": "pid-basic.1792586601070.a68a98ae-14d2-4d59-8482-e52183e6a8dc.jwt",
+      "expiresAt": "2027-01-18T11:47:20.000Z",
+      "activatedAt": "2026-10-21T12:43:21.071Z"
+    },
+    "pid-mdoc": {
+      "declarationHash": "fb38663662a714f2779d7822134a077583b8aa6417e3c2ed7fc4b600a6dc7d5d",
+      "intendedUseId": "cf8bc654-333d-4414-9359-77192b782a15",
+      "quarantineFile": "pid-mdoc.unverified.b7ee0c392bab964a1b7a9b99ee84648d3c837a2a3f1f50d270acf4cad43d2574.jwt",
+      "certificateId": "a0affc6a-389b-444a-b710-19b687cc30b3",
+      "registryStatus": "active"
+    },
+    "pid-sd-jwt-full": {
+      "declarationHash": "be81e969424be1c21fcccff5989bcc1d167d4aec77ba7ef570720c3ce8b09009",
+      "intendedUseId": "a873d799-4797-464d-9cdc-42c08f475f70",
+      "quarantineFile": "pid-sd-jwt-full.unverified.7d9d47f3616cb838edb6ae13e0a853db97bb0016bbd2f948f563a7724b348450.jwt",
+      "certificateId": "ad890d1e-5fdc-4725-9648-2184f6ff7b98",
+      "registryStatus": "active"
+    },
+    "qualified-signing": {
+      "declarationHash": "b4c56dfde0fd54b7cb4ef8e2d05d856e3ebd334f9fabd69fce6d66139403c3c4",
+      "intendedUseId": "fc02b55d-f9a0-4f08-9db5-494f5fec0cf9",
+      "quarantineFile": "qualified-signing.unverified.d6917e5aa7f3556114d5043e01da5e2b40bd2a81547ef46d2da1e1ae31fc1922.jwt",
+      "certificateId": "b56767cf-05a1-4506-9c73-4bd303063122",
+      "registryStatus": "active"
+    },
+    "ts12-dpc-pid-standalone": {
+      "declarationHash": "8f86a68a4c49a32cf19e4340a25ba891e83a4d4bd6b1a6798176a7232474b996",
+      "intendedUseId": "ee9edc03-2209-47b9-bd02-d92c0c0ba38b",
+      "quarantineFile": "ts12-dpc-pid-standalone.unverified.1d8355af346ec3592dc03f525512013ebb3dcfd07e6f58776d2830fa4d2b9096.jwt",
+      "certificateId": "f92e3a84-290d-4122-8f02-446c67d866e9",
+      "registryStatus": "active"
+    },
+    "ts12-dpc-pid": {
+      "declarationHash": "0b5c1db3d91346497161858f7cf7b89ac6de15d94fe91ca2877b0380d34f32c1",
+      "intendedUseId": "a3517063-87ca-436e-9feb-2ae6f1c8effa",
+      "quarantineFile": "ts12-dpc-pid.unverified.19886be3c3343048184aa2ecb11eed958766fad0875f9436f53ee8460c062744.jwt",
+      "certificateId": "8d56dbea-f1b3-4ca3-a65f-6e40145642e9",
+      "registryStatus": "active"
+    },
+    "ts12-dpc": {
+      "declarationHash": "3a0e984ab0244faf9b7f21ea5054872a17c214398dd23107458bf3646f5036c8",
+      "intendedUseId": "792e8065-3dc7-45cf-98cf-5610c407996a",
+      "quarantineFile": "ts12-dpc.unverified.3952a906090aded29fff85562e0d0ba6b1a6a8087a8f0c869075e8b021f243ce.jwt",
+      "certificateId": "720da6a9-879c-4a7e-84f7-4d6d3b98197b",
+      "registryStatus": "active"
+    },
+    "ts12-iban-pid": {
+      "declarationHash": "cacec97fa2e726e96053943ae1dd04d8ea488cf22bf1149a323f173259c738a4",
+      "intendedUseId": "9db414f6-ff7c-4043-9ff1-e224e7349ffb",
+      "quarantineFile": "ts12-iban-pid.unverified.ba5bdc7fb78a57f59adb403f767ba356a9f9901d0f389478f0fef0811a08f4f6.jwt",
+      "certificateId": "4c6ce248-2e35-4915-b6c6-4897b0652a76",
+      "registryStatus": "active"
+    },
+    "ts12-iban": {
+      "declarationHash": "f0a16e7d997374d4c53a6313508326b613f932390abd392a78f2c7f5d3e24790",
+      "intendedUseId": "55e0e3f7-0d55-4458-89fa-d1cf9ed858f2",
+      "quarantineFile": "ts12-iban.unverified.7f4c661898127e9191b4fb8da8bd808b23596bfd73e8da5b50e39748f2d1a379.jwt",
+      "certificateId": "f8aeeddb-e67d-4ffb-89e3-021b5bc54400",
+      "registryStatus": "active"
+    },
+    "ts12-user-pid": {
+      "declarationHash": "e526a52562a85f222d946ff5a311e2556003154b3b056767547a7149359f5f71",
+      "intendedUseId": "14ece697-679a-412b-90c5-f2fc91562d25",
+      "quarantineFile": "ts12-user-pid.unverified.92c02ea534bd073d611c29d430ddf3974805ad275ef4155f2b7f9745d79fb426.jwt",
+      "certificateId": "549dca8c-5806-48df-bc83-ab75c66a4339",
+      "registryStatus": "active"
+    },
+    "ts12-user": {
+      "declarationHash": "a3bdc67a7592761677254bdd244b381a067d21f555e0ea016dee774d1d379551",
+      "intendedUseId": "b50bdedc-6d1a-4454-a6f0-dbee1bd1324b",
+      "quarantineFile": "ts12-user.unverified.95718015224e0c215bdae8275b6a53754921e99e5eee4f4ccc0fd6fed468a418.jwt",
+      "certificateId": "2b21c189-9221-4246-9403-832a4907e80e",
+      "registryStatus": "active"
+    }
+  }
+}

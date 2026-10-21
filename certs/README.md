@@ -19,3 +19,12 @@ Notes:
 
 Requirements:
 - `openssl` must be installed and available on `PATH`
+
+Ordinary remote CS-02 presentation sessions use the original EUDI preproduction
+`WE-BUILD-Verifier.p12` and the `pidissuerca02_eu.pem` chain through the
+existing P12 loader (`WEBUILD_P12_PASSWORD`). Explicit
+`trustFramework=true` sessions retain the Raidiam WRPAC and registration
+validation. Ordinary EUDI P12 sessions omit Raidiam `verifier_info`; consequently
+they are interoperability cases rather than full CS-02 v1.2 conformance cases.
+CS-03 and CS-07 certificate selection is unchanged. Existing request URIs retain
+their session's signing profile; create a new session to use the new default.

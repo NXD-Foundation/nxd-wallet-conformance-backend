@@ -76,15 +76,24 @@ export function hasDigitalSignatureKeyUsage(certPem) {
  * or an x5c chain terminating at a service CA certificate.  The trusted list
  * remains the source of anchors; an x5c chain never introduces an anchor.
  */
-export function validateCertificatePath({ certificateChain, anchorCertificates = [], evaluationTime = new Date(), requireDigitalSignature = true } = {}) {
+export function validateCertificatePath({ certificateChain, anchorCertificates = [], evaluationTime = new Date(), requireDigitalSignature = true, allowMissingKeyUsageForListedLeaf = false } = {}) {
   const chain = (certificateChain || []).map((pem) => ({ pem, cert: certificateAt(pem, evaluationTime) }));
   const anchors = (anchorCertificates || []).map((pem) => ({ pem, cert: certificateAt(pem, evaluationTime) }));
   if (!chain.length || !anchors.length) {
     throw new TrustListError("A presented certificate chain and listed trust anchor are required", TRUST_REASON_CODES.CERTIFICATE_PATH_INVALID);
   }
   const leaf = chain[0];
+  let acceptedMissingKeyUsage = false;
   if (requireDigitalSignature && !hasDigitalSignatureKeyUsage(leaf.pem)) {
-    throw new TrustListError("Presented certificate is not permitted for digital signatures", TRUST_REASON_CODES.CERTIFICATE_PATH_INVALID);
+    const keyUsage = new PeculiarX509Certificate(leaf.cert.raw).getExtension(KeyUsagesExtension);
+    const directlyListed = anchors.some(anchor => certificateFingerprint(anchor.pem) === certificateFingerprint(leaf.pem));
+    // RFC 5280 4.2.1.3: absent KU is not an explicit restriction. This narrow
+    // opt-in is for a WRPRC signing key published directly by its trusted list,
+    // not for arbitrary descendants of a listed CA or WRPAC profile validation.
+    acceptedMissingKeyUsage = allowMissingKeyUsageForListedLeaf && !keyUsage && !leaf.cert.ca && directlyListed;
+    if (!acceptedMissingKeyUsage) {
+      throw new TrustListError("Presented certificate is not permitted for digital signatures", TRUST_REASON_CODES.CERTIFICATE_PATH_INVALID);
+    }
   }
   const candidates = [...chain.slice(1), ...anchors];
   let current = leaf;
@@ -92,7 +101,7 @@ export function validateCertificatePath({ certificateChain, anchorCertificates =
   for (;;) {
     const exactAnchor = anchors.find((anchor) => certificateFingerprint(anchor.pem) === certificateFingerprint(current.pem));
     if (exactAnchor) {
-      return { leafPem: leaf.pem, chain: chain.map((entry) => entry.pem), anchorPem: exactAnchor.pem, anchorFingerprint: certificateFingerprint(exactAnchor.pem) };
+      return { leafPem: leaf.pem, chain: chain.map((entry) => entry.pem), anchorPem: exactAnchor.pem, anchorFingerprint: certificateFingerprint(exactAnchor.pem), ...(acceptedMissingKeyUsage ? { keyUsage: "absent-directly-listed-signer" } : {}) };
     }
     const issuer = candidates.find((candidate) => {
       const fingerprint = certificateFingerprint(candidate.pem);

@@ -1,3 +1,5 @@
+import { X509Certificate } from "node:crypto";
+import { loadVerifierP12 } from "../utils/cryptoUtils.js";
 import { expect } from "chai";
 import express from "express";
 import request from "supertest";
@@ -46,13 +48,14 @@ describe("CS-02 / CS-03 presentation route regressions", () => {
         `-----BEGIN CERTIFICATE-----\n${header.x5c[0]}\n-----END CERTIFICATE-----`, "ES256"));
       expect(payload.client_id).to.equal(CONFIG.CLIENT_ID);
       expect(payload.response_mode).to.equal("direct_post");
+      expect(payload.client_metadata.vp_formats_supported).to.have.property("https://cloudsignatureconsortium.org/2025/x509");
     });
   }
 
   for (const method of ["get", "post"]) {
-    it(`retrieves the signed hash JAR over ${method.toUpperCase()} using the generated session identity`, async () => {
+    it(`keeps VP-001 on EUDI P12 over ${method.toUpperCase()} retrieval with CS03 compatibility enabled`, async () => {
       const sessionId = `hash-retrieval-${method}`;
-      const created = await request(app).get("/generateVPRequestDCQLGET").query({ sessionId }).expect(200);
+      const created = await request(app).get("/generateVPRequestDCQL").query({ sessionId }).expect(200);
       let retrieval = request(app)[method](`/x509VPrequest/${sessionId}`);
       if (method === "post") retrieval = retrieval.type("form").send({ wallet_nonce: "wallet-nonce" });
       const fetched = await retrieval.expect(200);
@@ -61,6 +64,12 @@ describe("CS-02 / CS-03 presentation route regressions", () => {
       const { payload } = await jwtVerify(fetched.text, await importX509(pem, "ES256"));
       const publishedId = new URL(created.body.deepLink).searchParams.get("client_id");
       expect(payload.client_id).to.equal(publishedId);
+      expect(payload.response_mode).to.equal("direct_post.jwt");
+      expect(header.x5c).to.deep.equal([loadVerifierP12().certChain[0]]);
+      expect(new X509Certificate(Buffer.from(header.x5c[0], "base64")).issuer).to.include("PID Issuer CA 02");
+      expect(payload).not.to.have.property("verifier_info");
+      expect((await getVPSession(sessionId)).verifier_signing_profile).to.equal("eudi-p12");
+      expect(payload.client_metadata.vp_formats_supported).to.not.have.property("https://cloudsignatureconsortium.org/2025/x509");
       assertX509HashLeafMatchesClientId(payload.client_id, header.x5c[0]);
       expect(payload.state).to.equal((await getVPSession(sessionId)).state);
       if (method === "post") expect(payload.wallet_nonce).to.equal("wallet-nonce");

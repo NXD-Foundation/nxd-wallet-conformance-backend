@@ -1,4 +1,5 @@
 import { expect } from "chai";
+import forge from "node-forge";
 import fs from "node:fs/promises";
 import { execSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -133,5 +134,48 @@ describe("Phase 1 signed trust-list validation", () => {
     } catch (error) {
       expect(error.reasonCode).to.equal("LIST_SIGNATURE_INVALID");
     }
+  });
+});
+
+
+describe("Directly listed WRPRC signer Key Usage", () => {
+  let keys, nextSerial = 1;
+  before(() => { keys = forge.pki.rsa.generateKeyPair(2048); });
+  function certificate({ keyUsage, ca = false, expired = false } = {}) {
+    const cert = forge.pki.createCertificate();
+    cert.publicKey = keys.publicKey;
+    cert.serialNumber = String(nextSerial++).padStart(2, '0');
+    cert.validity.notBefore = new Date('2020-01-01');
+    cert.validity.notAfter = new Date(expired ? '2021-01-01' : '2035-01-01');
+    cert.setSubject([{ name: 'commonName', value: 'Direct WRPRC signer' }]); cert.setIssuer(cert.subject.attributes);
+    cert.setExtensions([...(ca ? [{ name: 'basicConstraints', cA: true }] : []), ...(keyUsage ? [{ name: 'keyUsage', ...keyUsage }] : [])]);
+    cert.sign(keys.privateKey, forge.md.sha256.create());
+    return forge.pki.certificateToPem(cert);
+  }
+  function options(cert) {
+    return { certificateChain: [cert], anchorCertificates: [cert], evaluationTime: '2026-10-21T12:00:00Z', allowMissingKeyUsageForListedLeaf: true };
+  }
+  it("accepts absent Key Usage only for an explicitly allowed directly listed non-CA signer", () => {
+    const cert = certificate();
+    expect(validateCertificatePath(options(cert)).keyUsage).to.equal('absent-directly-listed-signer');
+    expect(() => validateCertificatePath({ ...options(cert), allowMissingKeyUsageForListedLeaf: false })).to.throw('not permitted');
+  });
+  it("never overrides an explicit Key Usage that excludes digitalSignature", () => {
+    const cert = certificate({ keyUsage: { keyEncipherment: true } });
+    expect(() => validateCertificatePath(options(cert))).to.throw('not permitted');
+    const allowed = certificate({ keyUsage: { digitalSignature: true } });
+    expect(validateCertificatePath(options(allowed)).anchorFingerprint).to.equal(certificateFingerprint(allowed));
+  });
+  it("does not extend the exception to a descendant of a listed CA or an unlisted signer", () => {
+    const cert = certificate();
+    const ca = certificate({ ca: true, keyUsage: { keyCertSign: true } });
+    expect(() => validateCertificatePath({ ...options(cert), anchorCertificates: [ca] })).to.throw('not permitted');
+    expect(() => validateCertificatePath({ ...options(cert), anchorCertificates: [certificate()] })).to.throw('not permitted');
+    const caWithoutUsage = certificate({ ca: true });
+    expect(() => validateCertificatePath(options(caWithoutUsage))).to.throw('not permitted');
+  });
+  it("still rejects an expired directly listed signer", () => {
+    const cert = certificate({ expired: true });
+    expect(() => validateCertificatePath(options(cert))).to.throw('validity period');
   });
 });

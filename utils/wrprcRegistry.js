@@ -3,7 +3,7 @@ import path from 'node:path';
 import { X509Certificate } from 'node:crypto';
 import { verifyWrprc, assertQueryScope, assertRegistrarDataset, encodeRegistrationCertificate } from './wrprc.js';
 import { checkAccessCertificateTrust } from './trustFrameworkPolicy.js';
-import { declarationHash } from './raidiamProvisioning.js';
+import { declarationHash, registrarDatasetForRegistration } from './raidiamProvisioning.js';
 
 export const DEFAULT_WRPRC_MANIFEST = 'certs/raidiam/registration/manifest.json';
 const DEFAULT_DECLARATIONS = 'data/trust/intended_uses';
@@ -51,15 +51,10 @@ export async function selectRegistrarDataset({ scenario, cs07ProfileId, cs03Sign
   if (manifest.version !== 1 || !entry?.intendedUseId) throw new Error(`WRPRC: no registered intended use for ${scenarioId}`);
   const declaration = JSON.parse(await fs.readFile(path.join(declarationsDir, `${scenarioId}.json`), 'utf8'));
   if (entry.declarationHash !== declarationHash(declaration)) throw new Error('WRPRC: declaration changed; reprovision scenario');
-  const registrarDataset = entry.registrarDataset || {
-    identifier: manifest.entityId,
-    serviceId: manifest.serviceId,
-    srvDescription: declaration.purpose.map(item => ({ lang: item.lang, value: item.value ?? item.content })),
-    registryURI: process.env.RAIDIAM_REGISTRY_URI || `https://data.sandbox.eudi.raidiam.io/wrp/${encodeURIComponent(manifest.entityId)}/services/${encodeURIComponent(manifest.serviceId)}`,
-    intendedUseIdentifier: entry.intendedUseId,
-    purpose: declaration.purpose.map(item => ({ lang: item.lang, value: item.value ?? item.content })),
-    policyURI: declaration.privacyPolicy?.[0]?.url,
-  };
+  const registrarDataset = entry.registrarDataset || registrarDatasetForRegistration({
+    entityId: manifest.entityId, serviceId: manifest.serviceId, intendedUseId: entry.intendedUseId, body: declaration,
+    registryUrl: process.env.RAIDIAM_REGISTRY_URI || `https://data.sandbox.eudi.raidiam.io/wrp/${encodeURIComponent(manifest.entityId)}/services/${encodeURIComponent(manifest.serviceId)}`,
+  });
   const selection = { scenario: scenarioId, entityId: manifest.entityId, serviceId: manifest.serviceId,
     intendedUseId: entry.intendedUseId, declaration, registrarDataset };
   return { selection, ...validatePinnedRegistrarDataset({ selection, query, certificatePem }) };
