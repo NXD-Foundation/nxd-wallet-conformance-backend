@@ -12,9 +12,10 @@ const cs01 = "webuild-cs01";
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status });
 
 describe("CS-01 PAR dpop_jkt", () => {
-  it("includes dpop_jkt matching WIA cnf and PAR DPoP proof for authorization-code PAR", async () => {
+  it("includes dpop_jkt matching PAR DPoP proof independently of WIA cnf for authorization-code PAR", async () => {
     const cnfKeyPair = await ensureOrCreateEcKeyPair(null, "ES256");
-    const expectedJkt = await calculateJwkThumbprint(cnfKeyPair.publicJwk, "sha256");
+    const dpopKeyPair = await ensureOrCreateEcKeyPair(null, "ES256");
+    const expectedJkt = await calculateJwkThumbprint(dpopKeyPair.publicJwk, "sha256");
     let capturedParams;
     let capturedProof;
     let capturedHeaders;
@@ -31,6 +32,7 @@ describe("CS-01 PAR dpop_jkt", () => {
         dpop_jkt: expectedJkt,
       },
       cnfKeyPair,
+      dpopKeyPair,
       nonceState: createDpopNonceState(),
       challengeState: createAttestationChallengeState(),
       buildAttestation: (session) =>
@@ -51,9 +53,9 @@ describe("CS-01 PAR dpop_jkt", () => {
     });
     expect(capturedParams.dpop_jkt).to.equal(expectedJkt);
     const wiaCnf = decodeJwt(capturedHeaders["OAuth-Client-Attestation"]).cnf.jwk;
-    expect(await calculateJwkThumbprint(wiaCnf, "sha256")).to.equal(expectedJkt);
-    expect(decodeProtectedHeader(capturedProof).jwk).to.deep.equal(cnfKeyPair.publicJwk);
-    await jwtVerify(capturedProof, await importJWK(cnfKeyPair.publicJwk, "ES256"));
+    expect(await calculateJwkThumbprint(wiaCnf, "sha256")).not.to.equal(expectedJkt);
+    expect(decodeProtectedHeader(capturedProof).jwk).to.deep.equal(dpopKeyPair.publicJwk);
+    await jwtVerify(capturedProof, await importJWK(dpopKeyPair.publicJwk, "ES256"));
     assertCs01ParRequestContract({
       profile: cs01,
       parParams: capturedParams,

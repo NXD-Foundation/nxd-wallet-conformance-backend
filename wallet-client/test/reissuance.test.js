@@ -234,13 +234,20 @@ describe("CS-01 refresh re-issuance", () => {
     const signingKey = await importJWK(keys.privateJwk, 'ES256');
     let endpoint, metadata;
     const requested = [], writes = [];
+    let tokenDpopJkt;
     const issuer = createServer(async (req, res) => {
       res.setHeader('content-type', 'application/json');
       if (req.url.includes('.well-known')) return res.end(JSON.stringify(metadata));
       if (req.url === '/jwks') return res.end(JSON.stringify({ keys: [{ ...keys.publicJwk, kid: 'issuer-key' }] }));
       let raw = '';
       for await (const chunk of req) raw += chunk;
-      if (req.url === '/token') return res.end(JSON.stringify({ access_token: 'opaque', token_type: 'DPoP', refresh_token: 'retained-refresh', c_nonce: 'fresh', authorization_details: [{ type: 'openid_credential', credential_configuration_id: 'VerifiableIdCard', credential_identifiers: ['first', 'second'] }] }));
+      if (req.url === '/token') {
+        tokenDpopJkt = await calculateJwkThumbprint(decodeProtectedHeader(req.headers.dpop).jwk);
+        const wiaKey = decodeJwt(req.headers['oauth-client-attestation']).cnf.jwk;
+        expect(await calculateJwkThumbprint(wiaKey)).not.to.equal(tokenDpopJkt);
+        return res.end(JSON.stringify({ access_token: 'opaque', token_type: 'DPoP', refresh_token: 'retained-refresh', c_nonce: 'fresh', authorization_details: [{ type: 'openid_credential', credential_configuration_id: 'VerifiableIdCard', credential_identifiers: ['first', 'second'] }] }));
+      }
+      expect(await calculateJwkThumbprint(decodeProtectedHeader(req.headers.dpop).jwk)).to.equal(tokenDpopJkt);
       const body = JSON.parse(raw);
       requested.push(body.credential_identifier);
       const credential = await new SignJWT({ iss: endpoint, vct: 'urn:test:credential', name: body.credential_identifier }).setProtectedHeader({ alg: 'ES256', kid: 'issuer-key' }).setIssuedAt().setExpirationTime('1h').sign(signingKey);
@@ -300,7 +307,7 @@ describe("CS-01 refresh re-issuance", () => {
       expect(bodies[0].params).not.to.have.property("dpop_jkt");
       const wia = decodeJwt(bodies[0].headers["oauth-client-attestation"]);
       const proofKey = decodeProtectedHeader(bodies[0].headers.dpop).jwk;
-      expect(await calculateJwkThumbprint(wia.cnf.jwk)).to.equal(await calculateJwkThumbprint(binding.publicJwk));
+      expect(await calculateJwkThumbprint(wia.cnf.jwk)).not.to.equal(await calculateJwkThumbprint(binding.publicJwk));
       expect(await calculateJwkThumbprint(proofKey)).to.equal(await calculateJwkThumbprint(binding.publicJwk));
     } finally {
       sandbox.restore();

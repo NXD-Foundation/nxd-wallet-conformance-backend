@@ -181,6 +181,7 @@ vpStandardRouter.get("/vp/request", validateCs02InvocationScheme, async (req, re
       invocationScheme: req.cs02InvocationScheme,
       sessionId,
       trustPolicy: trustFrameworkSessionProps(req.query).trustPolicy,
+      wrprcScenario: req.query.wrprc_scenario || ({ mdl: "pid-mdoc", "arf-pid": "pid-arf", "ts12-dpc-pid": "ts12-dpc-pid-standalone" }[credentialProfile] || "pid-basic"),
       responseMode,
       presentationDefinition,
       clientId,

@@ -1,0 +1,42 @@
+{
+  "purpose": [
+    {
+      "lang": "en",
+      "content": "Verify PID name and nationality presentations for University of the Aegean WE BUILD pilot interoperability testing."
+    }
+  ],
+  "privacyPolicy": [
+    {
+      "type": "Privacy Statement",
+      "url": "https://www.aegean.gr/"
+    }
+  ],
+  "credentials": [
+    {
+      "format": "mso_mdoc",
+      "meta": {
+        "doctype_value": "urn:eu.europa.ec.eudi:pid:1"
+      },
+      "claims": [
+        {
+          "path": [
+            "urn:eu.europa.ec.eudi:pid:1",
+            "family_name"
+          ]
+        },
+        {
+          "path": [
+            "urn:eu.europa.ec.eudi:pid:1",
+            "given_name"
+          ]
+        },
+        {
+          "path": [
+            "urn:eu.europa.ec.eudi:pid:1",
+            "nationality"
+          ]
+        }
+      ]
+    }
+  ]
+}

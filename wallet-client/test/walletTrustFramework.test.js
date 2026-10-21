@@ -1,4 +1,6 @@
 import { expect } from "chai";
+import { SignJWT, importPKCS8 } from "jose";
+import { encodeRegistrationCertificate } from "../../utils/wrprc.js";
 import {
   credentialMatchesRequest,
   credentialTypeFromJwtVcPayload,
@@ -9,6 +11,7 @@ import {
   assertVerifierAttestationBinding,
   authorizeVerifierRegistrationScope,
   registrationCredentials,
+  parseVerifierInfo,
   setWalletTrustSessionStorageForTests,
 } from "../src/lib/trustFramework.js";
 import {
@@ -77,7 +80,7 @@ describe("wallet WE BUILD trust framework helpers", () => {
     })).to.equal(true);
   });
 
-  it("reads TS5 credential authorization from every intended-use record", () => {
+  it("reads TS5 credential authorization from a single unambiguous intended-use record", () => {
     const registered = registrationCredentials({
       intendedUse: [{
         credentials: [{
@@ -153,11 +156,11 @@ describe("wallet WE BUILD trust framework helpers", () => {
     }
   });
 
-  it("accepts an undeclared verifier registration scope but rejects an explicit mismatch", () => {
+  it("rejects an undeclared verifier registration scope and explicit mismatches", () => {
     expect(authorizeVerifierRegistrationScope({
       registration: { intendedUse: [] },
       requested: [{ format: "dc+sd-jwt", meta: { vct_values: ["pilot-vct"] }, claims: [] }],
-    })).to.deep.include({ authorized: true });
+    })).to.deep.include({ authorized: false });
     expect(authorizeVerifierRegistrationScope({
       registration: { credentials: [{ format: "dc+sd-jwt", meta: { vct_values: ["other-vct"] }, claims: [] }] },
       requested: [{ format: "dc+sd-jwt", meta: { vct_values: ["pilot-vct"] }, claims: [] }],
@@ -371,5 +374,91 @@ describe("wallet WE BUILD trust framework helpers", () => {
     } catch (error) {
       expect(error.message).to.include("WRPAC x5c certificate to verify");
     }
+  });
+});
+
+
+describe("wallet registration certificate request boundary", () => {
+  const type = "urn:eu.europa.ec.eudi:pid:1";
+  const credential = { format: "dc+sd-jwt", meta: { vct_values: [type] }, claims: [{ path: ["address", "country"] }] };
+  let leaf, key, sessions;
+  before(async () => {
+    const certificate = forge.pki.certificateFromPem(await fs.readFile(path.join(TRUST_FIXTURE_DIR, "pid.crt"), "utf8"));
+    const privateKey = forge.pki.privateKeyFromPem(await fs.readFile(path.join(TRUST_FIXTURE_DIR, "pid.key"), "utf8"));
+    certificate.setSubject([...certificate.subject.attributes, { name: "serialNumber", value: "test-verifier-001" }, { name: "organizationalUnitName", value: "test-service-001" }]);
+    certificate.sign(privateKey, forge.md.sha256.create());
+    leaf = forge.pki.certificateToPem(certificate).replace(/-----[^-]+-----/g, "").replace(/\s+/g, "");
+    key = await importPKCS8(forge.pki.privateKeyInfoToPem(forge.pki.wrapRsaPrivateKey(forge.pki.privateKeyToAsn1(privateKey))), "RS256");
+  });
+  beforeEach(() => {
+    sessions = new Map([["wallet:test-session:wrprc", JSON.stringify({ sessionId: "wrprc", status: "pending", trustPolicy: { mode: "webuild", profile: "webuild-wp4-pilot" } })]]);
+    setWalletTrustSessionStorageForTests({ get: async k => sessions.get(k), set: async (k,v) => sessions.set(k,v) });
+    setTrustResolverForTests({ resolve: sinon.stub().resolves({ trusted: true, state: "trusted", reasonCode: "TRUSTED", evidence: {} }) });
+  });
+  afterEach(() => { clearTrustResolverForTests(); setWalletTrustSessionStorageForTests(null); });
+  async function request(overrides = {}, datasetOverrides = {}) {
+    const payload = { sub: "test-verifier-001", entitlements: ["https://uri.etsi.org/19475/Entitlement/Service_Provider"], credentials: [credential], purpose: [{ lang: "en", content: "Testing" }], privacyPolicy: [{ url: "https://www.aegean.gr/" }], ...overrides };
+    const token = await new SignJWT(payload).setProtectedHeader({ alg: "RS256", typ: "rc-wrp+jwt", x5c: [leaf] }).setIssuedAt().setExpirationTime(overrides.exp ?? "5m").sign(key);
+    return { client_id: computeX509HashClientIdFromLeafCertBase64(leaf), dcql_query: { credentials: [credential] }, verifier_info: [
+      { format: "registrar_dataset", data: { identifier: "test-verifier-001", intendedUseIdentifier: "pid", registryURI: "https://registrar.example", srvDescription: [{ lang: "en", value: "Test" }], purpose: payload.purpose, policyURI: "https://www.aegean.gr/", ...datasetOverrides } },
+      { format: "registration_cert", data: encodeRegistrationCertificate(token) },
+    ] };
+  }
+  async function check(payload) {
+    return enforceVerifierPresentationTrust({ sessionId: "wrprc", requestHeader: { x5c: [leaf] }, requestPayload: payload });
+  }
+  async function rejects(payload, message) {
+    let failure; try { await check(payload); } catch (error) { failure = error; }
+    expect(failure?.message).to.include(message);
+  }
+  it("accepts an authenticated CS-02 verifier_info array with matching scope", async () => {
+    expect((await check(await request())).trusted).to.equal(true);
+  });
+  it("rejects object, missing, duplicate, raw JWT and padded certificate encodings", async () => {
+    const payload = await request();
+    for (const value of [undefined, {}, [payload.verifier_info[0]], [...payload.verifier_info, payload.verifier_info[1]]]) {
+      expect(() => parseVerifierInfo(value)).to.throw();
+    }
+    for (const data of [Buffer.from(payload.verifier_info[1].data, "base64url").toString(), payload.verifier_info[1].data + "="]) {
+      expect(() => parseVerifierInfo([payload.verifier_info[0], { format: "registration_cert", data }])).to.throw();
+    }
+  });
+  it("rejects signature tampering and expired certificates", async () => {
+    const payload = await request();
+    const token = Buffer.from(payload.verifier_info[1].data, "base64url").toString();
+    const parts = token.split("."); parts[1] = Buffer.from(JSON.stringify({ ...JSON.parse(Buffer.from(parts[1], "base64url")), sub: "attacker" })).toString("base64url");
+    payload.verifier_info[1].data = encodeRegistrationCertificate(parts.join("."));
+    await rejects(payload, "signature verification failed");
+    await rejects(await request({ exp: 1 }), '"exp" claim');
+  });
+  it("rejects WRPAC identity and registrar dataset mismatches", async () => {
+    await rejects(await request({ sub: "another-rp" }), "subject does not match WRPAC");
+    await rejects(await request({}, { policyURI: "https://attacker.example/" }), "privacy policy mismatch");
+    await rejects(await request({}, { identifier: "another-rp" }), "identity mismatch");
+  });
+  it("binds dataset service to the WRPAC OU even when the signed token omits service", async () => {
+    await rejects(await request({}, { serviceId: "another-service" }), "service does not match WRPAC");
+    expect((await check(await request({}, { serviceId: "test-service-001" }))).trusted).to.equal(true);
+  });
+  it("rejects omitted scope and untrusted registrar signing certificates", async () => {
+    await rejects(await request({ credentials: [] }), "scope is not declared");
+    expect(JSON.parse(sessions.get("wallet:test-session:wrprc")).trustDecision).to.include({ trusted: false, reasonCode: "VERIFIER_REGISTRATION_INVALID" });
+    setTrustResolverForTests({ resolve: sinon.stub().callsFake(({ role }) => Promise.resolve({ trusted: role === "wrpac-provider" })) });
+    await rejects(await request(), "signing chain is not trusted");
+  });
+  it("checks every VCT alternative, nested path and optional claim", async () => {
+    for (const altered of [
+      { ...credential, meta: { vct_values: [type, "unregistered"] } },
+      { ...credential, claims: [{ path: ["address", "street"] }] },
+      { ...credential, claims: [...credential.claims, { id: "optional", path: ["picture"] }], claim_sets: [["optional"]] },
+    ]) { const payload = await request(); payload.dcql_query.credentials = [altered]; await rejects(payload, "exceeds intended-use"); }
+  });
+  it("never combines separate intended uses to authorize one query", () => {
+    const second = { ...credential, meta: { vct_values: ["other"] } };
+    expect(authorizeVerifierRegistrationScope({ registration: { intendedUse: [{ id: "a", credentials: [credential] }, { id: "b", credentials: [second] }] }, requested: [credential, second] }).authorized).to.equal(false);
+    expect(authorizeVerifierRegistrationScope({ registration: { intendedUse: [{ id: "a", credentials: [credential] }, { id: "b", credentials: [second] }] }, intendedUseId: "a", requested: [credential, second] }).authorized).to.equal(false);
+  });
+  it("preserves trust-disabled behavior even without verifier_info", async () => {
+    sessions.clear(); expect(await check({ client_id: "x509_hash:test" })).to.equal(null);
   });
 });

@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { X509Certificate } from "node:crypto";
-import { decodeProtectedHeader, decodeJwt, importX509, jwtVerify } from "jose";
+import { decodeProtectedHeader, importX509, jwtVerify } from "jose";
 import { walletRedisClient } from "./cache.js";
 import { makeSessionLogger } from "./logger.js";
 import { createWalletContext } from "../../../utils/sessionContext.js";
@@ -13,6 +13,7 @@ import {
 } from "../../../utils/trustFrameworkPolicy.js";
 import { validateVerifierAttestationTrust } from "../../../utils/cs02TrustPolicy.js";
 import { certificateFromX5c, certificatesFromX5c } from "../../../trust/crypto.js";
+import { assertQueryScope, assertRegistrarDataset, decodeRegistrationCertificate, resolveRegistrationIntendedUse, verifyWrprc } from "../../../utils/wrprc.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const DEFAULT_ROLE_MAP_PATH = path.join(ROOT, "data/trust-role-map.json");
@@ -201,67 +202,32 @@ export async function assertVerifierAttestationBinding({ clientId, requestHeader
   return attestation;
 }
 
-function normalizedClaimPath(claim) {
-  const path = claim?.path ?? claim;
-  if (typeof path !== "string") return path;
-  try { return JSON.parse(path); } catch { return path; }
-}
-
-function credentialMeta(credential) {
-  if (typeof credential?.meta !== "string") return credential?.meta || {};
-  try { return JSON.parse(credential.meta); } catch { return {}; }
-}
-
-function credentialType(credential) {
-  const meta = credentialMeta(credential);
-  return meta.vct_values?.[0] || meta.doctype_value || null;
-}
-
-function credentialTypes(credential) {
-  const meta = credentialMeta(credential);
-  return meta.vct_values || [meta.vct, meta.doctype, meta.doctype_value].filter(Boolean);
-}
-
 export function credentialMatchesRequest(registered, requested) {
-  const requestedType = credentialType(requested);
-  const registeredTypes = credentialTypes(registered);
-  if (!requestedType && registeredTypes.length > 0) return false;
-  if (requestedType && !registeredTypes.includes(requestedType)) return false;
-  if (registered?.format && requested?.format && registered.format !== requested.format) return false;
-  const registeredPaths = new Set((registered?.claims || registered?.claim || []).map((claim) => JSON.stringify(normalizedClaimPath(claim))));
-  return (requested?.claims || []).every((claim) => registeredPaths.has(JSON.stringify(normalizedClaimPath(claim))));
+  try { return assertQueryScope({ credentials: [requested] }, { credentials: [registered] }); }
+  catch { return false; }
 }
 
-// TS 5 registration records authorize credential access per intended use. Keep
-// the top-level form for compatibility with earlier registrar payloads.
-export function registrationCredentials(registration) {
-  if (Array.isArray(registration?.intendedUse)) {
-    return registration.intendedUse.flatMap((intendedUse) => (
-      Array.isArray(intendedUse?.credentials) ? intendedUse.credentials : []
-    ));
-  }
-  return Array.isArray(registration?.credentials) ? registration.credentials : [];
+// A selected intended use is required: never union authorization from different purposes.
+export function registrationCredentials(registration, intendedUseId) {
+  try { return resolveRegistrationIntendedUse(registration, { intendedUseId }).credentials; }
+  catch { return []; }
 }
 
-export function authorizeVerifierRegistrationScope({ registration, requested }) {
-  const registered = registrationCredentials(registration);
-  if (registered.length === 0) {
-    return {
-      authorized: true,
-      scopeOmission: {
-        code: "TRUST_SCOPE_NOT_DECLARED",
-        operation: "wallet-verify-verifier",
-        message: "Trusted verifier registration does not declare credential or claim scope; accepted for test-infrastructure interoperability",
-      },
-    };
-  }
-  if (registered.some((entry) => credentialTypes(entry).length > 0) && requested.some((credential) => !credentialType(credential))) {
-    return { authorized: false, scopeOmission: null };
-  }
-  return {
-    authorized: requested.every((credential) => registered.some((entry) => credentialMatchesRequest(entry, credential))),
-    scopeOmission: null,
-  };
+export function authorizeVerifierRegistrationScope({ registration, requested, intendedUseId }) {
+  try {
+    assertQueryScope({ credentials: requested }, resolveRegistrationIntendedUse(registration, { intendedUseId }));
+    return { authorized: true, scopeOmission: null };
+  } catch { return { authorized: false, scopeOmission: null }; }
+}
+
+export function parseVerifierInfo(verifierInfo) {
+  if (!Array.isArray(verifierInfo)) throw new WalletTrustError("verifier_info must be an array containing a registrar dataset and registration certificate");
+  const datasets = verifierInfo.filter((entry) => entry?.format === "registrar_dataset");
+  const certificates = verifierInfo.filter((entry) => entry?.format === "registration_cert");
+  if (datasets.length !== 1 || certificates.length !== 1) throw new WalletTrustError("verifier_info requires exactly one registrar dataset and registration certificate");
+  const dataset = datasets[0].data;
+  if (!dataset || typeof dataset !== "object" || Array.isArray(dataset) || !dataset.intendedUseIdentifier) throw new WalletTrustError("Registrar dataset must identify the selected intended use");
+  return { dataset, token: decodeRegistrationCertificate(certificates[0].data) };
 }
 
 async function verifyRegistrationCertificate(registrationCert, session, expectedEntityId) {
@@ -305,33 +271,6 @@ export async function resolveIssuerScopeEvidence({ sessionId, issuerMetadata }) 
   };
 }
 
-async function fetchRegistrarRegistration(expectedEntityId, session) {
-  const template = process.env.WALLET_TRUST_REGISTRAR_URL;
-  if (!template || !expectedEntityId) throw new WalletTrustError("Verifier registration certificate is missing and no Registrar endpoint is configured");
-  const url = template.includes("{entityId}")
-    ? template.replace("{entityId}", encodeURIComponent(expectedEntityId))
-    : `${template.replace(/\/$/, "")}/wrp/${encodeURIComponent(expectedEntityId)}`;
-  const response = await fetch(url, { headers: { Accept: "application/jwt" } });
-  if (!response.ok) throw new WalletTrustError(`Registrar lookup failed with HTTP ${response.status}`);
-  const token = await response.text();
-  const header = decodeProtectedHeader(token);
-  const evidence = x5cEvidence(header);
-  if (!evidence) throw new WalletTrustError("Registrar response has no x5c");
-  const decision = await checkAccessCertificateTrust({
-    session,
-    certificatePem: evidence.certificatePem,
-    certificateChain: evidence.certificateChain,
-    role: "wrprc-provider",
-    operation: "wallet-fetch-registrar",
-  });
-  if (!decision?.trusted) throw new WalletTrustError(`Registrar response trust rejected: ${decision?.reasonCode || "TRUST_EVALUATION_INDETERMINATE"}`, decision);
-  const verified = await jwtVerify(token, await importX509(evidence.certificatePem, header.alg || "ES256"));
-  const registration = verified.payload?.data || verified.payload;
-  const entity = Array.isArray(registration) ? registration[0] : registration;
-  if (!entity || entity.sub !== expectedEntityId) throw new WalletTrustError("Registrar response entity does not match WRPAC");
-  return { payload: entity, decision };
-}
-
 export async function enforceVerifierPresentationTrust({ sessionId, requestHeader, requestPayload, trustEvidenceBound = true }) {
   const { session, enabled } = await isWalletTrustEnabled(sessionId);
   if (!enabled) return null;
@@ -365,16 +304,23 @@ export async function enforceVerifierPresentationTrust({ sessionId, requestHeade
   });
   await recordWalletTrustDecision(sessionId, accessDecision, "wallet-verify-wrpac");
   if (!accessDecision?.trusted) throw new WalletTrustError(`Verifier access certificate trust rejected: ${accessDecision?.reasonCode || "TRUST_EVALUATION_INDETERMINATE"}`, accessDecision);
-  const registrationCert = requestPayload?.verifier_info?.registration_cert;
-  const { payload: registration, decision: registrationDecision } = registrationCert
-    ? await verifyRegistrationCertificate(registrationCert, session, entityId)
-    : await fetchRegistrarRegistration(entityId, session);
-  const entitlements = registration.entitlements || [];
-  if (!entitlements.includes("https://uri.etsi.org/19475/Entitlement/Service_Provider")) throw new WalletTrustError("Verifier registration certificate lacks Service Provider entitlement");
-  const scope = authorizeVerifierRegistrationScope({ registration, requested });
-  if (!scope.authorized) throw new WalletTrustError("Verifier registration certificate does not authorize requested credentials or claims");
-  const decision = withScopeOmission(registrationDecision, scope.scopeOmission);
-  logScopeOmission(sessionId, scope.scopeOmission);
-  await recordWalletTrustDecision(sessionId, decision, "wallet-verify-wrprc");
-  return decision;
+  try {
+    const { dataset, token } = parseVerifierInfo(requestPayload?.verifier_info);
+    const intendedUseId = dataset.intendedUseIdentifier;
+    const serviceId = dataset.serviceId || dataset.serviceIdentifier || dataset.service_id;
+    const accessServiceId = new X509Certificate(evidence.certificatePem).subject.match(/(?:^|\n)OU\s*=\s*([^\n]+)/)?.[1]?.trim();
+    if (serviceId && accessServiceId && serviceId !== accessServiceId) throw new WalletTrustError("Registrar dataset service does not match WRPAC");
+    const { payload: registration, intendedUse, trustDecision } = await verifyWrprc(token, {
+      entityId, intendedUseId, serviceId,
+      checkTrust: (material) => checkAccessCertificateTrust({ ...material, session, operation: "wallet-verify-wrprc" }),
+    });
+    assertRegistrarDataset(dataset, { registration, intendedUse, entityId, intendedUseId, serviceId });
+    assertQueryScope(requestPayload.dcql_query, intendedUse);
+    await recordWalletTrustDecision(sessionId, trustDecision, "wallet-verify-wrprc");
+    return trustDecision;
+  } catch (error) {
+    const decision = { trusted: false, state: "not_trusted", reasonCode: "VERIFIER_REGISTRATION_INVALID", evidence: { entityId, message: error.message } };
+    await recordWalletTrustDecision(sessionId, decision, "wallet-verify-wrprc");
+    throw new WalletTrustError(error.message, decision);
+  }
 }

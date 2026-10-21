@@ -1,8 +1,11 @@
 import { expect } from "chai";
+import { createWrprcFixture } from "./helpers/wrprcFixture.js";
 import express from "express";
 import request from "supertest";
 import { createRequire } from "node:module";
-import { decodeJwt, decodeProtectedHeader } from "jose";
+import { decodeJwt, decodeProtectedHeader, importX509, jwtVerify } from "jose";
+import fs from "fs";
+import { X509Certificate } from "crypto";
 import { resolveCs02InvocationScheme, resolveCs02InvocationSchemeInput, createOpenId4VpRequestUrl } from "../utils/cs02VerifierRequest.js";
 import { CONFIG, generateVPRequest } from "../utils/routeUtils.js";
 import { getVPSession } from "../services/cacheServiceRedis.js";
@@ -85,6 +88,9 @@ describe("CS-02 parametric invocation scheme", () => {
       expect(payload.client_id).to.match(/^x509_hash:/);
       expect(payload.state).to.equal((await getVPSession(id)).state);
       expect(payload.response_mode).to.equal("direct_post.jwt");
+      expect(payload.verifier_info.map(entry => entry.format)).to.deep.equal(["registrar_dataset"]);
+      expect(payload.verifier_info[0].data.identifier).to.equal("VATEL-090264862");
+      expect(payload.verifier_info[0].data.intendedUseIdentifier).to.be.a("string").and.not.equal("");
       if (method === "post") expect(payload.wallet_nonce).to.equal("wallet-nonce");
     });
   }
@@ -179,6 +185,24 @@ describe("CS-02 parametric invocation scheme", () => {
       { VERIFIER_CS02_COMPATIBILITY: "true" })).hostname).to.equal("present");
   });
 
+  it("signs retrieved x509 verifier requests with the Raidiam WRPAC", async () => {
+    const id = sessionId();
+    const generated = await request(app).get("/x509/generateVPRequestDCQL").query({ sessionId: id }).expect(200);
+    const uri = new URL(generated.body.deepLink);
+    const jar = await request(app).get(new URL(uri.searchParams.get("request_uri")).pathname).expect(200);
+    const header = decodeProtectedHeader(jar.text);
+    const wrpac = new X509Certificate(fs.readFileSync("certs/raidiam/uAaqzBHXMTOW0maXduvtPyAgFWY2RppjzxH5ucvky7U.pem"));
+    const leaf = new X509Certificate(Buffer.from(header.x5c[0], "base64"));
+    const issuingCa = new X509Certificate(fs.readFileSync("certs/raidiam/eudi-sandbox-issuing-ca-g1.pem"));
+    expect(header.alg).to.equal("ES256");
+    expect(header.x5c).to.have.length(2);
+    expect(leaf.raw.equals(wrpac.raw)).to.equal(true);
+    expect(Buffer.from(header.x5c[1], "base64").equals(issuingCa.raw)).to.equal(true);
+    expect(leaf.checkIssued(issuingCa)).to.equal(true);
+    expect(decodeJwt(jar.text).client_id).to.equal(uri.searchParams.get("client_id"));
+    await jwtVerify(jar.text, await importX509(wrpac.toString(), "ES256"));
+  });
+
   it("selected scheme preserves CS-03 SAN identity and plaintext response mode", async () => {
     const id = sessionId();
     const generated = await request(app).get("/x509/generateVPRequestDCQL").query({ sessionId: id, cs03: "1", invocation_scheme: "eu-eaap" }).expect(200);
@@ -189,8 +213,9 @@ describe("CS-02 parametric invocation scheme", () => {
   });
 
   it("selected scheme preserves opt-in trust policy and hash signing material", async () => {
-    process.env.TRUST_WRPAC_CERT_PATH = "x509EC/client_certificate.crt";
-    process.env.TRUST_WRPAC_KEY_PATH = "x509EC/ec_private_pkcs8.key";
+    const fixture = await createWrprcFixture();
+    process.env.TRUST_WRPRC_MANIFEST_PATH = fixture.manifestPath;
+    try {
     delete process.env.TRUST_WRPRC_CERT_PATH;
     setTrustResolverForTests({ resolve: async () => ({ trusted: true, state: "trusted", reasonCode: "TRUSTED" }) });
     const id = sessionId();
@@ -200,6 +225,8 @@ describe("CS-02 parametric invocation scheme", () => {
     const fetched = await request(app).get(`/x509/x509VPrequest/${id}`).expect(200);
     expect(decodeProtectedHeader(fetched.text).x5c).to.have.length.greaterThan(0);
     expect(decodeJwt(fetched.text).client_id).to.equal(new URL(generated.body.deepLink).searchParams.get("client_id"));
+    expect(decodeJwt(fetched.text).verifier_info[0].data.intendedUseIdentifier).to.equal("use-pid-basic");
+    } finally { await fixture.cleanup(); }
   });
 
   for (const location of ["query", "body"]) {

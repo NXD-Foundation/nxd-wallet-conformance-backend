@@ -5,6 +5,7 @@ import { buildVpRequestJWT, loadVerifierP12 } from "../utils/cryptoUtils.js";
 import { computeX509HashClientIdFromLeafCertBase64 } from "../utils/cs02ClientIdBinding.js";
 import { DEFAULT_DCQL_QUERY } from "../utils/routeUtils.js";
 import {
+  validateCs02SignedJar,
   validateCs02Nonce,
   Cs02VerifierRequestError,
   createOpenId4VpRequestUrl,
@@ -397,5 +398,15 @@ describe("CS-02 verifier request generation (Phase 3)", () => {
     expect(eaap).to.include(encodeURIComponent(requestUri));
     expect(haip).to.include(encodeURIComponent(clientId));
     expect(haip).to.include("request_uri_method=post");
+  });
+});
+
+
+describe("CS-02 strict signing algorithm regression", () => {
+  it("rejects RS256 even when the removed allowRs256Jar escape hatch is supplied", () => {
+    const encode = value => Buffer.from(JSON.stringify(value)).toString("base64url");
+    const jar = `${encode({ alg: "RS256", typ: "oauth-authz-req+jwt" })}.${encode({})}.c2ln`;
+    expect(() => validateCs02SignedJar(jar, { strict: true, allowRs256Jar: true }))
+      .to.throw(Cs02VerifierRequestError, 'must be signed with ES256');
   });
 });

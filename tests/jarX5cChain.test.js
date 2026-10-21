@@ -1,4 +1,5 @@
 import { strict as assert } from "assert";
+import forge from "node-forge";
 import fs from "fs";
 import os from "os";
 import path from "path";
@@ -101,17 +102,55 @@ describe("JAR x5c certificate chain", () => {
     );
   });
 
-  it("uses the WRPAC leaf when trust-framework signing material is supplied", async () => {
-    const requestJwt = await buildEs256X509Jar(loadTrustFrameworkVerifierMaterial());
+  it("rejects supplied RSA signing material instead of bypassing strict CS-02", async () => {
+    const keys = forge.pki.rsa.generateKeyPair(2048);
+    const cert = forge.pki.createCertificate();
+    cert.publicKey = keys.publicKey;
+    cert.serialNumber = "01";
+    cert.validity.notBefore = new Date(Date.now() - 60000);
+    cert.validity.notAfter = new Date(Date.now() + 86400000);
+    cert.setSubject([{ name: "commonName", value: "RSA regression verifier" }]);
+    cert.setIssuer(cert.subject.attributes);
+    cert.sign(keys.privateKey, forge.md.sha256.create());
+    const material = {
+      privateKeyPkcs8: forge.pki.privateKeyInfoToPem(forge.pki.wrapRsaPrivateKey(forge.pki.privateKeyToAsn1(keys.privateKey))),
+      certChain: [forge.util.encode64(forge.asn1.toDer(forge.pki.certificateToAsn1(cert)).getBytes())],
+    };
+    const previousCompatibility = process.env.VERIFIER_CS02_COMPATIBILITY;
+    process.env.VERIFIER_CS02_COMPATIBILITY = "false";
+    try {
+      await assert.rejects(buildEs256X509Jar(material), /must be signed with ES256/);
+    } finally {
+      if (previousCompatibility === undefined) delete process.env.VERIFIER_CS02_COMPATIBILITY;
+      else process.env.VERIFIER_CS02_COMPATIBILITY = previousCompatibility;
+    }
+  });
+
+  it("signs with the Raidiam WRPAC when that verifier material is supplied", async () => {
+    const material = loadTrustFrameworkVerifierMaterial();
+    const requestJwt = await buildEs256X509Jar(material);
     const header = jose.decodeProtectedHeader(requestJwt);
     const leaf = new X509Certificate(x5cToPem(header.x5c[0]));
+    const wrpac = new X509Certificate(fs.readFileSync("certs/raidiam/uAaqzBHXMTOW0maXduvtPyAgFWY2RppjzxH5ucvky7U.pem"));
 
-    assert.match(leaf.subject, /CN=dev-i4mlab.aegean.gr/);
+    const issuingCa = new X509Certificate(fs.readFileSync("certs/raidiam/eudi-sandbox-issuing-ca-g1.pem"));
+
+    assert.strictEqual(header.alg, "ES256");
+    assert.deepStrictEqual(header.x5c, [
+      wrpac.raw.toString("base64"),
+      issuingCa.raw.toString("base64"),
+    ]);
+    assert.strictEqual(leaf.raw.toString("base64"), wrpac.raw.toString("base64"));
+    assert.match(leaf.subject, /University of the Aegean/);
+    assert.match(leaf.subjectAltName, /DNS:dev-i4mlab\.aegean\.gr/);
+    assert.ok(leaf.checkIssued(issuingCa));
+    assert.ok(issuingCa.ca);
+    assert.ok(!(issuingCa.checkIssued(issuingCa) && issuingCa.verify(issuingCa.publicKey)));
     assert.ok(header.x5c.every((entry) => {
       const cert = new X509Certificate(Buffer.from(entry, "base64"));
       return !(cert.ca && cert.checkIssued(cert) && cert.verify(cert.publicKey));
     }));
-    assert.doesNotMatch(leaf.subject, /CN=WE-BUILD Verifier/);
+    await jose.jwtVerify(requestJwt, await jose.importX509(wrpac.toString(), "ES256"));
   });
 
   it("refuses a trust-framework VP request when the WRPAC material is missing", () => {

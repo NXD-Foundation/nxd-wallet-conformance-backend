@@ -1,0 +1,47 @@
+{
+  "purpose": [
+    {
+      "lang": "en",
+      "content": "Verify ARF PID identity presentations for University of the Aegean WE BUILD pilot interoperability testing."
+    }
+  ],
+  "privacyPolicy": [
+    {
+      "type": "Privacy Statement",
+      "url": "https://www.aegean.gr/"
+    }
+  ],
+  "credentials": [
+    {
+      "format": "dc+sd-jwt",
+      "meta": {
+        "vct_values": [
+          "urn:eudi:pid:1"
+        ]
+      },
+      "claims": [
+        {
+          "path": [
+            "given_name"
+          ]
+        },
+        {
+          "path": [
+            "family_name"
+          ]
+        },
+        {
+          "path": [
+            "birthdate"
+          ]
+        },
+        {
+          "path": [
+            "place_of_birth",
+            "country"
+          ]
+        }
+      ]
+    }
+  ]
+}

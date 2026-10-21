@@ -216,6 +216,7 @@ describe("authorization code prepare (handoff)", () => {
     const parAttestation = {
       attestationJwt: "wia-from-par",
       cnfKeyPair,
+      dpopKeyPair: await ensureOrCreateEcKeyPair(undefined, "ES256"),
     };
     const calls = [];
     const tokenResponse = {
@@ -289,6 +290,8 @@ describe("authorization code prepare (handoff)", () => {
     expect(tokenCall.reuseAttestationJwt).to.equal("wia-from-par");
     expect(tokenCall.cnfKeyPair.publicJwk).to.deep.equal(parAttestation.cnfKeyPair.publicJwk);
     expect(tokenCall.cnfKeyPair.privateJwk).to.deep.equal(parAttestation.cnfKeyPair.privateJwk);
+    expect(tokenCall.dpopKeyPair.publicJwk).to.deep.equal(parAttestation.dpopKeyPair.publicJwk);
+    expect(tokenCall.dpopKeyPair.publicJwk).not.to.deep.equal(tokenCall.cnfKeyPair.publicJwk);
   });
 });
 

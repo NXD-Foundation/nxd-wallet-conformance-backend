@@ -1,0 +1,30 @@
+{
+  "purpose": [
+    {
+      "lang": "en",
+      "content": "Verify whether a holder is over 18 in University of the Aegean WE BUILD pilot age-verification tests."
+    }
+  ],
+  "privacyPolicy": [
+    {
+      "type": "Privacy Statement",
+      "url": "https://www.aegean.gr/"
+    }
+  ],
+  "credentials": [
+    {
+      "format": "mso_mdoc",
+      "meta": {
+        "doctype_value": "eu.europa.ec.av.1"
+      },
+      "claims": [
+        {
+          "path": [
+            "eu.europa.ec.av.1",
+            "age_over_18"
+          ]
+        }
+      ]
+    }
+  ]
+}

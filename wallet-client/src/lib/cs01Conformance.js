@@ -57,7 +57,7 @@ export function assertCs01ParRequestContract({
   assertCs01WalletUnitAttestationHeaders(attestationHeaders, { stage: "PAR" });
   assertCs01PkceAuthorizationParams(parParams);
   if (!parParams?.dpop_jkt || typeof parParams.dpop_jkt !== "string") {
-    throw new Cs01ConformanceError("CS-01 PAR must include dpop_jkt (WIA cnf key thumbprint)");
+    throw new Cs01ConformanceError("CS-01 PAR must include dpop_jkt (token-request DPoP key thumbprint)");
   }
   if (!usedPar) {
     throw new Cs01ConformanceError("CS-01 must use PAR; direct authorization fallback is not permitted");

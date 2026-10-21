@@ -1,0 +1,76 @@
+{
+  "purpose": [
+    {
+      "lang": "en",
+      "content": "Verify the configured full PID presentation for University of the Aegean WE BUILD pilot interoperability and conformance testing."
+    }
+  ],
+  "privacyPolicy": [
+    {
+      "type": "Privacy Statement",
+      "url": "https://www.aegean.gr/"
+    }
+  ],
+  "credentials": [
+    {
+      "format": "dc+sd-jwt",
+      "meta": {
+        "vct_values": [
+          "urn:eu.europa.ec.eudi:pid:1"
+        ]
+      },
+      "claims": [
+        {
+          "path": [
+            "given_name"
+          ]
+        },
+        {
+          "path": [
+            "family_name"
+          ]
+        },
+        {
+          "path": [
+            "birthdate"
+          ]
+        },
+        {
+          "path": [
+            "nationalities"
+          ]
+        },
+        {
+          "path": [
+            "place_of_birth"
+          ]
+        },
+        {
+          "path": [
+            "picture"
+          ]
+        },
+        {
+          "path": [
+            "date_of_issuance"
+          ]
+        },
+        {
+          "path": [
+            "date_of_expiry"
+          ]
+        },
+        {
+          "path": [
+            "issuing_authority"
+          ]
+        },
+        {
+          "path": [
+            "issuing_country"
+          ]
+        }
+      ]
+    }
+  ]
+}

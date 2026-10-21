@@ -2,7 +2,8 @@ import { expect } from "chai";
 import crypto from "crypto";
 import fs from "fs";
 import * as jose from "jose";
-import { buildVpRequestJWT } from "../utils/cryptoUtils.js";
+import { buildVpRequestJWT, loadVerifierP12 } from "../utils/cryptoUtils.js";
+import { computeX509HashClientIdFromLeafCertBase64 } from "../utils/cs02ClientIdBinding.js";
 import { validateCs02KeyBindingJwtClaims } from "../utils/cs02VerifierResponse.js";
 import {
   buildCs07DigitalCredentialRequest,
@@ -503,7 +504,7 @@ describe("CS-07 Digital Credentials API request profile", () => {
     process.env.DC_API_VERIFIER_ORIGIN = "https://verifier.example";
     try {
       const requestJwt = await buildVpRequestJWT(
-        "x509_san_dns:verifier.example",
+        computeX509HashClientIdFromLeafCertBase64(loadVerifierP12().certChain[0]),
         null,
         null,
         null,
@@ -542,7 +543,7 @@ describe("CS-07 Digital Credentials API request profile", () => {
     try {
       const clientMetadata = JSON.parse(fs.readFileSync("./data/verifier-config.json", "utf8"));
       const requestJwt = await buildVpRequestJWT(
-        "x509_san_dns:verifier.example",
+        computeX509HashClientIdFromLeafCertBase64(loadVerifierP12().certChain[0]),
         null,
         null,
         null,
@@ -707,7 +708,7 @@ describe("CS-07 TS12 payment DC API requests", () => {
     try {
       const built = buildCs07Ts12PaymentRequest(paymentInput, dpcDcql);
       const requestJwt = await buildVpRequestJWT(
-        "x509_san_dns:verifier.example",
+        computeX509HashClientIdFromLeafCertBase64(loadVerifierP12().certChain[0]),
         null,
         null,
         null,

@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "entityId": "VATEL-090264862",
+  "serviceId": "4c3ecfb0-76ff-4eea-8e51-c8fac931e186",
+  "scenarios": {
+    "age-over-18-mdoc": {
+      "declarationHash": "9afc10e617625a7a4b080745b94f9c5ccdf5581264d1bae0e86abfc4216f4644",
+      "intendedUseId": "2ff98d54-320f-49f2-b963-70a030966848"
+    },
+    "pid-arf": {
+      "declarationHash": "1c8675a18d329137dcdf78fa7d01118e369eefc1ad0bbe9e2ef449ee0a95915e",
+      "intendedUseId": "8fbf7ab8-0fea-4a6d-9f6b-aedf10f6d677"
+    },
+    "pid-basic": {
+      "declarationHash": "3f68b38e01149d6c62b6e3f2fbba2aed9f05aa6828423b63ba1eb9d1d92711c6",
+      "intendedUseId": "95da7781-0a65-4271-bf49-22da0e6ebbf5"
+    },
+    "pid-mdoc": {
+      "declarationHash": "fb38663662a714f2779d7822134a077583b8aa6417e3c2ed7fc4b600a6dc7d5d",
+      "intendedUseId": "cf8bc654-333d-4414-9359-77192b782a15"
+    },
+    "pid-sd-jwt-full": {
+      "declarationHash": "be81e969424be1c21fcccff5989bcc1d167d4aec77ba7ef570720c3ce8b09009",
+      "intendedUseId": "a873d799-4797-464d-9cdc-42c08f475f70"
+    },
+    "qualified-signing": {
+      "declarationHash": "b4c56dfde0fd54b7cb4ef8e2d05d856e3ebd334f9fabd69fce6d66139403c3c4",
+      "intendedUseId": "fc02b55d-f9a0-4f08-9db5-494f5fec0cf9"
+    },
+    "ts12-dpc-pid-standalone": {
+      "declarationHash": "8f86a68a4c49a32cf19e4340a25ba891e83a4d4bd6b1a6798176a7232474b996",
+      "intendedUseId": "ee9edc03-2209-47b9-bd02-d92c0c0ba38b"
+    },
+    "ts12-dpc-pid": {
+      "declarationHash": "0b5c1db3d91346497161858f7cf7b89ac6de15d94fe91ca2877b0380d34f32c1",
+      "intendedUseId": "a3517063-87ca-436e-9feb-2ae6f1c8effa"
+    },
+    "ts12-dpc": {
+      "declarationHash": "3a0e984ab0244faf9b7f21ea5054872a17c214398dd23107458bf3646f5036c8",
+      "intendedUseId": "792e8065-3dc7-45cf-98cf-5610c407996a"
+    }
+  }
+}

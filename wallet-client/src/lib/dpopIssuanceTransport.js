@@ -4,17 +4,18 @@ import { shouldRetryWithAttestationChallenge } from "./attestationChallenge.js";
 import { shouldUseDpopForResourceRequest, isSenderConstrainingMandatory, assertDpopBoundTokenReceived } from "./dpopBinding.js";
 import { computeAthForDpop } from "../../utils/tokenUtils.js";
 
-/** Preserve the WE BUILD session WIA/key while refreshing PoP and DPoP. */
+/** Retain independent WIA and DPoP keys while refreshing their proof JWTs. */
 export async function postFormWithAttestationNonceRetry({
-  url, params, postForm, buildAttestation, keyPath, cnfKeyPair = null,
+  url, params, postForm, buildAttestation, keyPath, cnfKeyPair = null, dpopKeyPair = null,
   reuseAttestationJwt = null, challengeState, nonceState = createDpopNonceState(), log, enabled = true,
 }) {
   const keys = cnfKeyPair || await ensureOrCreateEcKeyPair(keyPath, "ES256");
+  const dpopKeys = dpopKeyPair || await ensureOrCreateEcKeyPair(null, "ES256");
   const budget = { sends: 0, nonceRetries: 0 };
   let attestationJwt = reuseAttestationJwt;
   let lastAttestation;
   const dispatch = () => requestWithDpopNonce({
-    url, namespace: "as", state: nonceState, ...keys, budget, log, enabled,
+    url, namespace: "as", state: nonceState, ...dpopKeys, budget, log, enabled,
     send: async (proof) => {
       lastAttestation = await buildAttestation({ cnfKeyPair: keys, reuseAttestationJwt: attestationJwt });
       attestationJwt = lastAttestation.headers["OAuth-Client-Attestation"];
@@ -31,7 +32,7 @@ export async function postFormWithAttestationNonceRetry({
     response = await dispatch();
   }
   Object.defineProperty(response, "sessionClientAttestation", { value: {
-    attestationJwt, cnfKeyPair: keys, nonceState,
+    attestationJwt, cnfKeyPair: keys, dpopKeyPair: dpopKeys, nonceState,
   }, enumerable: false });
   return response;
 }

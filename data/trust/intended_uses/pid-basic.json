@@ -1,0 +1,31 @@
+{
+  "purpose": [
+    {
+      "lang": "en",
+      "content": "Verify PID surname presentations for University of the Aegean WE BUILD pilot interoperability and conformance testing."
+    }
+  ],
+  "privacyPolicy": [
+    {
+      "type": "Privacy Statement",
+      "url": "https://www.aegean.gr/"
+    }
+  ],
+  "credentials": [
+    {
+      "format": "dc+sd-jwt",
+      "meta": {
+        "vct_values": [
+          "urn:eu.europa.ec.eudi:pid:1"
+        ]
+      },
+      "claims": [
+        {
+          "path": [
+            "family_name"
+          ]
+        }
+      ]
+    }
+  ]
+}

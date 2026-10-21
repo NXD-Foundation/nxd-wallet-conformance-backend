@@ -1,0 +1,76 @@
+{
+  "purpose": [
+    {
+      "lang": "en",
+      "content": "Verify payment service user authentication attestations for WE BUILD TS-12 pilot payment transactions. Verify associated PID identity attributes and optional contact details for the same pilot transaction."
+    }
+  ],
+  "privacyPolicy": [
+    {
+      "type": "Privacy Statement",
+      "url": "https://www.aegean.gr/"
+    }
+  ],
+  "credentials": [
+    {
+      "format": "dc+sd-jwt",
+      "meta": {
+        "vct_values": [
+          "https://webuildconsortium.eu/sca/sca-user/1.0"
+        ]
+      },
+      "claims": [
+        {
+          "path": [
+            "masked_psu_id"
+          ]
+        }
+      ]
+    },
+    {
+      "format": "dc+sd-jwt",
+      "meta": {
+        "vct_values": [
+          "urn:eu.europa.ec.eudi:pid:1"
+        ]
+      },
+      "claims": [
+        {
+          "path": [
+            "given_name"
+          ]
+        },
+        {
+          "path": [
+            "family_name"
+          ]
+        },
+        {
+          "path": [
+            "birthdate"
+          ]
+        },
+        {
+          "path": [
+            "email"
+          ]
+        },
+        {
+          "path": [
+            "nationalities"
+          ]
+        },
+        {
+          "path": [
+            "phone_number"
+          ]
+        },
+        {
+          "path": [
+            "address"
+          ]
+        }
+      ]
+    }
+  ]
+}

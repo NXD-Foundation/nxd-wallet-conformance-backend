@@ -1,2 +1,5 @@
 node_modules
 certbot/
+
+# Raidiam private keys stay local; public certificates and WRPRCs can be reviewed.
+certs/raidiam/**/*.key*

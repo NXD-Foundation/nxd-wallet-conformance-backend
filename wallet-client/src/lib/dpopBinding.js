@@ -56,7 +56,7 @@ function extractAccessTokenJkt(accessToken) {
   }
 }
 
-export async function assertAccessTokenCnfMatchesWia(profile, accessToken, wiaCnfJwk) {
+export async function assertAccessTokenCnfMatchesDpop(profile, accessToken, dpopJwk) {
   if (!isSenderConstrainingMandatory(profile)) {
     return;
   }
@@ -64,15 +64,15 @@ export async function assertAccessTokenCnfMatchesWia(profile, accessToken, wiaCn
   if (!tokenJkt) {
     return;
   }
-  if (!wiaCnfJwk) {
+  if (!dpopJwk) {
     throw new DpopRequiredError(
-      "WE BUILD CS-01 profile requires access-token cnf.jkt to match WIA cnf.jwk; WIA cnf key is missing",
+      "WE BUILD CS-01 profile requires access-token cnf.jkt to match DPoP public key; DPoP key is missing",
     );
   }
-  const expectedJkt = await calculateJwkThumbprint(wiaCnfJwk, "sha256");
+  const expectedJkt = await calculateJwkThumbprint(dpopJwk, "sha256");
   if (tokenJkt !== expectedJkt) {
     throw new DpopRequiredError(
-      "WE BUILD CS-01 profile requires access-token cnf.jkt to match the WIA cnf.jwk thumbprint",
+      "WE BUILD CS-01 profile requires access-token cnf.jkt to match the DPoP public key thumbprint",
     );
   }
 }

@@ -21,6 +21,7 @@ import {
   validateCs02ClientId,
   validateCs02DeepLinkClientIdConsistency,
   validateAndVerifyCs02AuthorizationRequest,
+  verifyCs02JarSignature,
   fetchCs02AuthorizationRequestJwt,
   parseCs02ClientIdScheme,
   decodeJarParts,
@@ -249,8 +250,35 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
       expect(() => validateCs02JarHeader({ alg: "none", typ: CS02_JAR_TYP })).to.throw(Cs02ValidationError);
     });
 
-    it("rejects RS256", () => {
+    it("rejects RS256 authorization requests in CS-02 mode", () => {
       expect(() => validateCs02JarHeader({ alg: "RS256", typ: CS02_JAR_TYP })).to.throw(Cs02ValidationError);
+    });
+
+    it("rejects a cryptographically signed RSA request before credential selection", async () => {
+      const { privateKey, publicKey } = await generateKeyPair("RS256");
+      const requestJwt = await new SignJWT(baseJarPayload())
+        .setProtectedHeader({ alg: "RS256", typ: CS02_JAR_TYP, jwk: await exportJWK(publicKey) })
+        .sign(privateKey);
+      let failure;
+      try { await validateAndVerifyCs02AuthorizationRequest(requestJwt, { options: strictOptions() }); }
+      catch (error) { failure = error; }
+      expect(failure).to.be.instanceOf(Cs02ValidationError);
+      expect(failure.message).to.include('Unsupported authorization request signing algorithm "RS256"');
+    });
+
+    it("verifies an authorization request signed by the Raidiam WRPAC", async () => {
+      const certPath = path.resolve(path.dirname(new URL(import.meta.url).pathname), "../../certs/raidiam/uAaqzBHXMTOW0maXduvtPyAgFWY2RppjzxH5ucvky7U.pem");
+      const keyPath = path.resolve(path.dirname(new URL(import.meta.url).pathname), "../../certs/raidiam/4c3ecfb0-76ff-4eea-8e51-c8fac931e186-WRPAC.key");
+      const certPem = fs.readFileSync(certPath, "utf8");
+      const leafB64 = certPem.replace(/-----BEGIN CERTIFICATE-----|-----END CERTIFICATE-----|\s+/g, "");
+      const clientId = computeX509HashClientIdFromLeafCertBase64(leafB64);
+      const key = await importPKCS8(fs.readFileSync(keyPath, "utf8"), "ES256");
+      const requestJwt = await new SignJWT(baseJarPayload({ client_id: clientId }))
+        .setProtectedHeader({ alg: "ES256", typ: CS02_JAR_TYP, x5c: [leafB64] })
+        .sign(key);
+      const { header, payload } = decodeJarParts(requestJwt);
+      const verified = await verifyCs02JarSignature(requestJwt, header, payload, strictOptions());
+      expect(verified.payload.client_id).to.equal(clientId);
     });
 
     it("rejects missing typ", () => {

@@ -1564,6 +1564,8 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
       return res.status(400).json({ error: "invalid_dpop_proof", error_description: "Token DPoP key does not match the DPoP key bound at PAR" });
     }
 
+    // CS-04 / TS-03 v1.5.2 allows independent WIA and DPoP keys.
+    // CS-05 retains its separate BWIA key-equality requirement.
     if (attestationResult.ok && attestationResult.walletProfile?.resolvedProfile === "cs05") {
       if (dpopCnf?.jkt !== attestationResult.wiaCnfJkt) {
         return res.status(400).json({ error: "invalid_dpop_proof", error_description: "Token DPoP key does not match the BWIA cnf.jwk" });
@@ -1572,26 +1574,6 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
       const ttlSeconds = Math.max(1, attestationResult.attestationPayload.exp - Math.floor(Date.now() / 1000));
       const reserved = await reserveBusinessWalletAttestation(attestationResult.attestationDigest, sessionKeyForUse, ttlSeconds);
       if (!reserved) return res.status(401).json({ error: "invalid_client", error_description: "BWIA was already used in another issuance session or replay storage is unavailable" });
-    }
-
-    if (
-      tokenRequiresWua &&
-      ((codeFlowSessionForWua?.wiaCnfJkt) || (preAuthSessionForWua && attestationResult?.wiaCnfJkt)) &&
-      dpopCnf?.jkt &&
-      dpopCnf.jkt !== (codeFlowSessionForWua?.wiaCnfJkt || attestationResult.wiaCnfJkt)
-    ) {
-      if (slog) {
-        try {
-          slog("[TOKEN] [ERROR] DPoP jkt does not match WIA cnf.jkt from issuance session", {
-            expected: codeFlowSessionForWua?.wiaCnfJkt || attestationResult.wiaCnfJkt,
-            received: dpopCnf.jkt,
-          });
-        } catch {}
-      }
-      return res.status(400).json({
-        error: "invalid_dpop_proof",
-        error_description: "Token DPoP key must be the Wallet Instance Attestation cnf key",
-      });
     }
 
     let tokenResponse;

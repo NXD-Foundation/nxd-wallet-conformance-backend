@@ -101,6 +101,7 @@ async function handleTs12PaymentRequest(req, res) {
       invocationScheme: req.cs02InvocationScheme,
       sessionId,
       trustPolicy: trustFrameworkSessionProps(req.query).trustPolicy,
+      wrprcScenario: req.query.wrprc_scenario || `ts12-${({ "sca-iban": "iban", "sca-user": "user", "sca-card-dpc": "dpc" })[attestationType.id]}${includePid ? "-pid" : ""}`,
       responseMode,
       presentationDefinition: null,
       clientId: CONFIG.CLIENT_ID,

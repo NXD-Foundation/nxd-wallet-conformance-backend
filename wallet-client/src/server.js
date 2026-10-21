@@ -41,7 +41,7 @@ import {
   createResourceRequestDpopProof,
   buildResourceRequestHeaders,
   assertDpopBoundTokenReceived,
-  assertAccessTokenCnfMatchesWia,
+  assertAccessTokenCnfMatchesDpop,
 } from "./lib/dpopBinding.js";
 import {
   describeAttestationConfiguration,
@@ -1354,12 +1354,13 @@ async function httpPostFormWithAttestationChallengeRetry({
   stage,
   challengeState,
   cnfKeyPair = null,
+  dpopKeyPair = null,
   reuseAttestationJwt = null,
   nonceState = createDpopNonceState(),
 }) {
   nonceState.authorizationServer = authorizationServerIssuer;
   return postFormWithAttestationNonceRetry({
-    url, params, keyPath, cnfKeyPair, reuseAttestationJwt, challengeState, nonceState,
+    url, params, keyPath, cnfKeyPair, dpopKeyPair, reuseAttestationJwt, challengeState, nonceState,
     enabled: isWebuildCs01Profile(profile) || Boolean(dpopHeader),
     log: logSessionId ? makeSessionLogger(logSessionId) : undefined,
     postForm: (endpoint, body, proof, headers) => httpPostForm(endpoint, body, logSessionId, proof, headers),
@@ -1607,7 +1608,7 @@ async function runPreAuthorizedIssuance({ profile = activeWalletProfile, walletC
   );
 
   const dpopBinding = await createTokenRequestDpopBinding({
-    keyPath,
+    keyPath: null,
     tokenEndpoint,
     profile,
   });
@@ -1663,7 +1664,7 @@ async function runPreAuthorizedIssuance({ profile = activeWalletProfile, walletC
     authorizationServerIssuer,
     stage: "token request",
     challengeState: attestationChallengeState,
-    cnfKeyPair: dpopBinding,
+    dpopKeyPair: dpopBinding,
     nonceState: dpopBinding.nonceState,
   });
   console.log("[preauth] tokenRes.status=", tokenRes.status); 
@@ -1700,7 +1701,7 @@ async function runPreAuthorizedIssuance({ profile = activeWalletProfile, walletC
     assertDpopBoundTokenReceived(profile, tokenBody, accessToken),
   );
   await runGuardedAsync(slog, "[preauth] access token cnf validation failed", () =>
-    assertAccessTokenCnfMatchesWia(profile, accessToken, dpopBinding.publicJwk),
+    assertAccessTokenCnfMatchesDpop(profile, accessToken, dpopBinding.publicJwk),
   );
   let c_nonce = tokenBody.c_nonce;
   const credentialRequestTargets = runGuardedSync(

@@ -1,0 +1,31 @@
+{
+  "purpose": [
+    {
+      "lang": "en",
+      "content": "Verify payment service user authentication attestations for WE BUILD TS-12 pilot payment transactions."
+    }
+  ],
+  "privacyPolicy": [
+    {
+      "type": "Privacy Statement",
+      "url": "https://www.aegean.gr/"
+    }
+  ],
+  "credentials": [
+    {
+      "format": "dc+sd-jwt",
+      "meta": {
+        "vct_values": [
+          "https://webuildconsortium.eu/sca/sca-user/1.0"
+        ]
+      },
+      "claims": [
+        {
+          "path": [
+            "masked_psu_id"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "purpose": [
+    {
+      "lang": "en",
+      "content": "Exercise remote qualified electronic signing with a CSC X.509 signing credential in the University of the Aegean WE BUILD pilot."
+    }
+  ],
+  "privacyPolicy": [
+    {
+      "type": "Privacy Statement",
+      "url": "https://www.aegean.gr/"
+    }
+  ],
+  "credentials": [
+    {
+      "format": "https://cloudsignatureconsortium.org/2025/x509",
+      "meta": {
+        "certificatePolicies": [
+          "0.4.0.2042.1"
+        ]
+      }
+    }
+  ]
+}

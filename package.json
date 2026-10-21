@@ -17,7 +17,8 @@
     "test:cs07-issuance": "mocha tests/cs07DcApiIssuerClient.test.js tests/cs07DcApiIssuanceRoutes.test.js tests/callerSdJwtPayload.test.js --exit",
     "fcaf:disposition-template": "node scripts/fcafDispositionRegister.js",
     "dev": "SERVER_URL=https://9748-2a02-85f-ec74-200-91b7-3225-5b2e-ce62.ngrok-free.app node server.js",
-    "dc-api:demo": "node clients/dc-api/serve.js"
+    "dc-api:demo": "node clients/dc-api/serve.js",
+    "raidiam:provision": "node scripts/provisionRaidiamWrprc.js"
   },
   "author": "",
   "license": "ISC",

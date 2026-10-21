@@ -83,6 +83,7 @@ mdlRouter.get("/generateVPRequest", validateCs02InvocationScheme, async (req, re
       invocationScheme: req.cs02InvocationScheme,
       sessionId,
       trustPolicy: trustFrameworkSessionProps(req.query).trustPolicy,
+      wrprcScenario: req.query.wrprc_scenario || "pid-mdoc",
       responseMode,
       // presentationDefinition: presentationDefinitionMdl,
 
@@ -124,12 +125,14 @@ mdlRouter.get("/generateVPRequestDCQL", validateCs02InvocationScheme, async (req
       responseMode,
       sessionId,
       trustPolicy: trustFrameworkSessionProps(req.query).trustPolicy,
+      wrprcScenario: req.query.wrprc_scenario || "age-over-18-mdoc",
     });
 
     const result = await generateVPRequest({
       invocationScheme: req.cs02InvocationScheme,
       sessionId,
       trustPolicy: trustFrameworkSessionProps(req.query).trustPolicy,
+      wrprcScenario: req.query.wrprc_scenario,
       responseMode,
       clientId: CONFIG.CLIENT_ID,
       clientMetadata,

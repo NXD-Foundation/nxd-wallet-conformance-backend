@@ -8,7 +8,7 @@ import {
   assertDpopJwtPresent,
   shouldUseDpopForResourceRequest,
   createTokenRequestDpopBinding,
-  assertAccessTokenCnfMatchesWia,
+  assertAccessTokenCnfMatchesDpop,
   buildResourceRequestHeaders,
 } from "../src/lib/dpopBinding.js";
 import { ensureOrCreateEcKeyPair } from "../src/lib/crypto.js";
@@ -98,7 +98,7 @@ describe("wallet-client dpopBinding (Phase 6)", () => {
     expect(headers).to.not.have.property("DPoP");
   });
 
-  it("can create token DPoP from the WIA cnf keypair", async () => {
+  it("can create token DPoP from the actual DPoP keypair", async () => {
     const cnfKeyPair = await ensureOrCreateEcKeyPair(undefined, "ES256");
     const binding = await createTokenRequestDpopBinding({
       tokenEndpoint: "https://issuer.example.com/token",
@@ -110,18 +110,18 @@ describe("wallet-client dpopBinding (Phase 6)", () => {
     expect(binding.dpopJwt).to.be.a("string");
   });
 
-  it("verifies JWT access-token cnf.jkt against the WIA cnf key", async () => {
+  it("verifies JWT access-token cnf.jkt against the actual DPoP key", async () => {
     const cnfKeyPair = await ensureOrCreateEcKeyPair(undefined, "ES256");
     const jkt = await calculateJwkThumbprint(cnfKeyPair.publicJwk, "sha256");
     const token = minimalJwt({ cnf: { jkt } });
-    await assertAccessTokenCnfMatchesWia(WALLET_PROFILES.WEBUILD_CS01, token, cnfKeyPair.publicJwk);
+    await assertAccessTokenCnfMatchesDpop(WALLET_PROFILES.WEBUILD_CS01, token, cnfKeyPair.publicJwk);
   });
 
   it("rejects JWT access-token cnf.jkt mismatch in CS-01 mode", async () => {
     const cnfKeyPair = await ensureOrCreateEcKeyPair(undefined, "ES256");
     const token = minimalJwt({ cnf: { jkt: "different-thumbprint" } });
     try {
-      await assertAccessTokenCnfMatchesWia(WALLET_PROFILES.WEBUILD_CS01, token, cnfKeyPair.publicJwk);
+      await assertAccessTokenCnfMatchesDpop(WALLET_PROFILES.WEBUILD_CS01, token, cnfKeyPair.publicJwk);
       expect.fail("expected cnf.jkt mismatch to throw");
     } catch (error) {
       expect(error).to.be.instanceOf(DpopRequiredError);

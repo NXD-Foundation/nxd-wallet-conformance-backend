@@ -160,6 +160,7 @@ dcApiRouter.post("/vp/dc-api/request", enforceBodyLimit(MAX_REQUEST_BODY_BYTES),
     const result = await generateVPRequest({
       sessionId,
       trustPolicy: trustFrameworkSessionProps(req.query).trustPolicy,
+      wrprcScenario: req.query.wrprc_scenario,
       responseMode: "dc_api.jwt",
       jarAlg: "ES256",
       presentationDefinition: null,

@@ -115,6 +115,32 @@ LoTL content; runtime still fetches the published LoTL and referenced lists.
 
 ## Architectural Decisions And Constraints
 
+### Raidiam relying-party registration certificates
+
+Strict CS-02 verifier requests include a `registrar_dataset` entry in
+`verifier_info` even when trust enforcement is disabled. The dataset uses the
+saved registration ID and submitted intended-use declaration (or a retained
+registrar dataset); no quarantined JWT is read or advertised. Dataset selection
+is pinned in the VP session and its WRPAC identity and finalized DCQL scope are
+revalidated on request retrieval. Missing registration records or inconsistent
+scope fail generation rather than inventing registry identifiers.
+
+Trust-enabled requests additionally require a locally activated, trusted WRPRC
+for the selected scenario and include its base64url-encoded registration token.
+Missing or untrusted certificates still fail request generation; dataset-only
+requests do not bypass this policy. Both selections are pinned in the VP session.
+The wallet applies the signed-token, identity, dataset and scope checks when
+trust enforcement is enabled; WRPRCs are registration JWTs, not X.509 access
+certificates.
+
+Use `node scripts/provisionRaidiamWrprc.js` to register/renew the 13 checked-in
+scenarios. It uses separate mTLS transport credentials, retains issued tokens
+that fail validation in quarantine, and activates only verified registrations.
+See [registration setup](../data/trust/intended_uses/README.md) for configuration,
+scenario mappings, the test-infrastructure privacy URL and current live trust
+limitations. No automatic trust-anchor fallback is added for Raidiam.
+
+
 
 
 ### CS-01 High-Assurance Issuance
@@ -126,14 +152,19 @@ Unit subject key.
 - Deferred issuance uses `transaction_id`, not `acceptance_token`.
 - General OpenID4VCI compatibility modes may be deliberately less strict. Do
 not describe them as CS-01 conformant.
-- The checked-in CS-01 profile text is **v1.3** (August 2026). Initial issuance
-grants are `authorization_code` and `pre-authorized_code`. Pre-authorized
+- The checked-in CS-01 profile text is **v1.4** (October 2026, PR #355
+alignment). Initial issuance grants are `authorization_code` and `pre-authorized_code`. Pre-authorized
 issuance is normative in v1.3 and implemented for `webuild-cs01` without
 weakening WUA, DPoP, or proof binding.
 - Authorization-code PAR MUST include `dpop_jkt`, the SHA-256 JWK thumbprint of
-the WUA `cnf` key. The wallet sends the same key in the PAR DPoP proof and
-WUA; pre-authorized token requests omit `dpop_jkt` (CS-01 §7.4).
-- Re-issuance uses `grant_type=refresh_token` with the same WUA/DPoP and nonce
+the actual DPoP key. The wallet retains separate WIA authentication and DPoP
+keys through PAR, browser handoff, token and nonce retries; pre-authorized
+token requests omit `dpop_jkt` (CS-01 §7.4).
+- CS-04 follows the TS-03 v1.5.2 relaxation proposed in upstream PR #355:
+WIA PoP verifies under WIA `cnf`, while token DPoP may use a different key.
+CS-05/BWIA key-equality requirements remain unchanged. See
+[alignment details](./cs04-independent-dpop-keys.md).
+- Re-issuance uses `grant_type=refresh_token` with independent WIA/DPoP keys and the same nonce
 retry behaviour as the authorization-code token request; a `use_dpop_nonce`
 challenge must not consume the refresh token. The issuer rotates refresh
 tokens atomically on each successful refresh and binds them to the DPoP `jkt`,
@@ -562,8 +593,8 @@ Section 3.6 and Section 4.2.
   `DISABLE_SCA_WIA_KA_CHECKS=false` for full CS-04 WIA/KA and status-list
   enforcement on SCA-only paths. Mixed issuance with `VerifiablePIDSDJWTWUA` or
   `trustFramework=true` still enforces WIA/KA regardless.
-- A DPoP `jkt` that does not match the WIA `cnf` thumbprint is logged as a
-  warning and does not fail the token request (TS-03 v1.5.2). Client
+- CS-04 accepts a DPoP `jkt` distinct from the WIA `cnf` thumbprint
+  (TS-03 v1.5.2); CS-05 still requires equality. Client
   Attestation PoP under WIA `cnf` remains required. The post-issuance 24-hour
   re-check cadence from CS-04 §7.2 is not implemented.
 - WUA/key-attestation signature validation is shared by `proofs.jwt` protected
@@ -711,12 +742,19 @@ deliberately separate:
   metadata signing material. `certs/pidissuerca02_eu.pem` is the CA used to
   extend the JAR `x5c` chain and the hardcoded `preprod.pki.eudiw.dev` WRPAC
   alternative anchor.
-- `trustFramework=true` x509 VP requests are signed with
-  `certs/we-build-wrpac.pem` and `certs/dev-i4mlab.aegean.gr.key.pem`
-  (`TRUST_WRPAC_CERT_PATH`, `TRUST_WRPAC_KEY_PATH`). Requests without that flag
-  keep the preprod P12. x509 credential issuance on a `trustFramework=true`
-  session is signed with `certs/id-union-pid-certificate.pem` and the same
-  private key (`TRUST_PID_ISSUER_CERT_PATH`, `TRUST_PID_ISSUER_KEY_PATH`).
+- x509 verifier authorization requests, including `trustFramework=true`
+  sessions, are signed with the Raidiam sandbox WRPAC
+  `certs/raidiam/uAaqzBHXMTOW0maXduvtPyAgFWY2RppjzxH5ucvky7U.pem` and its P-256 EC private key
+  (`TRUST_WRPAC_CERT_PATH`, `TRUST_WRPAC_KEY_PATH`). The JAR `x5c` is that
+  leaf followed by `certs/raidiam/eudi-sandbox-issuing-ca-g1.pem`
+  (`TRUST_WRPAC_CA_PATH`). The EUDI Sandbox Root CA - G1 trust anchor stays
+  out of `x5c`. The JAR uses ES256; strict CS-02 generation and wallet validation reject
+  RS256. Callers that do not supply this material keep the preprod P12 and
+  ES256. x509 credential issuance on a
+  `trustFramework=true` session is signed with
+  `certs/id-union-pid-certificate.pem` and
+  `certs/dev-i4mlab.aegean.gr.key.pem`
+  (`TRUST_PID_ISSUER_CERT_PATH`, `TRUST_PID_ISSUER_KEY_PATH`).
   Issuance without that flag keeps `x509EC/client_certificate.crt`. A missing
   trust-framework certificate fails generation instead of falling back.
 - Wallet-client credentials remain protocol-specific fixtures. DID, X.509,

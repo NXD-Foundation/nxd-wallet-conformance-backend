@@ -619,7 +619,7 @@ describe('Shared Issuance Flows', function () {
         walletAttestationProfile: 'auto',
         ...sessionProps,
       });
-      const send = async ({ dpopKey = clientKey, nonce = null, pop, withAttestation = true } = {}) => {
+      const send = async ({ dpopKey = clientKey, nonce = null, pop, withAttestation = true, tokenParams = {} } = {}) => {
         let req = request(app).post('/token_endpoint')
           .set('DPoP', await buildTokenDpopProof({ key: dpopKey, nonce }));
         if (withAttestation) {
@@ -630,6 +630,7 @@ describe('Shared Issuance Flows', function () {
           grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
           'pre-authorized_code': preAuthCode,
           client_id: clientId,
+          ...tokenParams,
         });
       };
       return { clientKey, makePop, preAuthCode, send };
@@ -651,19 +652,35 @@ describe('Shared Issuance Flows', function () {
       expect(await cacheServiceRedis.getPreAuthSession(preAuthCode)).to.not.have.property('accessToken');
     });
 
-    it('rejects a CS-04 token whose DPoP key is not the WIA cnf key instead of only warning', async () => {
+    it('accepts a CS-04 pre-authorized token with a DPoP key distinct from WIA cnf', async () => {
       const { preAuthCode, send } = await setupBusinessTokenRequest({}, { business: false });
       const otherPair = await jose.generateKeyPair('ES256', { extractable: true });
       const otherKey = { privateKey: otherPair.privateKey, publicJwk: await jose.exportJWK(otherPair.publicKey) };
-
-      const rejected = await send({ dpopKey: otherKey });
-      expect(rejected.status, JSON.stringify(rejected.body)).to.equal(400);
-      expect(rejected.body).to.have.property('error', 'invalid_dpop_proof');
-      expect(rejected.body.error_description).to.match(/Wallet Instance Attestation cnf/i);
-      expect(await cacheServiceRedis.getPreAuthSession(preAuthCode)).to.not.have.property('accessToken');
-
-      const accepted = await send();
+      const accepted = await send({ dpopKey: otherKey });
       expect(accepted.status, JSON.stringify(accepted.body)).to.equal(200);
+      expect(jose.decodeJwt(accepted.body.access_token).cnf.jkt).to.equal(
+        await jose.calculateJwkThumbprint(otherKey.publicJwk, 'sha256'));
+      expect(await cacheServiceRedis.getPreAuthSession(preAuthCode)).to.have.property('accessToken');
+    });
+
+    it('accepts a CS-04 authorization code bound at PAR to a DPoP key distinct from WIA cnf', async () => {
+      const { clientKey, preAuthCode, send } = await setupBusinessTokenRequest({}, { business: false });
+      const otherPair = await jose.generateKeyPair('ES256', { extractable: true });
+      const otherKey = { privateKey: otherPair.privateKey, publicJwk: await jose.exportJWK(otherPair.publicKey) };
+      const jkt = await jose.calculateJwkThumbprint(otherKey.publicJwk, 'sha256');
+      const code = `cs04-code-${uuidv4()}`;
+      const session = await cacheServiceRedis.getPreAuthSession(preAuthCode);
+      await cacheServiceRedis.storeCodeFlowSession(code, {
+        ...session, parDpopJkt: jkt,
+        wiaCnfJkt: await jose.calculateJwkThumbprint(clientKey.publicJwk, 'sha256'),
+        requests: { sessionId: code, challenge: await cryptoUtils.base64UrlEncodeSha256('verifier') },
+        results: { issuerState: code },
+      });
+      const accepted = await send({ dpopKey: otherKey, tokenParams: {
+        grant_type: 'authorization_code', code, code_verifier: 'verifier',
+      } });
+      expect(accepted.status, JSON.stringify(accepted.body)).to.equal(200);
+      expect(jose.decodeJwt(accepted.body.access_token).cnf.jkt).to.equal(jkt);
     });
 
     it('rejects an authorization_code token whose DPoP key differs from the key bound at PAR, for any profile', async () => {

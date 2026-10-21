@@ -10,9 +10,10 @@ import {
   loadTrustFrameworkVerifierMaterial,
   loadVerifierP12,
 } from "./cryptoUtils.js";
+import { selectWrprc, validatePinnedWrprc, selectRegistrarDataset, validatePinnedRegistrarDataset } from "./wrprcRegistry.js";
 import { computeX509HashClientIdFromLeafCertBase64 } from "./cs02ClientIdBinding.js";
 import { certificateFromX5c, certificatesFromX5c } from "../trust/crypto.js";
-import { checkAccessCertificateTrust, isTrustFrameworkSession, loadConfiguredAccessCertificate } from "./trustFrameworkPolicy.js";
+import { checkAccessCertificateTrust, isTrustFrameworkSession } from "./trustFrameworkPolicy.js";
 import {
   filterClientMetadataForCs02,
   createOpenId4VpRequestUrl,
@@ -1279,6 +1280,7 @@ export async function generateVPRequest(params) {
     cs07VerifierOrigin = null,
     cs07ProfileId = null,
     trustPolicy = null,
+    wrprcScenario = null,
     invocationScheme,
   } = params;
   if (cs07DcApi && invocationScheme !== undefined) {
@@ -1290,15 +1292,15 @@ export async function generateVPRequest(params) {
   const cs02StrictMode = isVerifierCs02StrictMode();
   let effectivePresentationDefinition = presentationDefinition;
   let effectiveDcqlQuery = dcqlQuery;
-  const trustFrameworkSigningMaterial =
-    trustPolicy && isTrustFrameworkSession({ trustPolicy })
-      ? loadTrustFrameworkVerifierMaterial()
-      : null;
+  const useConfiguredWrpac = cs07DcApi
+    || String(clientId || "").startsWith("x509_")
+    || (cs02StrictMode && !cs03Signing);
+  const verifierSigningMaterial = useConfiguredWrpac ? loadTrustFrameworkVerifierMaterial() : null;
   const effectiveClientId = resolveCs02PresentationClientId({
     clientId,
     cs03Signing,
     strict: cs02StrictMode,
-    verifierSigningMaterial: trustFrameworkSigningMaterial,
+    verifierSigningMaterial,
   });
 
   if (cs02StrictMode) {
@@ -1347,10 +1349,6 @@ export async function generateVPRequest(params) {
     sessionData.trustPolicy = trustPolicy;
   }
 
-  const useTrustWrpac = isTrustFrameworkSession(sessionData)
-    && (String(effectiveClientId || "").startsWith("x509_") || cs07DcApi);
-  const verifierSigningMaterial = useTrustWrpac ? loadTrustFrameworkVerifierMaterial() : null;
-
   if (isTrustFrameworkSession(sessionData) && String(effectiveClientId || "").startsWith("x509_")) {
     const accessCertificatePem = certificateFromX5c(verifierSigningMaterial.certChain);
     const accessDecision = await checkAccessCertificateTrust({
@@ -1367,21 +1365,24 @@ export async function generateVPRequest(params) {
       throw new Error(`Verifier access certificate trust rejected: ${accessDecision?.reasonCode || "TRUST_EVALUATION_INDETERMINATE"}`);
     }
 
-    const registrationCertificatePem = await loadConfiguredAccessCertificate("wrprc-provider");
-    if (registrationCertificatePem) {
-      const registrationDecision = await checkAccessCertificateTrust({
-        session: sessionData,
-        certificatePem: registrationCertificatePem,
-        entityId: effectiveClientId,
-        role: "wrprc-provider",
-        operation: "verify-registration-certificate",
-      });
-      sessionData.registrationCertificateTrust = registrationDecision;
-      if (!registrationDecision?.trusted) {
-        await storeVPSessionData(sessionId, sessionData);
-        throw new Error(`Verifier registration certificate trust rejected: ${registrationDecision?.reasonCode || "TRUST_EVALUATION_INDETERMINATE"}`);
-      }
-    }
+  }
+  if (isTrustFrameworkSession(sessionData)) {
+    if (!verifierSigningMaterial) throw new Error("WRPRC: trust-enabled requests require WRPAC signing material");
+    const selected = await selectWrprc({
+      scenario: wrprcScenario, cs07ProfileId, cs03Signing, query: effectiveDcqlQuery,
+      certificatePem: certificateFromX5c(verifierSigningMaterial.certChain), session: sessionData,
+    });
+    sessionData.wrprcSelection = selected.selection;
+    sessionData.verifier_info = selected.verifierInfo;
+    sessionData.registrationCertificateTrust = selected.trustDecision;
+  } else if (cs02StrictMode) {
+    if (!verifierSigningMaterial) throw new Error("CS-02 registrar dataset requires WRPAC signing material");
+    const selected = await selectRegistrarDataset({
+      scenario: wrprcScenario, cs07ProfileId, cs03Signing, query: effectiveDcqlQuery,
+      certificatePem: certificateFromX5c(verifierSigningMaterial.certChain),
+    });
+    sessionData.registrarDatasetSelection = selected.selection;
+    sessionData.verifier_info = selected.verifierInfo;
   }
   if (cs07DcApi) {
     sessionData.transport_profile = "cs07-dc-api";
@@ -1482,6 +1483,7 @@ export async function generateVPRequest(params) {
     cs07DcApi,
     resolvedCs07Origin,
     verifierSigningMaterial,
+    sessionData.verifier_info || null,
   );
   await logInfo(sessionId, "VP request JWT built successfully");
 
@@ -1570,10 +1572,25 @@ export async function processVPRequest(params) {
       : clientMetadata;
     // The session identity is also the client_id published in its invocation URI.
     const requestClientId = vpSession.client_id || clientId;
-    const trustSigningMaterial = isTrustFrameworkSession(vpSession)
-      && String(requestClientId || "").startsWith("x509_")
+    const trustSigningMaterial = String(requestClientId || "").startsWith("x509_")
       ? loadTrustFrameworkVerifierMaterial()
       : null;
+
+    let verifierInfo = null;
+    if (isTrustFrameworkSession(vpSession)) {
+      if (!trustSigningMaterial) throw new Error("WRPRC: trust-enabled requests require WRPAC signing material");
+      const validated = await validatePinnedWrprc({
+        selection: vpSession.wrprcSelection, query: vpSession.dcql_query,
+        certificatePem: certificateFromX5c(trustSigningMaterial.certChain), session: vpSession,
+      });
+      verifierInfo = validated.verifierInfo;
+    } else if (isVerifierCs02StrictMode()) {
+      if (!trustSigningMaterial) throw new Error("CS-02 registrar dataset requires WRPAC signing material");
+      verifierInfo = validatePinnedRegistrarDataset({
+        selection: vpSession.registrarDatasetSelection, query: vpSession.dcql_query,
+        certificatePem: certificateFromX5c(trustSigningMaterial.certChain),
+      }).verifierInfo;
+    }
 
     const vpRequestJWT = await buildVpRequestJWT(
       requestClientId,
@@ -1597,6 +1614,7 @@ export async function processVPRequest(params) {
       false,
       null,
       trustSigningMaterial,
+      verifierInfo,
     );
     
     await logInfo(sessionId, "VP request JWT built successfully", {

@@ -15,7 +15,7 @@ const json = (body, headers = {}, status = 200) => new Response(JSON.stringify(b
 const rsChallenge = () => new Response(null, { status: 401, headers: { "WWW-Authenticate": 'DPoP error="use_dpop_nonce"', "DPoP-Nonce": "resource" } });
 
 describe("WE BUILD issuance nonce integration", () => {
-  it("retains one WIA/session key across PAR, handoff and token nonce/attestation retries", async () => {
+  it("retains separate WIA and DPoP keys across PAR, handoff and token nonce/attestation retries", async () => {
     const state = createDpopNonceState(); state.authorizationServer = "https://issuer.example";
     const challengeState = createAttestationChallengeState();
     const proofJtis = [], popJtis = [], wias = [];
@@ -36,15 +36,16 @@ describe("WE BUILD issuance nonce integration", () => {
     const session = pending.sessionClientAttestation;
     let tokenSends = 0;
     await postFormWithAttestationNonceRetry({ url: "https://issuer.example/token", params: { grant_type: "authorization_code", code: "code", code_verifier: "verifier" },
-      cnfKeyPair: session.cnfKeyPair, reuseAttestationJwt: session.attestationJwt, nonceState: session.nonceState,
+      cnfKeyPair: session.cnfKeyPair, dpopKeyPair: session.dpopKeyPair, reuseAttestationJwt: session.attestationJwt, nonceState: session.nonceState,
       challengeState, buildAttestation: build("https://issuer.example/token"),
       postForm: async (_url, body, proof, headers) => {
         expect(body.code).to.equal("code"); expect(body.code_verifier).to.equal("verifier");
         wias.push(headers["OAuth-Client-Attestation"]); proofJtis.push(decodeJwt(proof).jti);
         popJtis.push(decodeJwt(headers["OAuth-Client-Attestation-PoP"]).jti);
         const publicJwk = decodeJwt(wias.at(-1)).cnf.jwk;
-        expect(decodeProtectedHeader(proof).jwk).to.deep.equal(publicJwk);
-        await jwtVerify(proof, await importJWK(publicJwk, "ES256"));
+        expect(decodeProtectedHeader(proof).jwk).to.deep.equal(session.dpopKeyPair.publicJwk);
+        expect(decodeProtectedHeader(proof).jwk).not.to.deep.equal(publicJwk);
+        await jwtVerify(proof, await importJWK(session.dpopKeyPair.publicJwk, "ES256"));
         await jwtVerify(headers["OAuth-Client-Attestation-PoP"], await importJWK(publicJwk, "ES256"));
         tokenSends++;
         if (tokenSends === 1) { expect(decodeJwt(proof).nonce).to.equal("par-nonce"); return json({ error: "use_dpop_nonce" }, { "DPoP-Nonce": "token-nonce" }, 400); }

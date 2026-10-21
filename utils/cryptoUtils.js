@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import { KEY_MATERIAL_PATHS } from "./keyMaterialPaths.js";
 import { execSync } from "child_process";
 import jwt from "jsonwebtoken";
 import * as jose from "jose";
@@ -170,10 +171,11 @@ export function loadVerifierP12({ p12Path, passphrase } = {}) {
   }
 }
 
-const DEFAULT_TRUST_WRPAC_CERT = path.resolve(process.cwd(), "certs", "we-build-wrpac.pem");
-const DEFAULT_TRUST_WRPAC_KEY = path.resolve(process.cwd(), "certs", "dev-i4mlab.aegean.gr.key.pem");
+const DEFAULT_TRUST_WRPAC_CERT = path.resolve(process.cwd(), KEY_MATERIAL_PATHS.verifierTrustWrpacCertificate);
+const DEFAULT_TRUST_WRPAC_KEY = path.resolve(process.cwd(), KEY_MATERIAL_PATHS.verifierTrustWrpacKey);
+const DEFAULT_TRUST_WRPAC_ISSUING_CA = path.resolve(process.cwd(), KEY_MATERIAL_PATHS.verifierTrustWrpacIssuingCa);
 const DEFAULT_TRUST_PID_ISSUER_CERT = path.resolve(process.cwd(), "certs", "id-union-pid-certificate.pem");
-const DEFAULT_TRUST_PID_ISSUER_KEY = DEFAULT_TRUST_WRPAC_KEY;
+const DEFAULT_TRUST_PID_ISSUER_KEY = path.resolve(process.cwd(), "certs", "dev-i4mlab.aegean.gr.key.pem");
 
 function resolveMaterialPath(explicitPath, envPath, fallback) {
   const selected = explicitPath || envPath || fallback;
@@ -204,16 +206,82 @@ function loadMatchedCertificateMaterial({ resolvedCertPath, resolvedKeyPath, rol
 }
 
 /**
- * Leaf plus issuing CA for VP requests created with trustFramework=true.
- * The preprod verifier P12 remains the signing material for every other request.
+ * JWS alg for a loaded verifier certificate. The configured Raidiam sandbox WRPAC uses P-256.
+ */
+export function verifierMaterialSigningAlg(material) {
+  const keyType = crypto.createPrivateKey(material.privateKeyPkcs8).asymmetricKeyType;
+  if (keyType === "rsa") return "RS256";
+  if (keyType === "ec") return "ES256";
+  throw new Error(`Unsupported verifier signing key type "${keyType}"`);
+}
+
+function signingParamsFromVerifierMaterial(material) {
+  return {
+    privateKeyPkcs8: material.privateKeyPkcs8,
+    certChain: [...material.certChain],
+    alg: verifierMaterialSigningAlg(material),
+  };
+}
+
+function certificateFromDerBase64(derB64) {
+  return new crypto.X509Certificate(derBase64ToPemCert(derB64));
+}
+
+function isSelfSignedCa(certificate) {
+  return certificate.ca && certificate.checkIssued(certificate) && certificate.verify(certificate.publicKey);
+}
+
+/**
+ * OIDFVP-HAIP_COMMON_RO_REQ-21: x5c is the access certificate, then the path
+ * up to but excluding the trust anchor. Append an issuing CA that signed the
+ * leaf. A leaf issued directly by its trust anchor stays alone.
+ */
+function appendWrpacIssuingCa(certChain, caPemPath) {
+  const chain = [...certChain];
+  const leaf = certificateFromDerBase64(chain[0]);
+  const issuerAlreadyPresent = chain.slice(1).some((entry) => leaf.checkIssued(certificateFromDerBase64(entry)));
+  if (issuerAlreadyPresent || isSelfSignedCa(leaf)) return chain;
+
+  if (!fs.existsSync(caPemPath)) {
+    throw new Error(
+      `Trust-framework WRPAC issuing CA is unavailable at ${caPemPath}. Presentation request x5c must include the certificate path up to the trust anchor.`
+    );
+  }
+
+  for (const derB64 of extractCertificateChain(fs.readFileSync(caPemPath, "utf8"))) {
+    const certificate = certificateFromDerBase64(derB64);
+    if (isSelfSignedCa(certificate) || !leaf.checkIssued(certificate) || chain.includes(derB64)) continue;
+    chain.push(derB64);
+  }
+
+  if (!chain.slice(1).some((entry) => leaf.checkIssued(certificateFromDerBase64(entry)))) {
+    throw new Error(
+      `Trust-framework WRPAC x5c is missing the issuing CA for ${leaf.issuer}. Presentation request x5c must include the certificate path up to the trust anchor.`
+    );
+  }
+
+  return chain;
+}
+
+/**
+ * WRPAC leaf plus its issuing CA, used to sign x509 verifier authorization
+ * requests. trustFramework=true sessions use the same material. The preprod
+ * P12 remains available for callers that pass no WRPAC material.
  */
 export function loadTrustFrameworkVerifierMaterial({ certPath, keyPath } = {}) {
-  return loadMatchedCertificateMaterial({
+  const material = loadMatchedCertificateMaterial({
     resolvedCertPath: resolveMaterialPath(certPath, process.env.TRUST_WRPAC_CERT_PATH, DEFAULT_TRUST_WRPAC_CERT),
     resolvedKeyPath: resolveMaterialPath(keyPath, process.env.TRUST_WRPAC_KEY_PATH, DEFAULT_TRUST_WRPAC_KEY),
     roleLabel: "Trust-framework WRPAC",
     missingMessage: "trustFramework=true VP requests do not fall back to the preprod verifier certificate.",
   });
+  return {
+    ...material,
+    certChain: appendWrpacIssuingCa(
+      material.certChain,
+      resolveMaterialPath(undefined, process.env.TRUST_WRPAC_CA_PATH, DEFAULT_TRUST_WRPAC_ISSUING_CA),
+    ),
+  };
 }
 
 /**
@@ -419,6 +487,7 @@ export async function buildVpRequestJWT(
   cs07DcApi = false,
   cs07VerifierOrigin = null,
   verifierSigningMaterial = null,
+  verifierInfo = null,
 ) {
     const cs02Options = resolveVerifierCs02Options(process.env);
   const cs07Origin = cs07DcApi
@@ -560,6 +629,8 @@ export async function buildVpRequestJWT(
     jwtPayload.presentation_definition = presentation_definition;
   }
 
+  if (verifierInfo) jwtPayload.verifier_info = verifierInfo;
+
   // Add transaction_data if provided
   if (transaction_data) {
     validateCs02TransactionDataEntries(transaction_data, dcql_query, cs02Options);
@@ -568,30 +639,42 @@ export async function buildVpRequestJWT(
 
   let signedJwt;
   const verifierMaterial = () => verifierSigningMaterial || loadVerifierP12();
+  const suppliedVerifierSigning = verifierSigningMaterial
+    ? signingParamsFromVerifierMaterial(verifierSigningMaterial)
+    : null;
 
   if (response_mode === "dc_api.jwt" || response_mode === "dc_api") {
-    // Use WE-BUILD Verifier P12 certificate for Digital Credentials API
-    const { privateKeyPkcs8, certChain } = verifierMaterial();
+    const { privateKeyPkcs8, certChain } = suppliedVerifierSigning || loadVerifierP12();
+    const alg = suppliedVerifierSigning?.alg || "ES256";
 
     const header = {
-      alg: "ES256",
+      alg,
       typ: "oauth-authz-req+jwt",
       x5c: buildPresentationRequestX5c(certChain),
     };
 
     signedJwt = await new jose.SignJWT(jwtPayload)
       .setProtectedHeader(header)
-      .sign(await jose.importPKCS8(privateKeyPkcs8, "ES256"));
+      .sign(await jose.importPKCS8(privateKeyPkcs8, alg));
   } else if (
     effectiveClientId.startsWith("x509_san_dns:") ||
     effectiveClientId.startsWith("x509_san_uri:")
   ) {
-    const useEs256 =
-      signingPolicy.forceEs256 ||
-      (typeof jar_alg === "string" && jar_alg.toUpperCase() === "ES256");
+    const useEs256 = suppliedVerifierSigning
+      ? suppliedVerifierSigning.alg === "ES256"
+      : signingPolicy.forceEs256 ||
+        (typeof jar_alg === "string" && jar_alg.toUpperCase() === "ES256");
 
     let certChain;
-    if (useEs256) {
+    let x509Alg = useEs256 ? "ES256" : "RS256";
+    if (suppliedVerifierSigning) {
+      privateKey = suppliedVerifierSigning.privateKeyPkcs8;
+      certChain = suppliedVerifierSigning.certChain;
+      x509Alg = suppliedVerifierSigning.alg;
+      if (x509Alg === "ES256") {
+        await validateX509SanDnsTrustForRequestGeneration(client_id, { x5c: certChain });
+      }
+    } else if (useEs256) {
       const p12 = verifierMaterial();
       privateKey = p12.privateKeyPkcs8;
       certChain = verifierSigningMaterial ? [...p12.certChain] : appendCaCertsIfNeeded([...p12.certChain]);
@@ -613,22 +696,28 @@ export async function buildVpRequestJWT(
     }
 
     const header = {
-      alg: useEs256 ? "ES256" : "RS256",
+      alg: x509Alg,
       typ: "oauth-authz-req+jwt",
       x5c: buildPresentationRequestX5c(certChain),
     };
 
     signedJwt = await new jose.SignJWT(jwtPayload)
       .setProtectedHeader(header)
-      .sign(await jose.importPKCS8(privateKey, useEs256 ? "ES256" : "RS256"));
+      .sign(await jose.importPKCS8(privateKey, x509Alg));
   } else if (effectiveClientId.startsWith("x509_hash:")) {
-    const useEs256 =
-      cs02Options.strict ||
-      signingPolicy.forceEs256 ||
-      (typeof jar_alg === "string" && jar_alg.toUpperCase() === "ES256");
+    const useEs256 = suppliedVerifierSigning
+      ? suppliedVerifierSigning.alg === "ES256"
+      : cs02Options.strict ||
+        signingPolicy.forceEs256 ||
+        (typeof jar_alg === "string" && jar_alg.toUpperCase() === "ES256");
 
     let certChain;
-    if (useEs256) {
+    let x509Alg = useEs256 ? "ES256" : "RS256";
+    if (suppliedVerifierSigning) {
+      privateKey = suppliedVerifierSigning.privateKeyPkcs8;
+      certChain = suppliedVerifierSigning.certChain;
+      x509Alg = suppliedVerifierSigning.alg;
+    } else if (useEs256) {
       const p12 = verifierMaterial();
       privateKey = p12.privateKeyPkcs8;
       certChain = verifierSigningMaterial ? [...p12.certChain] : appendCaCertsIfNeeded([...p12.certChain]);
@@ -656,19 +745,19 @@ export async function buildVpRequestJWT(
         "invalid_client",
       );
     }
-    if (useEs256) {
+    if (x509Alg === "ES256") {
       await validateX509HashTrustForRequestGeneration(client_id, { x5c: certChain });
     }
 
     const header = {
-      alg: useEs256 ? "ES256" : "RS256",
+      alg: x509Alg,
       typ: "oauth-authz-req+jwt",
       x5c: buildPresentationRequestX5c(certChain),
     };
 
     signedJwt = await new jose.SignJWT(jwtPayload)
       .setProtectedHeader(header)
-      .sign(await jose.importPKCS8(privateKey, useEs256 ? "ES256" : "RS256"));
+      .sign(await jose.importPKCS8(privateKey, x509Alg));
   } else if (effectiveClientId.startsWith("did:")) {
     // Check if this is a did:jwk identifier
     if (effectiveClientId.startsWith("did:jwk:")) {

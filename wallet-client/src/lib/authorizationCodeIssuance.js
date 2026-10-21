@@ -20,7 +20,7 @@ import {
   createResourceRequestDpopProof,
   buildResourceRequestHeaders,
   assertDpopBoundTokenReceived,
-  assertAccessTokenCnfMatchesWia,
+  assertAccessTokenCnfMatchesDpop,
 } from "./dpopBinding.js";
 import {
   describeAttestationConfiguration,
@@ -324,9 +324,9 @@ export function createAuthorizationCodeIssuance(deps) {
     nonceState.resourceServer = issuerMetaWorking.credential_issuer || apiBase;
     if (parEndpoint) {
       try {
-        let parCnfKeyPair = null;
+        let parDpopKeyPair = null;
         if (isWebuildCs01Profile(profile)) {
-          parCnfKeyPair = await ensureOrCreateEcKeyPair(keyPath, "ES256");
+          parDpopKeyPair = await ensureOrCreateEcKeyPair(null, "ES256");
         }
         let legacyParBodyClientAssertionJwt = null;
         if (allowsLegacyBodyClientAssertion(profile)) {
@@ -350,9 +350,9 @@ export function createAuthorizationCodeIssuance(deps) {
                 client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
               }
             : {}),
-          ...(parCnfKeyPair
+          ...(parDpopKeyPair
             ? {
-                dpop_jkt: await calculateJwkThumbprint(parCnfKeyPair.publicJwk, "sha256"),
+                dpop_jkt: await calculateJwkThumbprint(parDpopKeyPair.publicJwk, "sha256"),
               }
             : {}),
         };
@@ -368,7 +368,7 @@ export function createAuthorizationCodeIssuance(deps) {
           stage: "PAR",
           nonceState,
           challengeState: attestationChallengeState,
-          cnfKeyPair: parCnfKeyPair,
+          dpopKeyPair: parDpopKeyPair,
         });
         if (parRes.ok) {
           const parBody = parRes.parsedBody || (await parRes.json().catch(() => ({})));
@@ -546,10 +546,11 @@ export function createAuthorizationCodeIssuance(deps) {
 
     const sessionClientAttestation = pending.sessionClientAttestation || null;
     const dpopBinding = await createTokenRequestDpopBinding({
-      keyPath,
+      keyPath: null,
       tokenEndpoint,
       profile,
-      cnfKeyPair: sessionClientAttestation?.cnfKeyPair || null,
+      // Pending contexts created before key separation used the WIA key for DPoP.
+      cnfKeyPair: sessionClientAttestation?.dpopKeyPair || sessionClientAttestation?.cnfKeyPair || null,
     });
     dpopBinding.nonceState = sessionClientAttestation?.nonceState || createDpopNonceState();
     dpopBinding.nonceState.authorizationServer = authorizationServerIssuer;
@@ -606,7 +607,8 @@ export function createAuthorizationCodeIssuance(deps) {
       ),
       stage: "token request",
       challengeState: attestationChallengeState,
-      cnfKeyPair: dpopBinding,
+      cnfKeyPair: sessionClientAttestation?.cnfKeyPair || null,
+      dpopKeyPair: dpopBinding,
       reuseAttestationJwt: sessionClientAttestation?.attestationJwt || null,
       nonceState: dpopBinding.nonceState,
     });
@@ -634,7 +636,7 @@ export function createAuthorizationCodeIssuance(deps) {
       assertDpopBoundTokenReceived(profile, tokenBody, accessToken),
     );
     await runGuardedAsync(slog, "[codeflow] access token cnf validation failed", () =>
-      assertAccessTokenCnfMatchesWia(profile, accessToken, dpopBinding.publicJwk),
+      assertAccessTokenCnfMatchesDpop(profile, accessToken, dpopBinding.publicJwk),
     );
 
     issuanceContext.refreshToken = describeIssuanceRefreshTokenMetadata(tokenBody);

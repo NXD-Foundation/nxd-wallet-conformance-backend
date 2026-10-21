@@ -6,7 +6,7 @@ import { requestWithResourceDpop, requestCredentialNonce } from "./dpopIssuanceT
 import { isWebuildCs01Profile } from "./profile.js";
 import {
   assertDpopBoundTokenReceived,
-  assertAccessTokenCnfMatchesWia,
+  assertAccessTokenCnfMatchesDpop,
   buildResourceRequestHeaders,
 } from "./dpopBinding.js";
 import {
@@ -165,7 +165,7 @@ export async function runRefreshTokenReissuance({
     authorizationServerIssuer: binding.authorizationServerIssuer,
     stage: "refresh token request",
     challengeState: attestationChallengeState,
-    cnfKeyPair: dpopBinding,
+    dpopKeyPair: dpopBinding,
     nonceState: dpopBinding.nonceState,
   }), { pollTimeoutMs, pollIntervalMs, ...retryOptions });
 
@@ -192,7 +192,7 @@ export async function runRefreshTokenReissuance({
 
   const accessToken = tokenBody.access_token;
   assertDpopBoundTokenReceived(profile, tokenBody, accessToken);
-  await assertAccessTokenCnfMatchesWia(profile, accessToken, dpopBinding.publicJwk);
+  await assertAccessTokenCnfMatchesDpop(profile, accessToken, dpopBinding.publicJwk);
 
   const nextBinding = buildReissuanceBinding({
     profile, refreshToken: tokenBody.refresh_token, dpopBinding,

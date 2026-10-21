@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "entityId": "VATEL-090264862",
+  "serviceId": "4c3ecfb0-76ff-4eea-8e51-c8fac931e186",
+  "scenarios": {
+    "age-over-18-mdoc": {
+      "declarationHash": "9afc10e617625a7a4b080745b94f9c5ccdf5581264d1bae0e86abfc4216f4644",
+      "intendedUseId": "2ff98d54-320f-49f2-b963-70a030966848"
+    }
+  }
+}

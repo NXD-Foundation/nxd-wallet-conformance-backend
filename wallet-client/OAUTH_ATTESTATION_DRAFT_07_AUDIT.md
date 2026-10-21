@@ -1,3 +1,5 @@
+> Historical audit. CS-04 key-binding conclusions below are superseded by [PR #355 alignment](../docs/cs04-independent-dpop-keys.md); WIA and DPoP keys are independent.
+
 # WE BUILD CS-01 / TS03 / ARF 2.9 Wallet Client Gap Analysis
 
 Audit target: `wallet-client`

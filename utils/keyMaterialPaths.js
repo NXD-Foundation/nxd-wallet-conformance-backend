@@ -13,8 +13,9 @@ export const KEY_MATERIAL_PATHS = Object.freeze({
   verifierEncryptionCertificate: "./x509EC/client_certificate.crt",
   verifierSigningP12: "./certs/WE-BUILD-Verifier.p12",
   verifierSigningCa: "./certs/pidissuerca02_eu.pem",
-  verifierTrustWrpacCertificate: "./certs/we-build-wrpac.pem",
-  verifierTrustWrpacKey: "./certs/dev-i4mlab.aegean.gr.key.pem",
+  verifierTrustWrpacCertificate: "./certs/raidiam/uAaqzBHXMTOW0maXduvtPyAgFWY2RppjzxH5ucvky7U.pem",
+  verifierTrustWrpacKey: "./certs/raidiam/4c3ecfb0-76ff-4eea-8e51-c8fac931e186-WRPAC.key",
+  verifierTrustWrpacIssuingCa: "./certs/raidiam/eudi-sandbox-issuing-ca-g1.pem",
   trustFrameworkPidIssuerCertificate: "./certs/id-union-pid-certificate.pem",
 });
 
