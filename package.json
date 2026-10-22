@@ -7,7 +7,7 @@
   "scripts": {
     "test": "mocha \"tests/**/*.js\" --ignore \"tests/helpers/**\"",
     "test:aptitude": "NODE_ENV=test ALLOW_NO_REDIS=true mocha \"tests/**/*.js\" --ignore \"tests/helpers/**\"",
-    "dev": "SERVER_URL=https://c3b5-2a02-85f-ec91-c300-8a0b-ce8e-5a65-b290.ngrok-free.app node server.js"
+    "dev": "SERVER_URL=https://2d64-2a02-85f-ec2e-dd00-9a44-caf3-60b7-c5f9.ngrok-free.app node server.js"
   },
   "author": "",
   "license": "ISC",
