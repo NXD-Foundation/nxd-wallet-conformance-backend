@@ -141,7 +141,7 @@ describe("WUA validation (routeUtils)", () => {
     expect(result.payload?.iss).to.equal("https://wallet-provider.example");
   });
 
-  it("validateWUA accepts a WUA without iss (test-service relaxed)", async () => {
+  it("validateWUA accepts a KA without iss (TS3 certificate identifies the Wallet Provider)", async () => {
     const fixtures = await import("./helpers/wpKeyAttestationCertFixtures.mjs").then((m) =>
       m.createWalletProviderKeyAttestationCertFixtures()
     );
@@ -159,7 +159,7 @@ describe("WUA validation (routeUtils)", () => {
     expect(result.payload?.attested_keys).to.be.an("array").with.length(1);
   });
 
-  it("validateWUA rejects a WUA without eudi_wallet_info", async () => {
+  it("validateWUA accepts a trusted KA without the legacy eudi_wallet_info extension", async () => {
     const fixtures = await import("./helpers/wpKeyAttestationCertFixtures.mjs").then((m) =>
       m.createWalletProviderKeyAttestationCertFixtures()
     );
@@ -173,9 +173,53 @@ describe("WUA validation (routeUtils)", () => {
     const result = await validateWUA(compact, null, {
       wallet_provider_trust_anchors: fixtures.issuerConfigAnchors,
     });
-    expect(result.valid).to.equal(false);
-    expect(result.error).to.match(/eudi_wallet_info/i);
+    expect(result.valid).to.equal(true);
+    expect(result.payload).not.to.have.property("eudi_wallet_info");
   });
+
+  for (const legacyInfo of [{}, { general_info: {} }, null]) {
+    it(`does not require nested legacy wallet info: ${JSON.stringify(legacyInfo)}`, async () => {
+      const fixtures = await import("./helpers/wpKeyAttestationCertFixtures.mjs").then((m) =>
+        m.createWalletProviderKeyAttestationCertFixtures()
+      );
+      const pubJwk = await jose.exportJWK((await jose.generateKeyPair("ES256")).publicKey);
+      const compact = await buildMinimalWuaX5c({
+        fixtures, attestedKeys: [pubJwk], claims: { eudi_wallet_info: legacyInfo },
+      });
+      expect((await validateWUA(compact, null, {
+        wallet_provider_trust_anchors: fixtures.issuerConfigAnchors,
+      })).valid).to.equal(true);
+    });
+  }
+
+  for (const failure of ["signature", "trust", "expiration"]) {
+    it(`still rejects invalid ${failure} without legacy wallet info`, async () => {
+      const fixtures = await import("./helpers/wpKeyAttestationCertFixtures.mjs").then((m) =>
+        m.createWalletProviderKeyAttestationCertFixtures()
+      );
+      const pubJwk = await jose.exportJWK((await jose.generateKeyPair("ES256")).publicKey);
+      let compact = await buildMinimalWuaX5c({
+        fixtures,
+        attestedKeys: [pubJwk],
+        claims: {
+          eudi_wallet_info: undefined,
+          ...(failure === "expiration" ? { exp: Math.floor(Date.now() / 1000) - 60 } : {}),
+        },
+      });
+      if (failure === "signature") {
+        const parts = compact.split(".");
+        const signature = Buffer.from(parts[2], "base64url");
+        signature[0] ^= 1;
+        parts[2] = signature.toString("base64url");
+        compact = parts.join(".");
+      }
+      const result = await validateWUA(compact, null, {
+        wallet_provider_trust_anchors: failure === "trust" ? [] : fixtures.issuerConfigAnchors,
+      });
+      expect(result.valid).to.equal(false);
+      expect(result.error).to.match(failure === "expiration" ? /expired/i : /signature|trust anchor/i);
+    });
+  }
 
   it("verifyWuaJwtSignature verifies x5c-signed WUA with trust anchors", async () => {
     const fixtures = await import("./helpers/wpKeyAttestationCertFixtures.mjs").then((m) =>

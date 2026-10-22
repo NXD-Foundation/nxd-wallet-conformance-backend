@@ -3218,8 +3218,8 @@ export const validateWIA = async (wiaJwt, sessionId = null) => {
  * Based on TS3 Wallet Unit Attestation spec:
  * https://github.com/eu-digital-identity-wallet/eudi-doc-standards-and-technical-specifications/blob/main/docs/technical-specifications/ts3-wallet-unit-attestation.md
  *
- * Trust: see module comment above — JWS verification is performed; Wallet Provider / `iss` trust
- * via Trusted List is not (yet); use {@link isWuaWalletProviderTrustedByPolicy} for that hook.
+ * Trust: verifies the JWS using x5c and the configured Wallet Provider trust anchors.
+ * Nonce and holder-key binding are enforced by the credential proof pipeline.
  *
  * @param {string} wuaJwt - The WUA JWT string
  * @param {string} sessionId - Session ID for logging
@@ -3244,33 +3244,14 @@ export const validateWUA = async (wuaJwt, sessionId = null, issuerMetadata = nul
       return { valid: false, error: withSpecRef('WUA JWT has expired', WUA_SPEC_REF, OID4VCI_WALLET_ATTESTATION_SPEC_REF) };
     }
 
-    // iss identifies the Wallet Provider; required for production trust policy but relaxed
-    // in this test service when other structural checks pass.
-    if (!decoded.payload.iss) {
-      if (sessionId) {
-        await logWarn(sessionId, 'WUA JWT missing iss claim; continuing with test-service relaxed validation', {}).catch(() => {});
-      }
-    }
-
-    // Check for eudi_wallet_info (optional but recommended)
+    // TS3 §2.3.2 uses the OpenID4VCI Appendix D key-attestation claims.
+    // eudi_wallet_info is a legacy extension, not a required KA claim. Do not
+    // impose its old general_info/key_storage_info schema on reference wallets.
+    // Wallet Provider identity comes from the trusted x5c signing certificate;
+    // TS3 does not require an iss claim in the KA.
     const hasEudiWalletInfo = !!decoded.payload.eudi_wallet_info;
-    let generalInfo;
-    let keyStorageInfo;
-    if (!hasEudiWalletInfo) {
-      return { valid: false, error: withSpecRef('eudi_wallet_info claim is missing', WUA_SPEC_REF) };
-    }else{
-      generalInfo = decoded.payload.eudi_wallet_info.general_info;
-      keyStorageInfo = decoded.payload.eudi_wallet_info.key_storage_info;
-      if (!generalInfo || !keyStorageInfo) {
-        return { valid: false, error: withSpecRef('general_info or key_storage_info claim is missing', WUA_SPEC_REF) };
-      }
-    }
-    
-    // Check for attested_keys (required per spec)
     const hasAttestedKeys = Array.isArray(decoded.payload.attested_keys) && decoded.payload.attested_keys.length > 0;
-    
-    // Check for status/revocation information (required per spec)
-    const hasStatus = !!decoded.payload.status && !!decoded.payload.status.status_list;
+    const hasStatus = !!decoded.payload.key_storage_status?.status || !!decoded.payload.status?.status_list;
 
     const meta = issuerMetadata ?? loadIssuerMetadataForWua();
     const sigResult = await verifyWuaJwtSignature(wuaJwt, decoded.header, meta);
@@ -3296,15 +3277,13 @@ export const validateWUA = async (wuaJwt, sessionId = null, issuerMetadata = nul
     // TODO: Check revocation status using status_list if present
 
     if (sessionId) {
-      await logInfo(sessionId, "WUA validated (structure + signature + trust stub)", {
+      await logInfo(sessionId, "WUA validated (signature + configured Wallet Provider trust)", {
         wuaIssuer: decoded.payload.iss,
         wuaExp: decoded.payload.exp,
         wuaIat: decoded.payload.iat,
         hasEudiWalletInfo,
         hasAttestedKeys,
         hasStatus,
-        generalInfo,
-        keyStorageInfo,
         attestedKeysCount: decoded.payload.attested_keys?.length || 0,
         signatureVerification: 'verified',
         walletProviderTrustPolicy: 'x5c_to_wallet_provider_trust_anchors',

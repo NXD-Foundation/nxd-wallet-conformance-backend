@@ -396,7 +396,8 @@ Per RFC 9449:
 - **Wallet Unit Attestation (WUA)**: Optional validation of WUA JWT in credential requests
   - Validates WUA signature, claims, and expiration
   - Extracts WUA from proof JWT header `key_attestation` claim
-  - Validates `attested_keys` array and `eudi_wallet_info` structure
+  - Validates attestation signature and configured Wallet Provider certificate trust; the credential proof pipeline checks nonce and `attested_keys` binding
+  - Accepts current TS3 key attestations without the legacy `eudi_wallet_info` extension
   - Graceful degradation: continues without attestation if not provided (logs warning)
 
 ### Notification Endpoint
@@ -525,11 +526,9 @@ The implementation supports **EUDI Wallet Architecture and Reference Framework (
 - **Issuer Support**: Validates WUA JWT in credential requests
   - Extracts WUA from proof JWT header `key_attestation` claim
   - Validates WUA signature, claims, and expiration
-  - Validates `eudi_wallet_info` structure:
-    - `general_info`: General wallet information
-    - `key_storage_info`: Key storage information
+  - Uses the OpenID4VCI Appendix D key-attestation format (TS3 §2.3.2); legacy `eudi_wallet_info`, `general_info`, and `key_storage_info` are not required
   - Validates `attested_keys` array (required per spec)
-  - Validates optional `status` claim for revocation information
+  - Recognizes current `key_storage_status` and legacy `status` for diagnostics; revocation lookup is not implemented
   - Graceful degradation: continues without attestation if not provided (logs warning)
 
 - **Wallet Support**: Generates WUA JWT for credential endpoint requests

@@ -88,12 +88,14 @@ export async function buildSignedKeyAttestationJwt({ fixtures, attestedKeys, cla
     iat: now,
     exp: now + 3600,
     jti: "ka-test-jti",
-    eudi_wallet_info: {
-      general_info: { name: "test-wallet" },
-      key_storage_info: { level: "tee" },
+    key_storage: ["iso_18045_high"],
+    user_authentication: ["iso_18045_high"],
+    certification: "https://wallet-provider.example/certification",
+    key_storage_status: {
+      status: { status_list: { uri: "https://example.com/status", idx: 0 } },
+      exp: now + 86400,
     },
     attested_keys: attestedKeys,
-    status: { status_list: { uri: "https://example.com/status", idx: 0 } },
     ...claims,
   })
     .setProtectedHeader({

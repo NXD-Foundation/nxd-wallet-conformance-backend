@@ -167,7 +167,8 @@ describe('Shared Issuance Flows', () => {
     const validPrivateKeyPem = testPrivateKey.export({ type: 'pkcs8', format: 'pem' });
     const validPublicKeyPem = testPublicKey.export({ type: 'spki', format: 'pem' });
     
-    globalSandbox.stub(fs, 'readFileSync')
+    // Preserve reads of dependency source files while overriding issuer fixtures.
+    globalSandbox.stub(fs, 'readFileSync').callThrough()
       .withArgs(sinon.match(/issuer-config\.json/)).returns(JSON.stringify({
         wallet_provider_trust_anchors: wpKaFixtures.issuerConfigAnchors,
         credential_configurations_supported: {
