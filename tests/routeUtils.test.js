@@ -1,8 +1,19 @@
 import { expect } from 'chai';
 import {
   createCredentialOfferConfig,
+  DEFAULT_DCQL_QUERY,
   DEFAULT_MDL_DCQL_QUERY,
+  MINIMAL_PID_DCQL_CLAIMS,
   BOOKING_REFERENCE_PID_DCQL_QUERY,
+  BOOKING_REFERENCE_PID_EDC_DCQL_QUERY,
+  EUROPEAN_DISABILITY_CARD_DCQL_CREDENTIAL_ID,
+  EUROPEAN_DISABILITY_CARD_VCT,
+  AIRLINE_PNR_DCQL_QUERY,
+  AIRLINE_PNR_VCT,
+  AIRLINE_BOARDING_PASS_DCQL_QUERY,
+  AIRLINE_BOARDING_PASS_VCT,
+  BOARDING_PASS_PID_DCQL_QUERY,
+  PNR_PID_DCQL_QUERY,
   URL_SCHEMES,
   resolveCredentialOfferUrlScheme,
   getCredentialOfferSchemeFromRequest,
@@ -13,9 +24,34 @@ import {
   isEtsiIssuanceProfileEnforced,
   parseBooleanEnvFlag,
   extractWIAFromTokenRequest,
+  parseMultiCredentialOfferRequest,
+  preAuthOfferSessionStateMatches,
+  createSessionWithMultiCredentialPayloads,
+  buildCredentialOfferUrl,
+  resolveVciOfferSignatureType,
 } from '../utils/routeUtils.js';
 
 describe('Route Utils', () => {
+  describe('resolveVciOfferSignatureType', () => {
+    it('defaults EUDI PID SD-JWT offers to x509 when signature_type is omitted', () => {
+      expect(
+        resolveVciOfferSignatureType(
+          { query: {} },
+          'urn:eu.europa.ec.eudi:pid:1',
+        ),
+      ).to.equal('x509');
+    });
+
+    it('respects an explicit signature_type override', () => {
+      expect(
+        resolveVciOfferSignatureType(
+          { query: { signature_type: 'kid-jwk' } },
+          'urn:eu.europa.ec.eudi:pid:1',
+        ),
+      ).to.equal('kid-jwk');
+    });
+  });
+
   describe('createCredentialOfferConfig', () => {
     it('should set issuer_state for authorization code flow', () => {
       const config = createCredentialOfferConfig(
@@ -136,6 +172,25 @@ describe('Route Utils', () => {
     });
   });
 
+  describe('DEFAULT_DCQL_QUERY', () => {
+    it('requests minimal PID claims aligned with presentation_definition_pid.json', () => {
+      const [pidQuery] = DEFAULT_DCQL_QUERY.credentials;
+
+      expect(pidQuery.format).to.equal('dc+sd-jwt');
+      expect(pidQuery.meta.vct_values).to.deep.equal(['urn:eu.europa.ec.eudi:pid:1', 'urn:eudi:pid:1']);
+      expect(pidQuery.claims).to.deep.equal(MINIMAL_PID_DCQL_CLAIMS);
+      expect(pidQuery.claims.map(({ path }) => path[0])).to.deep.equal([
+        'given_name',
+        'family_name',
+        'birthdate',
+        'place_of_birth',
+        'nationalities',
+        'issuing_authority',
+        'issuing_country',
+      ]);
+    });
+  });
+
   describe('DEFAULT_MDL_DCQL_QUERY', () => {
     it('uses the PID namespace for mso_mdoc claim paths', () => {
       const claimPaths = DEFAULT_MDL_DCQL_QUERY.credentials[0].claims.map(
@@ -150,13 +205,148 @@ describe('Route Utils', () => {
   });
 
   describe('BOOKING_REFERENCE_PID_DCQL_QUERY', () => {
-    it('requests both booking reference and PID credentials', () => {
-      const [bookingQuery, pidQuery] = BOOKING_REFERENCE_PID_DCQL_QUERY.credentials;
+    it('requests Accommodation Voucher reservationReference and PID family_name for guest matching', () => {
+      const [voucherQuery, pidQuery] = BOOKING_REFERENCE_PID_DCQL_QUERY.credentials;
 
-      expect(bookingQuery.meta.vct_values).to.deep.equal(['booking_reference_credential']);
-      expect(bookingQuery.claims.map(({ path }) => path)).to.deep.equal([['booking_reference']]);
+      expect(voucherQuery.id).to.equal('accommodation-voucher');
+      expect(voucherQuery.meta.vct_values).to.deep.equal(['booking_reference_credential']);
+      expect(voucherQuery.claims.map(({ path }) => path)).to.deep.equal([
+        ['reservationReference'],
+      ]);
 
-      expect(pidQuery.meta.vct_values).to.deep.equal(['urn:eu.europa.ec.eudi:pid:1']);
+      expect(pidQuery.meta.vct_values).to.deep.equal(['urn:eu.europa.ec.eudi:pid:1', 'urn:eudi:pid:1']);
+      expect(pidQuery.claims.map(({ path }) => path)).to.deep.equal([['family_name']]);
+    });
+  });
+
+  describe('AIRLINE_PNR_DCQL_QUERY', () => {
+    it('requests airline PNR credential with EUDI-style vct and pnr claim', () => {
+      const [pnrQuery] = AIRLINE_PNR_DCQL_QUERY.credentials;
+
+      expect(pnrQuery.id).to.equal('airline-pnr');
+      expect(pnrQuery.format).to.equal('dc+sd-jwt');
+      expect(pnrQuery.meta.vct_values).to.deep.equal([AIRLINE_PNR_VCT]);
+      expect(pnrQuery.claims.map(({ path }) => path)).to.deep.equal([['pnr']]);
+    });
+  });
+
+  describe('AIRLINE_BOARDING_PASS_DCQL_QUERY', () => {
+    it('requests airline boarding pass with boarding-pass vct and key claims', () => {
+      const [boardingQuery] = AIRLINE_BOARDING_PASS_DCQL_QUERY.credentials;
+
+      expect(boardingQuery.id).to.equal('airline-boarding-pass');
+      expect(boardingQuery.format).to.equal('dc+sd-jwt');
+      expect(boardingQuery.meta.vct_values).to.deep.equal([
+        AIRLINE_BOARDING_PASS_VCT,
+      ]);
+      expect(boardingQuery.claims.map(({ path }) => path)).to.deep.equal([
+        ['pnr'],
+        ['operating_carrier'],
+        ['flight_number'],
+        ['seat'],
+        ['passenger_name'],
+        ['bcbp_data'],
+      ]);
+    });
+  });
+
+  describe('BOARDING_PASS_PID_DCQL_QUERY', () => {
+    it('requests full boarding pass claims plus core PID identity attributes', () => {
+      const [boardingQuery, pidQuery] = BOARDING_PASS_PID_DCQL_QUERY.credentials;
+
+      expect(boardingQuery.meta.vct_values).to.deep.equal([
+        AIRLINE_BOARDING_PASS_VCT,
+      ]);
+      expect(boardingQuery.claims.map(({ path }) => path)).to.deep.equal([
+        ['format_code'],
+        ['number_of_legs'],
+        ['passenger_name'],
+        ['electronic_ticket_indicator'],
+        ['pnr'],
+        ['from_airport'],
+        ['to_airport'],
+        ['operating_carrier'],
+        ['flight_number'],
+        ['date_of_flight_julian'],
+        ['compartment_code'],
+        ['seat'],
+        ['check_in_sequence_number'],
+        ['passenger_status'],
+        ['bcbp_data'],
+        ['given_name'],
+        ['family_name'],
+        ['carrier_name'],
+        ['departure_datetime'],
+        ['arrival_datetime'],
+        ['terminal'],
+        ['gate'],
+        ['boarding_time'],
+        ['boarding_group'],
+        ['ticket_number'],
+        ['baggage_allowance'],
+      ]);
+
+      expect(pidQuery.meta.vct_values).to.deep.equal([
+        'urn:eu.europa.ec.eudi:pid:1',
+        'urn:eudi:pid:1',
+      ]);
+      expect(pidQuery.claims.map(({ path }) => path)).to.deep.equal([
+        ['given_name'],
+        ['family_name'],
+        ['birthdate'],
+        ['nationalities'],
+        ['picture'],
+      ]);
+    });
+  });
+
+  describe('BOOKING_REFERENCE_PID_EDC_DCQL_QUERY', () => {
+    it('requires accommodation voucher and PID, with optional EDC name or entitlement disclosure', () => {
+      const [voucherQuery, pidQuery, edcQuery] =
+        BOOKING_REFERENCE_PID_EDC_DCQL_QUERY.credentials;
+
+      expect(voucherQuery.id).to.equal('accommodation-voucher');
+      expect(voucherQuery.meta.vct_values).to.deep.equal(['booking_reference_credential']);
+      expect(voucherQuery.claims.map(({ path }) => path)).to.deep.equal([
+        ['reservationReference'],
+      ]);
+
+      expect(pidQuery.meta.vct_values).to.deep.equal(['urn:eu.europa.ec.eudi:pid:1', 'urn:eudi:pid:1']);
+      expect(pidQuery.claims.map(({ path }) => path)).to.deep.equal([['family_name']]);
+
+      expect(edcQuery.id).to.equal(EUROPEAN_DISABILITY_CARD_DCQL_CREDENTIAL_ID);
+      expect(edcQuery.meta.vct_values).to.deep.equal([EUROPEAN_DISABILITY_CARD_VCT]);
+      expect(edcQuery.claims.map(({ id, path }) => [id, path])).to.deep.equal([
+        ['edc_given_name', ['given_name']],
+        ['edc_family_name', ['family_name']],
+        ['edc_assistant_entitlement', ['assistant_entitlement']],
+      ]);
+      expect(edcQuery.claim_sets).to.deep.equal([
+        ['edc_given_name', 'edc_family_name'],
+        ['edc_assistant_entitlement'],
+      ]);
+
+      expect(BOOKING_REFERENCE_PID_EDC_DCQL_QUERY.credential_sets).to.deep.equal([
+        {
+          required: true,
+          options: [['accommodation-voucher', 'pid']],
+        },
+        {
+          required: false,
+          options: [[EUROPEAN_DISABILITY_CARD_DCQL_CREDENTIAL_ID]],
+        },
+      ]);
+    });
+  });
+
+  describe('PNR_PID_DCQL_QUERY', () => {
+    it('requests both airline PNR and PID credentials', () => {
+      const [pnrQuery, pidQuery] = PNR_PID_DCQL_QUERY.credentials;
+
+      expect(pnrQuery.meta.vct_values).to.deep.equal([AIRLINE_PNR_VCT]);
+      expect(pnrQuery.claims.map(({ path }) => path)).to.deep.equal([['pnr']]);
+
+      expect(pidQuery.meta.vct_values).to.deep.equal(['urn:eu.europa.ec.eudi:pid:1', 'urn:eudi:pid:1']);
       expect(pidQuery.claims.map(({ path }) => path)).to.deep.equal([['family_name']]);
     });
   });
@@ -432,4 +622,122 @@ describe('Route Utils', () => {
       expect(extractWIAFromTokenRequest({}, {})).to.equal(null);
     });
   });
-}); 
+
+  describe('parseMultiCredentialOfferRequest', () => {
+    const issuerConfig = {
+      credential_configurations_supported: {
+        'multi-cred-a': { format: 'dc+sd-jwt' },
+        'multi-cred-b': { format: 'dc+sd-jwt' },
+      },
+    };
+
+    it('parses valid multi-credential offer body', () => {
+      const result = parseMultiCredentialOfferRequest(
+        {
+          credentials: [
+            {
+              credential_configuration_id: 'multi-cred-a',
+              payload: { name: 'Alice' },
+            },
+            {
+              credential_configuration_id: 'multi-cred-b',
+              payload: { tier: 'gold' },
+            },
+          ],
+        },
+        issuerConfig,
+      );
+
+      expect(result.offeredConfigurationIds).to.deep.equal([
+        'multi-cred-a',
+        'multi-cred-b',
+      ]);
+      expect(result.credentialPayloads['multi-cred-a']).to.deep.equal({
+        name: 'Alice',
+      });
+      expect(result.credentialPayloads['multi-cred-b']).to.deep.equal({
+        tier: 'gold',
+      });
+    });
+
+    it('rejects duplicate credential_configuration_id values', () => {
+      expect(() =>
+        parseMultiCredentialOfferRequest(
+          {
+            credentials: [
+              {
+                credential_configuration_id: 'multi-cred-a',
+                payload: { a: 1 },
+              },
+              {
+                credential_configuration_id: 'multi-cred-a',
+                payload: { a: 2 },
+              },
+            ],
+          },
+          issuerConfig,
+        ),
+      ).to.throw(/Duplicate credential_configuration_id/);
+    });
+
+    it('rejects unknown credential_configuration_id values', () => {
+      expect(() =>
+        parseMultiCredentialOfferRequest(
+          {
+            credentials: [
+              {
+                credential_configuration_id: 'missing-config',
+                payload: { a: 1 },
+              },
+            ],
+          },
+          issuerConfig,
+        ),
+      ).to.throw(/Unknown credential_configuration_id/);
+    });
+  });
+
+  describe('preAuthOfferSessionStateMatches', () => {
+    it('matches equivalent multi-credential offer sessions', () => {
+      const session = createSessionWithMultiCredentialPayloads(
+        ['multi-cred-a', 'multi-cred-b'],
+        { 'multi-cred-a': { a: 1 }, 'multi-cred-b': { b: 2 } },
+        true,
+      );
+      expect(preAuthOfferSessionStateMatches(session, { ...session })).to.equal(
+        true,
+      );
+    });
+
+    it('detects conflicting multi-credential offer sessions', () => {
+      const existing = createSessionWithMultiCredentialPayloads(
+        ['multi-cred-a'],
+        { 'multi-cred-a': { a: 1 } },
+        true,
+      );
+      const incoming = createSessionWithMultiCredentialPayloads(
+        ['multi-cred-b'],
+        { 'multi-cred-b': { b: 2 } },
+        true,
+      );
+      expect(preAuthOfferSessionStateMatches(existing, incoming)).to.equal(
+        false,
+      );
+    });
+  });
+
+  describe('buildCredentialOfferUrl', () => {
+    it('omits type query parameter when credential type is not provided', () => {
+      const encoded = buildCredentialOfferUrl(
+        'session-123',
+        null,
+        '/credential-offer-no-code-batch',
+      );
+      const decoded = decodeURIComponent(encoded);
+      expect(decoded).to.equal(
+        'http://localhost:3000/credential-offer-no-code-batch/session-123',
+      );
+      expect(decoded).to.not.include('type=');
+    });
+  });
+});

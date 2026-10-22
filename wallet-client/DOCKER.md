@@ -2,11 +2,42 @@
 
 This document describes how to run the wallet-client service using Docker and Docker Compose.
 
+## Monorepo build context (required)
+
+The `Dockerfile` copies paths relative to the **repository root** (`wallet-client/...` and sibling `utils/`). Shared root `utils/` is re-exported by `wallet-client/utils`, so that directory must be in the build context.
+
+**Do not** run `docker build .` from inside `wallet-client/` — Docker will look for `wallet-client/package.json` under the wrong context and fail with `"/wallet-client/...": not found`.
+
+### Build the image alone
+
+From the **repository root** (`rfc-issuer-v1/`):
+
+```bash
+docker build -f wallet-client/Dockerfile -t endimion13/aptitude-wallet-client:0.0.1f .
+```
+
+From **`wallet-client/`** (context is still the parent):
+
+```bash
+docker build -f Dockerfile -t endimion13/aptitude-wallet-client:0.0.1f ..
+```
+
+Both are equivalent: `-f` points at the Dockerfile; the final `.` / `..` is the **build context** (must be the monorepo root).
+
+### Compose
+
+`docker-compose.yml` already sets `context: ..` and `dockerfile: wallet-client/Dockerfile`, so compose works from `wallet-client/`:
+
+```bash
+cd wallet-client
+docker-compose up -d --build
+```
+
 ## Quick Start
 
 ```bash
-# Build and start the services
-docker-compose up -d
+# From wallet-client/ (compose build context is the monorepo root)
+docker-compose up -d --build
 
 # Check service status
 docker-compose ps
@@ -42,7 +73,31 @@ Redis database for storing credentials and session data.
 | `WALLET_DEBUG_CREDENTIAL` | false | Enable full credential logging |
 | `WALLET_MDL_STRICT` | false | Enable strict MDL verification |
 | `WALLET_POLL_TIMEOUT_MS` | 30000 | Deferred credential polling timeout |
-| `WALLET_POLL_INTERVAL_MS` | 2000 | Deferred credential polling interval |
+| `WALLET_POLL_INTERVAL_MS` | 2000 | Deferred credential polling interval (fallback when issuer omits `interval`) |
+| `WALLET_AUTH_HANDOFF` | unset | Set `true` so authorization-code `/session` returns `authorizationUrl` instead of fetching `/authorize` |
+| `WALLET_OAUTH_REDIRECT_URI` | unset | HTTPS OAuth callback for authorization-code issuance (overrides `{WALLET_PROVIDER_URL}/oauth/callback`) |
+| `WALLET_PROVIDER_URL` | unset | Public HTTPS wallet base. Callback defaults to `{base}/oauth/callback` |
+| `WALLET_AUTH_HANDOFF_TTL` | 600 | Pending authorization TTL in seconds (capped by PAR `expires_in` when present) |
+
+## APTITUDE RFC001/002 profile notes
+
+This wallet targets APTITUDE RFC001 issuance (WIA/WUA, DPoP, `eu-eaa-offer://`) and RFC002
+presentation (DCQL, `openid4vp://present`). It does **not** use WE BUILD CS-01/02 profile
+environment variables (`WALLET_PROFILE=webuild-cs01`, `TRUST_PROFILE_PATH`, etc.).
+
+Use `curl http://localhost:4000/health` to inspect runtime configuration.
+
+### ITB auth handoff (authorization-code `/session`)
+
+Authorization-code issuance requires `WALLET_OAUTH_REDIRECT_URI` or `WALLET_PROVIDER_URL` (HTTPS). The default `/session` path fetches `/authorize` and expects `code` and `state` on the first redirect.
+
+When `WALLET_AUTH_HANDOFF=true`, or the `/session` body includes `"authHandoff": true`, the wallet:
+
+1. Performs PAR and returns **HTTP 200** with `status: "AUTHORIZATION_REQUIRED"` and `authorizationUrl`. It does not fetch `/authorize`.
+2. Stores that session so `GET /session-status/:sessionId` returns `authorizationUrl` while login is pending.
+3. Accepts the browser redirect at **`GET /oauth/callback`**. That URL must be the configured `redirect_uri` and must be reachable from the tester's browser.
+
+ITB polls `GET /session-status/:sessionId` until `status` is `ok` or `failed`. See [docs/auth-handoff-itb.md](./docs/auth-handoff-itb.md).
 
 ## Usage Examples
 
@@ -89,7 +144,7 @@ curl -X POST http://localhost:4000/issue \
 ## Volumes
 
 - `redis-data`: Persistent Redis data storage
-- `./keys:/app/keys:ro`: Read-only mount for key files (optional)
+- `./keys:/workspace/wallet-client/keys:ro`: Read-only mount for key files (optional)
 
 ## Networks
 
@@ -103,6 +158,10 @@ curl -X POST http://localhost:4000/issue \
 - Services restart automatically unless explicitly stopped
 
 ## Troubleshooting
+
+### Build fails with `"/wallet-client/...": not found`
+
+You built with context = `wallet-client/` (e.g. `docker build .` inside that folder). Rebuild with monorepo root as context — see [Monorepo build context](#monorepo-build-context-required).
 
 ### Service won't start
 ```bash

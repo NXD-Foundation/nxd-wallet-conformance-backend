@@ -32,6 +32,7 @@ import jwt from "jsonwebtoken";
 import qr from "qr-image";
 import imageDataURI from "image-data-uri";
 import { streamToBuffer } from "@jorgeferrero/stream-to-buffer";
+import { applyPreAuthTxCode, createCredentialOfferResponse, ensureExpectedTxCode, TX_CODE_CONFIG } from "../utils/routeUtils.js";
 
 const pidRouter = express.Router();
 
@@ -45,11 +46,10 @@ const publicKeyPem = fs.readFileSync("./public-key.pem", "utf-8");
 // *******************
 pidRouter.get(["/issue-pid-pre-auth"], async (req, res) => {
   const uuid = req.query.sessionId ? req.query.sessionId : uuidv4();
-  const credentialType = "urn:eu.europa.ec.eudi:pid:1";
 
-  let existingPreAuthSession = await getPreAuthSession(uuid);
-  if (!existingPreAuthSession) {
-    storePreAuthSession(uuid, {
+  let session = await getPreAuthSession(uuid);
+  if (!session) {
+    session = applyPreAuthTxCode({
       status: "pending",
       resulut: null,
       persona: null,
@@ -57,21 +57,22 @@ pidRouter.get(["/issue-pid-pre-auth"], async (req, res) => {
       isPID: true,
       requireTxCode: true,
     });
+    await storePreAuthSession(uuid, session);
+  } else {
+    const previousTxCode = session.expectedTxCode;
+    session = ensureExpectedTxCode(session);
+    if (session.expectedTxCode !== previousTxCode) {
+      await storePreAuthSession(uuid, session);
+    }
   }
-  let credentialOffer = `openid-credential-offer://?credential_offer_uri=${serverURL}/pid-pre-auth-offer/${uuid}`;
-  let code = qr.image(credentialOffer, {
-    type: "png",
-    ec_level: "H",
-    size: 10,
-    margin: 10,
-  });
-  let mediaType = "PNG";
-  let encodedQR = imageDataURI.encode(await streamToBuffer(code), mediaType);
-  res.json({
-    qr: encodedQR,
-    deepLink: credentialOffer,
-    sessionId: uuid,
-  });
+
+  const credentialOffer = `openid-credential-offer://?credential_offer_uri=${serverURL}/pid-pre-auth-offer/${uuid}`;
+  const response = await createCredentialOfferResponse(
+    credentialOffer,
+    uuid,
+    session.expectedTxCode,
+  );
+  res.json(response);
 });
 
 pidRouter.get(["/pid-pre-auth-offer/:id"], async (req, res) => {
@@ -85,11 +86,10 @@ pidRouter.get(["/pid-pre-auth-offer/:id"], async (req, res) => {
     return;
   }
 
-  // assign a pre-auth code to session to verify afterwards
-  let existingPreAuthSession = await getPreAuthSession(req.params.id);
-  if (existingPreAuthSession) {
-    existingPreAuthSession["preAuthCode"] = "1234"; //TODO generate a random code here
-    storePreAuthSession(req.params.id, existingPreAuthSession);
+  let session = await getPreAuthSession(req.params.id);
+  if (session) {
+    session = ensureExpectedTxCode(session);
+    await storePreAuthSession(req.params.id, session);
   }
 
   res.json({
@@ -98,12 +98,7 @@ pidRouter.get(["/pid-pre-auth-offer/:id"], async (req, res) => {
     grants: {
       "urn:ietf:params:oauth:grant-type:pre-authorized_code": {
         "pre-authorized_code": req.params.id,
-        tx_code: {
-          length: 4,
-          input_mode: "numeric",
-          description:
-            "Please provide the one-time code that was sent via e-mail or offline",
-        },
+        tx_code: TX_CODE_CONFIG,
       },
     },
   });

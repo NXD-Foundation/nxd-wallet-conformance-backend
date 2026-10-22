@@ -1,2 +1,7 @@
 node_modules
 certbot/
+.worktrees/
+
+# Historical key backups (see deprecated/README.md); never commit private material
+deprecated/**
+!deprecated/README.md

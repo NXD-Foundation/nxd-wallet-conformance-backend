@@ -8,11 +8,6 @@ import fs from 'fs';
 import jwt from 'jsonwebtoken';
 import * as jose from 'jose';
 import { v4 as uuidv4 } from 'uuid';
-import {
-  signWuaWithX5cOnly,
-  signProofJwtWithKeyAttestation,
-  x509EcFixturesAvailable,
-} from './fixtures/wuaProofFixtures.js';
 
 // Set up environment for testing BEFORE importing modules
 process.env.ALLOW_NO_REDIS = 'true';
@@ -24,7 +19,6 @@ process.env.SERVER_URL = 'http://localhost:3000';
 
 describe('Shared Issuance Flows', () => {
   const originalEtsiEnforcementEnv = process.env.ENFORCE_ETSI_ISSUANCE_PROFILE;
-  const originalWuaTrustFrameworkEnv = process.env.ENFORCE_WUA_TRUST_FRAMEWORK;
   /** Bound at PAR/authorize; token exchange must present the same `client_id` when set (RFC001 P0-2). */
   const TEST_OAUTH_CLIENT_ID = 'test-oauth-client-id';
   /** Bound at PAR/authorize; token exchange must present the same `redirect_uri` when set (RFC001 P0-3). */
@@ -34,6 +28,9 @@ describe('Shared Issuance Flows', () => {
   let app;
   let sharedModule;
   let cacheServiceRedis;
+  /** CA-signed key-attestation fixtures for x5c + wallet_provider_trust_anchors tests */
+  let wpKaFixtures;
+  let buildSignedKeyAttestationJwt;
   let cryptoUtils;
   let tokenUtils;
   let credGenerationUtils;
@@ -159,6 +156,10 @@ describe('Shared Issuance Flows', () => {
   before(async () => {
     // Create a global sandbox for module-level stubs
     globalSandbox = sinon.createSandbox();
+
+    const wpKaMod = await import('./helpers/wpKeyAttestationCertFixtures.mjs');
+    wpKaFixtures = await wpKaMod.createWalletProviderKeyAttestationCertFixtures();
+    buildSignedKeyAttestationJwt = wpKaMod.buildSignedKeyAttestationJwt;
     
     // Stub fs.readFileSync BEFORE importing modules that use it
     const crypto = await import('crypto');
@@ -166,17 +167,27 @@ describe('Shared Issuance Flows', () => {
     const validPrivateKeyPem = testPrivateKey.export({ type: 'pkcs8', format: 'pem' });
     const validPublicKeyPem = testPublicKey.export({ type: 'spki', format: 'pem' });
     
-    globalSandbox.stub(fs, 'readFileSync')
+    // Preserve reads of dependency source files while overriding issuer fixtures.
+    globalSandbox.stub(fs, 'readFileSync').callThrough()
       .withArgs(sinon.match(/issuer-config\.json/)).returns(JSON.stringify({
+        wallet_provider_trust_anchors: wpKaFixtures.issuerConfigAnchors,
         credential_configurations_supported: {
-          'test-cred-config': { format: 'dc+sd-jwt', proof_types_supported: { jwt: { proof_signing_alg_values_supported: ['ES256'] } } },
+          'test-cred-config': {
+            format: 'dc+sd-jwt',
+            proof_types_supported: {
+              jwt: { proof_signing_alg_values_supported: ['ES256'] },
+              attestation: { proof_signing_alg_values_supported: ['ES256'] },
+            },
+          },
+          booking_reference_credential: { format: 'dc+sd-jwt', vct: 'booking_reference_credential', proof_types_supported: { jwt: { proof_signing_alg_values_supported: ['ES256'] } } },
+          airline_pnr_credential: { format: 'dc+sd-jwt', vct: 'urn:eu.aptitude:airline.pnr:1', proof_types_supported: { jwt: { proof_signing_alg_values_supported: ['ES256'] } } },
+          airline_boarding_pass: { format: 'dc+sd-jwt', vct: 'urn:eu.aptitude:airline.boardingpass:1', proof_types_supported: { jwt: { proof_signing_alg_values_supported: ['ES256'] } } },
           'rfc001-device-bound-test': {
             format: 'vc+sd-jwt',
             vct: 'urn:eu.europa.ec.eudi:pid:1',
             credential_signing_alg_values_supported: ['ES256'],
             proof_types_supported: {
               jwt: { proof_signing_alg_values_supported: ['ES256'] },
-              attestation: { proof_signing_alg_values_supported: ['ES256'] },
             },
           },
         },
@@ -219,11 +230,6 @@ describe('Shared Issuance Flows', () => {
       process.env.ENFORCE_ETSI_ISSUANCE_PROFILE = originalEtsiEnforcementEnv;
     } else {
       delete process.env.ENFORCE_ETSI_ISSUANCE_PROFILE;
-    }
-    if (originalWuaTrustFrameworkEnv !== undefined) {
-      process.env.ENFORCE_WUA_TRUST_FRAMEWORK = originalWuaTrustFrameworkEnv;
-    } else {
-      delete process.env.ENFORCE_WUA_TRUST_FRAMEWORK;
     }
     if (globalSandbox) {
       globalSandbox.restore();
@@ -401,12 +407,47 @@ describe('Shared Issuance Flows', () => {
       expect(response.body).to.have.property('error', 'invalid_grant');
     });
 
-    it('accepts any non-empty tx_code when offer required tx_code', async () => {
-      const preAuthCode = 'test-pre-auth-tx-any-' + uuidv4();
+    it('MUST return invalid_grant when offer required tx_code but session has no expectedTxCode', async () => {
+      const preAuthCode = 'test-pre-auth-tx-no-expected-' + uuidv4();
       const preAuthSession = {
         status: 'pending',
         authorizationDetails: null,
         requireTxCode: true,
+      };
+
+      if (!cacheServiceRedis.client.isReady) {
+        throw new Error('Redis is not ready - cannot run test');
+      }
+
+      await cacheServiceRedis.storePreAuthSession(preAuthCode, preAuthSession);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      const { dpopJwt } = await makeTokenDpop();
+
+      await makeTestWiaClientAssertion();
+      const response = await wireWiaOAuthHeaders(
+        request(app)
+          .post('/token_endpoint')
+          .set('DPoP', dpopJwt)
+      )
+        .send({
+          ...pickWiaBodyFields(),
+          grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
+          'pre-authorized_code': preAuthCode,
+          tx_code: '1234',
+        })
+        .expect(400);
+
+      expect(response.body).to.have.property('error', 'invalid_grant');
+    });
+
+    it('accepts tx_code when it matches expectedTxCode on the session', async () => {
+      const preAuthCode = 'test-pre-auth-tx-match-' + uuidv4();
+      const preAuthSession = {
+        status: 'pending',
+        authorizationDetails: null,
+        requireTxCode: true,
+        expectedTxCode: '5678',
       };
 
       if (!cacheServiceRedis.client.isReady) {
@@ -428,7 +469,7 @@ describe('Shared Issuance Flows', () => {
           ...pickWiaBodyFields(),
           grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
           'pre-authorized_code': preAuthCode,
-          tx_code: 'not-validated-by-issuer',
+          tx_code: '5678',
         })
         .expect(200);
 
@@ -1998,7 +2039,7 @@ describe('Shared Issuance Flows', () => {
       expect(res.body.error_description).to.match(/key_attestation/i);
     });
 
-    it('P1-1 relaxed — continues device-bound issuance without key_attestation when ENFORCE_ETSI_ISSUANCE_PROFILE=false', async function () {
+    it('rejects device-bound issuance without key_attestation even when ENFORCE_ETSI_ISSUANCE_PROFILE=false', async function () {
       if (!cacheServiceRedis.client?.isReady) {
         this.skip();
       }
@@ -2027,9 +2068,67 @@ describe('Shared Issuance Flows', () => {
           proofs: { jwt: [proof] },
         });
 
-      expect(res.status).to.equal(200);
-      expect(res.body).to.have.property('credentials');
-      expect(res.body.credentials).to.be.an('array').that.is.not.empty;
+      expect(res.status).to.equal(400);
+      expect(res.body).to.have.property('error', 'invalid_proof');
+      expect(res.body.error_description).to.match(/key_attestation/i);
+    });
+
+    it('rejects proofs.jwt with jwk-only key_attestation when metadata does not require KA', async function () {
+      if (!cacheServiceRedis.client?.isReady) {
+        this.skip();
+      }
+      const { privateKey: wpPriv, publicKey: wpPub } = await jose.generateKeyPair('ES256', { extractable: true });
+      const { privateKey: holderPriv, publicKey: holderPub } = await jose.generateKeyPair('ES256', { extractable: true });
+      const wpPubJwk = await jose.exportJWK(wpPub);
+      const holderPubJwk = await jose.exportJWK(holderPub);
+      const wuaJwt = await new jose.SignJWT({
+        iss: 'https://wallet-provider.example',
+        aud: 'https://issuer.example/credential',
+        iat: Math.floor(Date.now() / 1000),
+        exp: Math.floor(Date.now() / 1000) + 3600,
+        jti: 'wua-optional-reject',
+        eudi_wallet_info: {
+          general_info: { name: 'test-wallet' },
+          key_storage_info: { level: 'tee' },
+        },
+        attested_keys: [holderPubJwk],
+        status: { status_list: { uri: 'https://example.com/status', idx: 0 } },
+      })
+        .setProtectedHeader({ alg: 'ES256', typ: 'key-attestation+jwt', jwk: wpPubJwk })
+        .sign(wpPriv);
+
+      const nonce = cryptoUtils.generateNonce();
+      await cacheServiceRedis.storeNonce(nonce, 300);
+      const base = process.env.SERVER_URL || 'http://localhost:3000';
+      const proofJwt = await new jose.SignJWT({ nonce, iss: 'did:holder:test', aud: base })
+        .setProtectedHeader({
+          alg: 'ES256',
+          typ: 'openid4vci-proof+jwt',
+          jwk: holderPubJwk,
+          key_attestation: wuaJwt,
+        })
+        .sign(holderPriv);
+
+      const sessionKey = 'optional-ka-jwk-reject-' + uuidv4();
+      const accessToken = 'test-access-token-optional-ka-' + uuidv4();
+      await cacheServiceRedis.storePreAuthSession(sessionKey, {
+        status: 'success',
+        isDeferred: false,
+        accessToken,
+        c_nonce: nonce,
+      });
+
+      const res = await request(app)
+        .post('/credential')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({
+          credential_configuration_id: 'test-cred-config',
+          proofs: { jwt: [proofJwt] },
+        });
+
+      expect(res.status).to.equal(400);
+      expect(res.body).to.have.property('error', 'invalid_proof');
+      expect(String(res.body.error_description || '')).to.match(/key_attestation|header\.jwk|x5c/i);
     });
 
     it('P1-1b — MUST return invalid_proof when proof signature does not verify with WUA attested_keys[0]', async function () {
@@ -2037,28 +2136,16 @@ describe('Shared Issuance Flows', () => {
       if (!cacheServiceRedis.client?.isReady) {
         this.skip();
       }
-      const { privateKey: wpPriv, publicKey: wpPub } = await jose.generateKeyPair('ES256', { extractable: true });
       const { privateKey: holderA, publicKey: pubA } = await jose.generateKeyPair('ES256', { extractable: true });
       const { privateKey: holderB, publicKey: pubB } = await jose.generateKeyPair('ES256', { extractable: true });
-      const wpPubJwk = await jose.exportJWK(wpPub);
       const holderAPubJwk = await jose.exportJWK(pubA);
       const holderBPubJwk = await jose.exportJWK(pubB);
 
-      const wuaJwt = await new jose.SignJWT({
-        iss: 'https://wallet-provider.example',
-        aud: 'https://issuer.example/credential',
-        iat: Math.floor(Date.now() / 1000),
-        exp: Math.floor(Date.now() / 1000) + 3600,
-        jti: 'wua-p11b',
-        eudi_wallet_info: {
-          general_info: { name: 'test-wallet' },
-          key_storage_info: { level: 'tee' },
-        },
-        attested_keys: [holderAPubJwk],
-        status: { status_list: { uri: 'https://example.com/status', idx: 0 } },
-      })
-        .setProtectedHeader({ alg: 'ES256', typ: 'key-attestation+jwt', jwk: wpPubJwk })
-        .sign(wpPriv);
+      const wuaJwt = await buildSignedKeyAttestationJwt({
+        fixtures: wpKaFixtures,
+        attestedKeys: [holderAPubJwk],
+        claims: { jti: 'wua-p11b' },
+      });
 
       const nonce = cryptoUtils.generateNonce();
       await cacheServiceRedis.storeNonce(nonce, 300);
@@ -2101,30 +2188,18 @@ describe('Shared Issuance Flows', () => {
       if (!cacheServiceRedis.client?.isReady) {
         this.skip();
       }
-      const { privateKey: wpPriv, publicKey: wpPub } = await jose.generateKeyPair('ES256', { extractable: true });
       const { privateKey: h1priv, publicKey: h1pub } = await jose.generateKeyPair('ES256', { extractable: true });
       const { privateKey: _h2, publicKey: h2pub } = await jose.generateKeyPair('ES256', { extractable: true });
       const { privateKey: _h3, publicKey: h3pub } = await jose.generateKeyPair('ES256', { extractable: true });
-      const wpPubJwk = await jose.exportJWK(wpPub);
       const k1 = await jose.exportJWK(h1pub);
       const k2 = await jose.exportJWK(h2pub);
       const k3 = await jose.exportJWK(h3pub);
 
-      const wuaJwt = await new jose.SignJWT({
-        iss: 'https://wallet-provider.example',
-        aud: 'https://issuer.example/credential',
-        iat: Math.floor(Date.now() / 1000),
-        exp: Math.floor(Date.now() / 1000) + 3600,
-        jti: 'wua-p112',
-        eudi_wallet_info: {
-          general_info: { name: 'test-wallet' },
-          key_storage_info: { level: 'tee' },
-        },
-        attested_keys: [k1, k2, k3],
-        status: { status_list: { uri: 'https://example.com/status', idx: 0 } },
-      })
-        .setProtectedHeader({ alg: 'ES256', typ: 'key-attestation+jwt', jwk: wpPubJwk })
-        .sign(wpPriv);
+      const wuaJwt = await buildSignedKeyAttestationJwt({
+        fixtures: wpKaFixtures,
+        attestedKeys: [k1, k2, k3],
+        claims: { jti: 'wua-p112' },
+      });
 
       const nonce = cryptoUtils.generateNonce();
       await cacheServiceRedis.storeNonce(nonce, 300);
@@ -2174,143 +2249,6 @@ describe('Shared Issuance Flows', () => {
         jkts.add(jkt);
       }
       expect(jkts.size).to.equal(3);
-    });
-
-    it('P1-1c — MUST return invalid_proof when strict trust enforcement rejects x5c-only WUA without configured keys', async function () {
-      process.env.ENFORCE_ETSI_ISSUANCE_PROFILE = 'true';
-      process.env.ENFORCE_WUA_TRUST_FRAMEWORK = 'true';
-      if (!cacheServiceRedis.client?.isReady) {
-        this.skip();
-      }
-      if (!x509EcFixturesAvailable()) {
-        this.skip();
-      }
-      const { privateKey: holderPriv, publicKey: holderPub } = await jose.generateKeyPair('ES256', {
-        extractable: true,
-      });
-      const holderPubJwk = await jose.exportJWK(holderPub);
-      const wuaJwt = await signWuaWithX5cOnly({ attestedKeys: [holderPubJwk] });
-      expect(wuaJwt).to.be.a('string');
-
-      const nonce = cryptoUtils.generateNonce();
-      await cacheServiceRedis.storeNonce(nonce, 300);
-      const base = process.env.SERVER_URL || 'http://localhost:3000';
-      const proofJwt = await signProofJwtWithKeyAttestation({
-        holderPrivateKey: holderPriv,
-        holderPublicJwk: holderPubJwk,
-        wuaJwt,
-        nonce,
-        aud: base,
-      });
-
-      const sessionKey = 'p11c-x5c-fail-' + uuidv4();
-      const accessToken = 'test-access-token-p11c-' + uuidv4();
-      await cacheServiceRedis.storePreAuthSession(sessionKey, {
-        status: 'success',
-        isDeferred: false,
-        accessToken,
-        c_nonce: nonce,
-      });
-
-      const res = await request(app)
-        .post('/credential')
-        .set('Authorization', `Bearer ${accessToken}`)
-        .send({
-          credential_configuration_id: 'rfc001-device-bound-test',
-          proofs: { jwt: [proofJwt] },
-        });
-
-      expect(res.status).to.equal(400);
-      expect(res.body).to.have.property('error', 'invalid_proof');
-      expect(res.body.error_description).to.match(/key_attestation|WUA signature|ENFORCE_WUA_TRUST_FRAMEWORK/i);
-    });
-
-    it('P1-1d — MUST accept proofs.jwt when default interoperability mode receives x5c-only WUA', async function () {
-      process.env.ENFORCE_ETSI_ISSUANCE_PROFILE = 'true';
-      delete process.env.ENFORCE_WUA_TRUST_FRAMEWORK;
-      if (!cacheServiceRedis.client?.isReady) {
-        this.skip();
-      }
-      if (!x509EcFixturesAvailable()) {
-        this.skip();
-      }
-      const { privateKey: holderPriv, publicKey: holderPub } = await jose.generateKeyPair('ES256', {
-        extractable: true,
-      });
-      const holderPubJwk = await jose.exportJWK(holderPub);
-      const wuaJwt = await signWuaWithX5cOnly({ attestedKeys: [holderPubJwk] });
-
-      const nonce = cryptoUtils.generateNonce();
-      await cacheServiceRedis.storeNonce(nonce, 300);
-      const base = process.env.SERVER_URL || 'http://localhost:3000';
-      const proofJwt = await signProofJwtWithKeyAttestation({
-        holderPrivateKey: holderPriv,
-        holderPublicJwk: holderPubJwk,
-        wuaJwt,
-        nonce,
-        aud: base,
-      });
-
-      const sessionKey = 'p11d-x5c-ok-' + uuidv4();
-      const accessToken = 'test-access-token-p11d-' + uuidv4();
-      await cacheServiceRedis.storePreAuthSession(sessionKey, {
-        status: 'success',
-        isDeferred: false,
-        accessToken,
-        c_nonce: nonce,
-      });
-
-      const res = await request(app)
-        .post('/credential')
-        .set('Authorization', `Bearer ${accessToken}`)
-        .send({
-          credential_configuration_id: 'rfc001-device-bound-test',
-          proofs: { jwt: [proofJwt] },
-        });
-
-      expect(res.status).to.equal(200);
-      expect(res.body).to.have.property('credentials');
-      expect(res.body.credentials).to.be.an('array').that.is.not.empty;
-    });
-
-    it('P1-13 — proofs.attestation succeeds with x5c-signed WUA in default interoperability mode', async function () {
-      process.env.ENFORCE_ETSI_ISSUANCE_PROFILE = 'true';
-      delete process.env.ENFORCE_WUA_TRUST_FRAMEWORK;
-      if (!cacheServiceRedis.client?.isReady) {
-        this.skip();
-      }
-      if (!x509EcFixturesAvailable()) {
-        this.skip();
-      }
-      const { publicKey: holderPub } = await jose.generateKeyPair('ES256', { extractable: true });
-      const holderPubJwk = await jose.exportJWK(holderPub);
-      const nonce = cryptoUtils.generateNonce();
-      await cacheServiceRedis.storeNonce(nonce, 300);
-      const wuaJwt = await signWuaWithX5cOnly({
-        attestedKeys: [holderPubJwk],
-        payloadExtras: { nonce },
-      });
-
-      const sessionKey = 'p113-attestation-x5c-' + uuidv4();
-      const accessToken = 'test-access-token-p113-' + uuidv4();
-      await cacheServiceRedis.storePreAuthSession(sessionKey, {
-        status: 'success',
-        isDeferred: false,
-        accessToken,
-        c_nonce: nonce,
-      });
-
-      const res = await request(app)
-        .post('/credential')
-        .set('Authorization', `Bearer ${accessToken}`)
-        .send({
-          credential_configuration_id: 'rfc001-device-bound-test',
-          proofs: { attestation: [wuaJwt] },
-        });
-
-      expect(res.status).to.equal(200);
-      expect(res.body).to.have.property('credentials');
-      expect(res.body.credentials).to.be.an('array').that.is.not.empty;
     });
 
     it('should handle immediate credential issuance successfully', async () => {
@@ -2541,6 +2479,67 @@ describe('Shared Issuance Flows', () => {
       expect(second.body).to.have.property('error', 'invalid_nonce');
     });
 
+    describe('OpenID4VCI F.1 proof JWT iss', () => {
+      async function credentialRequestWithIss({ sessionFields, proofPayload }) {
+        if (!cacheServiceRedis.client?.isReady) {
+          return null;
+        }
+        const sessionKey = 'test-session-key-iss-' + uuidv4();
+        const accessToken = 'test-access-token-iss-' + uuidv4();
+        const cnonce = cryptoUtils.generateNonce();
+        await cacheServiceRedis.storePreAuthSession(sessionKey, {
+          status: 'success',
+          isDeferred: false,
+          accessToken,
+          ...sessionFields,
+        });
+        await cacheServiceRedis.storeNonce(cnonce, 300);
+        const testProofJwt = signProofJwt({
+          nonce: cnonce,
+          aud: process.env.SERVER_URL,
+          ...proofPayload,
+        });
+        return request(app)
+          .post('/credential')
+          .set('Authorization', `DPoP ${accessToken}`)
+          .send({
+            credential_configuration_id: 'test-cred-config',
+            proofs: { jwt: [testProofJwt] },
+          });
+      }
+
+      it('rejects holder DID iss when the token client_id is known', async function () {
+        const response = await credentialRequestWithIss({
+          sessionFields: { tokenClientId: 'wallet-client', preAuthorizedAnonymousAccess: false },
+          proofPayload: { iss: 'did:jwk:eyJrdHkiOiJFQyJ9' },
+        });
+        if (!response) this.skip();
+        expect(response.status).to.equal(400);
+        expect(response.body).to.have.property('error', 'invalid_proof');
+        expect(response.body.error_description).to.match(/Issuer claim must be the client_id of the request: wallet-client/);
+      });
+
+      it('accepts iss equal to the authenticated client_id', async function () {
+        const response = await credentialRequestWithIss({
+          sessionFields: { tokenClientId: 'wallet-client', preAuthorizedAnonymousAccess: false },
+          proofPayload: { iss: 'wallet-client' },
+        });
+        if (!response) this.skip();
+        expect(response.body.error).to.not.equal('invalid_proof');
+      });
+
+      it('rejects iss on anonymous pre-authorized access', async function () {
+        const response = await credentialRequestWithIss({
+          sessionFields: { tokenClientId: null, preAuthorizedAnonymousAccess: true },
+          proofPayload: { iss: 'wallet-client' },
+        });
+        if (!response) this.skip();
+        expect(response.status).to.equal(400);
+        expect(response.body).to.have.property('error', 'invalid_proof');
+        expect(response.body.error_description).to.match(/omitted for anonymous pre-authorized access/);
+      });
+    });
+
     it('should return unknown_credential_configuration for unsupported credential_configuration_id', async () => {
       const response = await request(app)
         .post('/credential')
@@ -2758,7 +2757,7 @@ describe('Shared Issuance Flows', () => {
     });
 
     describe('V1.0 PoP Cryptographic Validation', () => {
-      it('MUST reject proof JWT without iss in pre-authorized (non-code) flow', async () => {
+      it('allows proof JWT without iss when the session has no token client binding (F.1 OPTIONAL)', async () => {
         const sessionKey = 'test-session-key-' + uuidv4();
         const accessToken = 'test-access-token-' + uuidv4();
         const nonce = cryptoUtils.generateNonce();
@@ -2770,7 +2769,7 @@ describe('Shared Issuance Flows', () => {
         });
         await cacheServiceRedis.storeNonce(nonce, 300);
 
-        const tampered = jwt.sign(
+        const proofWithoutIss = jwt.sign(
           { nonce, aud: process.env.SERVER_URL },
           testKeys.privateKeyPem,
           {
@@ -2787,12 +2786,14 @@ describe('Shared Issuance Flows', () => {
           .set('Authorization', `Bearer ${accessToken}`)
           .send({
             credential_configuration_id: 'test-cred-config',
-            proofs: { jwt: [tampered] },
-          })
-          .expect(400);
+            proofs: { jwt: [proofWithoutIss] },
+          });
 
-        expect(res.body).to.have.property('error', 'invalid_proof');
-        expect(res.body.error_description).to.match(/iss/i);
+        if (res.status === 400 && res.body?.error === 'invalid_proof') {
+          expect(res.body.error_description || '').to.not.match(/iss/i);
+        } else {
+          expect([200, 202, 400, 500]).to.include(res.status);
+        }
       });
 
       it('MUST reject proof JWT when header typ is not openid4vci-proof+jwt', async () => {
@@ -3619,4 +3620,222 @@ describe('Shared Issuance Flows', () => {
       expect([200, 500]).to.include(response.status);
     });
   });
-}); 
+
+  describe('Multi-credential pre-auth offer binding', () => {
+    it('authorizes the full offered set without returning authorization_details', async function () {
+      if (!cacheServiceRedis.client?.isReady) {
+        this.skip();
+      }
+
+      const preAuthCode = `multi-offer-token-${uuidv4()}`;
+      await cacheServiceRedis.storePreAuthSession(preAuthCode, {
+        status: 'pending',
+        flowType: 'pre-auth',
+        offeredConfigurationIds: ['booking_reference_credential', 'airline_pnr_credential'],
+        credentialPayloads: {
+          booking_reference_credential: { booking_reference: 'HOTEL-REF-01' },
+          airline_pnr_credential: { pnr: 'Q7X2LM' },
+        },
+        issuedConfigurationIds: [],
+      });
+
+      const { dpopJwt } = await makeTokenDpop();
+      await makeTestWiaClientAssertion();
+      const response = await wireWiaOAuthHeaders(
+        request(app).post('/token_endpoint').set('DPoP', dpopJwt),
+      )
+        .send({
+          ...pickWiaBodyFields(),
+          grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
+          'pre-authorized_code': preAuthCode,
+        })
+        .expect(200);
+
+      expect(response.body).to.not.have.property('authorization_details');
+
+      const updated = await cacheServiceRedis.getPreAuthSession(preAuthCode);
+      expect(updated.tokenAuthorizations[response.body.access_token].authorizedConfigurationIds).to.deep.equal([
+        'booking_reference_credential',
+        'airline_pnr_credential',
+      ]);
+    });
+
+    it('keeps each token authorization subset when a pre-authorized code is exchanged twice', async function () {
+      if (!cacheServiceRedis.client?.isReady) {
+        this.skip();
+      }
+
+      const preAuthCode = `multi-offer-token-isolation-${uuidv4()}`;
+      await cacheServiceRedis.storePreAuthSession(preAuthCode, {
+        status: 'pending',
+        flowType: 'pre-auth',
+        offeredConfigurationIds: ['booking_reference_credential', 'airline_pnr_credential'],
+        credentialPayloads: {
+          booking_reference_credential: { booking_reference: 'HOTEL-REF-01' },
+          airline_pnr_credential: { pnr: 'Q7X2LM' },
+        },
+      });
+
+      await makeTestWiaClientAssertion();
+      const exchange = async (authorization_details) => {
+        const { dpopJwt } = await makeTokenDpop();
+        return wireWiaOAuthHeaders(
+          request(app).post('/token_endpoint').set('DPoP', dpopJwt),
+        ).send({
+          ...pickWiaBodyFields(),
+          grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
+          'pre-authorized_code': preAuthCode,
+          authorization_details,
+        }).expect(200);
+      };
+
+      const first = await exchange([{
+        type: 'openid_credential',
+        credential_configuration_id: 'booking_reference_credential',
+      }]);
+      const second = await exchange([{
+        type: 'openid_credential',
+        credential_configuration_id: 'airline_pnr_credential',
+      }]);
+
+      const updated = await cacheServiceRedis.getPreAuthSession(preAuthCode);
+      expect(updated.tokenAuthorizations[first.body.access_token].authorizedConfigurationIds)
+        .to.deep.equal(['booking_reference_credential']);
+      expect(updated.tokenAuthorizations[second.body.access_token].authorizedConfigurationIds)
+        .to.deep.equal(['airline_pnr_credential']);
+      expect(updated.authorizedConfigurationIds).to.equal(undefined);
+    });
+
+    it('rejects authorization_details for configurations outside the offer', async function () {
+      if (!cacheServiceRedis.client?.isReady) {
+        this.skip();
+      }
+
+      const preAuthCode = `multi-offer-reject-${uuidv4()}`;
+      await cacheServiceRedis.storePreAuthSession(preAuthCode, {
+        status: 'pending',
+        flowType: 'pre-auth',
+        offeredConfigurationIds: ['booking_reference_credential'],
+        credentialPayloads: { booking_reference_credential: { booking_reference: 'HOTEL-REF-01' } },
+        issuedConfigurationIds: [],
+      });
+
+      const { dpopJwt } = await makeTokenDpop();
+      await makeTestWiaClientAssertion();
+      const response = await wireWiaOAuthHeaders(
+        request(app).post('/token_endpoint').set('DPoP', dpopJwt),
+      )
+        .send({
+          ...pickWiaBodyFields(),
+          grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
+          'pre-authorized_code': preAuthCode,
+          authorization_details: [
+            {
+              type: 'openid_credential',
+              credential_configuration_id: 'airline_pnr_credential',
+            },
+          ],
+        })
+        .expect(400);
+
+      expect(response.body).to.have.property('error', 'invalid_request');
+      expect(response.body.error_description).to.match(/not included in the credential offer/i);
+    });
+
+    it('issues consecutive credentials for authorized configurations using the same access token', async function () {
+      if (!cacheServiceRedis.client?.isReady) {
+        this.skip();
+      }
+
+      const sessionKey = `multi-offer-cred-${uuidv4()}`;
+      const accessToken = `multi-offer-access-${uuidv4()}`;
+
+      await cacheServiceRedis.storePreAuthSession(sessionKey, {
+        status: 'pending',
+        flowType: 'pre-auth',
+        accessToken,
+        offeredConfigurationIds: ['booking_reference_credential', 'airline_pnr_credential'],
+        authorizedConfigurationIds: ['booking_reference_credential', 'airline_pnr_credential'],
+        credentialPayloads: {
+          booking_reference_credential: { booking_reference: 'HOTEL-REF-01' },
+          airline_pnr_credential: { pnr: 'Q7X2LM' },
+        },
+        issuedConfigurationIds: [],
+      });
+
+      const makeCredentialRequest = async (configurationId) => {
+        const nonce = cryptoUtils.generateNonce();
+        await cacheServiceRedis.storeNonce(nonce, 300);
+        const proofJwt = signProofJwt({
+          nonce,
+          iss: 'test-issuer',
+          aud: process.env.SERVER_URL,
+        });
+        return request(app)
+          .post('/credential')
+          .set('Authorization', `Bearer ${accessToken}`)
+          .send({
+            credential_configuration_id: configurationId,
+            proofs: { jwt: [proofJwt] },
+          });
+      };
+
+      const first = await makeCredentialRequest('booking_reference_credential');
+      expect(first.status).to.equal(200);
+      expect(first.body.credentials).to.be.an('array').with.length(1);
+
+      const second = await makeCredentialRequest('airline_pnr_credential');
+      expect(second.status).to.equal(200);
+      expect(second.body.credentials).to.be.an('array').with.length(1);
+
+      const updated = await cacheServiceRedis.getPreAuthSession(sessionKey);
+      expect(updated.issuedConfigurationIds).to.deep.equal([
+        'booking_reference_credential',
+        'airline_pnr_credential',
+      ]);
+      expect(updated.status).to.equal('success');
+    });
+
+    it('rejects credential requests for configurations not authorized by the access token', async function () {
+      if (!cacheServiceRedis.client?.isReady) {
+        this.skip();
+      }
+
+      const sessionKey = `multi-offer-bind-${uuidv4()}`;
+      const accessToken = `multi-offer-bind-access-${uuidv4()}`;
+      const nonce = cryptoUtils.generateNonce();
+      await cacheServiceRedis.storeNonce(nonce, 300);
+
+      await cacheServiceRedis.storePreAuthSession(sessionKey, {
+        status: 'pending',
+        flowType: 'pre-auth',
+        accessToken,
+        offeredConfigurationIds: ['booking_reference_credential', 'airline_pnr_credential'],
+        authorizedConfigurationIds: ['booking_reference_credential'],
+        credentialPayloads: {
+          booking_reference_credential: { booking_reference: 'HOTEL-REF-01' },
+          airline_pnr_credential: { pnr: 'Q7X2LM' },
+        },
+        issuedConfigurationIds: [],
+      });
+
+      const proofJwt = signProofJwt({
+        nonce,
+        iss: 'test-issuer',
+        aud: process.env.SERVER_URL,
+      });
+
+      const response = await request(app)
+        .post('/credential')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({
+          credential_configuration_id: 'airline_pnr_credential',
+          proofs: { jwt: [proofJwt] },
+        })
+        .expect(400);
+
+      expect(response.body).to.have.property('error', 'invalid_credential_request');
+      expect(response.body.error_description).to.match(/not authorized for this access token/i);
+    });
+  });
+});

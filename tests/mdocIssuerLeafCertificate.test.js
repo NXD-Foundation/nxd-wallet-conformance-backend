@@ -1,14 +1,12 @@
 /**
- * The mdoc issuance path loads the leaf X.509 from ./x509EC/client_certificate.crt
- * (see utils/credGenerationUtils.js). Holders may reject credentials if the leaf
+ * The mdoc issuance path loads the EUDI-issued Aptitude signing leaf from the
+ * issuer P12 (see utils/credGenerationUtils.js). Holders may reject credentials if the leaf
  * used in issuerAuth x5chain lacks Key Usage with digitalSignature (RFC 5280 / mDL PKI).
  *
  * We parse with @peculiar/x509 because Node's crypto.X509Certificate.keyUsage is
  * often undefined even when the extension is present (OpenSSL shows it correctly).
  */
 import { expect } from "chai";
-import fs from "fs";
-import path from "path";
 import * as jose from "jose";
 import { decode } from "cbor-x";
 import {
@@ -18,29 +16,83 @@ import {
 } from "@peculiar/x509";
 import { handleCredentialGenerationBasedOnFormat } from "../utils/credGenerationUtils.js";
 import { pemToBase64Der } from "../utils/sdjwtUtils.js";
-
-const MDOC_LEAF_CERT_PATH = path.join(
-  process.cwd(),
-  "x509EC",
-  "client_certificate.crt"
-);
-const MDOC_LEAF_KEY_PATH = path.join(
-  process.cwd(),
-  "x509EC",
-  "ec_private_pkcs8.key"
-);
+import { loadAptitudeIssuerSigningMaterial } from "../utils/aptitudeIssuerSigningMaterial.js";
 
 function getLeafKeyUsage(cert) {
   return cert.getExtension(KeyUsagesExtension);
 }
 
-describe("mdoc issuance leaf certificate (x509EC/client_certificate.crt)", () => {
-  it("includes Key Usage with the digitalSignature bit set", function () {
-    if (!fs.existsSync(MDOC_LEAF_CERT_PATH)) {
-      this.skip();
-    }
+const COSE_LABEL_KID = 2;
+const COSE_LABEL_X = -2;
+const COSE_LABEL_Y = -3;
 
-    const pem = fs.readFileSync(MDOC_LEAF_CERT_PATH, "utf8");
+function coseKeyParameter(deviceKey, label) {
+  if (deviceKey instanceof Map) {
+    return deviceKey.get(label);
+  }
+  return deviceKey?.[label] ?? deviceKey?.[String(label)];
+}
+
+function decodeMsoFromIssuerAuthPayload(msoPayload) {
+  const msoBytes =
+    msoPayload instanceof Uint8Array || Buffer.isBuffer(msoPayload)
+      ? msoPayload
+      : Buffer.from(msoPayload);
+  let decoded = decode(msoBytes);
+  if (decoded?.tag === 24) {
+    decoded = decode(decoded.value);
+  }
+  return decoded;
+}
+
+function decodeMsoDeviceKeyFromIssuerSigned(issuerSigned) {
+  expect(issuerSigned.issuerAuth).to.be.an("array").with.length.at.least(3);
+  const mso = decodeMsoFromIssuerAuthPayload(issuerSigned.issuerAuth[2]);
+  const deviceKey = mso?.deviceKeyInfo?.deviceKey;
+  expect(deviceKey, "MSO deviceKeyInfo.deviceKey must be present").to.exist;
+  return deviceKey;
+}
+
+function expectByteStringCoseParameter(value, expectedUtf8 = null) {
+  expect(
+    Buffer.isBuffer(value) || value instanceof Uint8Array,
+    "COSE parameter must decode as a byte string, not text",
+  ).to.equal(true);
+  if (expectedUtf8 != null) {
+    expect(Buffer.from(value).toString("utf8")).to.equal(expectedUtf8);
+  }
+}
+
+async function issuePidMdocWithProofJwk(proofJwk, privateKey, nonce) {
+  const proofJwt = await new jose.SignJWT({
+    iss: "did:example:holder",
+    aud: "http://localhost:3000",
+    nonce,
+  })
+    .setProtectedHeader({
+      alg: "ES256",
+      typ: "openid4vci-proof+jwt",
+      jwk: proofJwk,
+    })
+    .sign(privateKey);
+
+  return handleCredentialGenerationBasedOnFormat(
+    {
+      vct: "urn:eu.europa.ec.eudi:pid:1:mso_mdoc",
+      proofs: { jwt: [proofJwt] },
+    },
+    {
+      signatureType: "x509",
+      isHaip: false,
+    },
+    "http://localhost:3000",
+    "mDL",
+  );
+}
+
+describe("mdoc issuance leaf certificate (Aptitude issuer signing material)", () => {
+  it("includes Key Usage with the digitalSignature bit set", function () {
+    const pem = loadAptitudeIssuerSigningMaterial().leafCertificatePem;
     const cert = new X509Certificate(pem);
 
     const keyUsage = getLeafKeyUsage(cert);
@@ -59,15 +111,8 @@ describe("mdoc issuance leaf certificate (x509EC/client_certificate.crt)", () =>
   });
 
   it("matches the configured mdoc issuer private key", async function () {
-    if (
-      !fs.existsSync(MDOC_LEAF_CERT_PATH) ||
-      !fs.existsSync(MDOC_LEAF_KEY_PATH)
-    ) {
-      this.skip();
-    }
-
-    const certPem = fs.readFileSync(MDOC_LEAF_CERT_PATH, "utf8");
-    const pkcs8Pem = fs.readFileSync(MDOC_LEAF_KEY_PATH, "utf8");
+    const { leafCertificatePem: certPem, privateKeyPkcs8: pkcs8Pem } =
+      loadAptitudeIssuerSigningMaterial();
 
     const certKey = await jose.importX509(certPem, "ES256", {
       extractable: true,
@@ -84,13 +129,6 @@ describe("mdoc issuance leaf certificate (x509EC/client_certificate.crt)", () =>
   });
 
   it("emits the same leaf certificate in issuerAuth x5chain with digitalSignature key usage", async function () {
-    if (
-      !fs.existsSync(MDOC_LEAF_CERT_PATH) ||
-      !fs.existsSync(MDOC_LEAF_KEY_PATH)
-    ) {
-      this.skip();
-    }
-
     const { publicKey, privateKey } = await jose.generateKeyPair("ES256");
     const proofJwk = await jose.exportJWK(publicKey);
     const proofJwt = await new jose.SignJWT({
@@ -133,7 +171,7 @@ describe("mdoc issuance leaf certificate (x509EC/client_certificate.crt)", () =>
     expect(Buffer.isBuffer(emittedLeafDer) || emittedLeafDer instanceof Uint8Array)
       .to.equal(true);
 
-    const configuredLeafPem = fs.readFileSync(MDOC_LEAF_CERT_PATH, "utf8");
+    const configuredLeafPem = loadAptitudeIssuerSigningMaterial().leafCertificatePem;
     expect(Buffer.from(emittedLeafDer).toString("base64")).to.equal(
       pemToBase64Der(configuredLeafPem)
     );
@@ -148,13 +186,6 @@ describe("mdoc issuance leaf certificate (x509EC/client_certificate.crt)", () =>
   });
 
   it("emits PID mso_mdoc claims under the namespace rather than the doctype", async function () {
-    if (
-      !fs.existsSync(MDOC_LEAF_CERT_PATH) ||
-      !fs.existsSync(MDOC_LEAF_KEY_PATH)
-    ) {
-      this.skip();
-    }
-
     const { publicKey, privateKey } = await jose.generateKeyPair("ES256");
     const proofJwk = await jose.exportJWK(publicKey);
     const proofJwt = await new jose.SignJWT({
@@ -188,5 +219,47 @@ describe("mdoc issuance leaf certificate (x509EC/client_certificate.crt)", () =>
     expect(issuerSigned.nameSpaces).to.not.have.property(
       "urn:eu.europa.ec.eudi:pid:1:mso_mdoc"
     );
+  });
+
+  it("encodes MSO deviceKey COSE label 2 (kid) as a byte string per RFC 9052", async function () {
+    const { publicKey, privateKey } = await jose.generateKeyPair("ES256");
+    const proofJwk = await jose.exportJWK(publicKey);
+    const kidString = "wallet-unit-subject-key-1";
+    proofJwk.kid = kidString;
+
+    const credential = await issuePidMdocWithProofJwk(
+      proofJwk,
+      privateKey,
+      "test-nonce-mdoc-devicekey-kid-bstr",
+    );
+
+    const issuerSigned = decode(Buffer.from(credential, "base64url"));
+    const deviceKey = decodeMsoDeviceKeyFromIssuerSigned(issuerSigned);
+
+    const kid = coseKeyParameter(deviceKey, COSE_LABEL_KID);
+    expectByteStringCoseParameter(kid, kidString);
+    expect(typeof kid).to.not.equal("string");
+
+    expectByteStringCoseParameter(coseKeyParameter(deviceKey, COSE_LABEL_X));
+    expectByteStringCoseParameter(coseKeyParameter(deviceKey, COSE_LABEL_Y));
+    expect(coseKeyParameter(deviceKey, COSE_LABEL_X).length).to.equal(32);
+    expect(coseKeyParameter(deviceKey, COSE_LABEL_Y).length).to.equal(32);
+  });
+
+  it("omits MSO deviceKey COSE label 2 when the proof JWK has no kid", async function () {
+    const { publicKey, privateKey } = await jose.generateKeyPair("ES256");
+    const proofJwk = await jose.exportJWK(publicKey);
+    delete proofJwk.kid;
+
+    const credential = await issuePidMdocWithProofJwk(
+      proofJwk,
+      privateKey,
+      "test-nonce-mdoc-devicekey-no-kid",
+    );
+
+    const issuerSigned = decode(Buffer.from(credential, "base64url"));
+    const deviceKey = decodeMsoDeviceKeyFromIssuerSigned(issuerSigned);
+
+    expect(coseKeyParameter(deviceKey, COSE_LABEL_KID)).to.be.undefined;
   });
 });

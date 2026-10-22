@@ -2,6 +2,7 @@ import { expect } from "chai";
 import {
   resolveScopeForCredentialConfiguration,
   readScopeFromOfferGrant,
+  assertAuthorizationDetailsSupportForCredentialRequest,
 } from "../src/lib/scopeResolution.js";
 import { buildIssuanceAuthorizationFields } from "../src/lib/issuance.js";
 
@@ -97,5 +98,49 @@ describe("scope resolution (RFC001 Phase 4)", () => {
       credential_configuration_id: "urn:eu.europa.ec.eudi:pid:1",
     });
     expect(details[0].locations).to.deep.equal(["https://issuer.example"]);
+  });
+
+  it("buildIssuanceAuthorizationFields succeeds for scope-less config with authorization_details only", () => {
+    const fields = buildIssuanceAuthorizationFields({
+      configurationId: "LegacyPidConfig",
+      issuerMeta,
+      grantType: "urn:ietf:params:oauth:grant-type:pre-authorized_code",
+    });
+    expect(fields).to.not.have.property("scope");
+    const details = JSON.parse(fields.authorization_details);
+    expect(details).to.have.length(1);
+    expect(details[0]).to.include({
+      type: "openid_credential",
+      credential_configuration_id: "LegacyPidConfig",
+    });
+    expect(details[0].locations).to.deep.equal(["https://issuer.example"]);
+  });
+
+  it("assertAuthorizationDetailsSupport allows scope-less config when AS advertises openid_credential", () => {
+    const result = assertAuthorizationDetailsSupportForCredentialRequest({
+      configurationId: "LegacyPidConfig",
+      issuerMeta,
+      grantType: "urn:ietf:params:oauth:grant-type:pre-authorized_code",
+      authorizationServerMeta: {
+        authorization_details_types_supported: ["openid_credential"],
+      },
+    });
+    expect(result).to.deep.equal({
+      required: true, scope: null,
+      reason: "issuer_scope_missing", authorizationDetailsType: "openid_credential",
+    });
+  });
+
+  it("assertAuthorizationDetailsSupport rejects scope-less config when AS omits openid_credential", () => {
+    expect(() =>
+      assertAuthorizationDetailsSupportForCredentialRequest({
+        configurationId: "LegacyPidConfig",
+        issuerMeta,
+        grantType: "urn:ietf:params:oauth:grant-type:pre-authorized_code",
+        authorizationServerMeta: {
+          scopes_supported: ["openid"],
+        },
+      }),
+    ).to.throw(/issuer_metadata_incomplete[\s\S]*authorization_details_types_supported/i);
   });
 });

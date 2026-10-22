@@ -1,19 +1,25 @@
 {
-  "_comment": "Placeholder registrar-provided registration information for RFC001 / ETSI TS 119 472-3 `issuer_info`. Replace this with the registrar-delivered dataset once an APTITUDE registrar is available. The `self_registered` flag SHOULD remain true for development/self-signed certificates so that wallets do not treat this as production trust material.",
-  "legal_name": "University of the Aegean",
-  "organization_identifier": "uaegean.gr",
-  "trade_name": "UAegean",
-  "country": "GR",
-  "jurisdiction": "GR",
-  "registrar": {
-    "name": "Self-registered (development)",
-    "identifier": "dev:rfc-issuer-v1",
-    "country": "GR"
-  },
-  "registered_on": "2026-04-01",
-  "homepage_uri": "https://uaegean.gr",
-  "logo_uri": null,
-  "policy_uri": null,
-  "terms_of_service_uri": null,
-  "self_registered": true
+  "_comment": "Placeholder registrar_dataset for RFC001 / ETSI TS 119 472-3 ISS-MDATA-REG_CERT-4.2.3-07..13. Replace with registrar-delivered data once an APTITUDE registrar is available. identifier, srvDescription, registryURI, and providesAttestations are required members of issuer_info[].data when format is registrar_dataset.",
+  "identifier": "uaegean.gr",
+  "srvDescription": [
+    {
+      "lang": "en",
+      "content": "APTITUDE RFC001 test issuer — University of the Aegean (self-registered development material)"
+    }
+  ],
+  "registryURI": "https://uaegean.gr",
+  "providesAttestations": [
+    {
+      "format": "dc+sd-jwt",
+      "meta": {
+        "vct": "urn:eu.europa.ec.eudi:pid:1"
+      }
+    },
+    {
+      "format": "mso_mdoc",
+      "meta": {
+        "doctype": "eu.europa.ec.eudi.pid.1"
+      }
+    }
+  ]
 }

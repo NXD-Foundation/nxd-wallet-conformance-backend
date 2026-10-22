@@ -49,6 +49,7 @@ import {
   sendVerifierWalletReportedError,
   VerifierRfc002Errors as VErr,
 } from "../../utils/routeUtils.js";
+import { loadVerifierEncryptionKey } from "../../utils/verifierEncryptionKeys.js";
 import {
   summarizeCs03ValidationForLog,
   validateCs03CredentialResponses,
@@ -57,6 +58,7 @@ import { evaluateDirectPostJwtStateCorrelation } from "../../utils/vpSessionCorr
 import { validateSdJwtKeyBindingMatchesCredential } from "../../utils/sdJwtKeyBinding.js";
 import {
   validateDcqlClaims,
+  validateDcqlQueryClaims,
   validateMdocDcqlClaims,
 } from "../../utils/dcqlClaimValidation.js";
 
@@ -738,7 +740,7 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
 
         // Decrypt the JWT using X509 EC private key
         await logDebug(sessionId, "Starting HAIP dc_api.jwt decryption");
-        const privateKeyForDecryption = fs.readFileSync("./x509EC/ec_private_pkcs8.key", "utf8");
+        const privateKeyForDecryption = loadVerifierEncryptionKey().privateKeyPem;
 
         let decryptedResponse;
         try {
@@ -1006,7 +1008,8 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
           await logInfo(sessionId, "Processing encrypted JWE response for direct_post.jwt");
 
           // Decrypt the JWE - this may return JWT string (per spec) or payload object (wallet-specific)
-          const decrypted = await decryptJWE(jwtResponse, privateKey, "direct_post.jwt");
+          const privateKeyForDecryption = loadVerifierEncryptionKey().privateKeyPem;
+          const decrypted = await decryptJWE(jwtResponse, privateKeyForDecryption, "direct_post.jwt");
           await logDebug(sessionId, "JWE decryption completed", {
             decryptedType: typeof decrypted
           });
@@ -1913,13 +1916,22 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
           }
         }
 
-        // Process claims as before
-        const dcqlValidation = validateDcqlClaims(
-          claimsFromExtraction,
-          vpSession.dcql_query?.credentials?.flatMap((credential) => credential?.claims || []) || [],
-        );
+        // mdoc claims are reconstructed as flat objects, while their DCQL
+        // paths include the namespace as the first segment. The mdoc branches
+        // above already validated both the DeviceResponse and its claims;
+        // applying the generic object-path validator here would incorrectly
+        // look for `claims[namespace][element]` in a flat mdoc object.
+        const dcqlValidation = isMdoc
+          ? validateMdocDcqlClaims(claimsFromExtraction, vpSession.dcql_query)
+          : validateDcqlQueryClaims(claimsFromExtraction, vpSession.dcql_query);
+        const allowedFieldsValid = isMdoc
+          ? true
+          : !(
+              vpSession.sdsRequested &&
+              !hasOnlyAllowedFields(claimsFromExtraction, vpSession.sdsRequested)
+            );
         if (
-          (vpSession.sdsRequested && !hasOnlyAllowedFields(claimsFromExtraction, vpSession.sdsRequested)) ||
+          !allowedFieldsValid ||
           !dcqlValidation.ok
         ) {
           const receivedClaims = JSON.stringify(claimsFromExtraction);
@@ -1946,16 +1958,17 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
         }
 
         vpSession.status = "success";
-        vpSession.claims = Array.isArray(claimsFromExtraction)
-          ? (claimsFromExtraction.length === 1 ? { ...claimsFromExtraction[0] } : claimsFromExtraction)
+        vpSession.claims = isMdoc
+          ? claimsFromExtraction[0] || {}
           : { ...claimsFromExtraction };
         await storeVPSession(sessionId, vpSession);
         
         await logInfo(sessionId, "direct_post.jwt processing completed successfully", {
           status: "success",
-          claimsCount: Array.isArray(claimsFromExtraction)
-            ? claimsFromExtraction.length
-            : Object.keys(claimsFromExtraction || {}).length
+          claimsCount: isMdoc
+            ? Object.keys(claimsFromExtraction[0] || {}).length
+            : Object.keys(claimsFromExtraction || {}).length,
+          credentialFormat: isMdoc ? "mso_mdoc" : "non-mdoc",
         });
         
         return res.status(200).json({ status: "ok" });
@@ -2676,9 +2689,9 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
 
       await logInfo(sessionId, "Nonce verification successful");
 
-      const dcqlValidation = validateDcqlClaims(
+      const dcqlValidation = validateDcqlQueryClaims(
         claimsFromExtraction,
-        vpSession.dcql_query?.credentials?.flatMap((credential) => credential?.claims || []) || [],
+        vpSession.dcql_query,
       );
       if (
         (vpSession.sdsRequested && !hasOnlyAllowedFields(claimsFromExtraction, vpSession.sdsRequested)) ||
@@ -2708,13 +2721,11 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
       }
 
       vpSession.status = "success";
-      vpSession.claims = Array.isArray(claimsFromExtraction)
-        ? (claimsFromExtraction.length === 1 ? { ...claimsFromExtraction[0] } : claimsFromExtraction)
-        : { ...claimsFromExtraction };
+      vpSession.claims = { ...claimsFromExtraction };
       await storeVPSession(sessionId, vpSession);
 
       if (slog) {
-        try { slog("[PRESENTATION] direct_post processing completed successfully", { status: "success", claimsCount: Array.isArray(claimsFromExtraction) ? claimsFromExtraction.length : Object.keys(claimsFromExtraction || {}).length }); } catch {}
+        try { slog("[PRESENTATION] direct_post processing completed successfully", { status: "success", claimsCount: Object.keys(claimsFromExtraction || {}).length }); } catch {}
         logHttpResponse(slog, requestId, `/direct_post/${sessionId}`, 200, "OK", res.getHeaders(), { status: "ok" });
         try { slog("[PRESENTATION] [COMPLETE] Processing direct_post VP response", { success: true }); } catch {}
       }

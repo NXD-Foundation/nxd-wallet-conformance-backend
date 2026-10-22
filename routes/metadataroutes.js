@@ -2,17 +2,20 @@ import express from "express";
 import fs from "fs";
 import { pemToJWK } from "../utils/cryptoUtils.js";
 import {
+  signCredentialIssuerMetadataFromConfiguredMaterial,
+} from "../utils/issuerMetadataSigning.js";
+import {
   PROXY_PATH,
-  SERVER_URL,
   buildOpenIdVerifierMetadataDocument,
   buildRfc002VerifierMetadataDocument,
   getPublicIssuerBaseUrl,
 } from "../utils/routeUtils.js";
-import { signCredentialIssuerMetadataFromConfiguredP12 } from "../utils/issuerMetadataSigning.js";
+import { buildIssuerInfo } from "../utils/issuerInfo.js";
+import { loadAptitudeIssuerSigningMaterial } from "../utils/aptitudeIssuerSigningMaterial.js";
 const metadataRouter = express.Router();
 
-const privateKey = fs.readFileSync("./private-key.pem", "utf-8");
 const publicKeyPem = fs.readFileSync("./public-key.pem", "utf-8");
+
 const issuerConfig = JSON.parse(
   fs.readFileSync("./data/issuer-config.json", "utf-8")
 );
@@ -32,32 +35,16 @@ const defaultSigningKid = issuerConfigValues.default_signing_kid || "aegean#auth
 
 const jwks = pemToJWK(publicKeyPem, "public");
 
-// The Android EUDI reference wallet deserializes every advertised credential
-// configuration before it selects the one in the offer. Keep experimental
-// formats in issuer-config.json for local work, but do not publish formats the
-// wallet cannot parse: one unsupported entry breaks discovery entirely.
-const WALLET_SUPPORTED_CREDENTIAL_FORMATS = new Set([
-  "dc+sd-jwt",
-  "jwt_vc_json",
-  "mso_mdoc",
-]);
-
-function buildPublishedIssuerMetadata(config) {
-  const credential_configurations_supported = Object.fromEntries(
-    Object.entries(config.credential_configurations_supported || {}).filter(
-      ([, value]) => WALLET_SUPPORTED_CREDENTIAL_FORMATS.has(value?.format),
-    ),
-  );
-
-  return { ...config, credential_configurations_supported };
-}
-
-// Do not retain the key used for credential-request encryption at module load
-// time. Besides avoiding a stale key after certificate/key rotation, this makes
-// the advertised JWK a direct export of the PEM currently used by the issuer.
-function getCredentialRequestEncryptionJwk() {
-  return pemToJWK(fs.readFileSync("./public-key.pem", "utf-8"), "public");
-}
+// RFC001 §7.7 SHALL 8 / ETSI TS 119 472-3: build the `issuer_info` array
+// (`{format, data}` entries) once at module load. We intentionally do not
+// fail module init if the registration certificate is missing — the metadata
+// response simply omits `issuer_info` when no material is available.
+let issuerInfoPromise = buildIssuerInfo({
+  certificatePem: loadAptitudeIssuerSigningMaterial().leafCertificatePem,
+}).catch((err) => {
+  console.warn("[issuer_info] Failed to build issuer_info:", err?.message);
+  return null;
+});
 
 function clientWantsSignedMetadata(req) {
   const accept = String(req.headers.accept || "").toLowerCase();
@@ -75,11 +62,7 @@ metadataRouter.get(
     "/openid-credential-issuer/:suffix(*)",
   ],
   async (req, res) => {
-    // Keep the metadata identifier identical to the identifier in credential
-    // offers.  The latter is built from SERVER_URL, so deriving this value
-    // from a request Host header can make a locally-opened offer resolve a
-    // different signed issuer identifier than the wallet expects.
-    const serverURL = SERVER_URL;
+    const serverURL = getPublicIssuerBaseUrl(req);
     const rawSuffix = req.params?.suffix || "";
     const normalizedSuffix = rawSuffix.replace(/^\/+/, "");
 
@@ -96,15 +79,9 @@ metadataRouter.get(
     // OID4VCI §11.2: if credential_response_encryption is advertised,
     // credential_request_encryption MUST also be present (EUDI wallet library enforces this).
     if (issuerConfig.credential_response_encryption && !issuerConfig.credential_request_encryption) {
-      const encJwk = {
-        ...getCredentialRequestEncryptionJwk(),
-        kid: `${defaultSigningKid}-agreement`,
-        use: "enc",
-        alg: "ECDH-ES",
-      };
+      const encJwk = { ...jwks, kid: `${defaultSigningKid}-agreement`, use: "enc", alg: "ECDH-ES" };
       issuerConfig.credential_request_encryption = {
         jwks: { keys: [encJwk] },
-        alg_values_supported: ["ECDH-ES"],
         enc_values_supported: issuerConfig.credential_response_encryption.enc_values_supported || ["A256GCM"],
         encryption_required: false,
       };
@@ -119,11 +96,20 @@ metadataRouter.get(
       delete issuerConfig.batch_credential_endpoint;
     }
 
-    const publishedIssuerMetadata = buildPublishedIssuerMetadata(issuerConfig);
+    // RFC001 §7.7 SHALL 8 — attach `issuer_info` (registration_cert +
+    // registrar_dataset `{format, data}` entries) when available.
+    const issuerInfo = await issuerInfoPromise;
+    if (issuerInfo) {
+      issuerConfig.issuer_info = issuerInfo;
+    } else if (Object.prototype.hasOwnProperty.call(issuerConfig, "issuer_info")) {
+      delete issuerConfig.issuer_info;
+    }
 
     if (clientWantsSignedMetadata(req)) {
       try {
-        const signedMetadata = await signCredentialIssuerMetadataFromConfiguredP12(publishedIssuerMetadata);
+        const signedMetadata = await signCredentialIssuerMetadataFromConfiguredMaterial(
+          issuerConfig,
+        );
         return res.type("application/jwt").send(signedMetadata);
       } catch (error) {
         console.error("Unable to produce signed Credential Issuer metadata:", error.message);
@@ -134,7 +120,7 @@ metadataRouter.get(
       }
     }
 
-    res.type("application/json").send(publishedIssuerMetadata);
+    res.type("application/json").send(issuerConfig);
   }
 );
 
@@ -143,7 +129,7 @@ metadataRouter.get(
  */
 metadataRouter.get("/.well-known/openid-verifier-metadata", (req, res) => {
   try {
-    const serverURL = SERVER_URL;
+    const serverURL = getPublicIssuerBaseUrl(req);
     const doc = buildOpenIdVerifierMetadataDocument({ serverURL });
     res.type("application/json").json(doc);
   } catch (err) {
@@ -157,7 +143,7 @@ metadataRouter.get("/.well-known/openid-verifier-metadata", (req, res) => {
 
 metadataRouter.get("/client-metadata/rfc002", (req, res) => {
   try {
-    const serverURL = SERVER_URL;
+    const serverURL = getPublicIssuerBaseUrl(req);
     res.type("application/json").json(
       buildRfc002VerifierMetadataDocument({ serverURL }),
     );

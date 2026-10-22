@@ -1,0 +1,68 @@
+{
+  "schema_version": "1.0",
+  "profile": "APTITUDE issuance and presentation branch",
+  "derived_from": "main:docs/FCAFs/we-build-fcaf-applicability.json",
+  "assessment_date": "2026-07-29",
+  "source_of_truth": "docs/knowledge.md",
+  "scope": {
+    "datamodels": "out-of-scope-datamodel",
+    "trust_framework": "structural-only",
+    "negative_e2e": "not-required",
+    "negative_behavior": "must-be-rejected-by-runtime"
+  },
+  "disposition_definitions": {
+    "implemented": "Runtime behavior and focused tests cover the applicable requirement.",
+    "partial": "Applicable behavior exists, but one or more focused coverage items remain.",
+    "structural-only": "Required fields or shape are checked; trust authority is intentionally not decided.",
+    "not-assessed-per-id": "The main-branch FCAF row has not been revalidated against this branch.",
+    "inapplicable-cs02": "The requirement is not part of the WE BUILD CS-02 profile.",
+    "out-of-scope-datamodel": "Credential/PID rulebook and detailed data-model semantics are deferred."
+  },
+  "catalogue_inventory": {
+    "message_structure_declared_rows": 236,
+    "message_structure_explicit_rows": 222,
+    "security_mechanisms_explicit_rows": 79,
+    "explicit_rows_total": 301,
+    "reconciliation_note": "The 14 MessageStructure rows absent from the source extractor remain unreconciled, as recorded on main."
+  },
+  "branch_assessment": {
+    "overall": "partial",
+    "per_id_register_status": "generated-audit",
+    "reason": "The generated row-by-row audit reassesses all 301 explicit catalogue rows against this branch's own runtime paths and focused tests.",
+    "implemented_or_present": [
+      "OpenID4VP direct_post and direct_post.jwt route handling",
+      "Verifier metadata and response-encryption-key handling",
+      "SD-JWT key-binding helpers and focused tests",
+      "Wallet DCQL credential selection and presentation generation",
+      "Aptitude issuer metadata, signed metadata, WIA/WUA and key-attestation issuance work"
+    ],
+    "not_ported_from_main": [
+      "CS-02 request validation and wallet strict-profile modules",
+      "Shared CS-02 DCQL core used by wallet and verifier",
+      "CS-02 verifier request and response validators",
+      "CS-02 trust-policy and status-list placeholder modules",
+      "CS-02 successful-flow matrix and per-ID FCAF disposition register"
+    ]
+  },
+  "per_id_audit": {
+    "generator": "scripts/aptitudeFcafAudit.js",
+    "explicit_catalogue_rows": 301,
+    "dispositions": {
+      "implemented": 77,
+      "partial": 129,
+      "structural-only": 24,
+      "inapplicable-cs02": 70,
+      "out-of-scope-datamodel": 1
+    },
+    "evidence_rule": "Each emitted row includes its source description, current-branch evidence paths where available, and a conservative remaining gap. Main-only evidence is never counted as implemented on this branch."
+  },
+  "layers": {
+    "MessageStructure": { "total_fafcs": 236, "status": "partial" },
+    "Interaction": { "total_fafcs": 71, "status": "partial" },
+    "SecurityMechanisms": { "total_fafcs": 79, "status": "partial" },
+    "Shared": { "total_fafcs": 29, "status": "partial" },
+    "UseCases": { "total_fafcs": 2, "status": "partial" },
+    "DataModel": { "total_fafcs": 142, "status": "out-of-scope-datamodel" }
+  },
+  "next_step": "Port the main CS-02 implementation as a separately reviewed change, then copy and revalidate every per-ID disposition before publishing coverage counts."
+}

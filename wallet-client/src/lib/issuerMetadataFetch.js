@@ -1,9 +1,40 @@
 import { jwtVerify, decodeProtectedHeader, importX509 } from "jose";
 
+/** OpenID4VCI 1.0 §12.2.2 — prefer signed metadata, fall back to JSON. */
+export const ISSUER_METADATA_ACCEPT_PREFER_SIGNED = "application/jwt, application/json";
+export const ISSUER_METADATA_ACCEPT_JSON = "application/json";
+
+export const ISSUER_METADATA_ACCEPT_SEQUENCE = [
+  ISSUER_METADATA_ACCEPT_PREFER_SIGNED,
+  ISSUER_METADATA_ACCEPT_JSON,
+];
+
 function pemFromDerBase64(b64) {
   const body = String(b64).replace(/\s+/g, "");
   const lines = body.match(/.{1,64}/g) || [body];
   return `-----BEGIN CERTIFICATE-----\n${lines.join("\n")}\n-----END CERTIFICATE-----`;
+}
+
+/**
+ * Extract the registration certificate from ETSI/RFC001 `issuer_info`.
+ * Prefers `format: "registration_cert"` array entries; falls back to the
+ * legacy flat `registration_certificate` object for older issuers.
+ *
+ * @param {unknown} issuerInfo
+ * @returns {unknown}
+ */
+export function registrationCertificateFromIssuerInfo(issuerInfo) {
+  if (Array.isArray(issuerInfo)) {
+    const entry = issuerInfo.find(
+      (item) =>
+        item && typeof item === "object" && item.format === "registration_cert",
+    );
+    return entry != null ? entry.data : null;
+  }
+  if (issuerInfo && typeof issuerInfo === "object" && "registration_certificate" in issuerInfo) {
+    return issuerInfo.registration_certificate;
+  }
+  return null;
 }
 
 /**
@@ -16,6 +47,7 @@ export function trimCompactJws(body) {
   if (!t) return null;
   const parts = t.split(".");
   if (parts.length !== 3) return null;
+  if (!parts.every((part) => /^[A-Za-z0-9_-]+$/.test(part))) return null;
   return t;
 }
 
@@ -86,15 +118,11 @@ export async function parseIssuerMetadataHttpResponse(res) {
 
   const { payload } = await verifyIssuerMetadataJws(compact);
   const meta = { ...payload };
-  const issuerInfo = meta.issuer_info;
-  const regCert =
-    issuerInfo && typeof issuerInfo === "object" && "registration_certificate" in issuerInfo
-      ? issuerInfo.registration_certificate
-      : null;
-
   const debug = {
     signed_metadata_jws: true,
-    issuer_info_registration_certificate: regCert,
+    issuer_info_registration_certificate: registrationCertificateFromIssuerInfo(
+      meta.issuer_info,
+    ),
   };
 
   return { meta, debug };

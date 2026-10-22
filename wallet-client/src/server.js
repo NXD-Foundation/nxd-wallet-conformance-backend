@@ -1,3 +1,5 @@
+import { redactHttpLog } from "./lib/httpLogRedaction.js";
+import { createDpopNonceState } from "./lib/dpopNonce.js";
 import express from "express";
 import fetch from "node-fetch";
 import { generateDidJwkFromPrivateJwk, ensureOrCreateEcKeyPair, createPkcePair, createDPoP } from "./lib/crypto.js";
@@ -26,7 +28,7 @@ import {
   prepareCredentialResponseEncryption,
   parseCredentialResponsePayload,
 } from "./lib/credentialResponseEncryption.js";
-import { parseIssuerMetadataHttpResponse } from "./lib/issuerMetadataFetch.js";
+import { parseIssuerMetadataHttpResponse, ISSUER_METADATA_ACCEPT_SEQUENCE } from "./lib/issuerMetadataFetch.js";
 import {
   selectProofSigningAlg,
   buildKeyPairs,
@@ -45,9 +47,32 @@ import { digest } from "@sd-jwt/crypto-nodejs";
 import { verifyReceivedMdlToken } from "../utils/mdlVerification.js";
 import { didKeyToJwks } from "../utils/cryptoUtils.js";
 import { isDpopBoundAccessToken, computeAthForDpop, buildCredentialRequestSelector } from "../utils/tokenUtils.js";
+import {
+  createAttestationChallengeState,
+  initializeAttestationChallengeState,
+  postFormWithWiaAttestationChallengeRetry,
+  readFetchResponseJson,
+} from "./lib/attestationChallenge.js";
+import { createWuaStatusListRouter } from "./routes/wuaStatusListRoutes.js";
+import { serializePendingContext } from "./lib/authorizationCodeIssuance.js";
+import { createAuthCodeIssuanceHost } from "./lib/authCodeIssuanceHost.js";
+import {
+  isAuthHandoffEnabled,
+  resolveRedirectUriForFlow,
+  AuthHandoffConfigError,
+} from "./lib/authHandoffConfig.js";
+import {
+  savePendingAuthorization,
+  consumePendingByState,
+  updateWalletTestSession,
+  renderCallbackHtml,
+  issuersMatch,
+} from "./lib/authHandoffStore.js";
+import { resolveWalletProfile } from "./lib/profile.js";
 
 const app = express();
 app.use(express.json({ limit: "2mb" }));
+app.use(createWuaStatusListRouter());
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -118,6 +143,21 @@ function makeSessionLogger(sessionId) {
       appendWalletLog(sessionId, logEntry).catch(() => {});
     } catch {}
   };
+}
+
+async function createIssuanceAttestationChallengeState(authorizationServerMeta, logSessionId, logPrefix) {
+  const slog = logSessionId ? makeSessionLogger(logSessionId) : (() => {});
+  try {
+    return await initializeAttestationChallengeState(authorizationServerMeta);
+  } catch (error) {
+    console.warn(`${logPrefix} attestation challenge initialization failed:`, error?.message || error);
+    try {
+      slog(`${logPrefix} attestation challenge init failed`, {
+        error: error?.message || String(error),
+      });
+    } catch {}
+    return createAttestationChallengeState();
+  }
 }
 
 // Helper function to log errors to both console and Redis (if sessionId available)
@@ -272,6 +312,87 @@ app.get("/logs/:sessionId", async (req, res) => {
   }
 });
 
+// GET /oauth/callback — browser redirect for ITB auth handoff (RFC001 §6.1).
+app.get("/oauth/callback", async (req, res) => {
+  const { code, state, error, error_description: errorDescription, iss } = req.query || {};
+  const respondHtml = (payload) => {
+    res.status(payload.statusCode || 200);
+    res.type("html").send(renderCallbackHtml(payload));
+  };
+
+  if (!state) {
+    return respondHtml({
+      success: false,
+      statusCode: 400,
+      title: "Authentication failed",
+      message: "Missing state parameter.",
+    });
+  }
+
+  const pendingRecord = await consumePendingByState(String(state));
+  if (!pendingRecord) {
+    return respondHtml({
+      success: false,
+      statusCode: 400,
+      title: "Authentication failed",
+      message: "Authorization session expired or already used.",
+    });
+  }
+
+  const { sessionId, pendingContext } = pendingRecord;
+  const fail = async (message) => {
+    await updateWalletTestSession(sessionId, "failed", { error: message });
+    return respondHtml({
+      success: false,
+      statusCode: 400,
+      title: "Authentication failed",
+      message,
+    });
+  };
+
+  if (error) {
+    const detail = errorDescription ? `${error}: ${errorDescription}` : String(error);
+    return fail(`Authorization server error: ${detail}`);
+  }
+
+  if (!code) {
+    return fail("Authorization code missing from callback.");
+  }
+
+  if (
+    iss &&
+    pendingContext?.authorizationServerIssuer &&
+    !issuersMatch(pendingContext.authorizationServerIssuer, String(iss))
+  ) {
+    return fail("Authorization server issuer mismatch.");
+  }
+
+  try {
+    const result = await getAuthCodeIssuance().completeAuthorization(
+      pendingContext,
+      { code: String(code), state: String(state), iss: iss ? String(iss) : undefined },
+      sessionId,
+    );
+    await updateWalletTestSession(sessionId, "ok", { result });
+    return respondHtml({
+      success: true,
+      title: "Authentication complete",
+      message: "Credential issuance finished. You can close this tab and return to the test.",
+    });
+  } catch (callbackError) {
+    await logError(sessionId, "[/oauth/callback] error:", callbackError);
+    await updateWalletTestSession(sessionId, "failed", {
+      error: callbackError.message || String(callbackError),
+    });
+    return respondHtml({
+      success: false,
+      statusCode: 500,
+      title: "Authentication failed",
+      message: "Credential issuance failed. Return to the test for details.",
+    });
+  }
+});
+
 // GET /session-status/:sessionId
 // Returns the current status of a session from Redis
 app.get("/session-status/:sessionId", async (req, res) => {
@@ -397,8 +518,10 @@ async function handleWalletTestSession(req, res, issuanceOpts = {}) {
           });
           return res.json(okPayload);
         } catch (err) {
-          const failed = await setStatus("failed", { error: err.message || String(err) });
-          return res.status(500).json({ error: "server_error", error_description: err.message || String(err), state: failed });
+          const errorMessage = err?.message || String(err);
+          await logError(sessionId, "[/session] pre-authorized issuance failed:", errorMessage);
+          const failed = await setStatus("failed", { error: errorMessage });
+          return res.status(500).json({ error: "server_error", error_description: errorMessage, state: failed });
         }
       }
 
@@ -407,6 +530,57 @@ async function handleWalletTestSession(req, res, issuanceOpts = {}) {
         // issuer_state is optional per OIDC4VCI 1.0 - only required if provided in the offer
         try {
           const authGrant = grants.authorization_code;
+          const authHandoff = isAuthHandoffEnabled(process.env, req.body);
+          let redirectUri;
+          try {
+            redirectUri = resolveRedirectUriForFlow(process.env, authHandoff);
+          } catch (configError) {
+            if (configError instanceof AuthHandoffConfigError) {
+              const failed = await setStatus("failed", { error: configError.message });
+              return res.status(400).json({
+                error: configError.errorCode || "invalid_configuration",
+                error_description: configError.message,
+                state: failed,
+              });
+            }
+            throw configError;
+          }
+
+          const issuanceArgs = {
+            profile: resolveWalletProfile(process.env),
+            walletClientId: await resolveWalletInstanceClientId(),
+            apiBase,
+            issuerMeta,
+            offerConfig: offerCfg,
+            configurationId,
+            issuerState: authGrant.issuer_state,
+            authorizationServer: authGrant.authorization_server,
+            keyPath: req.body.keyPath,
+            pollTimeoutMs: req.body.pollTimeoutMs,
+            pollIntervalMs: req.body.pollIntervalMs,
+            redirectUri,
+            proofMode,
+            attestKeyCount,
+          };
+
+          if (authHandoff) {
+            sessionLog("[/session] auth handoff: preparing authorization. configurationId=", configurationId);
+            const prepared = await getAuthCodeIssuance().prepareAuthorization(issuanceArgs, sessionId);
+            const pendingPayload = await savePendingAuthorization({
+              sessionId,
+              state: prepared.state,
+              pendingContext: serializePendingContext(prepared),
+              authorizationUrl: prepared.authorizationUrl,
+              expiresAt: prepared.expiresAt,
+              ttlSeconds: prepared.ttlSeconds,
+              previousSession: await walletRedisClient
+                .get(key)
+                .then((raw) => (raw ? JSON.parse(raw) : null))
+                .catch(() => null),
+            });
+            return res.json(pendingPayload);
+          }
+
           sessionLog("[/session] invoking authorization code issuance. configurationId=", configurationId);
           const result = await runAuthorizationCodeIssuance({
             apiBase,
@@ -427,8 +601,10 @@ async function handleWalletTestSession(req, res, issuanceOpts = {}) {
           });
           return res.json(okPayload);
         } catch (err) {
-          const failed = await setStatus("failed", { error: err.message || String(err) });
-          return res.status(500).json({ error: "server_error", error_description: err.message || String(err), state: failed });
+          const errorMessage = err?.message || String(err);
+          await logError(sessionId, "[/session] authorization-code issuance failed:", errorMessage);
+          const failed = await setStatus("failed", { error: errorMessage });
+          return res.status(500).json({ error: "server_error", error_description: errorMessage, state: failed });
         }
       }
 
@@ -536,12 +712,17 @@ app.post("/issue-codeflow", async (req, res) => {
     return res.json(attachIssuerMetadataWalletHarness(issuerMeta, result));
   } catch (e) {
     await logError(req.body.sessionId, "[/issue-codeflow] error:", e);
+    if (e instanceof AuthHandoffConfigError) {
+      return res.status(400).json({ error: e.errorCode, error_description: e.message });
+    }
     return res.status(500).json({ error: "server_error", error_description: e.message || String(e) });
   }
 });
 
 const port = process.env.PORT || 4000;
-app.listen(port, () => console.log(`Wallet service listening on http://localhost:${port}`));
+if (process.env.NODE_ENV !== "test") {
+  app.listen(port, () => console.log(`Wallet service listening on http://localhost:${port}`));
+}
 
 async function getOfferDeepLink(issuerBase, path, credentialType) {
   if (!path) return undefined;
@@ -618,7 +799,7 @@ function pickConfigurationId(offer, requestedId) {
   return ids.length > 0 ? ids[0] : undefined;
 }
 
-/** RFC001 P2-W-5: expose signed issuer metadata `issuer_info.registration_certificate` for test harnesses. */
+/** RFC001 P2-W-5: expose signed issuer metadata `issuer_info` registration_cert data for test harnesses. */
 function attachIssuerMetadataWalletHarness(issuerMeta, result) {
   const dbg = issuerMeta?._walletIssuerMetadataDebug;
   if (!dbg) return result;
@@ -634,7 +815,7 @@ function issuerMetadataWalletSessionExtra(issuerMeta) {
   return { issuerMetadataWallet: dbg };
 }
 
-async function discoverIssuerMetadata(credentialIssuerBase, logSessionId) {
+export async function discoverIssuerMetadata(credentialIssuerBase, logSessionId, fetchImpl = fetch) {
   const slog = logSessionId ? makeSessionLogger(logSessionId) : (() => {});
   const base = credentialIssuerBase.replace(/\/$/, "");
   // RFC: if credential_issuer contains a path, well-known URI keeps path suffix
@@ -656,25 +837,30 @@ async function discoverIssuerMetadata(credentialIssuerBase, logSessionId) {
   let meta = null; let lastErr = null;
   console.log("[issuer-meta] trying candidates:", candidates); try { slog("[issuer-meta] candidates", { candidates }); } catch {}
   for (const url of candidates) {
-    try {
-      const res = await fetch(url, { headers: { Accept: "application/json" } });
-      console.log("[issuer-meta]", url, "->", res.status); try { slog("[issuer-meta] fetch", { url, status: res.status }); } catch {}
-      if (res.ok) {
-        const { meta: parsedMeta, debug } = await parseIssuerMetadataHttpResponse(res);
-        meta = parsedMeta;
-        if (debug) {
-          meta._walletIssuerMetadataDebug = debug;
-          try {
-            slog("[issuer-meta] signed JWT issuer metadata verified", {
-              hasRegCert: debug.issuer_info_registration_certificate != null,
-            });
-          } catch {}
+    for (const accept of ISSUER_METADATA_ACCEPT_SEQUENCE) {
+      try {
+        const res = await fetchImpl(url, { headers: { Accept: accept } });
+        console.log("[issuer-meta]", url, "->", res.status, "accept=", accept);
+        try { slog("[issuer-meta] fetch", { url, status: res.status, accept }); } catch {}
+        if (res.ok) {
+          const { meta: parsedMeta, debug } = await parseIssuerMetadataHttpResponse(res);
+          meta = parsedMeta;
+          if (debug) {
+            meta._walletIssuerMetadataDebug = debug;
+            try {
+              slog("[issuer-meta] signed JWT issuer metadata verified", {
+                hasRegCert: debug.issuer_info_registration_certificate != null,
+              });
+            } catch {}
+          }
+          console.log("[issuer-meta] selected:", url);
+          break;
         }
-        console.log("[issuer-meta] selected:", url);
-        break;
-      }
-      lastErr = res.status;
-    } catch (e) { lastErr = e.message || String(e); }
+        lastErr = res.status;
+      } catch (e) { lastErr = e.message || String(e); }
+      if (meta) break;
+    }
+    if (meta) break;
   }
   if (!meta) throw new Error(`Issuer metadata fetch error ${lastErr}`);
   // Normalize property names that can differ across specs/implementations
@@ -857,7 +1043,7 @@ async function httpPostJson(url, body, logSessionId, extraHeaders = {}) {
       method: "POST",
       url,
       headers: { "content-type": "application/json", hasAuthorization: Boolean(extraHeaders.Authorization) },
-      body: body || {},
+      body: redactHttpLog(body || {}),
     });
   } catch {}
 
@@ -870,6 +1056,10 @@ async function httpPostJson(url, body, logSessionId, extraHeaders = {}) {
   try {
     responseBody = responseText ? JSON.parse(responseText) : null;
   } catch {}
+  res._responseText = responseText;
+  if (responseBody !== null) {
+    res._parsedBody = responseBody;
+  }
   
   try { console.log("[http] <-", url, res.status); } catch {}
   try { 
@@ -878,8 +1068,8 @@ async function httpPostJson(url, body, logSessionId, extraHeaders = {}) {
       url, 
       status: res.status,
       statusText: res.statusText,
-      headers: Object.fromEntries(res.headers.entries()),
-      body: responseBody || responseText
+      headers: redactHttpLog(Object.fromEntries(res.headers.entries())),
+      body: responseBody ? redactHttpLog(responseBody) : (responseText ? "<non-JSON response>" : "")
     }); 
   } catch {}
   return res;
@@ -931,6 +1121,10 @@ async function httpPostForm(url, params, logSessionId, dpopHeader = null, extraH
   try {
     responseBody = responseText ? JSON.parse(responseText) : null;
   } catch {}
+  res._responseText = responseText;
+  if (responseBody !== null) {
+    res._parsedBody = responseBody;
+  }
   
   try { console.log("[http] <-", url, res.status); } catch {}
   try { 
@@ -939,8 +1133,8 @@ async function httpPostForm(url, params, logSessionId, dpopHeader = null, extraH
       url, 
       status: res.status,
       statusText: res.statusText,
-      headers: Object.fromEntries(res.headers.entries()),
-      body: responseBody || responseText
+      headers: redactHttpLog(Object.fromEntries(res.headers.entries())),
+      body: responseBody ? redactHttpLog(responseBody) : (responseText ? "<non-JSON response>" : "")
     }); 
   } catch {}
   return res;
@@ -1100,16 +1294,53 @@ async function runPreAuthorizedIssuance(
     }
     authorizationServerMeta = await discoverAuthorizationServerMetadata(asBase, logSessionId);
   }
-  assertAuthorizationDetailsSupportForCredentialRequest({
-    configurationId,
-    issuerMeta,
-    offer,
-    grantType: "urn:ietf:params:oauth:grant-type:pre-authorized_code",
-    authorizationServerMeta,
-  });
   try {
-    slog("[preauth] authorization fields", { walletClientId, scope, configurationId });
+    slog("[preauth] authorization fields", {
+      walletClientId,
+      scope: scope || null,
+      configurationId,
+      hasAuthorizationDetails: !!authorization_details,
+      asAuthDetailsTypes: authorizationServerMeta?.authorization_details_types_supported ?? null,
+    });
   } catch {}
+  try {
+    assertAuthorizationDetailsSupportForCredentialRequest({
+      configurationId,
+      issuerMeta,
+      offer,
+      grantType: "urn:ietf:params:oauth:grant-type:pre-authorized_code",
+      authorizationServerMeta,
+    });
+  } catch (err) {
+    const errorMessage = err?.message || String(err);
+    console.error("[preauth] authorization parameter check failed:", errorMessage);
+    try { slog("[preauth] authorization parameter check failed", { error: errorMessage }); } catch {}
+    throw err;
+  }
+  if (!authorizationServerMeta) {
+    const authorizationServers = Array.isArray(issuerMeta.authorization_servers)
+      ? issuerMeta.authorization_servers
+      : issuerMeta.authorization_server
+        ? [issuerMeta.authorization_server]
+        : [];
+    const asBase =
+      authorizationServer || authorizationServers[0] || issuerMeta.credential_issuer || apiBase;
+    try {
+      authorizationServerMeta = await discoverAuthorizationServerMetadata(asBase, logSessionId);
+    } catch (error) {
+      console.warn("[preauth] AS metadata for attestation challenge skipped:", error?.message || error);
+      try {
+        slog("[preauth] attestation challenge AS discovery skipped", {
+          error: error?.message || String(error),
+        });
+      } catch {}
+    }
+  }
+  const attestationChallengeState = await createIssuanceAttestationChallengeState(
+    authorizationServerMeta,
+    logSessionId,
+    "[preauth]",
+  );
   const tokenExchange = await exchangeToken({
     tokenEndpoint,
     tokenPayload: {
@@ -1131,7 +1362,9 @@ async function runPreAuthorizedIssuance(
     deviceKeyPath,
     log: slog,
     logPrefix: "[preauth]",
+    challengeState: attestationChallengeState,
   });
+  const dpopNonceState = tokenExchange.dpopNonceState;
   const tokenBody = tokenExchange.tokenBody;
   dpopPrivateJwk = tokenExchange.dpopPrivateJwk;
   dpopPublicJwk = tokenExchange.dpopPublicJwk;
@@ -1139,6 +1372,8 @@ async function runPreAuthorizedIssuance(
   const { c_nonce, c_nonce_expires_in } = await fetchCredentialNonce({
     tokenBody,
     nonceEndpoint: issuerMeta.nonce_endpoint,
+    dpopNonceState, dpopPrivateJwk, dpopPublicJwk,
+    resourceServer: issuerMeta.credential_issuer || apiBase,
     accessToken,
     postJson: (url, body, dpopHeader, extraHeaders) =>
       httpPostJson(
@@ -1171,6 +1406,7 @@ async function runPreAuthorizedIssuance(
     proofJwt,
     credentialResponseDecryptionKey,
   } = await buildCredentialRequest({
+    issuerMeta,
     configurationId,
     tokenBody,
     proofMode,
@@ -1179,6 +1415,7 @@ async function runPreAuthorizedIssuance(
     c_nonce,
     keyPairs,
     selectedAlg,
+    clientId: walletClientId,
     buildCredentialRequestProofs,
     buildCredentialRequestSelector,
     prepareCredentialResponseEncryption: () => prepareCredentialResponseEncryption(issuerMeta),
@@ -1199,6 +1436,7 @@ async function runPreAuthorizedIssuance(
   }
   try { slog("[preauth] credential request", { configurationId, proofMode, hasProofJwt: !!proofJwt }); } catch {}
   const initialCredentialResponse = await postCredentialRequest({
+    dpopNonceState,
     credentialEndpoint,
     credentialRequest: credReq,
     accessToken,
@@ -1217,6 +1455,7 @@ async function runPreAuthorizedIssuance(
 
   const credBody = initialCredentialResponse.status === 202
     ? await pollDeferredCredential({
+        dpopNonceState,
         deferredEndpoint: issuerMeta.credential_deferred_endpoint || `${apiBase}/credential_deferred`,
         transactionId: initialCredentialResponse.body.transaction_id,
         initialInterval: initialCredentialResponse.body.interval,
@@ -1262,6 +1501,7 @@ async function runPreAuthorizedIssuance(
         publicJwk: k.publicJwk,
         didJwk: k.didJwk,
       })),
+      dpopNonceState,
       metadata: { configurationId, c_nonce, c_nonce_expires_in },
       authorizationServerMeta: issuerMeta._authorizationServerMeta,
       accessToken,
@@ -1371,7 +1611,7 @@ async function runAuthorizationCodeIssuance(
   const authorizeUrl = new URL((authorizeEndpoint || apiBase + "/authorize"));
   const { codeVerifier, codeChallenge, codeChallengeMethod } = createPkcePair();
   const state = randomState();
-  const redirectUri = "openid4vp://";
+  const redirectUri = resolveRedirectUriForFlow(process.env, false);
 
   const walletClientId = await resolveWalletInstanceClientId();
   const { scope, authorization_details } = buildIssuanceAuthorizationFields({
@@ -1381,16 +1621,34 @@ async function runAuthorizationCodeIssuance(
     grantType: "authorization_code",
     credentialIssuer: issuerMeta?.credential_issuer || apiBase,
   });
-  assertAuthorizationDetailsSupportForCredentialRequest({
-    configurationId,
-    issuerMeta,
-    offer,
-    grantType: "authorization_code",
-    authorizationServerMeta,
-  });
   try {
-    slog("[codeflow] authorization fields", { walletClientId, scope, configurationId });
+    slog("[codeflow] authorization fields", {
+      walletClientId,
+      scope: scope || null,
+      configurationId,
+      hasAuthorizationDetails: !!authorization_details,
+      asAuthDetailsTypes: authorizationServerMeta?.authorization_details_types_supported ?? null,
+    });
   } catch {}
+  try {
+    assertAuthorizationDetailsSupportForCredentialRequest({
+      configurationId,
+      issuerMeta,
+      offer,
+      grantType: "authorization_code",
+      authorizationServerMeta,
+    });
+  } catch (err) {
+    const errorMessage = err?.message || String(err);
+    console.error("[codeflow] authorization parameter check failed:", errorMessage);
+    try { slog("[codeflow] authorization parameter check failed", { error: errorMessage }); } catch {}
+    throw err;
+  }
+  const attestationChallengeState = await createIssuanceAttestationChallengeState(
+    authorizationServerMeta,
+    logSessionId,
+    "[codeflow]",
+  );
   const authzParams = {
     response_type: "code",
     ...(issuerState ? { issuer_state: issuerState } : {}),
@@ -1403,6 +1661,9 @@ async function runAuthorizationCodeIssuance(
     authorization_details,
   };
 
+  const parBinding = await ensureOrCreateEcKeyPair(deviceKeyPath, "ES256");
+  const parNonceState = createDpopNonceState();
+  parNonceState.authorizationServer = authorizationServerIssuer;
   // RFC001 authorization-code flow requires PAR; direct authorization fallback is not permitted.
   let finalAuthorizeUrl = authorizeUrl.toString();
   if (!parEndpoint) {
@@ -1410,21 +1671,30 @@ async function runAuthorizationCodeIssuance(
   }
   {
     try {
-      const parWia = await resolveWiaForParOrToken({
-        endpointAudience: parEndpoint,
-        authorizationServerIssuer,
-        clientId: walletClientId,
+      const parRes = await postFormWithWiaAttestationChallengeRetry({
+        postForm: (url, params, dpopHeader, extraHeaders) =>
+          httpPostForm(url, params, logSessionId, dpopHeader, extraHeaders),
+        url: parEndpoint,
+        params: authzParams,
+        dpopBinding: parBinding,
+        nonceState: parNonceState,
+        resolveWiaForParOrToken,
+        wiaOptions: {
+          endpointAudience: parEndpoint,
+          authorizationServerIssuer,
+          clientId: walletClientId,
+          cnfKeyPair: parBinding,
+        },
+        challengeState: attestationChallengeState,
       });
-      const parWiaHeaders = parWia.wiaHeaders;
       console.log("[codeflow][par] WIA for PAR validated");
       try {
-        slog("[codeflow][par] PAR WIA", { walletInstanceId: parWia.walletInstanceId });
+        slog("[codeflow][par] PAR WIA", { endpoint: parEndpoint });
       } catch {}
 
-      const parRes = await httpPostForm(parEndpoint, authzParams, logSessionId, null, parWiaHeaders);
       console.log("[codeflow][par] endpoint=", parEndpoint, "status=", parRes.status); try { slog("[codeflow][par] endpoint", { endpoint: parEndpoint, status: parRes.status }); } catch {}
       if (parRes.ok) {
-        const parBody = await parRes.json().catch(() => ({}));
+        const parBody = await readFetchResponseJson(parRes);
         const requestUri = parBody.request_uri;
         console.log("[codeflow][par] request_uri=", requestUri, "expires_in=", parBody.expires_in); try { slog("[codeflow][par] request_uri", { requestUri, expiresIn: parBody.expires_in }); } catch {}
         if (requestUri) {
@@ -1473,6 +1743,7 @@ async function runAuthorizationCodeIssuance(
   console.log("[codeflow] redirectUrl:", redirectUrl); try { slog("[codeflow] redirectUrl", { url: redirectUrl }); } catch {}
   const redirect = new URL(redirectUrl);
   const code = redirect.searchParams.get("code");
+  if (redirect.searchParams.get("state") !== state) throw new Error("invalid_state: authorization response state mismatch");
   if (!code) throw new Error("invalid_response: Authorization code missing");
 
   let tokenEndpoint = issuerMeta.token_endpoint || tokenEndpointFromAS || null;
@@ -1503,13 +1774,17 @@ async function runAuthorizationCodeIssuance(
       authorization_details,
     },
     authorizationServerIssuer: codeflowAsIssuer,
+    tokenBinding: parBinding,
+    dpopNonceState: parNonceState,
     ensureOrCreateEcKeyPair,
     createDPoP,
-    resolveWiaForParOrToken: ({ endpointAudience, authorizationServerIssuer: issuer }) =>
+    resolveWiaForParOrToken: ({ endpointAudience, authorizationServerIssuer: issuer, challenge, cnfKeyPair }) =>
       resolveWiaForParOrToken({
         endpointAudience,
         authorizationServerIssuer: issuer,
+        cnfKeyPair,
         clientId: walletClientId,
+        challenge,
       }),
     shouldRetryTokenExchangeAfterRotatingWalletProviderKey,
     rotateWalletProviderKeyPair,
@@ -1518,7 +1793,9 @@ async function runAuthorizationCodeIssuance(
     deviceKeyPath,
     log: slog,
     logPrefix: "[codeflow]",
+    challengeState: attestationChallengeState,
   });
+  const dpopNonceState = tokenExchange.dpopNonceState;
   const tokenBody = tokenExchange.tokenBody;
   dpopPrivateJwk = tokenExchange.dpopPrivateJwk;
   dpopPublicJwk = tokenExchange.dpopPublicJwk;
@@ -1526,6 +1803,8 @@ async function runAuthorizationCodeIssuance(
   const { c_nonce, c_nonce_expires_in } = await fetchCredentialNonce({
     tokenBody,
     nonceEndpoint: issuerMeta.nonce_endpoint,
+    dpopNonceState, dpopPrivateJwk, dpopPublicJwk,
+    resourceServer: issuerMeta.credential_issuer || apiBase,
     accessToken,
     postJson: (url, body, dpopHeader, extraHeaders) =>
       httpPostJson(
@@ -1557,6 +1836,7 @@ async function runAuthorizationCodeIssuance(
     credentialRequest: credReq,
     credentialResponseDecryptionKey: credentialResponseDecryptionKeyCode,
   } = await buildCredentialRequest({
+    issuerMeta,
     configurationId,
     tokenBody,
     proofMode,
@@ -1565,6 +1845,7 @@ async function runAuthorizationCodeIssuance(
     c_nonce,
     keyPairs,
     selectedAlg: selectedAlg2,
+    clientId: walletClientId,
     buildCredentialRequestProofs,
     buildCredentialRequestSelector,
     prepareCredentialResponseEncryption: () => prepareCredentialResponseEncryption(issuerMeta),
@@ -1573,6 +1854,7 @@ async function runAuthorizationCodeIssuance(
   console.log("[codeflow] requesting credential..."); try { slog("[codeflow] requesting credential"); } catch {}
   console.log("[codeflow] credential request:", JSON.stringify({ ...credReq, proofs: redactProofsForLog(credReq.proofs) }, null, 2)); try { slog("[codeflow] credential request body", { hasBody: true }); } catch {}
   const initialCredentialResponse = await postCredentialRequest({
+    dpopNonceState,
     credentialEndpoint,
     credentialRequest: credReq,
     accessToken,
@@ -1591,6 +1873,7 @@ async function runAuthorizationCodeIssuance(
 
   const credBody = initialCredentialResponse.status === 202
     ? await pollDeferredCredential({
+        dpopNonceState,
         deferredEndpoint: issuerMeta.credential_deferred_endpoint || `${apiBase}/credential_deferred`,
         transactionId: initialCredentialResponse.body.transaction_id,
         initialInterval: initialCredentialResponse.body.interval,
@@ -1636,6 +1919,7 @@ async function runAuthorizationCodeIssuance(
         publicJwk: k.publicJwk,
         didJwk: k.didJwk,
       })),
+      dpopNonceState,
       metadata: { configurationId, c_nonce, c_nonce_expires_in },
       authorizationServerMeta: issuerMeta._authorizationServerMeta,
       accessToken,
@@ -1680,6 +1964,7 @@ async function validateAndStoreCredential({
   tokenBody,
   dpopPrivateJwk,
   dpopPublicJwk,
+  dpopNonceState,
 }, logSessionId) {
   const slog = logSessionId ? makeSessionLogger(logSessionId) : (() => {});
 
@@ -1785,6 +2070,7 @@ async function validateAndStoreCredential({
     await postCredentialAcceptedNotification({
       notificationEndpoint,
       notificationId,
+      dpopNonceState,
       accessToken,
       tokenBody,
       dpopPrivateJwk,
@@ -2315,4 +2601,16 @@ async function verifyJwsWithDid(jws, header, didOrIss) {
     }
   }
   throw lastErr || new Error('DID verification failed');
+}
+
+const { getAuthCodeIssuance: getAuthCodeIssuanceImpl } = createAuthCodeIssuanceHost({
+  discoverAuthorizationServerMetadata,
+  httpPostForm,
+  httpPostJson,
+  validateAndStoreCredential,
+  sleep,
+});
+
+function getAuthCodeIssuance() {
+  return getAuthCodeIssuanceImpl();
 }

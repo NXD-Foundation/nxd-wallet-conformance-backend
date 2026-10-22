@@ -10,7 +10,7 @@ describe("scope-less credential authorization", () => {
       issuerMeta: { credential_configurations_supported: { pid: {} } },
     };
     expect(() => assertAuthorizationDetailsSupportForCredentialRequest(request)).to.throw(
-      "authorization_details support is required",
+      /issuer_metadata_incomplete[\s\S]*authorization_details_types_supported/i,
     );
     expect(() => assertAuthorizationDetailsSupportForCredentialRequest({
       ...request,

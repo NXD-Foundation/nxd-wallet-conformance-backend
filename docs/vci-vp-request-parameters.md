@@ -30,7 +30,10 @@ http://localhost:3000/vp/request?profile=dcql&credential_profile=pid&client_id_s
 http://localhost:3000/vp/request?profile=dcql&credential_profile=mdl&client_id_scheme=x509_hash&request_uri_method=post&response_mode=direct_post.jwt&invocation_scheme=mdoc-openid4vp
 ```
 
-**Booking reference + PID · combined DCQL**
+**Accommodation Voucher + PID · combined DCQL**
+
+Requests `reservationReference` from the Accommodation Voucher
+(`booking_reference_credential`) and `family_name` from PID for guest-name matching.
 
 ```
 http://localhost:3000/vp/request?profile=dcql&credential_profile=booking_pid&client_id_scheme=x509_hash&request_uri_method=post&response_mode=direct_post.jwt&scheme=openid4vp
@@ -111,7 +114,7 @@ Returns JSON: **`qr`**, **`deepLink`**, **`sessionId`**, and sometimes **`invoca
 | | | **`mdl`** + **`credential_profile=mdl`**: tries `./data/presentation_definition_mdl.json`; if missing, default mDL DCQL. |
 | | | **`etsi`**: PID invocation defaults to **`eu-eaap`** when **`scheme` / `invocation_scheme`** omitted. |
 | | | **`rfc002`**: like **`etsi`** for **`x509` → `x509_hash`** mapping; PID invocation still defaults to **`openid4vp`**. |
-| **`credential_profile`** | Credential query preset | **`pid`** (default), **`pidfull`**, **`booking_pid`** (booking_reference_credential + PID), **`mdl`**. |
+| **`credential_profile`** | Credential query preset | **`pid`** (default), **`pidfull`**, **`booking_pid`** (Accommodation Voucher + PID; requests `reservationReference` + `family_name`), **`mdl`**. |
 | **`client_id_scheme`** | Verifier identity | **`x509`**, **`x509_hash`**, **`x509_san_dns`**, **`did:web`**, **`did:jwk`**. |
 | | | **`x509`** with **`profile=etsi` or `rfc002`** → **`x509_hash`**; else **`x509_san_dns`**. |
 | **`request_uri_method`** | Wallet fetch of JAR | **`post`** (default). Only **`post`** (lowercase) adds POST semantics; otherwise GET. |
@@ -248,3 +251,9 @@ curl -sS -G "http://localhost:3000/vp/request" \
 
 - [RFC001 — How to initiate VCI test cases](./rfc001-vci-test-case-initiation.md)
 - [VP verification wallet matrix](./vp-verification-wallet-matrix.md)
+
+### PID VCT compatibility on APTITUDE
+
+Both `urn:eu.europa.ec.eudi:pid:1` and `urn:eudi:pid:1` are supported for SD-JWT PID issuance with the same mock PID data. Select the desired type with `credentialType` on `/vci/offer` (or `credential_type` on `/vci/request`). For example: `/vci/offer?credentialType=urn:eudi:pid:1&sessionId=NEW_SESSION`.
+
+The `/vp/request` profiles `pid`, `pidfull`, `pnr_pid`, `boarding_pass_pid`, `booking_pid`, and `booking_pid_edc` accept either PID VCT through the PID query's `vct_values`. Profile names and the other credentials' VCTs are unchanged. For example: `/vp/request?profile=dcql&credential_profile=pnr_pid`.

@@ -181,7 +181,7 @@ describe('OIDC4VCI V1.0 - Metadata Discovery Compliance', () => {
       expect(metadata).to.have.property('credential_configurations_supported').that.is.an('object');
     });
 
-    it('MUST advertise A256GCM in credential_response_encryption', async () => {
+    it('MUST advertise A128GCM and A256GCM in credential_response_encryption (RFC001 P2-4)', async () => {
       const response = await request(app)
         .get('/.well-known/openid-credential-issuer')
         .expect(200);
@@ -189,15 +189,35 @@ describe('OIDC4VCI V1.0 - Metadata Discovery Compliance', () => {
       expect(response.body).to.have.property('credential_response_encryption').that.is.an('object');
       const encList = response.body.credential_response_encryption.enc_values_supported;
       expect(encList).to.be.an('array');
+      expect(encList).to.include('A128GCM');
       expect(encList).to.include('A256GCM');
     });
 
-    it('MUST not advertise an untrusted issuer_info registration certificate', async () => {
+    it('MUST include issuer_info with registration certificate and registrar dataset (RFC001 §7.7 SHALL 8)', async () => {
       const response = await request(app)
         .get('/.well-known/openid-credential-issuer')
         .expect(200);
 
-      expect(response.body).to.not.have.property('issuer_info');
+      expect(response.body).to.have.property('issuer_info').that.is.an('array').with.length.greaterThan(0);
+      const issuerInfo = response.body.issuer_info;
+      for (const entry of issuerInfo) {
+        expect(entry).to.have.keys('format', 'data');
+      }
+
+      const registrationCert = issuerInfo.find((entry) => entry.format === 'registration_cert');
+      expect(registrationCert, 'issuer_info must include format=registration_cert').to.exist;
+      expect(registrationCert.data).to.be.a('string').that.matches(/^[A-Za-z0-9+/=]+$/);
+      expect(registrationCert.data.length).to.be.greaterThan(100);
+
+      const registrarDataset = issuerInfo.find((entry) => entry.format === 'registrar_dataset');
+      expect(registrarDataset, 'issuer_info must include format=registrar_dataset').to.exist;
+      expect(registrarDataset.data).to.be.an('object');
+      expect(registrarDataset.data).to.include.keys(
+        'identifier',
+        'srvDescription',
+        'registryURI',
+        'providesAttestations',
+      );
     });
 
     it('MUST support signed issuer metadata with x5c when client requests application/jwt (RFC001 §7.7 SHALL 7)', async () => {
@@ -219,7 +239,9 @@ describe('OIDC4VCI V1.0 - Metadata Discovery Compliance', () => {
 
       expect(payload).to.have.property('credential_issuer', 'https://issuer.example.com');
       expect(payload).to.have.property('credential_endpoint', 'https://issuer.example.com/credential');
-      expect(payload).to.not.have.property('issuer_info');
+      expect(payload).to.have.property('issuer_info').that.is.an('array');
+      expect(payload.issuer_info.some((entry) => entry.format === 'registration_cert')).to.equal(true);
+      expect(payload.issuer_info.some((entry) => entry.format === 'registrar_dataset')).to.equal(true);
     });
 
     it('MUST include credential_issuer identifier in metadata', async () => {
@@ -1112,7 +1134,7 @@ describe('OIDC4VCI V1.0 - Metadata Discovery Compliance', () => {
       expect(response.body).to.not.have.property('batch_credential_endpoint');
     });
 
-    it('publishes only EUDI reference-wallet-supported credential formats', async () => {
+    it('RFC001 ETSI: issuer metadata MUST advertise SD-JWT VC (vc+sd-jwt or dc+sd-jwt), vc+jwt, and x509_attr in at least one credential configuration each', async () => {
       const response = await request(app)
         .get('/.well-known/openid-credential-issuer')
         .expect(200);
@@ -1122,32 +1144,8 @@ describe('OIDC4VCI V1.0 - Metadata Discovery Compliance', () => {
       const hasSdJwtVcFormat =
         formats.has('vc+sd-jwt') || formats.has('dc+sd-jwt');
       expect(hasSdJwtVcFormat, 'vc+sd-jwt or dc+sd-jwt').to.be.true;
-      expect(formats.has('vc+jwt'), 'vc+jwt').to.be.false;
-      expect(formats.has('x509_attr'), 'x509_attr').to.be.false;
-    });
-
-    it('publishes wallet-compatible jwt and attestation proof metadata', async () => {
-      const response = await request(app)
-        .get('/.well-known/openid-credential-issuer')
-        .expect(200);
-
-      const configurations = response.body.credential_configurations_supported;
-      expect(configurations).to.have.property('ETSIRfc001PidVcSdJwt');
-      expect(configurations).to.have.property('room_key_credential');
-      expect(configurations.room_key_credential.proof_types_supported).to.deep.include({
-        attestation: {
-          proof_signing_alg_values_supported: ['ES256'],
-          key_attestations_required: {},
-        },
-      });
-
-      for (const configuration of Object.values(configurations)) {
-        const proofTypes = Object.keys(configuration.proof_types_supported || {});
-        if (proofTypes.length > 0) {
-          expect(proofTypes).to.include('jwt');
-          expect(proofTypes).to.include('attestation');
-        }
-      }
+      expect(formats.has('vc+jwt'), 'vc+jwt').to.be.true;
+      expect(formats.has('x509_attr'), 'x509_attr').to.be.true;
     });
 
     it('MUST use authorization_servers (array) instead of authorization_server (string)', async () => {

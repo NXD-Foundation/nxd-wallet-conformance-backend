@@ -53,6 +53,7 @@ import {
   pemToBase64Der,
 } from "../../utils/sdjwtUtils.js";
 import jwt from "jsonwebtoken";
+import { loadAptitudeIssuerSigningMaterial } from "../../utils/aptitudeIssuerSigningMaterial.js";
 
 import {
   handleCredentialGenerationBasedOnFormat,
@@ -88,6 +89,12 @@ import {
   parseProofAttestationJwtFromCredentialProofs,
   verifyKeyAttestationProofChain,
 } from "../../utils/keyAttestationProof.js";
+import {
+  applyTokenClientBindingToSession,
+  assertOpenid4VciProofIssClaim,
+  getProofIssBindingFromSession,
+  resolveTokenClientBinding,
+} from "../../utils/openid4vciProofIss.js";
 
 const sharedRouter = express.Router();
 
@@ -113,6 +120,7 @@ async function dedupeAttestedKeysToCnfList(attestedKeys) {
   }
   return out;
 }
+
 const DPOP_MAX_IAT_SKEW_SECONDS = 300; // 5 minutes clock skew window
 const DPOP_MAX_FUTURE_IAT_SKEW_SECONDS = 60; // allow small future skew
 
@@ -329,7 +337,7 @@ const ERROR_MESSAGES = {
   INVALID_PROOF_PUBLIC_KEY: "Public key for proof verification not found in JWT header.",
   INVALID_PROOF_UNABLE: "Unable to determine public key for proof verification.",
   INVALID_PROOF_SIGNATURE: "Proof JWT signature verification failed",
-  INVALID_PROOF_ISS: "Proof JWT is missing sender identifier (iss claim).",
+  INVALID_PROOF_ISS: "Proof JWT iss claim is invalid.",
   INVALID_PROOF_TYP: "Proof JWT must use typ openid4vci-proof+jwt in the JWT header (OpenID4VCI1.0 §8.2)",
   INVALID_PROOF_NONCE: "Proof JWT nonce is invalid, expired, or already used.",
   INVALID_TRANSACTION: "Invalid transaction ID",
@@ -389,6 +397,139 @@ function credentialValidationError(message, errorCode) {
   return err;
 }
 
+/**
+ * Resolve which configuration ids are authorized for this pre-auth session/token exchange.
+ * Returns null for legacy single-credential sessions without offeredConfigurationIds.
+ */
+const resolveAuthorizedConfigurationIdsForPreAuthSession = (
+  session,
+  parsedAuthDetails,
+) => {
+  const offered = session?.offeredConfigurationIds;
+  if (!Array.isArray(offered) || offered.length === 0) {
+    return null;
+  }
+
+  if (!parsedAuthDetails || parsedAuthDetails.length === 0) {
+    return [...offered];
+  }
+
+  const authorized = [];
+  for (const entry of parsedAuthDetails) {
+    const resolvedId = resolveCredentialIdentifierFromOpenidCredentialEntry(entry);
+    if (!resolvedId) {
+      const err = new Error(
+        `authorization_details entry is missing a credential identifier (credential_configuration_id or equivalent). See ${SPEC_REFS.VCI_1_0}`,
+      );
+      err.errorCode = "invalid_request";
+      throw err;
+    }
+    if (!offered.includes(resolvedId)) {
+      const err = new Error(
+        `credential_configuration_id '${resolvedId}' was not included in the credential offer`,
+      );
+      err.errorCode = "invalid_request";
+      throw err;
+    }
+    if (!authorized.includes(resolvedId)) {
+      authorized.push(resolvedId);
+    }
+  }
+  return authorized;
+};
+
+/**
+ * Multi-credential authorization belongs to the access token, not the reusable
+ * pre-authorized-code session. Legacy sessions have no token map and retain
+ * their existing session-level behavior.
+ */
+const tokenAuthorizationFor = (sessionObject, accessToken) => {
+  if (!accessToken || !sessionObject?.tokenAuthorizations) return null;
+  return sessionObject.tokenAuthorizations[accessToken] || null;
+};
+
+const assertCredentialConfigurationAuthorizedForSession = (
+  sessionObject,
+  effectiveConfigurationId,
+  tokenAuthorization = null,
+) => {
+  const authorization = tokenAuthorization || sessionObject;
+  const authorized = authorization?.authorizedConfigurationIds;
+  if (!Array.isArray(authorized) || authorized.length === 0) {
+    const offered = sessionObject?.offeredConfigurationIds;
+    if (Array.isArray(offered) && offered.length > 0) {
+      throw credentialValidationError(
+        `Credential configuration '${effectiveConfigurationId}' is not authorized. Exchange the pre-authorized code for an access token before requesting credentials.`,
+        CREDENTIAL_REQUEST_ERROR_CODES.INVALID_CREDENTIAL_REQUEST,
+      );
+    }
+    return;
+  }
+
+  if (!authorized.includes(effectiveConfigurationId)) {
+    throw credentialValidationError(
+      `Credential configuration '${effectiveConfigurationId}' is not authorized for this access token`,
+      CREDENTIAL_REQUEST_ERROR_CODES.INVALID_CREDENTIAL_REQUEST,
+    );
+  }
+
+  const issued = authorization.issuedConfigurationIds || [];
+  if (issued.includes(effectiveConfigurationId)) {
+    throw credentialValidationError(
+      `Credential configuration '${effectiveConfigurationId}' has already been issued in this pre-authorized session`,
+      CREDENTIAL_REQUEST_ERROR_CODES.INVALID_CREDENTIAL_REQUEST,
+    );
+  }
+};
+
+const applySessionCredentialPayloadForConfiguration = (
+  sessionObject,
+  effectiveConfigurationId,
+) => {
+  if (
+    sessionObject?.credentialPayloads &&
+    typeof sessionObject.credentialPayloads === "object" &&
+    sessionObject.credentialPayloads[effectiveConfigurationId]
+  ) {
+    sessionObject.credentialPayload =
+      sessionObject.credentialPayloads[effectiveConfigurationId];
+  }
+};
+
+const recordIssuedConfigurationAndUpdateSessionStatus = (
+  sessionObject,
+  effectiveConfigurationId,
+  tokenAuthorization = null,
+) => {
+  const authorization = tokenAuthorization || sessionObject;
+  if (!Array.isArray(authorization?.authorizedConfigurationIds)) {
+    sessionObject.status = "success";
+    return;
+  }
+
+  const issued = Array.isArray(authorization.issuedConfigurationIds)
+    ? [...authorization.issuedConfigurationIds]
+    : [];
+
+  if (!issued.includes(effectiveConfigurationId)) {
+    issued.push(effectiveConfigurationId);
+  }
+  authorization.issuedConfigurationIds = issued;
+
+  const allIssued = authorization.authorizedConfigurationIds.every((id) =>
+    issued.includes(id),
+  );
+  authorization.status = allIssued ? "success" : "pending";
+
+  // A session can hold more than one token authorization. It is complete only
+  // after every issued token's authorized set is complete; legacy sessions
+  // still have a single session-level authorization and follow the same result.
+  const tokenAuthorizations = Object.values(sessionObject.tokenAuthorizations || {});
+  sessionObject.status = tokenAuthorizations.length > 0
+    ? (tokenAuthorizations.every((entry) => entry.status === "success") ? "success" : "pending")
+    : authorization.status;
+};
+
 // Helper function to extract sessionId from sessionKey
 // sessionKey can be in format "code-flow-sessions:uuid" or just "uuid"
 const extractSessionId = (sessionKey) => {
@@ -410,30 +551,40 @@ const loadIssuerConfig = () => {
   }
 };
 
-// Load cryptographic keys
+// Load OAuth / JWE keys used by the token and credential endpoints.
 const loadCryptographicKeys = () => {
   try {
     const privateKey = fs.readFileSync("./private-key.pem", "utf-8");
     const publicKeyPem = fs.readFileSync("./public-key.pem", "utf-8");
-    const privateKeyPemX509 = fs.readFileSync("./x509EC/ec_private_pkcs8.key", "utf8");
-    const certificatePemX509 = fs.readFileSync("./x509EC/client_certificate.crt", "utf8");
-
-    return {
-      privateKey,
-      publicKeyPem,
-      privateKeyPemX509,
-      certificatePemX509
-    };
+    return { privateKey, publicKeyPem };
   } catch (error) {
     console.error("Error loading cryptographic keys:", error);
     throw new Error("Failed to load cryptographic keys");
   }
 };
 
+// Load Aptitude leaf signing material for module-level SD-JWT/X509 helpers.
+const loadX509CredentialSigningMaterial = () => {
+  try {
+    const {
+      privateKeyPkcs8: privateKeyPemX509,
+      leafCertificatePem: certificatePemX509,
+    } = loadAptitudeIssuerSigningMaterial();
+
+    return { privateKeyPemX509, certificatePemX509 };
+  } catch (error) {
+    console.error("Error loading X509 credential signing material:", error);
+    throw new Error("Failed to load X509 credential signing material");
+  }
+};
+
 // Initialize cryptographic components
 const initializeCrypto = async () => {
   try {
-    const keys = loadCryptographicKeys();
+    const keys = {
+      ...loadCryptographicKeys(),
+      ...loadX509CredentialSigningMaterial(),
+    };
     const { signer, verifier } = await createSignerVerifierX509(
       keys.privateKeyPemX509,
       keys.certificatePemX509
@@ -724,6 +875,7 @@ const verifyProofJWT = async (
   publicKeyForProof,
   flowType,
   sessionId = null,
+  sessionObject = null,
   httpReq = null,
 ) => {
   try {
@@ -739,17 +891,20 @@ const verifyProofJWT = async (
       }
     );
 
-    // Holder PoP in proofs.jwt (OpenID4VCI1.0 §8.2; RFC001 §7.5): iss required in every flow.
-    // proofs.attestation uses verifyKeyAttestationProofChain (key-attestation JWT), not this path.
-    if (!proofPayload.iss) {
-      throw new Error(`${ERROR_MESSAGES.INVALID_PROOF_ISS}. Received: payload without iss claim, expected: payload with iss claim. See ${SPEC_REFS.VCI_PROOF}`);
-    }
+    const { tokenClientId, anonymousAccess } = getProofIssBindingFromSession(sessionObject);
+    assertOpenid4VciProofIssClaim({
+      iss: proofPayload.iss,
+      tokenClientId,
+      anonymousAccess,
+    });
 
     if (sessionId) {
       logInfo(sessionId, "Proof JWT signature and claims validated successfully", {
         walletIssuer: proofPayload.iss,
         nonceVerified: true,
-        flowType
+        flowType,
+        tokenClientId,
+        anonymousAccess,
       }).catch(() => {});
     }
     return proofPayload;
@@ -807,6 +962,7 @@ const handlePreAuthorizedCodeFlow = async (
   dpopCnf = null,
   txCodeFromRequest = undefined,
   httpReq = null,
+  tokenClientBinding = null,
 ) => {
   const existingPreAuthSession = await getPreAuthSession(preAuthorizedCode);
   
@@ -820,9 +976,30 @@ const handlePreAuthorizedCodeFlow = async (
         ? ""
         : String(txCodeFromRequest).trim();
     if (!normalizedTxCode) {
-      throw new Error(
+      const err = new Error(
         `${ERROR_MESSAGES.INVALID_GRANT} Received: missing or empty tx_code, expected: non-empty tx_code in token request because the credential offer included tx_code (RFC001 §6.2.6 / OID4VCI 1.0).`,
       );
+      err.errorCode = "invalid_grant";
+      throw err;
+    }
+    const expectedRaw = existingPreAuthSession.expectedTxCode;
+    const expected =
+      expectedRaw === undefined || expectedRaw === null
+        ? ""
+        : String(expectedRaw).trim();
+    if (!expected) {
+      const err = new Error(
+        `${ERROR_MESSAGES.INVALID_GRANT} Received: tx_code required but issuer session has no expectedTxCode; pre-authorized offers with tx_code must store an expected code at offer creation.`,
+      );
+      err.errorCode = "invalid_grant";
+      throw err;
+    }
+    if (normalizedTxCode !== expected) {
+      const err = new Error(
+        "Invalid or missing tx_code for pre-authorized issuance when tx_code is advertised in the Credential Offer",
+      );
+      err.errorCode = "invalid_grant";
+      throw err;
     }
   }
 
@@ -847,6 +1024,12 @@ const handlePreAuthorizedCodeFlow = async (
 
   const parsedAuthDetails = parseAuthorizationDetails(authorizationDetails);
 
+  const authorizedConfigurationIds =
+    resolveAuthorizedConfigurationIdsForPreAuthSession(
+      existingPreAuthSession,
+      parsedAuthDetails,
+    );
+
   const generatedAccessToken = buildAccessToken(
     getPublicIssuerBaseUrl(httpReq),
     loadCryptographicKeys().privateKey,
@@ -855,9 +1038,25 @@ const handlePreAuthorizedCodeFlow = async (
   const cNonceForSession = generateNonce();
   await storeNonce(cNonceForSession, NONCE_EXPIRES_IN);
 
-  // Update session
+  // A pre-authorized code can be exchanged again in this test service. Bind
+  // the offered subset and its issuance progress to this particular token so
+  // a later exchange cannot alter an earlier token's permissions.
+  if (authorizedConfigurationIds) {
+    existingPreAuthSession.tokenAuthorizations =
+      existingPreAuthSession.tokenAuthorizations || {};
+    existingPreAuthSession.tokenAuthorizations[generatedAccessToken] = {
+      authorizedConfigurationIds: [...authorizedConfigurationIds],
+      issuedConfigurationIds: [],
+      status: "pending",
+    };
+    existingPreAuthSession.status = "pending";
+  }
+
+  // Keep these legacy fields for existing single-credential sessions and
+  // compatibility callers. Multi-credential enforcement reads the map above.
   existingPreAuthSession.accessToken = generatedAccessToken;
   existingPreAuthSession.c_nonce = cNonceForSession;
+  applyTokenClientBindingToSession(existingPreAuthSession, tokenClientBinding);
 
   await storePreAuthSession(preAuthorizedCode, existingPreAuthSession);
 
@@ -891,6 +1090,7 @@ const handleAuthorizationCodeFlow = async (
   tokenRequestClientId = undefined,
   tokenRequestRedirectUri = undefined,
   httpReq = null,
+  tokenClientBinding = null,
 ) => {
   const issuanceSessionId = await getSessionKeyAuthCode(code);
   
@@ -1026,6 +1226,7 @@ const handleAuthorizationCodeFlow = async (
   // Update session
   existingCodeSession.requests.accessToken = generatedAccessToken;
   existingCodeSession.c_nonce = cNonceForSession;
+  applyTokenClientBindingToSession(existingCodeSession, tokenClientBinding);
 
   await storeCodeFlowSession(
     existingCodeSession.results.issuerState,
@@ -1586,6 +1787,17 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
 
     let tokenResponse;
 
+    const tokenClientBinding = resolveTokenClientBinding({
+      grantType: grant_type,
+      bodyClientId: req.body?.client_id,
+      attestationResult,
+    });
+    if (slog) {
+      try {
+        slog("[TOKEN] Client binding for credential proof iss", tokenClientBinding);
+      } catch {}
+    }
+
     if (
       grant_type ===
       "urn:ietf:params:oauth:grant-type:pre-authorized_code"
@@ -1599,6 +1811,7 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
         dpopCnf,
         tx_code,
         req,
+        tokenClientBinding,
       );
     } else if (grant_type === "authorization_code") {
       if (slog) {
@@ -1619,6 +1832,7 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
         req.body?.client_id,
         redirect_uri,
         req,
+        tokenClientBinding,
       );
     } else {
       if (slog) {
@@ -1711,6 +1925,13 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
       });
     }
 
+    if (error.errorCode === "invalid_grant") {
+      return res.status(400).json({
+        error: "invalid_grant",
+        error_description: error.message,
+      });
+    }
+
     if (
       error.message.includes(ERROR_MESSAGES.INVALID_GRANT) ||
       error.message.includes(ERROR_MESSAGES.INVALID_GRANT_CODE) ||
@@ -1740,7 +1961,7 @@ sharedRouter.post("/credential", async (req, res) => {
   let sessionId = null;
   let slog = null;
   let requestId = null;
-  const enforceEtsiIssuance = isEtsiIssuanceProfileEnforced();
+  let tokenAuthorization = null;
   
   try {
     const requestBody = await parseCredentialEndpointBody(req);
@@ -1773,6 +1994,7 @@ sharedRouter.post("/credential", async (req, res) => {
     flowType = sessionData.flowType;
     sessionKey = sessionData.sessionKey;
     sessionId = extractSessionId(sessionKey);
+    tokenAuthorization = tokenAuthorizationFor(sessionObject, token);
     
     // Create session logger if we have a sessionId
     if (sessionId) {
@@ -1816,6 +2038,26 @@ sharedRouter.post("/credential", async (req, res) => {
       });
     }
 
+    try {
+      assertCredentialConfigurationAuthorizedForSession(
+        sessionObject,
+        effectiveConfigurationId,
+        tokenAuthorization,
+      );
+      applySessionCredentialPayloadForConfiguration(
+        sessionObject,
+        effectiveConfigurationId,
+      );
+    } catch (bindingError) {
+      if (bindingError.errorCode === CREDENTIAL_REQUEST_ERROR_CODES.INVALID_CREDENTIAL_REQUEST) {
+        return res.status(400).json({
+          error: CREDENTIAL_REQUEST_ERROR_CODES.INVALID_CREDENTIAL_REQUEST,
+          error_description: bindingError.message,
+        });
+      }
+      throw bindingError;
+    }
+
     const issuerConfigForCredential = loadIssuerConfig();
     const credConfigForCredential =
       effectiveConfigurationId &&
@@ -1854,9 +2096,14 @@ sharedRouter.post("/credential", async (req, res) => {
           try { slog("[CREDENTIAL] WUA validated successfully", { wuaIssuer: wuaValidationResult.payload?.iss, wuaExp: wuaValidationResult.payload?.exp, hasAttestedKeys: Array.isArray(wuaValidationResult.payload?.attested_keys) && wuaValidationResult.payload.attested_keys.length > 0 }); } catch {}
         }
       } else {
+        const kaError = `${ERROR_MESSAGES.INVALID_PROOF}: Wallet Unit Attestation in key_attestation could not be validated. ${wuaValidationResult.error || ""}`.trim();
         if (slog) {
-          try { slog("[CREDENTIAL] [WARN] WUA validation failed (continuing without WUA)", { error: wuaValidationResult.error }); } catch {}
+          try { slog("[CREDENTIAL] [ERROR] WUA validation failed", { error: wuaValidationResult.error }); } catch {}
         }
+        return res.status(400).json({
+          error: "invalid_proof",
+          error_description: kaError,
+        });
       }
     } else {
       if (slog) {
@@ -1926,20 +2173,30 @@ sharedRouter.post("/credential", async (req, res) => {
 
         // Mode (3): attestation proof — verify key-attestation JWT and bind credential to attested_keys (no holder PoP JWT).
         if (isAttestationProof) {
-          const { cnf, attestedKeys } = await verifyKeyAttestationProofChain(
-            requestBody.proofAttestationJwt,
-            credConfigForProof,
-            issuerConfigForProof,
-            SPEC_REFS.VCI_PROOF
-          );
-          requestBody._credentialBindingCnf = cnf;
-          requestBody._attestedKeys = attestedKeys;
-          requestBody._credentialBindingCnfList = await dedupeAttestedKeysToCnfList(attestedKeys);
-          if (sessionId) {
-            await logInfo(sessionId, "Key attestation proof validated", {
-              effectiveConfigurationId,
-              attestedKeysCount: attestedKeys.length,
-            }).catch(() => {});
+          try {
+            const { cnf, attestedKeys } = await verifyKeyAttestationProofChain(
+              requestBody.proofAttestationJwt,
+              credConfigForProof,
+              issuerConfigForProof,
+              SPEC_REFS.VCI_PROOF
+            );
+            requestBody._credentialBindingCnf = cnf;
+            requestBody._attestedKeys = attestedKeys;
+            requestBody._credentialBindingCnfList = await dedupeAttestedKeysToCnfList(attestedKeys);
+            if (sessionId) {
+              await logInfo(sessionId, "Key attestation proof validated", {
+                effectiveConfigurationId,
+                attestedKeysCount: attestedKeys.length,
+              }).catch(() => {});
+            }
+          } catch (error) {
+            if (sessionId) {
+              await logWarn(sessionId, "Key-attestation proof validation failed; rejecting credential request", {
+                effectiveConfigurationId,
+                error: error?.message || String(error),
+              }).catch(() => {});
+            }
+            throw error;
           }
         } else {
           // Mode (1) baseline: JWT proof — verify holder PoP ("I control this key right now") for cnf binding.
@@ -1952,16 +2209,6 @@ sharedRouter.post("/credential", async (req, res) => {
 
           let publicKeyForProof;
           if (jwtProofRequiresKeyAttestation) {
-            const relaxDeviceBoundEtsiViolation = (errorMessage, check) => {
-              if (enforceEtsiIssuance) {
-                throw new Error(errorMessage);
-              }
-              logSoftEtsiIssuanceViolation(slog, "[CREDENTIAL]", errorMessage, {
-                check,
-                fallback: "proof_jwt_holder_binding",
-                credential_configuration_id: effectiveConfigurationId,
-              });
-            };
             const wuaCompact = headerForVerification.key_attestation;
             publicKeyForProof = await resolveProofJwtPublicJwk(headerForVerification, {
               sessionId,
@@ -1973,31 +2220,28 @@ sharedRouter.post("/credential", async (req, res) => {
               publicKeyForProof,
               flowType,
               sessionId,
+              sessionObject,
               req,
             );
             if (typeof wuaCompact !== "string" || !wuaCompact.trim()) {
-              relaxDeviceBoundEtsiViolation(
-                `${ERROR_MESSAGES.INVALID_PROOF}: proofs.jwt MUST include protected-header parameter 'key_attestation' (Wallet Unit Attestation) for this credential configuration (RFC001 §7.5.1). See ${SPEC_REFS.VCI_PROOF}`,
-                "key_attestation_presence",
+              throw new Error(
+                `${ERROR_MESSAGES.INVALID_PROOF}: proofs.jwt MUST include protected-header parameter 'key_attestation' (Wallet Unit Attestation) for this credential configuration (RFC001 §7.5.1). See ${SPEC_REFS.VCI_PROOF}`
               );
             } else {
               const wuaStrict = await validateWUA(wuaCompact, sessionId, issuerConfigForProof);
               if (!wuaStrict.valid) {
-                relaxDeviceBoundEtsiViolation(
-                  `${ERROR_MESSAGES.INVALID_PROOF}: Wallet Unit Attestation in key_attestation could not be validated. ${wuaStrict.error || ""}`.trim(),
-                  "key_attestation_validation",
+                throw new Error(
+                  `${ERROR_MESSAGES.INVALID_PROOF}: Wallet Unit Attestation in key_attestation could not be validated. ${wuaStrict.error || ""}`.trim()
                 );
               } else {
                 const attested = wuaStrict.payload?.attested_keys;
                 if (!Array.isArray(attested) || !attested[0] || typeof attested[0] !== "object") {
-                  relaxDeviceBoundEtsiViolation(
-                    `${ERROR_MESSAGES.INVALID_PROOF}: WUA attested_keys[0] is required for device-bound issuance (RFC001 §7.5.1). See ${SPEC_REFS.VCI_PROOF}`,
-                    "attested_keys_primary",
+                  throw new Error(
+                    `${ERROR_MESSAGES.INVALID_PROOF}: WUA attested_keys[0] is required for device-bound issuance (RFC001 §7.5.1). See ${SPEC_REFS.VCI_PROOF}`
                   );
                 } else if (!proofKeyMatchesWUAAttestedKeys(publicKeyForProof, wuaStrict.payload)) {
-                  relaxDeviceBoundEtsiViolation(
-                    `${ERROR_MESSAGES.INVALID_PROOF}: proof signing key MUST match WUA attested_keys[0] (RFC001 §7.5.1). See ${SPEC_REFS.VCI_PROOF}`,
-                    "proof_key_matches_attested_keys_0",
+                  throw new Error(
+                    `${ERROR_MESSAGES.INVALID_PROOF}: proof signing key MUST match WUA attested_keys[0] (RFC001 §7.5.1). See ${SPEC_REFS.VCI_PROOF}`
                   );
                 } else {
                   requestBody._credentialBindingCnfList = await dedupeAttestedKeysToCnfList(attested);
@@ -2023,6 +2267,7 @@ sharedRouter.post("/credential", async (req, res) => {
               publicKeyForProof,
               flowType,
               sessionId,
+              sessionObject,
               req,
             );
 
@@ -2195,10 +2440,14 @@ sharedRouter.post("/credential", async (req, res) => {
           } catch {}
         }
 
-        // Mark session as successful after credential issuance and store notification_id
+        // Mark session progress after credential issuance and store notification_id
         if (sessionObject && sessionKey) {
           try {
-            sessionObject.status = "success";
+            recordIssuedConfigurationAndUpdateSessionStatus(
+              sessionObject,
+              effectiveConfigurationId,
+              tokenAuthorization,
+            );
             sessionObject.notification_id = response.notification_id;
 
             if (flowType === "code") {

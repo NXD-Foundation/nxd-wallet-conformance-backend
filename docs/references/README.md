@@ -1,6 +1,10 @@
 # Reference Documents
 
-Fetched on `2026-07-15` to support the core specs in `docs/core/RFC001.md`, `docs/core/RFC002.md`, and `docs/core/RFC004.md`.
+Fetched on `2026-07-15` to support the core specs in `docs/core/`. Those
+APTITUDE RFCs were last refreshed from
+https://github.com/APTITUDE-Consortium/aptitude-eudi-wallet-specs/tree/main/docs/RFCs
+on `2026-09-24` (`RFC001.md` v1.0, `RFC002.md` Draft, `RFC003.md` v0.1,
+`RFC004.md` v0.1, `RFC005.md` Draft).
 
 ## Local copies
 
@@ -21,7 +25,7 @@ Fetched on `2026-07-15` to support the core specs in `docs/core/RFC001.md`, `doc
 - `eu/arf-v1.0.0.pdf`
   - Source download page: <https://digital-strategy.ec.europa.eu/en/library/european-digital-identity-wallet-architecture-and-reference-framework>
   - Direct download used: <https://ec.europa.eu/newsroom/dae/redirection/document/93678>
-  - Used by: RFC001, RFC002, RFC004
+  - Used by: RFC001, RFC002, RFC004, RFC005
 - `eu/eudi-wallet-arf-page.html`
   - Source: <https://digital-strategy.ec.europa.eu/en/library/european-digital-identity-wallet-architecture-and-reference-framework>
   - Notes: Saved as the landing page for the ARF publication.
@@ -30,10 +34,10 @@ Fetched on `2026-07-15` to support the core specs in `docs/core/RFC001.md`, `doc
 
 - `aptitude/deliverable-2.1-trust.html`
   - Source: <https://aptitude-consortium.github.io/wp2-trust-specifications/latest/deliverable-2.1-trust/>
-  - Used by: RFC004
+  - Used by: RFC003, RFC004
 - `aptitude/trust-management-process.html`
   - Source: <https://aptitude-consortium.github.io/wp2-trust-specifications/pr-46/pr-workspace/trust-management-process/>
-  - Used by: RFC004
+  - Used by: RFC003, RFC004
 
 ### IETF / RFCs
 
@@ -42,10 +46,10 @@ Fetched on `2026-07-15` to support the core specs in `docs/core/RFC001.md`, `doc
   - Used by: RFC004
 - `ietf/rfc2119.txt`
   - Source: <https://www.rfc-editor.org/rfc/rfc2119.txt>
-  - Used by: RFC001, RFC002, RFC004
+  - Used by: RFC001, RFC002, RFC003, RFC004, RFC005
 - `ietf/rfc8174.txt`
   - Source: <https://www.rfc-editor.org/rfc/rfc8174.txt>
-  - Used by: RFC001, RFC002, RFC004
+  - Used by: RFC001, RFC002, RFC003, RFC004, RFC005
 - `ietf/rfc5280.txt`
   - Source: <https://www.rfc-editor.org/rfc/rfc5280.txt>
   - Used by: RFC004
@@ -72,13 +76,13 @@ Notes:
 - Direct `curl` fetches returned ETSI Web Application Firewall HTML instead of the PDF payload.
 - The URLs are still the canonical document locations and can be opened in a browser when needed.
 - RFC001 references ETSI TS 119 472-3.
-- RFC002 references ETSI TS 119 472-2.
+- RFC002 and RFC005 reference ETSI TS 119 472-2.
 
 ### ISO documents
 
-The following standards are referenced by RFC002 but were not mirrored here as full text because they are typically distributed through ISO channels rather than as public direct-download documents:
+The following standards are referenced by RFC002 and RFC005 but were not mirrored here as full text because they are typically distributed through ISO channels rather than as public direct-download documents:
 
-- ISO/IEC TS 18013-7:2025
-- ISO/IEC 18013-5:2021
+- ISO/IEC TS 18013-7:2025 (RFC002 remote mdoc)
+- ISO/IEC 18013-5:2021 (RFC005 proximity)
 
 If you want, the next step can be adding browser-exported local copies or catalog/landing pages for the ISO and ETSI items as well.

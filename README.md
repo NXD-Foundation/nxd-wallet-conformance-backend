@@ -103,6 +103,14 @@ node server.js
 
 The service will start on `http://localhost:3000` by default.
 
+### Docker runtime keys
+
+The Docker image intentionally excludes private keys and certificates. Before
+running `docker compose up --build`, ensure the repository checkout contains
+`private-key.pem`, `public-key.pem`, `x509EC/`, and `certs/`; Compose mounts
+them read-only at runtime. This includes the EUDI issuer P12 and PID Issuer CA
+used for signed metadata and X.509 credential issuance.
+
 4. **Optional: Set custom server URL** (for HTTPS or tunneling):
 ```bash
 SERVER_URL="https://your-public-url.example.com" node server.js
@@ -388,7 +396,8 @@ Per RFC 9449:
 - **Wallet Unit Attestation (WUA)**: Optional validation of WUA JWT in credential requests
   - Validates WUA signature, claims, and expiration
   - Extracts WUA from proof JWT header `key_attestation` claim
-  - Validates `attested_keys` array and `eudi_wallet_info` structure
+  - Validates attestation signature and configured Wallet Provider certificate trust; the credential proof pipeline checks nonce and `attested_keys` binding
+  - Accepts current TS3 key attestations without the legacy `eudi_wallet_info` extension
   - Graceful degradation: continues without attestation if not provided (logs warning)
 
 ### Notification Endpoint
@@ -517,11 +526,9 @@ The implementation supports **EUDI Wallet Architecture and Reference Framework (
 - **Issuer Support**: Validates WUA JWT in credential requests
   - Extracts WUA from proof JWT header `key_attestation` claim
   - Validates WUA signature, claims, and expiration
-  - Validates `eudi_wallet_info` structure:
-    - `general_info`: General wallet information
-    - `key_storage_info`: Key storage information
+  - Uses the OpenID4VCI Appendix D key-attestation format (TS3 §2.3.2); legacy `eudi_wallet_info`, `general_info`, and `key_storage_info` are not required
   - Validates `attested_keys` array (required per spec)
-  - Validates optional `status` claim for revocation information
+  - Recognizes current `key_storage_status` and legacy `status` for diagnostics; revocation lookup is not implemented
   - Graceful degradation: continues without attestation if not provided (logs warning)
 
 - **Wallet Support**: Generates WUA JWT for credential endpoint requests
@@ -815,7 +822,7 @@ Per OID4VCI v1.0 Section 7.2:
 - **Proof format**: Uses `proofs` (plural) format per V1.0 specification
 - **Proof signing algorithms**: Supports `ES256`, `ES384`, `ES512`, `EdDSA` with algorithm negotiation
 - **Public key embedding**: Embeds JWK in proof JWT header (`jwk` claim)
-- **DID-based issuer**: Uses `did:jwk:` as proof issuer (`iss` claim)
+- **Proof issuer**: Sets the credential proof JWT `iss` to the OAuth `client_id` from the token request (OpenID4VCI 1.0 Appendix F.1). Omits `iss` for anonymous pre-authorized access. The holder key stays in the proof header `jwk`.
 - **Nonce handling**: Includes `c_nonce` from issuer in proof JWT payload
 - **Audience validation**: Sets proof audience to credential issuer identifier
 - **Proof type header**: Uses `typ: "openid4vci-proof+jwt"` in proof JWT header
@@ -1014,5 +1021,4 @@ This makes `wallet-client` a **comprehensive test wallet** that exercises all is
 - **RFC 7636**: [Proof Key for Code Exchange (PKCE)](https://www.rfc-editor.org/rfc/rfc7636.html)
 - **EUDI Wallet ARF**: [Architecture and Reference Framework](https://github.com/eu-digital-identity-wallet/eudi-doc-architecture-and-reference-framework/releases)
 - **ISO/IEC 18013-5:2021**: [Mobile driving licence (mDL)](https://www.iso.org/standard/69084.html)
-
 

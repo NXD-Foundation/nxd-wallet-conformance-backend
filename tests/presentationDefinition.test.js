@@ -6,6 +6,28 @@ import base64url from 'base64url';
 import jwt from 'jsonwebtoken';
 import { getSDsFromPresentationDef } from '../utils/vpHeplers.js';
 
+const PID_SD_JWT_VCTS = ['urn:eu.europa.ec.eudi:pid:1', 'urn:eudi:pid:1'];
+
+function collectPidVctFilters(node, found = []) {
+  if (!node || typeof node !== 'object') return found;
+  if (Array.isArray(node)) {
+    for (const item of node) collectPidVctFilters(item, found);
+    return found;
+  }
+  const paths = Array.isArray(node.path) ? node.path : [];
+  const isVctField = paths.some((entry) => entry === '$.vct' || entry === '$.vc.vct');
+  if (isVctField && node.filter) {
+    const values = [];
+    if (typeof node.filter.const === 'string') values.push(node.filter.const);
+    if (Array.isArray(node.filter.enum)) values.push(...node.filter.enum);
+    if (values.some((value) => PID_SD_JWT_VCTS.includes(value))) found.push(node.filter);
+  }
+  for (const value of Object.values(node)) {
+    if (value && typeof value === 'object') collectPidVctFilters(value, found);
+  }
+  return found;
+}
+
 function readPemBody(path) {
   return fs.readFileSync(path, 'utf8')
     .replace(/-----BEGIN CERTIFICATE-----/g, '')
@@ -69,7 +91,7 @@ describe('Presentation Definition (PE) structure - OID4VP v1.0', () => {
     assert.ok(allPaths.every(p => typeof p === 'string' && p.startsWith('$.')), 'All field paths must be JSONPath starting with $.');
 
     // Granular selectors: ensure specific claims are requested (data minimization)
-    const requiredClaims = ['given_name', 'family_name', 'birth_date', 'age_over_18'];
+    const requiredClaims = ['given_name', 'family_name', 'birthdate', 'nationalities'];
     for (const claim of requiredClaims) {
       const hasClaim = allPaths.some(p => p.endsWith(`.${claim}`) || p === `$.${claim}`);
       assert.ok(hasClaim, `PD must request granular claim: ${claim}`);
@@ -78,9 +100,25 @@ describe('Presentation Definition (PE) structure - OID4VP v1.0', () => {
     // Must not request entire credential objects
     assert.ok(!allPaths.includes('$') && !allPaths.includes('$.vc') && !allPaths.includes('$.credentialSubject'), 'PD must not target whole objects');
 
-    // Ensure vct filter is specific to EU PID
+    // Ensure vct filter accepts both supported SD-JWT PID types
     const vctField = id0.constraints.fields.find(f => Array.isArray(f.path) && f.path.some(p => p === '$.vct' || p === '$.vc.vct'));
-    assert.ok(vctField && vctField.filter && vctField.filter.const === 'urn:eu.europa.ec.eudi:pid:1', 'vct filter must target EU PID');
+    assert.ok(vctField && vctField.filter, 'vct filter is required');
+    assert.deepStrictEqual(vctField.filter.enum, PID_SD_JWT_VCTS, 'vct filter must accept both PID VCTs');
+    assert.strictEqual(vctField.filter.const, undefined, 'vct filter must not pin a single PID VCT');
+  });
+
+  it('combined PID presentation definitions accept both SD-JWT PID VCTs', () => {
+    const files = fs.readdirSync('./data').filter((name) => name.startsWith('presentation_definition') && name.endsWith('.json'));
+    const pidFilters = [];
+    for (const name of files) {
+      const pd = JSON.parse(fs.readFileSync(`./data/${name}`, 'utf8'));
+      for (const filter of collectPidVctFilters(pd)) pidFilters.push({ name, filter });
+    }
+    assert.ok(pidFilters.length >= 5, 'expected the primary PID definition and the combined presets');
+    for (const { name, filter } of pidFilters) {
+      assert.deepStrictEqual(filter.enum, PID_SD_JWT_VCTS, `${name} must accept both PID VCTs`);
+      assert.strictEqual(filter.const, undefined, `${name} must not pin a single PID VCT`);
+    }
   });
 
   it('Legacy SD-JWT PD should not be used for v1.0 (vc+sd-jwt present)', () => {

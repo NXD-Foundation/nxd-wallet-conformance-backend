@@ -14,8 +14,10 @@ import {
   createPreAuthCredentialOfferUri,
   createCredentialOfferResponse,
   createCredentialOfferConfig,
+  applyPreAuthTxCode,
   bindSessionLoggingContext,
   handleRouteError,
+  resolveVciOfferSignatureType,
 } from "../../utils/routeUtils.js";
 import {
   getCodeFlowSession,
@@ -55,7 +57,7 @@ vciStandardRouter.get("/vci/offer", async (req, res) => {
     const txCodeRequired = req.query.tx_code_required === "true";
     const credentialType = req.query.credential_type || getCredentialType(req);
     const credentialFormat = req.query.credential_format || "sd-jwt";
-    const signatureType = req.query.signature_type || getSignatureType(req);
+    const signatureType = resolveVciOfferSignatureType(req, credentialType);
     const issuance = resolveCodeFlowOfferIssuanceOptions(req);
 
     requestId = logHttpRequest(slog, "GET", "/vci/offer", req.headers, req.query);
@@ -143,14 +145,12 @@ vciStandardRouter.get("/vci/offer", async (req, res) => {
     }
     // Handle pre-authorized code flow
     else if (flow === "pre_authorized_code") {
-      const sessionData = createBaseSession(
+      const sessionData = applyPreAuthTxCode(createBaseSession(
         "pre-auth",
         false, // isHaip
-        internalSignatureType
-      );
-      if (txCodeRequired) {
-        sessionData.requireTxCode = true;
-      }
+        internalSignatureType,
+        txCodeRequired ? { requireTxCode: true } : {},
+      ));
 
       await storePreAuthSession(sessionId, sessionData);
 
@@ -167,7 +167,11 @@ vciStandardRouter.get("/vci/offer", async (req, res) => {
         invocationScheme,
       );
 
-      const response = await createCredentialOfferResponse(credentialOffer, sessionId);
+      const response = await createCredentialOfferResponse(
+        credentialOffer,
+        sessionId,
+        txCodeRequired ? sessionData.expectedTxCode : undefined,
+      );
 
       if (slog) {
         logHttpResponse(slog, requestId, "/vci/offer", 200, "OK", res.getHeaders(), response);

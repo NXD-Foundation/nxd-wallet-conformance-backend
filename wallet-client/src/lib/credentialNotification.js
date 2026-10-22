@@ -1,5 +1,5 @@
+import { createDpopNonceState, requestWithDpopNonce } from "./dpopNonce.js";
 import fetch from "node-fetch";
-import { createDPoP } from "./crypto.js";
 import { isDpopBoundAccessToken, computeAthForDpop } from "../../utils/tokenUtils.js";
 
 /**
@@ -35,6 +35,8 @@ export async function postCredentialAcceptedNotification({
   tokenBody,
   dpopPrivateJwk,
   dpopPublicJwk,
+  dpopNonceState = createDpopNonceState(),
+  fetchImpl = fetch,
 }) {
   if (!notificationEndpoint || !notificationId || !accessToken) return;
 
@@ -43,34 +45,21 @@ export async function postCredentialAcceptedNotification({
     event: "credential_accepted",
   });
 
-  let dpopJwt = null;
-  try {
-    if (
-      dpopPrivateJwk &&
-      dpopPublicJwk &&
-      isDpopBoundAccessToken(tokenBody, accessToken)
-    ) {
-      dpopJwt = await createDPoP({
-        privateJwk: dpopPrivateJwk,
-        publicJwk: dpopPublicJwk,
-        htu: notificationEndpoint,
-        htm: "POST",
-        ath: computeAthForDpop(accessToken),
-        alg: "ES256",
-      });
-    }
-  } catch (e) {
-    console.warn("[credential-notification] DPoP for /notification failed:", e?.message);
-  }
-
-  const headers = {
-    "content-type": "application/json",
-    Authorization: `${dpopJwt ? "DPoP" : "Bearer"} ${accessToken}`,
-    ...(dpopJwt ? { DPoP: dpopJwt } : {}),
-  };
-
+  const budget = { sends: 0, nonceRetries: 0 };
   async function attempt() {
-    return fetch(notificationEndpoint, { method: "POST", headers, body });
+    return requestWithDpopNonce({
+      url: notificationEndpoint, state: dpopNonceState,
+      privateJwk: dpopPrivateJwk, publicJwk: dpopPublicJwk,
+      enabled: isDpopBoundAccessToken(tokenBody, accessToken),
+      ath: computeAthForDpop(accessToken), budget,
+      send: (proof) => fetchImpl(notificationEndpoint, {
+        method: "POST", body, headers: {
+          "content-type": "application/json",
+          Authorization: `${proof ? "DPoP" : "Bearer"} ${accessToken}`,
+          ...(proof ? { DPoP: proof } : {}),
+        },
+      }),
+    });
   }
 
   try {

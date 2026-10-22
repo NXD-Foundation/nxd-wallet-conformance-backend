@@ -5,15 +5,12 @@
   "main": "server.js",
   "type": "module",
   "scripts": {
-    "test": "mocha --recursive tests",
-    "test:issuer": "REDIS=localhost:6379 mocha --recursive tests",
-    "dev": "SERVER_URL=https://ed11-2a02-1388-a28-3505-a0b5-cdc0-9000-3d12.ngrok-free.app node server.js"
+    "test": "mocha \"tests/**/*.js\" --ignore \"tests/helpers/**\"",
+    "test:aptitude": "NODE_ENV=test ALLOW_NO_REDIS=true mocha \"tests/**/*.js\" --ignore \"tests/helpers/**\"",
+    "dev": "SERVER_URL=https://c3b5-2a02-85f-ec91-c300-8a0b-ce8e-5a65-b290.ngrok-free.app node server.js"
   },
   "author": "",
   "license": "ISC",
-  "engines": {
-    "node": ">=22.12.0 <23"
-  },
   "dependencies": {
     "@animo-id/mdoc": "^0.5.2",
     "@auth0/mdl": "^2.2.0",

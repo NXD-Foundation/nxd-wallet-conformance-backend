@@ -9,8 +9,12 @@
 import fs from "fs";
 import { createHash, createSign, randomBytes } from "crypto";
 import * as asn1js from "asn1js";
-import { AsnConvert } from "@peculiar/asn1-schema";
-import {
+import asn1Schema from "@peculiar/asn1-schema";
+import asn1X509Attr from "@peculiar/asn1-x509-attr";
+import asn1X509 from "@peculiar/asn1-x509";
+
+const { AsnConvert } = asn1Schema;
+const {
   AttributeCertificate,
   AttributeCertificateInfo,
   AttCertVersion,
@@ -18,13 +22,11 @@ import {
   AttCertIssuer,
   V2Form,
   AttCertValidityPeriod,
-} from "@peculiar/asn1-x509-attr";
-import {
-  GeneralName,
-  GeneralNames,
-  Attribute,
-  AlgorithmIdentifier,
-} from "@peculiar/asn1-x509";
+} = asn1X509Attr;
+
+// This CommonJS package re-exports its classes through tslib. Node cannot
+// reliably discover those as named ESM exports; use its module.exports object.
+const { GeneralName, GeneralNames, Attribute, AlgorithmIdentifier } = asn1X509;
 
 const ECDSA_WITH_SHA256_OID = "1.2.840.10045.4.3.2";
 

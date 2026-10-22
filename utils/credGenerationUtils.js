@@ -46,8 +46,16 @@ import {
   getLoyaltyCardSDJWTDataWithPayload,
   getBookingReferenceSDJWTData,
   getBookingReferenceSDJWTDataWithPayload,
+  getAirlinePnrSDJWTData,
+  getAirlinePnrSDJWTDataWithPayload,
+  getAirlineBoardingPassSDJWTData,
+  getAirlineBoardingPassSDJWTDataWithPayload,
   getRoomKeySDJWTData,
   getRoomKeySDJWTDataWithPayload,
+  getCasslBiometricQrSDJWTData,
+  getCasslBiometricQrSDJWTDataWithPayload,
+  getEuropeanDisabilityCardSDJWTData,
+  getEuropeanDisabilityCardSDJWTDataWithPayload,
 } from "../utils/credPayloadUtil.js";
 
 import { issueX509AttrCredentialWithDefaultKey } from "./issueX509AttrCredential.js";
@@ -61,17 +69,20 @@ import {
 import cryptoModule from "crypto";
 import { Buffer } from "buffer";
 import { encode } from "cbor-x";
+import { loadAptitudeIssuerSigningMaterial } from "./aptitudeIssuerSigningMaterial.js";
+import {
+  AIRLINE_PNR_VCT,
+  AIRLINE_BOARDING_PASS_VCT,
+  CASSL_BIOMETRIC_QR_VCT,
+  EUROPEAN_DISABILITY_CARD_VCT,
+} from "./routeUtils.js";
 
 const privateKey = fs.readFileSync("./private-key.pem", "utf-8");
 const publicKeyPem = fs.readFileSync("./public-key.pem", "utf-8");
-const privateKeyPemX509 = fs.readFileSync(
-  "./x509EC/ec_private_pkcs8.key",
-  "utf8"
-);
-const certificatePemX509 = fs.readFileSync(
-  "./x509EC/client_certificate.crt",
-  "utf8"
-);
+const {
+  privateKeyPkcs8: privateKeyPemX509,
+  leafCertificatePem: certificatePemX509,
+} = loadAptitudeIssuerSigningMaterial();
 // DID Web key pair - must match the keys published in the DID document
 let privateKeyPemDidWeb = null;
 let publicKeyPemDidWeb = null;
@@ -167,6 +178,31 @@ function normalizeIssuerAuthHeaders(preparedIssuerSigned) {
       `[mdl-issue] ✅ Normalized unprotected headers (object -> Map): removed undefined values, kept ${cleanedMap.size} valid entries`
     );
   }
+}
+
+/**
+ * Prepare a proof JWK for MSO deviceKeyInfo embedding.
+ *
+ * RFC 9052 §7.1 Table 4 defines COSE_Key label 2 (kid) as bstr. @auth0/mdl uses
+ * cose-kit COSEKeyFromJWK, which encodes JavaScript strings as CBOR text; pass
+ * kid as UTF-8 bytes so the signed MSO contains a byte string.
+ */
+function devicePublicKeyJwkForMsoDeviceKey(devicePublicKeyJwk) {
+  const { kid, ...rest } = devicePublicKeyJwk;
+  const copy = { ...rest };
+  if (kid == null || kid === "") {
+    return copy;
+  }
+  if (typeof kid === "string") {
+    copy.kid = new TextEncoder().encode(kid);
+  } else if (Buffer.isBuffer(kid)) {
+    copy.kid = new Uint8Array(kid);
+  } else if (kid instanceof Uint8Array) {
+    copy.kid = kid;
+  } else {
+    copy.kid = kid;
+  }
+  return copy;
 }
 
 function resolveMsoMdocNamespace(credentialConfiguration, credPayload) {
@@ -337,34 +373,80 @@ function derToP1363(derSignature) {
 function mapClaimsToMsoMdoc(claims, vct) {
   const msoMdocClaims = { ...claims }; // Start by copying all claims
 
-  // mDL uses 'birth_date', SD-JWT might use 'birthdate'
+  // PID Rulebook: SD-JWT `birthdate` → mdoc `birth_date`
   if (claims.birthdate) {
     msoMdocClaims.birth_date = claims.birthdate;
-    delete msoMdocClaims.birthdate; // remove original to avoid duplication
+    delete msoMdocClaims.birthdate;
   } else if (claims.birth_date) {
     msoMdocClaims.birth_date = claims.birth_date;
   }
 
-  // mDL 'issue_date' and 'expiry_date' for the document itself
-  if (claims.issuance_date) {
-    msoMdocClaims.issue_date = claims.issuance_date; // Map PID's issuance_date
-    delete msoMdocClaims.issuance_date;
-  } else if (claims.issue_date) {
+  // PID Rulebook: SD-JWT `nationalities` → mdoc attribute `nationality`
+  if (claims.nationalities && !claims.nationality) {
+    msoMdocClaims.nationality = claims.nationalities;
+    delete msoMdocClaims.nationalities;
+  }
+
+  // PID Rulebook: SD-JWT `picture` (data URL) → mdoc `portrait` (bstr)
+  if (claims.picture && !claims.portrait) {
+    const dataUrl = String(claims.picture);
+    const base64 = dataUrl.includes(",") ? dataUrl.split(",")[1] : dataUrl;
+    try {
+      msoMdocClaims.portrait = Buffer.from(base64, "base64");
+    } catch {
+      msoMdocClaims.portrait = claims.picture;
+    }
+    delete msoMdocClaims.picture;
+  }
+
+  // PID Rulebook private names → mdoc identifiers
+  if (claims.date_of_issuance) {
+    msoMdocClaims.issuance_date = claims.date_of_issuance;
+    delete msoMdocClaims.date_of_issuance;
+  }
+  if (claims.date_of_expiry) {
+    msoMdocClaims.expiry_date = claims.date_of_expiry;
+    delete msoMdocClaims.date_of_expiry;
+  }
+  if (claims.birth_family_name) {
+    msoMdocClaims.family_name_birth = claims.birth_family_name;
+    delete msoMdocClaims.birth_family_name;
+  }
+  if (claims.birth_given_name) {
+    msoMdocClaims.given_name_birth = claims.birth_given_name;
+    delete msoMdocClaims.birth_given_name;
+  }
+  if (claims.email) {
+    msoMdocClaims.email_address = claims.email;
+    delete msoMdocClaims.email;
+  }
+  if (claims.phone_number) {
+    msoMdocClaims.mobile_phone_number = claims.phone_number;
+    delete msoMdocClaims.phone_number;
+  }
+
+  // Flatten SD-JWT address object into mdoc resident_* attributes
+  if (claims.address && typeof claims.address === "object") {
+    const a = claims.address;
+    if (a.formatted) msoMdocClaims.resident_address = a.formatted;
+    if (a.country) msoMdocClaims.resident_country = a.country;
+    if (a.region) msoMdocClaims.resident_state = a.region;
+    if (a.locality) msoMdocClaims.resident_city = a.locality;
+    if (a.postal_code) msoMdocClaims.resident_postal_code = a.postal_code;
+    if (a.street_address) msoMdocClaims.resident_street = a.street_address;
+    delete msoMdocClaims.address;
+  }
+
+  // mDL 'issue_date' / 'expiry_date' aliases used by some doc types
+  if (claims.issuance_date && !msoMdocClaims.issuance_date) {
+    msoMdocClaims.issuance_date = claims.issuance_date;
+  }
+  if (claims.issue_date) {
     msoMdocClaims.issue_date = claims.issue_date;
   }
-
-  if (claims.expiry_date) {
-    msoMdocClaims.expiry_date = claims.expiry_date; // Map PID's expiry_date
+  if (claims.expiry_date && !msoMdocClaims.expiry_date) {
+    msoMdocClaims.expiry_date = claims.expiry_date;
   }
-
-  // Placeholder for other claims and VCT specific mappings
-  // For example, for a driver's license (mDL docType):
-  // if (vct === 'some_driver_license_vct') {
-  //   msoMdocClaims.driving_privileges = claims.driving_privileges;
-  //   msoMdocClaims.portrait = claims.portrait; // Needs to be bytes
-  //   msoMdocClaims.document_number = claims.document_number;
-  //   msoMdocClaims.issuing_country = claims.issuing_country;
-  // }
 
   if (
     claims.unique_id &&
@@ -372,12 +454,10 @@ function mapClaimsToMsoMdoc(claims, vct) {
       vct === "VerifiablePIDSDJWTAttestation" ||
       vct === "urn:eu.europa.ec.eudi:pid:1")
   ) {
-    msoMdocClaims.unique_identifier = claims.unique_id; // Example mapping for PID
+    msoMdocClaims.unique_identifier = claims.unique_id;
     delete msoMdocClaims.unique_id;
   }
 
-  // Add more specific mappings based on vct and mDL data element definitions
-  // console.log("Mapped mDL claims:", msoMdocClaims);
   return msoMdocClaims;
 }
 
@@ -597,6 +677,7 @@ export async function handleCredentialGenerationBasedOnFormat(
     case "VerifiablePIDSDJWT":
     case "VerifiablePIDSDJWTAttestation":
     case "urn:eu.europa.ec.eudi:pid:1":
+    case "urn:eudi:pid:1":
     case "test-cred-config": // For testing purposes
       credPayload =
         format === "mDL" || format === "mdl"
@@ -652,13 +733,42 @@ export async function handleCredentialGenerationBasedOnFormat(
           )
         : getBookingReferenceSDJWTData();
       break;
+    case "airline_pnr_credential":
+    case AIRLINE_PNR_VCT:
+      credPayload = sessionObject
+        ? getAirlinePnrSDJWTDataWithPayload(sessionObject.credentialPayload)
+        : getAirlinePnrSDJWTData();
+      break;
+    case "airline_boarding_pass":
+    case AIRLINE_BOARDING_PASS_VCT:
+      credPayload = sessionObject
+        ? getAirlineBoardingPassSDJWTDataWithPayload(
+            sessionObject.credentialPayload,
+          )
+        : getAirlineBoardingPassSDJWTData();
+      break;
     case "room_key_credential":
-      console.log("!!!!!!!!!!room_key_credential!!!!!!");
       credPayload = sessionObject
         ? await getRoomKeySDJWTDataWithPayload(
             sessionObject.credentialPayload,
           )
         : await getRoomKeySDJWTData();
+      break;
+    case "cassl_biometric_qr":
+    case CASSL_BIOMETRIC_QR_VCT:
+      credPayload = sessionObject
+        ? await getCasslBiometricQrSDJWTDataWithPayload(
+            sessionObject.credentialPayload,
+          )
+        : await getCasslBiometricQrSDJWTData();
+      break;
+    case "european_disability_card":
+    case EUROPEAN_DISABILITY_CARD_VCT:
+      credPayload = sessionObject
+        ? getEuropeanDisabilityCardSDJWTDataWithPayload(
+            sessionObject.credentialPayload,
+          )
+        : getEuropeanDisabilityCardSDJWTData();
       break;
     default:
       throw new Error(`Unsupported credential type: ${credType}`);
@@ -1241,7 +1351,9 @@ async function generateMdlCredentialWithAuth0Library(
     });
     console.log(`[mdl-issue] ✅ Added validity info`);
     
-    document.addDeviceKeyInfo({ deviceKey: devicePublicKeyJwk });
+    document.addDeviceKeyInfo({
+      deviceKey: devicePublicKeyJwkForMsoDeviceKey(devicePublicKeyJwk),
+    });
     console.log(`[mdl-issue] ✅ Added device key info`);
     
     // Log what we're passing to sign() for debugging
@@ -1463,6 +1575,7 @@ export async function handleCredentialGenerationBasedOnFormatDeferred(
     case "VerifiablePIDSDJWT":
     case "VerifiablePIDSDJWTAttestation":
     case "urn:eu.europa.ec.eudi:pid:1":
+    case "urn:eudi:pid:1":
     case "test-cred-config": // For testing purposes
       credPayload = getPIDSDJWTData();
       break;
@@ -1503,12 +1616,42 @@ export async function handleCredentialGenerationBasedOnFormatDeferred(
           )
         : getBookingReferenceSDJWTData();
       break;
+    case "airline_pnr_credential":
+    case AIRLINE_PNR_VCT:
+      credPayload = sessionObject
+        ? getAirlinePnrSDJWTDataWithPayload(sessionObject.credentialPayload)
+        : getAirlinePnrSDJWTData();
+      break;
+    case "airline_boarding_pass":
+    case AIRLINE_BOARDING_PASS_VCT:
+      credPayload = sessionObject
+        ? getAirlineBoardingPassSDJWTDataWithPayload(
+            sessionObject.credentialPayload,
+          )
+        : getAirlineBoardingPassSDJWTData();
+      break;
     case "room_key_credential":
       credPayload = sessionObject
         ? await getRoomKeySDJWTDataWithPayload(
             sessionObject.credentialPayload,
           )
         : await getRoomKeySDJWTData();
+      break;
+    case "cassl_biometric_qr":
+    case CASSL_BIOMETRIC_QR_VCT:
+      credPayload = sessionObject
+        ? await getCasslBiometricQrSDJWTDataWithPayload(
+            sessionObject.credentialPayload,
+          )
+        : await getCasslBiometricQrSDJWTData();
+      break;
+    case "european_disability_card":
+    case EUROPEAN_DISABILITY_CARD_VCT:
+      credPayload = sessionObject
+        ? getEuropeanDisabilityCardSDJWTDataWithPayload(
+            sessionObject.credentialPayload,
+          )
+        : getEuropeanDisabilityCardSDJWTData();
       break;
     default:
       throw new Error(`Unsupported credential type: ${credType}`);

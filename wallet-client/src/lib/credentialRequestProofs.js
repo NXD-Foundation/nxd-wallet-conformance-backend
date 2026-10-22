@@ -1,9 +1,10 @@
 /**
  * Credential endpoint proof binding (RFC001): WUA only — not WIA.
- * - proofs.jwt: exactly one proof JWT with WUA in `key_attestation`, signed with keyPairs[0]
+ * - proofs.jwt: one proof JWT; key attestation follows issuer metadata or strict profile policy
  * - proofs.attestation: exactly one WUA JWT
  */
 import { createProofJwt } from "./crypto.js";
+import { resolveOpenid4VciProofIssuerClaim } from "./credentialProofBinding.js";
 import { buildWalletUnitAttestationJwt } from "./walletProviderIdentity.js";
 import {
   orderedAttestedPublicJwks,
@@ -26,6 +27,8 @@ export function redactProofsForLog(proofs) {
 /**
  * @param {"jwt"|"attestation"} proofMode
  * @param {{ privateJwk: object, publicJwk: object, didJwk: string }[]} keyPairs — stable order; proof uses index 0
+ * @param {string} [clientId] OAuth client_id from the token request. OpenID4VCI 1.0 F.1 requires this as proof `iss` when the client authenticated.
+ * @param {boolean} [anonymousAccess] Omit proof `iss` for anonymous pre-authorized token access.
  */
 export async function buildCredentialRequestProofs({
   proofMode,
@@ -34,16 +37,20 @@ export async function buildCredentialRequestProofs({
   c_nonce,
   keyPairs,
   selectedAlg,
+  clientId = null,
+  anonymousAccess = false,
+  keyAttestationRequired = false,
 }) {
   const attestPub = orderedAttestedPublicJwks(keyPairs);
   const proofKey = keyPairs[0];
   const eudiWalletInfo = DEFAULT_EUDI_WALLET_INFO_FOR_WUA;
 
-  const wuaJwt = await buildWalletUnitAttestationJwt({
+  const wuaJwt = (proofMode === "attestation" || keyAttestationRequired) ? await buildWalletUnitAttestationJwt({
     credentialEndpoint,
     proofPublicJwks: attestPub,
     eudiWalletInfo,
-  });
+    c_nonce,
+  }) : null;
 
   if (proofMode === "attestation") {
     const proofs = { attestation: [wuaJwt] };
@@ -52,6 +59,7 @@ export async function buildCredentialRequestProofs({
       proofs,
       wuaJwt,
       keyPairs,
+      expectedCNonce: c_nonce,
     });
     return { proofs, proofJwt: null, wuaJwt };
   }
@@ -61,7 +69,7 @@ export async function buildCredentialRequestProofs({
     publicJwk: proofKey.publicJwk,
     audience: aud,
     nonce: c_nonce,
-    issuer: proofKey.didJwk,
+    issuer: resolveOpenid4VciProofIssuerClaim({ clientId, anonymousAccess }),
     typ: "openid4vci-proof+jwt",
     alg: selectedAlg,
     key_attestation: wuaJwt,
@@ -72,6 +80,8 @@ export async function buildCredentialRequestProofs({
     proofs,
     wuaJwt,
     keyPairs,
+    expectedCNonce: c_nonce,
+    keyAttestationRequired,
   });
   return { proofs, proofJwt, wuaJwt };
 }

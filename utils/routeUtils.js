@@ -16,20 +16,16 @@ import {
   setSessionContext,
   clearSessionContext,
 } from "../services/cacheServiceRedis.js";
-import { createHash, createPublicKey, X509Certificate } from "crypto";
+import { createHash, createPublicKey, X509Certificate, randomInt } from "crypto";
 import base64url from "base64url";
 import jwt from "jsonwebtoken";
 import path from "path";
 import * as jose from "jose";
 import { assertCnfJwkIsPublicOnly, getOAuthClientAttestationHeaders } from "./oauthClientAttestation.js";
 import {
-  isWalletProviderAttestationTrustedByPolicy,
-  isWuaTrustFrameworkEnforced,
-  resolveWalletProviderAttestationVerificationJwk,
-  verifyWalletProviderAttestation,
-} from "./wuaVerificationKeyResolver.js";
-
-export { isWuaTrustFrameworkEnforced };
+  isWalletProviderKeyAttestationTrustedByPolicy,
+  resolveKeyAttestationVerificationJwkFromX5c,
+} from "./keyAttestationX5cVerification.js";
 
 const WUA_SPEC_REF =
   "TS3 Wallet Unit Attestation";
@@ -357,6 +353,36 @@ export const TX_CODE_CONFIG = {
   input_mode: "numeric",
   description: "Please provide the one-time code that was sent via e-mail or offline",
 };
+
+/** Generate a numeric transaction code for pre-authorized offers that advertise tx_code. */
+export function generateNumericTxCode(length = TX_CODE_CONFIG.length) {
+  let code = "";
+  for (let i = 0; i < length; i += 1) {
+    code += randomInt(0, 10).toString();
+  }
+  return code;
+}
+
+/** When `requireTxCode` is set, assign the generated code used by test/conformance backends. */
+export function applyPreAuthTxCode(session = {}) {
+  if (session.requireTxCode) {
+    session.expectedTxCode = generateNumericTxCode();
+  }
+  return session;
+}
+
+/** Preserve an existing expectedTxCode; generate one only when missing. */
+export function ensureExpectedTxCode(session = {}) {
+  if (
+    session.requireTxCode &&
+    (session.expectedTxCode === undefined ||
+      session.expectedTxCode === null ||
+      String(session.expectedTxCode).trim() === "")
+  ) {
+    session.expectedTxCode = generateNumericTxCode();
+  }
+  return session;
+}
 
 export const URL_SCHEMES = {
   STANDARD: "openid-credential-offer://",
@@ -758,6 +784,20 @@ export const CONFIG = {
   },
 };
 
+// Minimal PID DCQL claims — aligned with data/presentation_definition_pid.json
+export const MINIMAL_PID_DCQL_CLAIMS = [
+  { path: ["given_name"] },
+  { path: ["family_name"] },
+  { path: ["birthdate"] },
+  { path: ["place_of_birth"] },
+  { path: ["nationalities"] },
+  { path: ["issuing_authority"] },
+  { path: ["issuing_country"] },
+];
+
+// Both SD-JWT PID types use the same mock claims and verification presets.
+export const PID_SD_JWT_VCTS = ["urn:eu.europa.ec.eudi:pid:1", "urn:eudi:pid:1"];
+
 // Default DCQL query configuration
 export const DEFAULT_DCQL_QUERY = {
   credentials: [
@@ -765,57 +805,246 @@ export const DEFAULT_DCQL_QUERY = {
       id: "cmwallet",
       format: "dc+sd-jwt",
       meta: {
-        vct_values: ["urn:eu.europa.ec.eudi:pid:1"],
+        vct_values: [...PID_SD_JWT_VCTS],
       },
-      claims: [
-        {
-          path: ["family_name"],
-        },
-      ],
+      claims: MINIMAL_PID_DCQL_CLAIMS,
     },
   ],
 };
 
-// Full PID DCQL query — ARF Annex 3.01 §5 SD-JWT VC claim names (not ISO mdoc identifiers)
+// Full PID DCQL query — all SD-JWT claim names from the PID Rulebook (Chapter 4)
 export const FULL_PID_DCQL_QUERY = {
   credentials: [
     {
       id: "cmwallet",
       format: "dc+sd-jwt",
       meta: {
-        vct_values: ["urn:eu.europa.ec.eudi:pid:1"],
+        vct_values: [...PID_SD_JWT_VCTS],
       },
       claims: [
         { path: ["given_name"] },
         { path: ["family_name"] },
         { path: ["birthdate"] },
-        { path: ["date_of_issuance"] },
-        { path: ["date_of_expiry"] },
+        { path: ["place_of_birth"] },
+        { path: ["nationalities"] },
+        { path: ["picture"] },
+        { path: ["address"] },
+        { path: ["personal_administrative_number"] },
+        { path: ["birth_family_name"] },
+        { path: ["birth_given_name"] },
+        { path: ["sex"] },
+        { path: ["email"] },
+        { path: ["phone_number"] },
         { path: ["issuing_authority"] },
         { path: ["issuing_country"] },
+        { path: ["date_of_issuance"] },
+        { path: ["date_of_expiry"] },
+        { path: ["document_number"] },
+        { path: ["issuing_jurisdiction"] },
+        { path: ["trust_anchor"] },
+        { path: ["attestation_legal_category"] },
       ],
     },
   ],
 };
 
-// Combined Booking Reference + PID DCQL query
-export const BOOKING_REFERENCE_PID_DCQL_QUERY = {
+// Semantic VCT for airline PNR SD-JWT (EUDI-style URN; configuration id stays airline_pnr_credential)
+export const AIRLINE_PNR_VCT = "urn:eu.aptitude:airline.pnr:1";
+
+// Semantic VCT for airline boarding pass SD-JWT
+export const AIRLINE_BOARDING_PASS_VCT =
+  "urn:eu.aptitude:airline.boardingpass:1";
+
+// Semantic VCT for CASSL biometric QR SD-JWT
+export const CASSL_BIOMETRIC_QR_VCT = "urn:eu.aptitude:cassl.biometricqr:1";
+
+// Provisional VCT for European Disability Card SD-JWT (Directive EU 2024/2841)
+export const EUROPEAN_DISABILITY_CARD_VCT = "urn:eu.europa.ec.eudi:edc:1";
+
+// Airline PNR only DCQL query
+export const AIRLINE_PNR_DCQL_QUERY = {
   credentials: [
     {
-      id: "booking-reference",
+      id: "airline-pnr",
       format: "dc+sd-jwt",
       meta: {
-        vct_values: ["booking_reference_credential"],
+        vct_values: [AIRLINE_PNR_VCT],
       },
-      claims: [{ path: ["booking_reference"] }],
+      claims: [{ path: ["pnr"] }],
+    },
+  ],
+};
+
+// Airline boarding pass only DCQL query (IATA BCBP core + identity helpers)
+export const AIRLINE_BOARDING_PASS_DCQL_QUERY = {
+  credentials: [
+    {
+      id: "airline-boarding-pass",
+      format: "dc+sd-jwt",
+      meta: {
+        vct_values: [AIRLINE_BOARDING_PASS_VCT],
+      },
+      claims: [
+        { path: ["pnr"] },
+        { path: ["operating_carrier"] },
+        { path: ["flight_number"] },
+        { path: ["seat"] },
+        { path: ["passenger_name"] },
+        { path: ["bcbp_data"] },
+      ],
+    },
+  ],
+};
+
+// Combined Airline boarding pass (all claims) + PID (core identity + picture) DCQL query
+export const BOARDING_PASS_PID_DCQL_QUERY = {
+  credentials: [
+    {
+      id: "airline-boarding-pass",
+      format: "dc+sd-jwt",
+      meta: {
+        vct_values: [AIRLINE_BOARDING_PASS_VCT],
+      },
+      claims: [
+        { path: ["format_code"] },
+        { path: ["number_of_legs"] },
+        { path: ["passenger_name"] },
+        { path: ["electronic_ticket_indicator"] },
+        { path: ["pnr"] },
+        { path: ["from_airport"] },
+        { path: ["to_airport"] },
+        { path: ["operating_carrier"] },
+        { path: ["flight_number"] },
+        { path: ["date_of_flight_julian"] },
+        { path: ["compartment_code"] },
+        { path: ["seat"] },
+        { path: ["check_in_sequence_number"] },
+        { path: ["passenger_status"] },
+        { path: ["bcbp_data"] },
+        { path: ["given_name"] },
+        { path: ["family_name"] },
+        { path: ["carrier_name"] },
+        { path: ["departure_datetime"] },
+        { path: ["arrival_datetime"] },
+        { path: ["terminal"] },
+        { path: ["gate"] },
+        { path: ["boarding_time"] },
+        { path: ["boarding_group"] },
+        { path: ["ticket_number"] },
+        { path: ["baggage_allowance"] },
+      ],
     },
     {
       id: "pid",
       format: "dc+sd-jwt",
       meta: {
-        vct_values: ["urn:eu.europa.ec.eudi:pid:1"],
+        vct_values: [...PID_SD_JWT_VCTS],
       },
-      // The booking flow needs a minimal PID attribute for identity matching.
+      claims: [
+        { path: ["given_name"] },
+        { path: ["family_name"] },
+        { path: ["birthdate"] },
+        { path: ["nationalities"] },
+        { path: ["picture"] },
+      ],
+    },
+  ],
+};
+
+// Combined Accommodation Voucher (booking_reference_credential) + PID DCQL query.
+// Requests reservationReference from the voucher; PID family_name supports guest-name matching.
+export const BOOKING_REFERENCE_PID_DCQL_QUERY = {
+  credentials: [
+    {
+      id: "accommodation-voucher",
+      format: "dc+sd-jwt",
+      meta: {
+        vct_values: ["booking_reference_credential"],
+      },
+      claims: [{ path: ["reservationReference"] }],
+    },
+    {
+      id: "pid",
+      format: "dc+sd-jwt",
+      meta: {
+        vct_values: [...PID_SD_JWT_VCTS],
+      },
+      // Guest-name matching: verifier compares PID family_name with voucher guest.
+      claims: [{ path: ["family_name"] }],
+    },
+  ],
+};
+
+// DCQL credential id for optional European Disability Card presentations.
+export const EUROPEAN_DISABILITY_CARD_DCQL_CREDENTIAL_ID = "european-disability-card";
+
+// Combined Accommodation Voucher + PID + optional European Disability Card.
+// EDC is optional; when presented, wallet discloses either holder name or assistant entitlement.
+export const BOOKING_REFERENCE_PID_EDC_DCQL_QUERY = {
+  credentials: [
+    {
+      id: "accommodation-voucher",
+      format: "dc+sd-jwt",
+      meta: {
+        vct_values: ["booking_reference_credential"],
+      },
+      claims: [{ path: ["reservationReference"] }],
+    },
+    {
+      id: "pid",
+      format: "dc+sd-jwt",
+      meta: {
+        vct_values: [...PID_SD_JWT_VCTS],
+      },
+      claims: [{ path: ["family_name"] }],
+    },
+    {
+      id: EUROPEAN_DISABILITY_CARD_DCQL_CREDENTIAL_ID,
+      format: "dc+sd-jwt",
+      meta: {
+        vct_values: [EUROPEAN_DISABILITY_CARD_VCT],
+      },
+      claims: [
+        { id: "edc_given_name", path: ["given_name"] },
+        { id: "edc_family_name", path: ["family_name"] },
+        { id: "edc_assistant_entitlement", path: ["assistant_entitlement"] },
+      ],
+      claim_sets: [
+        ["edc_given_name", "edc_family_name"],
+        ["edc_assistant_entitlement"],
+      ],
+    },
+  ],
+  credential_sets: [
+    {
+      required: true,
+      options: [["accommodation-voucher", "pid"]],
+    },
+    {
+      required: false,
+      options: [[EUROPEAN_DISABILITY_CARD_DCQL_CREDENTIAL_ID]],
+    },
+  ],
+};
+
+// Combined Airline PNR + PID DCQL query
+export const PNR_PID_DCQL_QUERY = {
+  credentials: [
+    {
+      id: "airline-pnr",
+      format: "dc+sd-jwt",
+      meta: {
+        vct_values: [AIRLINE_PNR_VCT],
+      },
+      claims: [{ path: ["pnr"] }],
+    },
+    {
+      id: "pid",
+      format: "dc+sd-jwt",
+      meta: {
+        vct_values: [...PID_SD_JWT_VCTS],
+      },
+      // The PNR flow needs a minimal PID attribute for identity matching.
       claims: [{ path: ["family_name"] }],
     },
   ],
@@ -1162,7 +1391,10 @@ export const DEFAULT_MDL_DCQL_QUERY = {
           path: ["urn:eu.europa.ec.eudi:pid:1", "given_name"],
         },
         {
-          path: ["urn:eu.europa.ec.eudi:pid:1", "age_over_18"],
+          path: ["urn:eu.europa.ec.eudi:pid:1", "birth_date"],
+        },
+        {
+          path: ["urn:eu.europa.ec.eudi:pid:1", "nationality"],
         },
       ],
       format: "mso_mdoc",
@@ -1308,17 +1540,79 @@ export const getSessionId = (req) => {
  * @returns {string} Credential type
  */
 export const getCredentialType = (req) => {
-  return req.query.credentialType || req.query.type || DEFAULT_CREDENTIAL_TYPE;
+  return (
+    req.query?.credentialType ||
+    req.query?.credential_type ||
+    req.query?.type ||
+    req.body?.credential_type ||
+    req.body?.credentialType ||
+    DEFAULT_CREDENTIAL_TYPE
+  );
 };
 
 /**
- * Extract signature type from request with default fallback
+ * Extract signature type from request with default fallback.
+ * Prefers body (POST offer helpers), then query (`signatureType` / `signature_type`).
  * @param {Object} req - Express request object
  * @returns {string} Signature type
  */
 export const getSignatureType = (req) => {
-  return req.query.signatureType || DEFAULT_SIGNATURE_TYPE;
+  const fromBody =
+    req.body?.signatureType ||
+    req.body?.signature_type ||
+    undefined;
+  const fromQuery =
+    req.query?.signatureType ||
+    req.query?.signature_type ||
+    undefined;
+  return fromBody || fromQuery || DEFAULT_SIGNATURE_TYPE;
 };
+
+/**
+ * Signature type for GET /vci/offer (and similar standardized offers).
+ * EUDI PID SD-JWT credentials must be X.509-signed (x5c) to be presentable;
+ * when signature_type is omitted and the offer targets that profile, default to x509.
+ *
+ * @param {import('express').Request} req
+ * @param {string} credentialType - credential_configuration_id
+ * @returns {string}
+ */
+export function resolveVciOfferSignatureType(req, credentialType) {
+  const explicit =
+    req.body?.signatureType ||
+    req.body?.signature_type ||
+    req.query?.signatureType ||
+    req.query?.signature_type;
+  if (explicit) return explicit;
+
+  const configId = String(credentialType || "").trim();
+  if (!configId) return DEFAULT_SIGNATURE_TYPE;
+
+  try {
+    const supported =
+      loadIssuerConfiguration()?.credential_configurations_supported || {};
+    const cfg = supported[configId];
+    const vct = cfg?.vct || cfg?.doctype;
+    const format = cfg?.format;
+    if (
+      format === "dc+sd-jwt" &&
+      PID_SD_JWT_VCTS.includes(vct)
+    ) {
+      return "x509";
+    }
+    if (format === "mso_mdoc" && vct === "urn:eu.europa.ec.eudi:pid:1") {
+      return "x509";
+    }
+  } catch {
+    // fall through to global default
+  }
+
+  if (PID_SD_JWT_VCTS.includes(configId)) {
+    return "x509";
+  }
+
+  return DEFAULT_SIGNATURE_TYPE;
+}
 
 /**
  * Extract client ID scheme from request with default fallback
@@ -1430,12 +1724,66 @@ export const createBaseSession = (flowType = "pre-auth", isHaip = false, signatu
  * Create session with credential payload
  * @param {Object} credentialPayload - Credential payload data
  * @param {boolean} isHaip - Whether this is a HAIP flow
+ * @param {string|null} signatureType - Issuer signing mode (e.g. x509, kid-jwk)
  * @returns {Object} Session object with credential payload
  */
-export const createSessionWithPayload = (credentialPayload, isHaip = true) => {
+export const createSessionWithPayload = (
+  credentialPayload,
+  isHaip = true,
+  signatureType = null,
+) => {
   return {
-    ...createBaseSession("pre-auth", isHaip),
-    credentialPayload
+    ...createBaseSession("pre-auth", isHaip, signatureType),
+    credentialPayload,
+  };
+};
+
+/**
+ * Normalize a single-credential POST offer body.
+ * Accepts either raw claims, or `{ credential_type, claims }` / `{ payload }`.
+ * @param {object} body
+ * @returns {object}
+ */
+export const normalizeSingleCredentialOfferPayload = (body) => {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return body;
+  }
+  if (body.claims && typeof body.claims === "object" && !Array.isArray(body.claims)) {
+    return body.claims;
+  }
+  if (body.payload && typeof body.payload === "object" && !Array.isArray(body.payload)) {
+    return body.payload;
+  }
+  const {
+    signatureType: _st,
+    signature_type: _st2,
+    credential_type: _ct,
+    credentialType: _ct2,
+    credentials: _creds,
+    ...rest
+  } = body;
+  return Object.keys(rest).length > 0 ? rest : body;
+};
+
+/**
+ * Create pre-auth session for a multi-configuration credential offer.
+ * @param {string[]} offeredConfigurationIds - Ordered offered configuration ids
+ * @param {Record<string, object>} credentialPayloads - Payload keyed by configuration id
+ * @param {boolean} isHaip - Whether this is a HAIP flow
+ * @param {string|null} signatureType - Issuer signing mode (e.g. x509, kid-jwk)
+ * @returns {Object}
+ */
+export const createSessionWithMultiCredentialPayloads = (
+  offeredConfigurationIds,
+  credentialPayloads,
+  isHaip = true,
+  signatureType = null,
+) => {
+  return {
+    ...createBaseSession("pre-auth", isHaip, signatureType),
+    offeredConfigurationIds,
+    credentialPayloads,
+    issuedConfigurationIds: [],
   };
 };
 
@@ -1517,8 +1865,15 @@ export const generateQRCode = async (credentialOffer, sessionId = null) => {
  */
 export const buildCredentialOfferUrl = (sessionId, credentialType, endpointPath, urlScheme = URL_SCHEMES.STANDARD, additionalParams = {}) => {
   const params = new URLSearchParams();
-  params.append('type', credentialType);
-  
+
+  if (
+    credentialType !== undefined &&
+    credentialType !== null &&
+    String(credentialType).trim() !== ""
+  ) {
+    params.append("type", credentialType);
+  }
+
   // Add additional parameters
   Object.entries(additionalParams).forEach(([key, value]) => {
     if (value !== undefined && value !== null) {
@@ -1551,16 +1906,21 @@ export const createPreAuthCredentialOfferUri = (sessionId, credentialType, endpo
  * Create credential offer response with QR code
  * @param {string} credentialOffer - Credential offer string
  * @param {string} sessionId - Session ID
+ * @param {string} [txCode] - Generated transaction code (test/conformance backends only)
  * @returns {Promise<Object>} Response object with QR code and deep link
  */
-export const createCredentialOfferResponse = async (credentialOffer, sessionId) => {
+export const createCredentialOfferResponse = async (credentialOffer, sessionId, txCode) => {
   try {
     const qr = await generateQRCode(credentialOffer);
-    return {
+    const response = {
       qr,
       deepLink: credentialOffer,
       sessionId,
     };
+    if (txCode != null) {
+      response.txCode = txCode;
+    }
+    return response;
   } catch (error) {
     logUtilityError("createCredentialOfferResponse", error);
     throw error;
@@ -1821,6 +2181,122 @@ export const isValidSessionId = (sessionId) => {
  */
 export const isValidCredentialPayload = (payload) => {
   return payload && typeof payload === 'object' && Object.keys(payload).length > 0;
+};
+
+/**
+ * Load issuer configuration from disk.
+ * @returns {object}
+ */
+export const loadIssuerConfiguration = () => {
+  const configPath = path.join(process.cwd(), "data", "issuer-config.json");
+  const raw = fs.readFileSync(configPath, "utf-8");
+  return JSON.parse(raw);
+};
+
+/**
+ * Parse and validate a multi-credential pre-auth offer request body.
+ * @param {object} body - Request body with `credentials` array
+ * @param {object} [issuerConfig] - Issuer metadata root; loaded when omitted
+ * @returns {{ offeredConfigurationIds: string[], credentialPayloads: Record<string, object> }}
+ */
+export const parseMultiCredentialOfferRequest = (body, issuerConfig = null) => {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    const err = new Error("Request body must be a JSON object");
+    err.errorCode = "invalid_request";
+    throw err;
+  }
+
+  const { credentials } = body;
+  if (!Array.isArray(credentials) || credentials.length === 0) {
+    const err = new Error("credentials must be a non-empty array");
+    err.errorCode = "invalid_request";
+    throw err;
+  }
+
+  const meta = issuerConfig ?? loadIssuerConfiguration();
+  const supported = meta?.credential_configurations_supported ?? {};
+  const offeredConfigurationIds = [];
+  const credentialPayloads = {};
+  const seen = new Set();
+
+  for (const entry of credentials) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      const err = new Error("Each credentials entry must be an object");
+      err.errorCode = "invalid_request";
+      throw err;
+    }
+
+    const rawId = entry.credential_configuration_id;
+    if (rawId === undefined || rawId === null || String(rawId).trim() === "") {
+      const err = new Error(
+        "Each credentials entry must include credential_configuration_id",
+      );
+      err.errorCode = "invalid_request";
+      throw err;
+    }
+
+    const configurationId = String(rawId).trim();
+    if (seen.has(configurationId)) {
+      const err = new Error(
+        `Duplicate credential_configuration_id: ${configurationId}`,
+      );
+      err.errorCode = "invalid_request";
+      throw err;
+    }
+    seen.add(configurationId);
+
+    if (!supported[configurationId]) {
+      const err = new Error(
+        `Unknown credential_configuration_id: ${configurationId}`,
+      );
+      err.errorCode = "invalid_request";
+      throw err;
+    }
+
+    if (!isValidCredentialPayload(entry.payload)) {
+      const err = new Error(
+        `payload is required for credential_configuration_id: ${configurationId}`,
+      );
+      err.errorCode = "invalid_request";
+      throw err;
+    }
+
+    offeredConfigurationIds.push(configurationId);
+    credentialPayloads[configurationId] = entry.payload;
+  }
+
+  return { offeredConfigurationIds, credentialPayloads };
+};
+
+/**
+ * Compare offer-relevant session fields for idempotent session reuse.
+ * @param {object|null|undefined} existing
+ * @param {object} incoming
+ * @returns {boolean}
+ */
+export const preAuthOfferSessionStateMatches = (existing, incoming) => {
+  if (!existing || !incoming) return false;
+
+  const normalize = (session) => ({
+    flowType: session.flowType ?? null,
+    isHaip: session.isHaip ?? false,
+    signatureType: session.signatureType ?? null,
+    offeredConfigurationIds: Array.isArray(session.offeredConfigurationIds)
+      ? [...session.offeredConfigurationIds]
+      : null,
+    credentialPayloads:
+      session.credentialPayloads && typeof session.credentialPayloads === "object"
+        ? session.credentialPayloads
+        : null,
+    credentialPayload:
+      session.credentialPayload && typeof session.credentialPayload === "object"
+        ? session.credentialPayload
+        : null,
+  });
+
+  return (
+    JSON.stringify(normalize(existing)) === JSON.stringify(normalize(incoming))
+  );
 };
 
 // ============================================================================
@@ -2424,12 +2900,8 @@ export function generateDidJwkIdentifiers(didJwkIdentifier) {
 //   • proofs.attestation = [ WUA ] — still WP-signed WUA; that proof type does not assert PoP of
 //     the attested key in that request (key-attestation-only path in keyAttestationProof.js).
 //
-// What we implement here vs. not yet:
-// - We verify the JWS cryptographically (using issuer wallet_unit_attestation_jwks or, for dev,
-//   header.jwk) and run structural checks (eudi_wallet_info, exp, etc.).
-// - We do NOT yet validate that payload.iss identifies a Wallet Provider that is on the Trusted
-//   List or otherwise policy-approved. That is isolated in isWuaWalletProviderTrustedByPolicy()
-//   below (currently stubs true) so the trust framework can be plugged in later.
+// Credential-request WUA / key attestation: JWS signature under x5c[0], chain to
+// issuer-config wallet_provider_trust_anchors (HAIP §4.5.1 / RFC001 §7.5.1).
 
 function loadIssuerMetadataForWua() {
   try {
@@ -2442,15 +2914,13 @@ function loadIssuerMetadataForWua() {
 }
 
 /**
- * Public key for verifying the WUA JWS. Delegates to shared Wallet Provider attestation resolver.
+ * Public key for verifying credential-request WUA / key-attestation JWS (x5c + WP trust anchors only).
  * @param {object} decodedHeader - jwt.decode complete.header
- * @param {object} issuerMetadata - issuer-config root (optional wallet_unit_attestation_jwks / key_attestation_jwks)
+ * @param {object} issuerMetadata - issuer-config root (wallet_provider_trust_anchors)
  * @returns {object} JWK
  */
 export function resolveWuaVerificationJwk(decodedHeader, issuerMetadata) {
-  return resolveWalletProviderAttestationVerificationJwk(decodedHeader, issuerMetadata, {
-    specRefs: [WUA_SPEC_REF, OID4VCI_WALLET_ATTESTATION_SPEC_REF],
-  });
+  return resolveKeyAttestationVerificationJwkFromX5c(decodedHeader, issuerMetadata);
 }
 
 /**
@@ -2460,11 +2930,15 @@ export function resolveWuaVerificationJwk(decodedHeader, issuerMetadata) {
  */
 export async function verifyWuaJwtSignature(wuaJwt, decodedHeader, issuerMetadata = null) {
   const meta = issuerMetadata ?? loadIssuerMetadataForWua();
+  const alg = decodedHeader?.alg || "ES256";
+  if (!alg) {
+    return { ok: false, error: withSpecRef("WUA JWT header missing alg", WUA_SPEC_REF, OID4VCI_WALLET_ATTESTATION_SPEC_REF) };
+  }
   try {
-    const verified = await verifyWalletProviderAttestation(wuaJwt, meta, {
-      specRefs: [WUA_SPEC_REF, OID4VCI_WALLET_ATTESTATION_SPEC_REF],
-    });
-    return { ok: true, ...verified };
+    const verificationJwk = resolveWuaVerificationJwk(decodedHeader, meta);
+    const key = await jose.importJWK(verificationJwk, alg);
+    await jose.jwtVerify(wuaJwt, key, { algorithms: [alg] });
+    return { ok: true };
   } catch (e) {
     const msg = e?.message || String(e);
     return {
@@ -2540,18 +3014,16 @@ export async function verifyWiaJwtSignature(wiaJwt, decodedHeader, issuerMetadat
 }
 
 /**
- * Policy gate: is the WUA issuer (`iss` = Wallet Provider) trusted by this credential issuer?
- *
- * Stub: always returns true. Replace with Trusted List lookup, WP registry, allow-lists keyed by
- * `iss`, certificate policy, etc., when the trust framework is available.
+ * Policy gate: is the WUA / key attestation trusted via x5c to configured Wallet Provider anchors?
  *
  * @param {object} wuaPayload - Decoded WUA JWT payload (after successful JWS verification)
  * @param {object} decodedHeader - Decoded WUA JWT protected header
- * @param {object} issuerMetadata - Issuer configuration root (future: trusted list URIs, pinned WP JWKS)
+ * @param {object} issuerMetadata - Issuer configuration root (wallet_provider_trust_anchors)
  * @returns {boolean}
  */
 export function isWuaWalletProviderTrustedByPolicy(wuaPayload, decodedHeader, issuerMetadata) {
-  return isWalletProviderAttestationTrustedByPolicy(wuaPayload, decodedHeader, issuerMetadata);
+  void wuaPayload;
+  return isWalletProviderKeyAttestationTrustedByPolicy(decodedHeader, wuaPayload, issuerMetadata);
 }
 
 // ============================================================================
@@ -2746,8 +3218,8 @@ export const validateWIA = async (wiaJwt, sessionId = null) => {
  * Based on TS3 Wallet Unit Attestation spec:
  * https://github.com/eu-digital-identity-wallet/eudi-doc-standards-and-technical-specifications/blob/main/docs/technical-specifications/ts3-wallet-unit-attestation.md
  *
- * Trust: see module comment above — JWS verification is performed; Wallet Provider / `iss` trust
- * via Trusted List is not (yet); use {@link isWuaWalletProviderTrustedByPolicy} for that hook.
+ * Trust: verifies the JWS using x5c and the configured Wallet Provider trust anchors.
+ * Nonce and holder-key binding are enforced by the credential proof pipeline.
  *
  * @param {string} wuaJwt - The WUA JWT string
  * @param {string} sessionId - Session ID for logging
@@ -2766,6 +3238,21 @@ export const validateWUA = async (wuaJwt, sessionId = null, issuerMetadata = nul
       return { valid: false, error: withSpecRef('WUA JWT is malformed', WUA_SPEC_REF, OID4VCI_WALLET_ATTESTATION_SPEC_REF) };
     }
 
+    // Check expiration
+    const now = Math.floor(Date.now() / 1000);
+    if (decoded.payload.exp && decoded.payload.exp < now) {
+      return { valid: false, error: withSpecRef('WUA JWT has expired', WUA_SPEC_REF, OID4VCI_WALLET_ATTESTATION_SPEC_REF) };
+    }
+
+    // TS3 §2.3.2 uses the OpenID4VCI Appendix D key-attestation claims.
+    // eudi_wallet_info is a legacy extension, not a required KA claim. Do not
+    // impose its old general_info/key_storage_info schema on reference wallets.
+    // Wallet Provider identity comes from the trusted x5c signing certificate;
+    // TS3 does not require an iss claim in the KA.
+    const hasEudiWalletInfo = !!decoded.payload.eudi_wallet_info;
+    const hasAttestedKeys = Array.isArray(decoded.payload.attested_keys) && decoded.payload.attested_keys.length > 0;
+    const hasStatus = !!decoded.payload.key_storage_status?.status || !!decoded.payload.status?.status_list;
+
     const meta = issuerMetadata ?? loadIssuerMetadataForWua();
     const sigResult = await verifyWuaJwtSignature(wuaJwt, decoded.header, meta);
     if (!sigResult.ok) {
@@ -2775,39 +3262,48 @@ export const validateWUA = async (wuaJwt, sessionId = null, issuerMetadata = nul
       return { valid: false, error: sigResult.error };
     }
 
-    const { payload } = sigResult;
-    const hasEudiWalletInfo = Boolean(payload.eudi_wallet_info);
-    const generalInfo = payload.eudi_wallet_info.general_info;
-    const keyStorageInfo = payload.eudi_wallet_info.key_storage_info;
-    const hasAttestedKeys = true;
-    const hasStatus = sigResult.hasStatus;
+    if (!isWuaWalletProviderTrustedByPolicy(decoded.payload, decoded.header, meta)) {
+      const msg = withSpecRef(
+        "WUA rejected: Wallet Provider (iss) not trusted by issuer policy",
+        WUA_SPEC_REF,
+        OID4VCI_WALLET_ATTESTATION_SPEC_REF
+      );
+      if (sessionId) {
+        await logError(sessionId, msg, { wuaIss: decoded.payload.iss }).catch(() => {});
+      }
+      return { valid: false, error: msg };
+    }
+
+    // TODO: Check revocation status using status_list if present
 
     if (sessionId) {
-      await logInfo(sessionId, "WUA validated (structure + signature + trust stub)", {
+      await logInfo(sessionId, "WUA validated (signature + configured Wallet Provider trust)", {
         wuaIssuer: decoded.payload.iss,
         wuaExp: decoded.payload.exp,
         wuaIat: decoded.payload.iat,
         hasEudiWalletInfo,
         hasAttestedKeys,
         hasStatus,
-        generalInfo,
-        keyStorageInfo,
         attestedKeysCount: decoded.payload.attested_keys?.length || 0,
         signatureVerification: 'verified',
-        walletProviderTrustPolicy: 'stub_true (Trusted List not wired)',
-        revocationCheck: 'pending',
-        verificationKeySource: sigResult.verificationKeySource,
-        trustFrameworkEnforced: sigResult.trustFrameworkEnforced,
+        walletProviderTrustPolicy: 'x5c_to_wallet_provider_trust_anchors',
+        revocationCheck: 'pending'
       }).catch(() => {});
     }
 
+    // Warn if required elements are missing
+    if (!hasAttestedKeys) {
+      if (sessionId) {
+        await logWarn(sessionId, "WUA missing attested_keys", {}).catch(() => {});
+      }
+    }
     if (!hasStatus) {
       if (sessionId) {
         await logWarn(sessionId, "WUA missing status/revocation information", {}).catch(() => {});
       }
     }
 
-    return { valid: true, payload, verificationKeySource: sigResult.verificationKeySource };
+    return { valid: true, payload: decoded.payload };
   } catch (error) {
     const errorMsg = `WUA validation error: ${error.message}`;
     if (sessionId) {
@@ -2847,7 +3343,8 @@ export const extractWIAFromTokenRequest = (reqBody, reqHeaders) => {
  * and the proof signature MUST verify under WUA `attested_keys[0]`.
  *
  * Triggered when:
- * - `proof_types_supported.jwt.key_attestation_required === true`, or
+ * - `proof_types_supported.jwt.key_attestations_required` is present, or
+ * - legacy `proof_types_supported.jwt.key_attestation_required === true`, or
  * - ETSI RFC001 PID profile: `vct` is the EUDI PID and `format` is `vc+sd-jwt`, `vc+jwt`, or `x509_attr`.
  *
  * @param {object} credConfig - entry from `credential_configurations_supported`
@@ -2855,9 +3352,11 @@ export const extractWIAFromTokenRequest = (reqBody, reqHeaders) => {
  */
 export function credentialConfigRequiresJwtProofKeyAttestation(credConfig) {
   if (!credConfig || typeof credConfig !== "object") return false;
-  if (credConfig.proof_types_supported?.jwt?.key_attestation_required === true) return true;
+  const jwtProofType = credConfig.proof_types_supported?.jwt;
+  if (jwtProofType?.key_attestation_required === true) return true;
+  if (Object.hasOwn(jwtProofType ?? {}, "key_attestations_required")) return true;
   const vct = credConfig.vct;
-  if (vct !== "urn:eu.europa.ec.eudi:pid:1") return false;
+  if (!PID_SD_JWT_VCTS.includes(vct)) return false;
   const fmt = credConfig.format;
   return fmt === "vc+sd-jwt" || fmt === "vc+jwt" || fmt === "x509_attr";
 }

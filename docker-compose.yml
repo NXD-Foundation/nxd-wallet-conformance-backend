@@ -1,18 +1,15 @@
-version: '3'
-
 services:
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-
   rfc-issuer:
     container_name: rfc-100
     build: .
     environment:
       SERVER_URL: https://dss.aegean.gr/rfc-issuer
-      REDIS: redis:6379
-    depends_on:
-      - redis
     ports:
       - "3000:3000"
+    volumes:
+      # Runtime signing material stays out of the image (.dockerignore) and is
+      # mounted read-only for the issuer/verifier process.
+      - ./private-key.pem:/usr/src/app/private-key.pem:ro
+      - ./public-key.pem:/usr/src/app/public-key.pem:ro
+      - ./x509EC:/usr/src/app/x509EC:ro
+      - ./certs:/usr/src/app/certs:ro

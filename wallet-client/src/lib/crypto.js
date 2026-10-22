@@ -1,7 +1,23 @@
 import fs from "fs";
 import path from "path";
-import { importJWK, exportJWK, SignJWT, generateKeyPair } from "jose";
+import { importJWK, importPKCS8, exportJWK, SignJWT, generateKeyPair } from "jose";
 import crypto from "node:crypto";
+
+const PEM_CERTIFICATE_BLOCK =
+  /-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g;
+
+export function pemCertificateChainToX5c(certPem) {
+  const blocks = certPem.match(PEM_CERTIFICATE_BLOCK);
+  if (!blocks?.length) {
+    throw new Error("No certificates found in PEM data");
+  }
+  return blocks.map((cert) =>
+    cert
+      .replace(/-----BEGIN CERTIFICATE-----/g, "")
+      .replace(/-----END CERTIFICATE-----/g, "")
+      .replace(/\s+/g, ""),
+  );
+}
 
 export async function ensureOrCreateEcKeyPair(optionalPath, alg = "ES256") {
   if (optionalPath && fs.existsSync(optionalPath)) {
@@ -75,7 +91,7 @@ export async function createProofJwt({
   }
   const now = Math.floor(Date.now() / 1000);
   const payload = {
-    iss: issuer,
+    ...(issuer ? { iss: issuer } : {}),
     aud: audience,
     iat: now,
     nbf: now - 5,
@@ -134,10 +150,11 @@ function base64url(input) {
  * @param {string} options.htu - HTTP URI (the token endpoint URL, normalized)
  * @param {string} options.htm - HTTP method (default: "POST")
  * @param {string} options.ath - Optional access token hash (for subsequent requests)
+ * @param {string} [options.nonce] - Server-provided DPoP nonce
  * @param {string} options.alg - Signing algorithm (default: ES256)
  * @returns {Promise<string>} - Signed DPoP JWT
  */
-export async function createDPoP({ privateJwk, publicJwk, htu, htm = "POST", ath = null, alg = "ES256" }) {
+export async function createDPoP({ privateJwk, publicJwk, htu, htm = "POST", ath = null, alg = "ES256", nonce = null }) {
   // Normalize the URI per RFC 9449 (remove fragment, normalize path, etc.)
   const normalizedHtu = normalizeUri(htu);
   
@@ -153,6 +170,7 @@ export async function createDPoP({ privateJwk, publicJwk, htu, htm = "POST", ath
     iat: now,
     jti: base64url(crypto.randomBytes(16)),
     ...(ath ? { ath } : {}),
+    ...(typeof nonce === "string" && nonce.length > 0 ? { nonce } : {}),
   };
 
   const key = await importJWK(privateJwk, alg);
@@ -167,12 +185,9 @@ export async function createDPoP({ privateJwk, publicJwk, htu, htm = "POST", ath
 function normalizeUri(uri) {
   try {
     const url = new URL(uri);
-    // Remove fragment
+    // RFC 9449 excludes query and fragment, but preserves the path.
     url.hash = "";
-    // Normalize path (remove trailing slash unless it's the root)
-    if (url.pathname !== "/" && url.pathname.endsWith("/")) {
-      url.pathname = url.pathname.slice(0, -1);
-    }
+    url.search = "";
     return url.toString();
   } catch (e) {
     // If URL parsing fails, return as-is
@@ -256,6 +271,7 @@ export async function createWiaPopJwt({
   audience,
   alg = "ES256",
   ttlSeconds = 300,
+  challenge = null,
 }) {
   const now = Math.floor(Date.now() / 1000);
   const header = { alg, typ: "oauth-client-attestation-pop+jwt", jwk: publicJwk };
@@ -266,6 +282,7 @@ export async function createWiaPopJwt({
     nbf: now,
     exp: now + ttlSeconds,
     jti: base64url(crypto.randomBytes(16)),
+    ...(typeof challenge === "string" && challenge.length > 0 ? { challenge } : {}),
   };
 
   const key = await importJWK(privateJwk, alg);
@@ -287,12 +304,14 @@ export async function createWiaPopJwt({
  * @param {object[]} options.attestedKeys - Ordered attested holder JWKs (RFC001 §7.5.1; proof JWT uses index 0)
  * @param {object} options.eudiWalletInfo - EUDI wallet info object with general_info and key_storage_info
  * @param {object} options.status - Optional status/revocation information
+ * @param {string} [options.nonce] - Optional issuer c_nonce bound into WUA (RFC001 key attestation)
  * @param {string} options.alg - Signing algorithm (default: ES256)
  * @param {number} options.ttlHours - Time-to-live in hours (default: 24)
  * @returns {Promise<string>} - Signed WUA JWT
  */
 export async function createWUA({ 
-  privateJwk, 
+  privateJwk,
+  privateKeyPem = null,
   publicJwk, 
   issuer, 
   subject = null,
@@ -300,16 +319,21 @@ export async function createWUA({
   attestedKeys, 
   eudiWalletInfo,
   status = null,
-  alg = "ES256", 
-  ttlHours = 24 
+  nonce = null,
+  alg = "ES256",
+  ttlHours = 24,
+  headerParams = null,
+  extraClaims = null,
+  includeJwkHeader = true,
 }) {
   const now = Math.floor(Date.now() / 1000);
   const exp = now + Math.floor(ttlHours * 3600);
   
-  const header = { alg, typ: "key-attestation+jwt", jwk: publicJwk };
+  const header = { alg, typ: "key-attestation+jwt",
+    ...(includeJwkHeader ? { jwk: publicJwk } : {}), ...(headerParams || {}) };
   const keys = Array.isArray(attestedKeys) ? attestedKeys.map((k) => publicJwkWithoutPrivateMaterial(k)) : [];
   const payload = {
-    iss: issuer,
+    ...(issuer ? { iss: issuer } : {}),
     ...(subject ? { sub: subject } : {}),
     aud: audience,
     iat: now,
@@ -317,10 +341,12 @@ export async function createWUA({
     jti: base64url(crypto.randomBytes(16)),
     eudi_wallet_info: eudiWalletInfo,
     attested_keys: keys,
+    ...(typeof nonce === "string" && nonce.length > 0 ? { nonce } : {}),
     ...(status ? { status } : {}),
+    ...(extraClaims || {}),
   };
 
-  const key = await importJWK(privateJwk, alg);
+  const key = privateKeyPem ? await importPKCS8(privateKeyPem, alg) : await importJWK(privateJwk, alg);
   const jwt = await new SignJWT(payload).setProtectedHeader(header).sign(key);
   return jwt;
 }
@@ -337,3 +363,68 @@ function publicJwkWithoutPrivateMaterial(jwk) {
   return publicJwk;
 }
 
+export async function createOAuthClientAttestationJwt({
+  privateJwk,
+  privateKeyPem = null,
+  publicJwk,
+  issuer,
+  subject,
+  audience,
+  cnfJwk,
+  alg = "ES256",
+  ttlSeconds = 300,
+  headerParams = null,
+  extraClaims = null,
+  includeJwkHeader = true,
+}) {
+  const now = Math.floor(Date.now() / 1000);
+  const header = {
+    alg,
+    typ: "oauth-client-attestation+jwt",
+    ...(includeJwkHeader ? { jwk: publicJwk } : {}),
+    ...(headerParams || {}),
+  };
+  const payload = {
+    ...(issuer ? { iss: issuer } : {}),
+    sub: subject,
+    aud: audience,
+    iat: now,
+    nbf: now,
+    exp: now + ttlSeconds,
+    jti: base64url(crypto.randomBytes(16)),
+    cnf: {
+      jwk: publicJwkWithoutPrivateMaterial(cnfJwk || publicJwk),
+    },
+    ...(extraClaims || {}),
+  };
+
+  const key = privateKeyPem ? await importPKCS8(privateKeyPem, alg) : await importJWK(privateJwk, alg);
+  const jwt = await new SignJWT(payload).setProtectedHeader(header).sign(key);
+  return jwt;
+}
+
+export async function createOAuthClientAttestationPopJwt({
+  privateJwk,
+  publicJwk,
+  issuer,
+  audience,
+  alg = "ES256",
+  ttlSeconds = 300,
+  challenge = null,
+}) {
+  const now = Math.floor(Date.now() / 1000);
+  const header = { alg, typ: "oauth-client-attestation-pop+jwt", jwk: publicJwk };
+  const payload = {
+    iss: issuer,
+    aud: audience,
+    iat: now,
+    nbf: now,
+    exp: now + ttlSeconds,
+    jti: base64url(crypto.randomBytes(16)),
+    ...(typeof challenge === "string" && challenge.length > 0 ? { challenge } : {}),
+  };
+
+  const key = await importJWK(privateJwk, alg);
+  const jwt = await new SignJWT(payload).setProtectedHeader(header).sign(key);
+  return jwt;
+}

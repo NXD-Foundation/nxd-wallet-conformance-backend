@@ -29,6 +29,11 @@ import {
   // Session management utilities
   createBaseSession,
   createSessionWithPayload,
+  createSessionWithMultiCredentialPayloads,
+  parseMultiCredentialOfferRequest,
+  preAuthOfferSessionStateMatches,
+  normalizeSingleCredentialOfferPayload,
+  loadIssuerConfiguration,
   
   // QR code and URL generation utilities
   generateQRCode,
@@ -36,6 +41,7 @@ import {
   createPreAuthCredentialOfferUri,
   createCredentialOfferResponse,
   createCredentialOfferConfig,
+  applyPreAuthTxCode,
   
   // Error handling utilities
   handleRouteError,
@@ -68,6 +74,35 @@ const manageSession = async (sessionId, sessionData) => {
   }
 };
 
+// Idempotent offer session creation; rejects conflicting reuse of sessionId
+const manageOfferSession = async (sessionId, sessionData) => {
+  try {
+    const existingSession = await getPreAuthSession(sessionId);
+    if (!existingSession) {
+      await storePreAuthSession(sessionId, sessionData);
+      return sessionData;
+    }
+    if (preAuthOfferSessionStateMatches(existingSession, sessionData)) {
+      return existingSession;
+    }
+    const err = new Error(
+      "Session already exists with different offer data for this sessionId",
+    );
+    err.errorCode = "invalid_request";
+    err.status = 409;
+    throw err;
+  } catch (error) {
+    if (error?.errorCode === "invalid_request" && error?.status === 409) {
+      throw error;
+    }
+    console.error(`[preAuth][${sessionId}] Offer session management error`, {
+      message: error?.message,
+      stack: error?.stack,
+    });
+    throw new Error(ERROR_MESSAGES.SESSION_CREATION_FAILED);
+  }
+};
+
 // ******************************************************************
 // ************* CREDENTIAL OFFER ENDPOINTS *************************
 // ******************************************************************
@@ -85,10 +120,10 @@ router.get("/offer-tx-code", async (req, res) => {
     const credentialType = getCredentialType(req);
     const signatureType = getSignatureType(req);
 
-    const sessionData = createBaseSession("pre-auth", false, signatureType, {
+    const sessionData = applyPreAuthTxCode(createBaseSession("pre-auth", false, signatureType, {
       requireTxCode: true,
-    });
-    await manageSession(sessionId, sessionData);
+    }));
+    const storedSession = await manageSession(sessionId, sessionData);
 
     const invocationScheme = getCredentialOfferSchemeFromRequest(req);
     const credentialOffer = createPreAuthCredentialOfferUri(
@@ -98,7 +133,11 @@ router.get("/offer-tx-code", async (req, res) => {
       invocationScheme,
     );
 
-    const response = await createCredentialOfferResponse(credentialOffer, sessionId);
+    const response = await createCredentialOfferResponse(
+      credentialOffer,
+      sessionId,
+      storedSession.expectedTxCode,
+    );
 
     res.json(response);
   } catch (error) {
@@ -157,7 +196,20 @@ router.get("/offer-no-code", async (req, res) => {
 });
 
 /**
- * Pre-authorized flow without transaction code with request body
+ * Pre-authorized flow without transaction code with request body.
+ *
+ * Accepts either:
+ * - raw claims object
+ * - `{ credential_type, claims }` (used by CASSL biometric QR callers)
+ * - `{ payload }`
+ *
+ * Query/body: `credentialType` / `credential_type`, `signatureType` / `signature_type`, `sessionId`.
+ *
+ * Example (biometric QR):
+ *   POST /offer-no-code?credentialType=cassl_biometric_qr&signatureType=x509
+ *   { "credential_type": "cassl_biometric_qr", "claims": { "pnr": "...", "picture": "data:image/jpeg;base64,..." } }
+ *
+ * Multi-credential offers: use POST /offer-no-code-batch instead.
  */
 router.post("/offer-no-code", async (req, res) => {
   let sessionId;
@@ -166,14 +218,19 @@ router.post("/offer-no-code", async (req, res) => {
     bindSessionLoggingContext(req, res, sessionId);
 
     const credentialType = getCredentialType(req);
-    const credentialPayload = req.body;
+    const signatureType = getSignatureType(req);
+    const credentialPayload = normalizeSingleCredentialOfferPayload(req.body);
 
     if (!isValidCredentialPayload(credentialPayload)) {
       return sendErrorResponse(res, "invalid_request", "Credential payload is required", 400);
     }
 
-    const sessionData = createSessionWithPayload(credentialPayload, true);
-    await manageSession(sessionId, sessionData);
+    const sessionData = createSessionWithPayload(
+      credentialPayload,
+      true,
+      signatureType,
+    );
+    await manageOfferSession(sessionId, sessionData);
 
     const invocationScheme = getCredentialOfferSchemeFromRequest(req);
     const credentialOffer = createPreAuthCredentialOfferUri(
@@ -186,7 +243,71 @@ router.post("/offer-no-code", async (req, res) => {
     const response = await createCredentialOfferResponse(credentialOffer, sessionId);
     res.json(response);
   } catch (error) {
+    if (error?.errorCode === "invalid_request") {
+      const status = error.status || 400;
+      return sendErrorResponse(res, "invalid_request", error.message, status);
+    }
     handleRouteError(error, "Offer no-code POST", res, sessionId);
+  }
+});
+
+/**
+ * Pre-authorized flow without transaction code — multi-configuration offer with payloads.
+ *
+ * Body:
+ * {
+ *   "signatureType": "x509",
+ *   "credentials": [
+ *     { "credential_configuration_id": "VerifiableStudentIDSDJWT", "payload": { ... } },
+ *     { "credential_configuration_id": "LoyaltyCard", "payload": { ... } }
+ *   ]
+ * }
+ *
+ * `signatureType` may also be supplied as a query parameter (same as `/vci/offer`).
+ */
+router.post("/offer-no-code-batch", async (req, res) => {
+  let sessionId;
+  try {
+    sessionId = getSessionId(req);
+    bindSessionLoggingContext(req, res, sessionId);
+
+    const issuerConfig = loadIssuerConfiguration();
+    const { offeredConfigurationIds, credentialPayloads } =
+      parseMultiCredentialOfferRequest(req.body, issuerConfig);
+    const signatureType = getSignatureType(req);
+
+    const sessionData = createSessionWithMultiCredentialPayloads(
+      offeredConfigurationIds,
+      credentialPayloads,
+      true,
+      signatureType,
+    );
+    await manageOfferSession(sessionId, sessionData);
+
+    const invocationScheme = getCredentialOfferSchemeFromRequest(req);
+    const credentialOffer = createPreAuthCredentialOfferUri(
+      sessionId,
+      null,
+      "/credential-offer-no-code-batch",
+      invocationScheme,
+    );
+
+    const response = await createCredentialOfferResponse(credentialOffer, sessionId);
+    res.json({
+      ...response,
+      offeredConfigurationIds,
+    });
+  } catch (error) {
+    if (error?.errorCode === "invalid_request") {
+      const status = error.status || 400;
+      return sendErrorResponse(
+        res,
+        "invalid_request",
+        error.message,
+        status,
+      );
+    }
+    handleRouteError(error, "Offer no-code batch POST", res, sessionId);
   }
 });
 
@@ -240,10 +361,10 @@ router.get("/haip-offer-tx-code", async (req, res) => {
 
     const credentialType = getCredentialType(req);
 
-    const sessionData = createBaseSession("pre-auth", true, null, {
+    const sessionData = applyPreAuthTxCode(createBaseSession("pre-auth", true, null, {
       requireTxCode: true,
-    });
-    await manageSession(sessionId, sessionData);
+    }));
+    const storedSession = await manageSession(sessionId, sessionData);
 
     const credentialOffer = createPreAuthCredentialOfferUri(
       sessionId,
@@ -252,7 +373,11 @@ router.get("/haip-offer-tx-code", async (req, res) => {
       URL_SCHEMES.HAIP
     );
 
-    const response = await createCredentialOfferResponse(credentialOffer, sessionId);
+    const response = await createCredentialOfferResponse(
+      credentialOffer,
+      sessionId,
+      storedSession.expectedTxCode,
+    );
     res.json(response);
   } catch (error) {
     handleRouteError(error, "HAIP offer tx-code", res, sessionId);

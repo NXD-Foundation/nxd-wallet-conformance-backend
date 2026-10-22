@@ -4,8 +4,175 @@ import fs from "fs";
 import qr from "qr-image";
 import imageDataURI from "image-data-uri";
 import { streamToBuffer } from "@jorgeferrero/stream-to-buffer";
+import {
+  buildIataBcbpDataString,
+  getAirlineBoardingPassSDJWTData,
+  getAirlineBoardingPassSDJWTDataWithPayload,
+} from "./airlineBoardingPassUtil.js";
+import {
+  getCasslBiometricQrSDJWTData,
+  getCasslBiometricQrSDJWTDataWithPayload,
+} from "./casslBiometricQrUtil.js";
+
+export {
+  buildIataBcbpDataString,
+  getAirlineBoardingPassSDJWTData,
+  getAirlineBoardingPassSDJWTDataWithPayload,
+  getCasslBiometricQrSDJWTData,
+  getCasslBiometricQrSDJWTDataWithPayload,
+};
 
 const face_data = fs.readFileSync("./data/face.data", "utf8");
+
+/** Mock PID portrait (JPEG bytes) — see data/portraits/README.md */
+const PID_PORTRAIT_JPEG = fs.readFileSync("./data/portraits/pid-portrait.jpg");
+const PID_PORTRAIT_DATA_URL = `data:image/jpeg;base64,${PID_PORTRAIT_JPEG.toString("base64")}`;
+
+/**
+ * Full mock natural-person PID claims per ARF Annex 3.01 PID Rulebook
+ * (docs/rulebooks/pid-rulebook.md) SD-JWT VC encoding (Chapter 4).
+ */
+function buildPidSdJwtClaims() {
+  const issuance = new Date();
+  const expiry = new Date(issuance);
+  expiry.setFullYear(expiry.getFullYear() + 10);
+  const toFullDate = (d) => d.toISOString().slice(0, 10);
+
+  return {
+    // Mandatory attributes (CIR 2024/2977) — SD-JWT claim names
+    given_name: "Hanna",
+    family_name: "Matkalainen",
+    birthdate: "2005-07-01",
+    place_of_birth: {
+      country: "FI",
+      region: "Uusimaa",
+      locality: "Helsinki",
+    },
+    nationalities: ["FI"],
+    picture: PID_PORTRAIT_DATA_URL,
+
+    // Optional attributes (CIR 2024/2977) — address hierarchy + others
+    address: {
+      formatted: "Mannerheimintie 1, 00100 Helsinki",
+      country: "FI",
+      region: "Uusimaa",
+      locality: "Helsinki",
+      postal_code: "00100",
+      street_address: "Mannerheimintie 1",
+      house_number: "1",
+    },
+    personal_administrative_number: "123456-789A",
+    birth_family_name: "Virtanen",
+    birth_given_name: "Hanna Maria",
+    sex: 2,
+    email: "hanna.matkalainen@example.com",
+    phone_number: "+358401234567",
+
+    // Mandatory metadata
+    issuing_authority: "Digital and Population Data Services Agency",
+    issuing_country: "FI",
+
+    // Optional metadata (administrative validity — YYYY-MM-DD)
+    date_of_issuance: toFullDate(issuance),
+    date_of_expiry: toFullDate(expiry),
+    document_number: "A01234567",
+    issuing_jurisdiction: "FI-18",
+
+    // Additional optional attributes from the Rulebook
+    trust_anchor: "https://example.com/trustanchors/pid/",
+    attestation_legal_category: "PID",
+  };
+}
+
+/**
+ * Disclosure frame for SD-JWT PID.
+ * place_of_birth and address are top-level _sd entries so DCQL whole-object
+ * paths (e.g. ["place_of_birth"], ["address"]) match what vpStandardRoutes requests.
+ */
+function buildPidSdJwtDisclosureFrame() {
+  return {
+    _sd: [
+      "given_name",
+      "family_name",
+      "birthdate",
+      "place_of_birth",
+      "nationalities",
+      "picture",
+      "address",
+      "personal_administrative_number",
+      "birth_family_name",
+      "birth_given_name",
+      "sex",
+      "email",
+      "phone_number",
+      "issuing_authority",
+      "issuing_country",
+      "date_of_issuance",
+      "date_of_expiry",
+      "document_number",
+      "issuing_jurisdiction",
+      "trust_anchor",
+      "attestation_legal_category",
+    ],
+  };
+}
+
+/**
+ * Full mock PID claims per Rulebook Chapter 3 (ISO/IEC 18013-5 / mso_mdoc).
+ * Attribute identifiers differ from SD-JWT (e.g. birth_date, nationality, portrait).
+ */
+function buildPidMdocClaims() {
+  const issuance = new Date();
+  const expiry = new Date(issuance);
+  expiry.setFullYear(expiry.getFullYear() + 10);
+  const toFullDate = (d) => d.toISOString().slice(0, 10);
+
+  return {
+    given_name: "Hanna",
+    family_name: "Matkalainen",
+    birth_date: "2005-07-01",
+    place_of_birth: {
+      country: "FI",
+      region: "Uusimaa",
+      locality: "Helsinki",
+    },
+    // Attribute identifier is `nationality`; value type is nationalities array
+    nationality: ["FI"],
+    portrait: PID_PORTRAIT_JPEG,
+
+    resident_address: "Mannerheimintie 1, 00100 Helsinki",
+    resident_country: "FI",
+    resident_state: "Uusimaa",
+    resident_city: "Helsinki",
+    resident_postal_code: "00100",
+    resident_street: "Mannerheimintie 1",
+    personal_administrative_number: "123456-789A",
+    family_name_birth: "Virtanen",
+    given_name_birth: "Hanna Maria",
+    sex: 2,
+    email_address: "hanna.matkalainen@example.com",
+    mobile_phone_number: "+358401234567",
+
+    issuing_authority: "Digital and Population Data Services Agency",
+    issuing_country: "FI",
+    issuance_date: toFullDate(issuance),
+    expiry_date: toFullDate(expiry),
+    document_number: "A01234567",
+    issuing_jurisdiction: "FI-18",
+
+    trust_anchor: "https://example.com/trustanchors/pid/",
+    attestation_legal_category: "PID",
+  };
+}
+
+function buildPidMdocDisclosureFrame(namespace, claimKeys) {
+  return {
+    [namespace]: {
+      _sd: [...claimKeys],
+    },
+  };
+}
+
 // Helper functions to create payloads for different credential types
 
 export const createPIDPayload = (token, serverURL, decodedHeaderSubjectDID) => {
@@ -340,73 +507,21 @@ export const createFerryBoardingPassPayload = (
 // SD-JWT HELPERS
 
 export const getPIDSDJWTData = (decodedHeaderSubjectDID) => {
-  const issuanceDate = new Date();
-  const expiryDate = new Date();
-  expiryDate.setFullYear(issuanceDate.getFullYear() + 1);
-  const isoDate = (d) => d.toISOString().split("T")[0];
-  // ARF Annex 3.01 §5 SD-JWT VC PID claim names (not ISO mdoc identifiers)
-  const claims = {
-    given_name: "Hanna",
-    family_name: "Matkalainen",
-    birthdate: "2005-07-01",
-    age_equal_or_over: { "18": true },
-    date_of_issuance: isoDate(issuanceDate),
-    date_of_expiry: isoDate(expiryDate),
-    issuing_authority: "UAegean Test Issuer",
-    issuing_country: "FI",
-  };
-
-  const disclosureFrame = {
-    _sd: [
-      "given_name",
-      "family_name",
-      "birthdate",
-      "date_of_expiry",
-      "date_of_issuance",
-      "issuing_authority",
-      "issuing_country",
-    ],
-    age_equal_or_over: {
-      _sd: ["18"],
-    },
-  };
-
+  const claims = buildPidSdJwtClaims();
+  const disclosureFrame = buildPidSdJwtDisclosureFrame();
   return { claims, disclosureFrame };
 };
 
 export const getPIDSDJWTDataMsoMdoc = (decodedHeaderSubjectDID) => {
-  const issuanceDate = new Date();
-  const expiryDate = new Date();
-  expiryDate.setFullYear(issuanceDate.getFullYear() + 1);
   const pidMdocNamespace = "urn:eu.europa.ec.eudi:pid:1";
-
+  const mdocClaims = buildPidMdocClaims();
   const claims = {
-    [pidMdocNamespace]: {
-      given_name: "Hanna",
-      family_name: "Matkalainen",
-      birth_date: "2005-07-01",
-      age_over_18: true,
-      issuance_date: issuanceDate.toISOString().split("T")[0],
-      expiry_date: expiryDate.toISOString().split("T")[0],
-      issuing_authority: "UAegean Test Issuer",
-      issuing_country: "FI",
-    },
+    [pidMdocNamespace]: mdocClaims,
   };
-
-  const disclosureFrame = {
-    [pidMdocNamespace]: {
-      _sd: [
-        "given_name",
-        "family_name",
-        "birth_date",
-        "age_over_18",
-        "expiry_date",
-        "issuance_date",
-        "issuing_authority",
-        "issuing_country",
-      ],
-    },
-  };
+  const disclosureFrame = buildPidMdocDisclosureFrame(
+    pidMdocNamespace,
+    Object.keys(mdocClaims),
+  );
 
   return { claims, disclosureFrame };
 };
@@ -1129,14 +1244,101 @@ export const getLoyaltyCardSDJWTDataWithPayload = (
   return { claims, disclosureFrame };
 };
 
-const DEFAULT_BOOKING_REFERENCE_CLAIMS = {
-  booking_reference: "BR-2026-00042",
-  hotel_id: "hotel-123",
-  hotel_name: "Example Hotel Athens",
-  arrival_date: "2026-06-12",
-  departure_date: "2026-06-15",
-  booking_platform: "Example Booking Portal",
+const DEFAULT_ACCOMMODATION_VOUCHER_CLAIMS = {
+  reservationReference: "BR-2026-00042",
+  supplierReference: "SUP-2026-00001",
+  property: { id: "hotel-123", name: "Example Hotel Athens" },
+  stay: { checkInDate: "2026-06-12", checkOutDate: "2026-06-15" },
+  room: { type: "Standard Double" },
+  ratePlanCode: "BAR",
+  reservationStatus: "Confirmed",
+  voucherReference: "VCH-2026-00042",
+  guest: { givenName: "Hanna", familyName: "Matkalainen" },
 };
+
+const ACCOMMODATION_VOUCHER_DISCLOSURE_FRAME = {
+  _sd: [
+    "id",
+    "reservationReference",
+    "supplierReference",
+    "property",
+    "stay",
+    "room",
+    "ratePlanCode",
+    "reservationStatus",
+    "voucherReference",
+    "guest",
+  ],
+};
+
+function normalizeStayDate(value) {
+  if (value == null || value === "") {
+    return undefined;
+  }
+  const normalized = String(value);
+  return /^\d{4}-\d{2}-\d{2}/.test(normalized)
+    ? normalized.slice(0, 10)
+    : normalized;
+}
+
+function buildAccommodationVoucherClaims(sourceClaims) {
+  return {
+    reservationReference:
+      sourceClaims.reservationReference ??
+      sourceClaims.booking_reference ??
+      DEFAULT_ACCOMMODATION_VOUCHER_CLAIMS.reservationReference,
+    supplierReference:
+      sourceClaims.supplierReference ??
+      sourceClaims.booking_platform ??
+      DEFAULT_ACCOMMODATION_VOUCHER_CLAIMS.supplierReference,
+    property: {
+      id:
+        sourceClaims.property?.id ??
+        sourceClaims.hotel_id ??
+        DEFAULT_ACCOMMODATION_VOUCHER_CLAIMS.property.id,
+      name:
+        sourceClaims.property?.name ??
+        sourceClaims.hotel_name ??
+        DEFAULT_ACCOMMODATION_VOUCHER_CLAIMS.property.name,
+    },
+    stay: {
+      checkInDate: normalizeStayDate(
+        sourceClaims.stay?.checkInDate ??
+          sourceClaims.arrival_date ??
+          DEFAULT_ACCOMMODATION_VOUCHER_CLAIMS.stay.checkInDate,
+      ),
+      checkOutDate: normalizeStayDate(
+        sourceClaims.stay?.checkOutDate ??
+          sourceClaims.departure_date ??
+          DEFAULT_ACCOMMODATION_VOUCHER_CLAIMS.stay.checkOutDate,
+      ),
+    },
+    room: {
+      type:
+        sourceClaims.room?.type ??
+        DEFAULT_ACCOMMODATION_VOUCHER_CLAIMS.room.type,
+    },
+    ratePlanCode:
+      sourceClaims.ratePlanCode ??
+      DEFAULT_ACCOMMODATION_VOUCHER_CLAIMS.ratePlanCode,
+    reservationStatus:
+      sourceClaims.reservationStatus ??
+      DEFAULT_ACCOMMODATION_VOUCHER_CLAIMS.reservationStatus,
+    voucherReference:
+      sourceClaims.voucherReference ??
+      DEFAULT_ACCOMMODATION_VOUCHER_CLAIMS.voucherReference,
+    guest: {
+      givenName:
+        sourceClaims.guest?.givenName ??
+        sourceClaims.given_name ??
+        DEFAULT_ACCOMMODATION_VOUCHER_CLAIMS.guest.givenName,
+      familyName:
+        sourceClaims.guest?.familyName ??
+        sourceClaims.family_name ??
+        DEFAULT_ACCOMMODATION_VOUCHER_CLAIMS.guest.familyName,
+    },
+  };
+}
 
 export const getBookingReferenceSDJWTData = (decodedHeaderSubjectDID) => {
   return getBookingReferenceSDJWTDataWithPayload(null, decodedHeaderSubjectDID);
@@ -1144,7 +1346,7 @@ export const getBookingReferenceSDJWTData = (decodedHeaderSubjectDID) => {
 
 export const getBookingReferenceSDJWTDataWithPayload = (
   payload,
-  decodedHeaderSubjectDID
+  decodedHeaderSubjectDID,
 ) => {
   const sourceClaims =
     payload?.claims && typeof payload.claims === "object"
@@ -1153,33 +1355,42 @@ export const getBookingReferenceSDJWTDataWithPayload = (
 
   const claims = {
     id: decodedHeaderSubjectDID || uuidv4(),
-    booking_reference:
-      sourceClaims.booking_reference ??
-      DEFAULT_BOOKING_REFERENCE_CLAIMS.booking_reference,
-    hotel_id:
-      sourceClaims.hotel_id ?? DEFAULT_BOOKING_REFERENCE_CLAIMS.hotel_id,
-    hotel_name:
-      sourceClaims.hotel_name ?? DEFAULT_BOOKING_REFERENCE_CLAIMS.hotel_name,
-    arrival_date:
-      sourceClaims.arrival_date ?? DEFAULT_BOOKING_REFERENCE_CLAIMS.arrival_date,
-    departure_date:
-      sourceClaims.departure_date ??
-      DEFAULT_BOOKING_REFERENCE_CLAIMS.departure_date,
-    booking_platform:
-      sourceClaims.booking_platform ??
-      DEFAULT_BOOKING_REFERENCE_CLAIMS.booking_platform,
+    ...buildAccommodationVoucherClaims(sourceClaims),
+  };
+
+  return { claims, disclosureFrame: ACCOMMODATION_VOUCHER_DISCLOSURE_FRAME };
+};
+
+const DEFAULT_AIRLINE_PNR_CLAIMS = {
+  pnr: "Q7X2LM",
+  from: "ATH",
+  to: "RHO",
+  flight_date: "2026-07-31",
+  airline_name: "Aegean Airlines",
+};
+
+export const getAirlinePnrSDJWTData = () => {
+  return getAirlinePnrSDJWTDataWithPayload(null);
+};
+
+export const getAirlinePnrSDJWTDataWithPayload = (payload) => {
+  const sourceClaims =
+    payload?.claims && typeof payload.claims === "object"
+      ? payload.claims
+      : payload || {};
+
+  const claims = {
+    pnr: sourceClaims.pnr ?? DEFAULT_AIRLINE_PNR_CLAIMS.pnr,
+    from: sourceClaims.from ?? DEFAULT_AIRLINE_PNR_CLAIMS.from,
+    to: sourceClaims.to ?? DEFAULT_AIRLINE_PNR_CLAIMS.to,
+    flight_date:
+      sourceClaims.flight_date ?? DEFAULT_AIRLINE_PNR_CLAIMS.flight_date,
+    airline_name:
+      sourceClaims.airline_name ?? DEFAULT_AIRLINE_PNR_CLAIMS.airline_name,
   };
 
   const disclosureFrame = {
-    _sd: [
-      "id",
-      "booking_reference",
-      "hotel_id",
-      "hotel_name",
-      "arrival_date",
-      "departure_date",
-      "booking_platform",
-    ],
+    _sd: ["pnr", "from", "to", "flight_date", "airline_name"],
   };
 
   return { claims, disclosureFrame };
@@ -1187,7 +1398,7 @@ export const getBookingReferenceSDJWTDataWithPayload = (
 
 const DEFAULT_ROOM_KEY_CLAIMS = {
   room_number: "412",
-  reservationId: "RES-2026-001234",
+  reservationReference: "RES-2026-001234",
 };
 
 const ROOM_KEY_QR_CONFIG = {
@@ -1199,7 +1410,9 @@ const ROOM_KEY_QR_CONFIG = {
 
 async function encodeTextAsQrDataUri(text) {
   const code = qr.image(String(text), ROOM_KEY_QR_CONFIG);
-  return imageDataURI.encode(await streamToBuffer(code), "PNG");
+  // Lowercase png matches the QR bitmap bytes. Claim key must be `picture`
+  // (or `portrait`) for EUDI wallets to render the value as an image.
+  return imageDataURI.encode(await streamToBuffer(code), "png");
 }
 
 export const getRoomKeySDJWTData = async (decodedHeaderSubjectDID) => {
@@ -1215,21 +1428,147 @@ export const getRoomKeySDJWTDataWithPayload = async (
       ? payload.claims
       : payload || {};
 
-  const reservationId =
-    sourceClaims.reservationId ?? DEFAULT_ROOM_KEY_CLAIMS.reservationId;
+  const qrSourceText =
+    sourceClaims.reservationReference ??
+    sourceClaims.reservationId ??
+    DEFAULT_ROOM_KEY_CLAIMS.reservationReference;
   const room_number =
     sourceClaims.room_number ?? DEFAULT_ROOM_KEY_CLAIMS.room_number;
-  const qr_code = await encodeTextAsQrDataUri(reservationId);
+  // EUDI wallets only render `picture` / `portrait` claim keys as images.
+  const picture =
+    sourceClaims.picture ??
+    sourceClaims.qr_code ??
+    (await encodeTextAsQrDataUri(qrSourceText));
 
   const claims = {
     id: decodedHeaderSubjectDID || uuidv4(),
     room_number,
-    qr_code,
+    picture,
   };
 
   const disclosureFrame = {
-    _sd: ["id", "room_number", "qr_code"],
+    _sd: ["id", "room_number", "picture"],
   };
 
   return { claims, disclosureFrame };
+};
+
+const DEFAULT_EUROPEAN_DISABILITY_CARD_CLAIMS = {
+  family_name: "Matkalainen",
+  given_name: "Hanna",
+  birth_date: "1990-05-23",
+  serial_number: "EDC-FI-2026-0001234",
+  issue_date: "2026-01-15",
+  expiry_date: "2031-01-14",
+  issuing_country: "FI",
+  portrait: PID_PORTRAIT_DATA_URL,
+  assistant_entitlement: true,
+  disability_status_recognised: true,
+};
+
+const EUROPEAN_DISABILITY_CARD_DISCLOSURE_FRAME = {
+  _sd: [
+    "id",
+    "family_name",
+    "given_name",
+    "birth_date",
+    "serial_number",
+    "issue_date",
+    "expiry_date",
+    "issuing_country",
+    "portrait",
+    "assistant_entitlement",
+    "disability_status_recognised",
+  ],
+};
+
+function normalizeEdcDate(value) {
+  if (value == null || value === "") {
+    return undefined;
+  }
+  const normalized = String(value);
+  return /^\d{4}-\d{2}-\d{2}/.test(normalized)
+    ? normalized.slice(0, 10)
+    : normalized;
+}
+
+function normalizeAssistantEntitlement(sourceClaims) {
+  if (sourceClaims.assistant_entitlement != null) {
+    return Boolean(sourceClaims.assistant_entitlement);
+  }
+  if (sourceClaims.assistant_indicator != null) {
+    const indicator = String(sourceClaims.assistant_indicator).toUpperCase();
+    return indicator === "A" || indicator === "TRUE";
+  }
+  if (sourceClaims.A != null) {
+    const indicator = String(sourceClaims.A).toUpperCase();
+    return indicator === "A" || indicator === "TRUE";
+  }
+  return DEFAULT_EUROPEAN_DISABILITY_CARD_CLAIMS.assistant_entitlement;
+}
+
+function buildEuropeanDisabilityCardClaims(sourceClaims) {
+  return {
+    family_name:
+      sourceClaims.family_name ??
+      sourceClaims.surname ??
+      DEFAULT_EUROPEAN_DISABILITY_CARD_CLAIMS.family_name,
+    given_name:
+      sourceClaims.given_name ??
+      sourceClaims.forename ??
+      sourceClaims.given_name_unicode ??
+      DEFAULT_EUROPEAN_DISABILITY_CARD_CLAIMS.given_name,
+    birth_date: normalizeEdcDate(
+      sourceClaims.birth_date ??
+        sourceClaims.date_of_birth ??
+        DEFAULT_EUROPEAN_DISABILITY_CARD_CLAIMS.birth_date,
+    ),
+    serial_number:
+      sourceClaims.serial_number ??
+      sourceClaims.file_number ??
+      DEFAULT_EUROPEAN_DISABILITY_CARD_CLAIMS.serial_number,
+    issue_date: normalizeEdcDate(
+      sourceClaims.issue_date ??
+        DEFAULT_EUROPEAN_DISABILITY_CARD_CLAIMS.issue_date,
+    ),
+    expiry_date: normalizeEdcDate(
+      sourceClaims.expiry_date ??
+        DEFAULT_EUROPEAN_DISABILITY_CARD_CLAIMS.expiry_date,
+    ),
+    issuing_country:
+      sourceClaims.issuing_country ??
+      DEFAULT_EUROPEAN_DISABILITY_CARD_CLAIMS.issuing_country,
+    portrait:
+      sourceClaims.portrait ??
+      sourceClaims.picture ??
+      DEFAULT_EUROPEAN_DISABILITY_CARD_CLAIMS.portrait,
+    assistant_entitlement: normalizeAssistantEntitlement(sourceClaims),
+    disability_status_recognised:
+      sourceClaims.disability_status_recognised ??
+      DEFAULT_EUROPEAN_DISABILITY_CARD_CLAIMS.disability_status_recognised,
+  };
+}
+
+export const getEuropeanDisabilityCardSDJWTData = (decodedHeaderSubjectDID) => {
+  return getEuropeanDisabilityCardSDJWTDataWithPayload(
+    null,
+    decodedHeaderSubjectDID,
+  );
+};
+
+export const getEuropeanDisabilityCardSDJWTDataWithPayload = (
+  payload,
+  decodedHeaderSubjectDID,
+) => {
+  const sourceClaims =
+    payload?.claims && typeof payload.claims === "object"
+      ? payload.claims
+      : payload || {};
+
+  const claims = {
+    id: decodedHeaderSubjectDID || uuidv4(),
+    ...buildEuropeanDisabilityCardClaims(sourceClaims),
+  };
+
+  return { claims, disclosureFrame: EUROPEAN_DISABILITY_CARD_DISCLOSURE_FRAME };
 };

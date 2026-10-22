@@ -13,6 +13,7 @@ import {
   createWiaPopJwt,
   createWUA,
 } from "./crypto.js";
+import { loadWuaSigningMaterial, validateExternalWuaSignature } from "./wuaSigningMaterial.js";
 import { getOrCreateWalletInstanceId } from "./cache.js";
 import { validateWiaMaterialForParOrToken } from "./wiaParTokenValidation.js";
 
@@ -116,6 +117,8 @@ export async function buildWiaBundleForParOrToken({
   endpointAudience,
   authorizationServerIssuer,
   wiaTtlSeconds = 3600,
+  challenge = null,
+  cnfKeyPair = null,
 }) {
   const { privateJwk, publicJwk } = await ensureWalletProviderKeyPair();
   const providerId = resolveWalletProviderIdSync(publicJwk);
@@ -126,15 +129,16 @@ export async function buildWiaBundleForParOrToken({
     issuer: providerId,
     subject: instanceId,
     audience: endpointAudience,
-    cnfJwk: publicJwk,
+    cnfJwk: cnfKeyPair?.publicJwk || publicJwk,
     ttlSeconds: wiaTtlSeconds,
   });
   // PoP `iss` MUST equal WIA `sub` (wallet instance id), not the Wallet Provider id.
   const wiaPopJwt = await createWiaPopJwt({
-    privateJwk,
-    publicJwk,
+    privateJwk: cnfKeyPair?.privateJwk || privateJwk,
+    publicJwk: cnfKeyPair?.publicJwk || publicJwk,
     issuer: instanceId,
     audience: authorizationServerIssuer,
+    challenge,
   });
   return {
     walletProviderId: providerId,
@@ -159,6 +163,8 @@ export async function resolveWiaForParOrToken({
   authorizationServerIssuer,
   wiaTtlSeconds = 3600,
   clientId,
+  challenge = null,
+  cnfKeyPair = null,
 }) {
   const ext = readExternalAttestationTokens();
   let wiaJwt;
@@ -167,6 +173,12 @@ export async function resolveWiaForParOrToken({
   let walletInstanceId;
 
   if (ext?.wiaHeaderJwt && ext.wiaPopJwt) {
+    if (challenge != null && String(challenge).trim() !== "") {
+      throw new Error(
+        "attestation challenge retry is not supported with WALLET_USE_EXTERNAL_ATTESTATION; " +
+          "external OAuth-Client-Attestation-PoP JWTs cannot be rebound to a new challenge",
+      );
+    }
     wiaJwt = ext.wiaHeaderJwt;
     wiaPopJwt = ext.wiaPopJwt;
   } else {
@@ -174,6 +186,8 @@ export async function resolveWiaForParOrToken({
       endpointAudience,
       authorizationServerIssuer,
       wiaTtlSeconds,
+      challenge,
+      cnfKeyPair,
     });
     wiaJwt = bundle.wiaJwt;
     wiaPopJwt = bundle.wiaPopJwt;
@@ -192,6 +206,7 @@ export async function resolveWiaForParOrToken({
     endpointAudience,
     authorizationServerIssuer,
     clientId: effectiveClientId,
+    expectedCnfJwk: cnfKeyPair?.publicJwk,
   });
 
   return {
@@ -210,9 +225,18 @@ export async function resolveWiaForParOrToken({
  * WUA for Credential binding: `proofs.jwt` `key_attestation` or `proofs.attestation`.
  * Signed by Wallet Provider key; `iss` = provider; `attested_keys` = ordered proof/holder public JWKs.
  */
-export async function buildWalletUnitAttestationJwt({ credentialEndpoint, proofPublicJwk, proofPublicJwks, eudiWalletInfo }) {
+export async function buildWalletUnitAttestationJwt({
+  credentialEndpoint,
+  proofPublicJwk,
+  proofPublicJwks,
+  eudiWalletInfo,
+  c_nonce = null,
+}) {
   const ext = readExternalAttestationTokens();
-  if (ext?.wuaJwt) return ext.wuaJwt;
+  if (ext?.wuaJwt) {
+    await validateExternalWuaSignature(ext.wuaJwt);
+    return ext.wuaJwt;
+  }
 
   const keys = proofPublicJwks ?? (proofPublicJwk ? [proofPublicJwk] : []);
   if (!Array.isArray(keys) || keys.length === 0) {
@@ -222,12 +246,16 @@ export async function buildWalletUnitAttestationJwt({ credentialEndpoint, proofP
     throw new Error("buildWalletUnitAttestationJwt: at most 32 attested_keys supported");
   }
 
-  const { privateJwk, publicJwk } = await ensureWalletProviderKeyPair();
-  const providerId = resolveWalletProviderIdSync(publicJwk);
+  const { privateKeyPem, publicJwk, x5c } = loadWuaSigningMaterial();
+  // Keep the configured/provider identity stable across WIA and WUA signers.
+  const providerKeys = await ensureWalletProviderKeyPair();
+  const providerId = resolveWalletProviderIdSync(providerKeys.publicJwk);
   const instanceId = await getOrCreateWalletInstanceId();
   return createWUA({
-    privateJwk,
+    privateKeyPem,
     publicJwk,
+    includeJwkHeader: false,
+    headerParams: { x5c },
     issuer: providerId,
     subject: instanceId,
     audience: credentialEndpoint,
@@ -235,5 +263,6 @@ export async function buildWalletUnitAttestationJwt({ credentialEndpoint, proofP
     eudiWalletInfo,
     alg: "ES256",
     ttlHours: 24,
+    ...(typeof c_nonce === "string" && c_nonce.length > 0 ? { nonce: c_nonce } : {}),
   });
 }

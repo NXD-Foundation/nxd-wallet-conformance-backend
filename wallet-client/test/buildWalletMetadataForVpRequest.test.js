@@ -26,8 +26,8 @@ describe("P2-W-6 wallet_metadata for request_uri POST", () => {
       "direct_post",
       "direct_post.jwt",
     ]);
-    assert.strictEqual(meta.authorization_encryption_alg_values_supported[0], "ECDH-ES+A256KW");
-    assert.strictEqual(meta.authorization_encryption_enc_values_supported[0], "A256GCM");
+    assert.strictEqual(meta.authorization_encryption_alg_values_supported[0], "ECDH-ES");
+    assert.deepStrictEqual(meta.authorization_encryption_enc_values_supported, ["A128GCM", "A256GCM"]);
     assert.strictEqual(meta.mdoc_generated_nonce, nonce);
 
     assert.ok(meta.jwks?.keys?.length === 1);

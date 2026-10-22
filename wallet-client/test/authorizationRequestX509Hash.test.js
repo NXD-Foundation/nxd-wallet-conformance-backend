@@ -23,6 +23,33 @@ function certToX5c0() {
 }
 
 describe("authorization request JWT (RFC002 x509_hash)", () => {
+  it("rejects an unsigned authorization request before trust resolution", async () => {
+    const unsigned = `${Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url")}.${Buffer.from(JSON.stringify({ client_id: "x509_hash:test" })).toString("base64url")}.`;
+    try {
+      await verifyAuthorizationRequestJwt(unsigned, { expectedClientId: null });
+      expect.fail("expected unsigned request rejection");
+    } catch (error) {
+      expect(error.message).to.include("Authorization request JWT must be signed");
+    }
+  });
+
+  it("rejects a signed request whose client_id differs from the deep-link client_id", async () => {
+    const x5c0 = certToX5c0();
+    const client_id = computeX509HashClientIdFromLeafX5c(x5c0);
+    const privateKeyPem = fs.readFileSync(x509KeyPath, "utf8");
+    const key = await importPKCS8(privateKeyPem, "RS256");
+    const requestJwt = await new SignJWT({ client_id })
+      .setProtectedHeader({ alg: "RS256", typ: "oauth-authz-req+jwt", x5c: [x5c0] })
+      .sign(key);
+
+    try {
+      await verifyAuthorizationRequestJwt(requestJwt, { expectedClientId: "x509_hash:other" });
+      expect.fail("expected client_id mismatch rejection");
+    } catch (error) {
+      expect(error.message).to.include("does not match deep link client_id");
+    }
+  });
+
   it("computeX509HashClientIdFromLeafX5c matches verifier computeX509HashClientId (SHA-256 DER, base64url)", () => {
     const x5c0 = certToX5c0();
     const got = computeX509HashClientIdFromLeafX5c(x5c0);

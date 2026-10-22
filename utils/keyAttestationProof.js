@@ -11,10 +11,10 @@
 import jwt from "jsonwebtoken";
 import * as jose from "jose";
 import {
-  isWalletProviderAttestationTrustedByPolicy,
-  resolveWalletProviderAttestationVerificationJwk,
-  verifyWalletProviderAttestation,
-} from "./wuaVerificationKeyResolver.js";
+  isWalletProviderKeyAttestationTrustedByPolicy,
+  resolveKeyAttestationVerificationJwkFromX5c,
+  withKeyAttestationSpecRef,
+} from "./keyAttestationX5cVerification.js";
 
 /** Match sharedIssuanceFlows ERROR_MESSAGES.INVALID_PROOF_* strings for consistent error handling */
 const INVALID_PROOF = "No proof information found";
@@ -27,12 +27,42 @@ const KEY_ATTESTATION_SPEC_REF =
 const HAIP_KEY_ATTESTATION_SPEC_REF = "HAIP 1.0 §4.5.1";
 
 function withSpecRef(message, ...refs) {
-  const present = refs.filter(Boolean);
-  if (present.length === 0) return message;
-  return `${message}${message.endsWith(".") ? "" : "."} See ${present.join(" and ")}.`;
+  return withKeyAttestationSpecRef(message, ...refs);
 }
 
 export const KEY_ATTESTATION_JWT_TYP = "key-attestation+jwt";
+
+function assertCertificationClaimShape(certification, specRef = "") {
+  if (certification === undefined) return;
+  if (typeof certification !== "string" || certification.trim() === "") {
+    const detail =
+      certification != null && typeof certification === "object"
+        ? "Key Attestation certification must be a string URL, not a JSON object"
+        : "Key Attestation certification must be a non-empty string URL";
+    throw new Error(withSpecRef(detail, KEY_ATTESTATION_SPEC_REF, specRef));
+  }
+  let parsed;
+  try {
+    parsed = new URL(certification.trim());
+  } catch {
+    throw new Error(
+      withSpecRef(
+        "Key Attestation certification must be a valid absolute URL",
+        KEY_ATTESTATION_SPEC_REF,
+        specRef
+      )
+    );
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(
+      withSpecRef(
+        "Key Attestation certification URL must use http or https",
+        KEY_ATTESTATION_SPEC_REF,
+        specRef
+      )
+    );
+  }
+}
 
 /**
  * Conformance-style parsing: proofs.attestation MUST be a JSON array containing exactly one JWT string.
@@ -67,43 +97,20 @@ export function parseProofAttestationJwtFromCredentialProofs(proofValue, specRef
 
 /**
  * Policy gate after cryptographic verification of the key-attestation JWT (often WUA in EUDI).
- * Stub: always true. Plug in Wallet Provider / Trusted List checks on payload.iss here, analogous to
- * isWuaWalletProviderTrustedByPolicy in routeUtils.js for the same WUA when carried as key_attestation.
  * @returns {boolean}
  */
-export function isKeyAttestationTrustedByIssuer(_decodedHeader, _decodedPayload, _issuerConfig) {
-  return isWalletProviderAttestationTrustedByPolicy(
-    _decodedPayload,
-    _decodedHeader,
-    _issuerConfig,
-  );
+export function isKeyAttestationTrustedByIssuer(decodedHeader, decodedPayload, issuerConfig) {
+  return isWalletProviderKeyAttestationTrustedByPolicy(decodedHeader, decodedPayload, issuerConfig);
 }
 
 /**
- * Verification key for the key-attestation JWT signature.
- * Uses the shared Wallet Provider attestation resolver (same as proofs.jwt key_attestation / WUA).
+ * Verification key for the key-attestation JWT signature (x5c leaf under configured WP trust anchors).
  * @param {{ header?: object }} decodedComplete - jwt.decode(..., { complete: true })
- * @param {object} issuerConfig - full issuer metadata object
+ * @param {object} issuerConfig - full issuer metadata object (wallet_provider_trust_anchors)
  * @returns {object} public JWK
  */
 export function resolveKeyAttestationVerificationJwk(decodedComplete, issuerConfig) {
-  try {
-    return resolveWalletProviderAttestationVerificationJwk(decodedComplete?.header, issuerConfig, {
-      specRefs: [KEY_ATTESTATION_SPEC_REF, HAIP_KEY_ATTESTATION_SPEC_REF],
-    });
-  } catch (e) {
-    const msg = e?.message || String(e);
-    if (/Cannot verify WUA signature/i.test(msg)) {
-      throw new Error(
-        withSpecRef(
-          `${INVALID_PROOF_PUBLIC_KEY} Key attestation: ${msg.replace(/^Cannot verify WUA signature:\s*/i, "")}`,
-          KEY_ATTESTATION_SPEC_REF,
-          HAIP_KEY_ATTESTATION_SPEC_REF,
-        ),
-      );
-    }
-    throw e;
-  }
+  return resolveKeyAttestationVerificationJwkFromX5c(decodedComplete?.header, issuerConfig);
 }
 
 /**
@@ -183,6 +190,9 @@ export function validateAttestationClaimsAndExtractAttestedKeys(payload, specRef
   if (!payload || typeof payload !== "object") {
     throw new Error(`${INVALID_PROOF_MALFORMED} Key attestation: empty payload${specRef ? `. See ${specRef}` : ""}`);
   }
+  if (Object.prototype.hasOwnProperty.call(payload, "certification")) {
+    assertCertificationClaimShape(payload.certification, specRef);
+  }
   const keys = payload.attested_keys;
   if (!Array.isArray(keys) || keys.length === 0) {
     throw new Error(
@@ -232,32 +242,19 @@ export async function verifyKeyAttestationProofChain(
 
   validateKeyAttestationHeaderForCredentialConfig(decodedComplete.header, credConfig, specRef);
 
-  let verified;
-  try {
-    verified = await verifyWalletProviderAttestation(proofAttestationJwt, issuerConfig, {
-      specRefs: [KEY_ATTESTATION_SPEC_REF, HAIP_KEY_ATTESTATION_SPEC_REF, specRef],
-      // OpenID4VCI Appendix D.1 key attestations may be produced by the key
-      // storage component, so neither `iss` nor TS3's `eudi_wallet_info` is a
-      // required claim. Keep signature/trust, `iat`, and `attested_keys`
-      // validation mandatory for this proof transport.
-      claimValidation: {
-        requireIssuer: false,
-        requireEudiWalletInfo: false,
-        requireIssuedAt: true,
-      },
-    });
-  } catch (error) {
+  if (!isKeyAttestationTrustedByIssuer(decodedComplete.header, decodedComplete.payload, issuerConfig)) {
     throw new Error(
       withSpecRef(
-        `${INVALID_PROOF_SIGNATURE}: Key attestation ${error?.message || error}`,
-        KEY_ATTESTATION_SPEC_REF,
-        HAIP_KEY_ATTESTATION_SPEC_REF,
-      ),
+        `${INVALID_PROOF_SIGNATURE}: Key attestation is not trusted by issuer policy`,
+        HAIP_KEY_ATTESTATION_SPEC_REF
+      )
     );
   }
-  const { payload } = verified;
+
+  const verificationJwk = resolveKeyAttestationVerificationJwk(decodedComplete, issuerConfig);
+  const payload = await verifyKeyAttestationJwtSignature(proofAttestationJwt, verificationJwk);
   const attestedKeys = validateAttestationClaimsAndExtractAttestedKeys(payload, specRef);
   const cnf = buildCredentialBindingCnfFromAttestedKeys(attestedKeys);
 
-  return { payload, attestedKeys, cnf, verificationKeySource: verified.verificationKeySource };
+  return { payload, attestedKeys, cnf, signatureVerified: true };
 }

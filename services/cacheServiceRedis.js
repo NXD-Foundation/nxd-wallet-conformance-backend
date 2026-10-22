@@ -102,7 +102,10 @@ export async function getSessionKeyFromAccessToken(accessToken) {
       const session = await client.get(key);
       if (session) {
         const parsedSession = JSON.parse(session);
-        if (parsedSession.accessToken === accessToken) {
+        if (
+          parsedSession.accessToken === accessToken ||
+          Object.hasOwn(parsedSession.tokenAuthorizations || {}, accessToken)
+        ) {
           console.log(`Found session key for access token: ${accessToken}`);
           return key.replace("pre-auth-sessions:", ""); // Return the session key without the prefix
         }
