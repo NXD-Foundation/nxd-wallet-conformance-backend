@@ -85,6 +85,18 @@ describe("authorization request JWT (RFC002 x509_hash)", () => {
       expectedClientId: client_id,
     });
     expect(payload.client_id).to.equal(client_id);
+    const originalTrustMode = process.env.WALLET_TRUST_MODE;
+    process.env.WALLET_TRUST_MODE = "strict";
+    try {
+      let failure;
+      try { await verifyAuthorizationRequestJwt(requestJwt, { expectedClientId: client_id }); }
+      catch (error) { failure = error; }
+      expect(failure?.message).to.match(/framework trust is not established/);
+    } finally {
+      if (originalTrustMode === undefined) delete process.env.WALLET_TRUST_MODE;
+      else process.env.WALLET_TRUST_MODE = originalTrustMode;
+    }
+
   });
 
   it("verifyAuthorizationRequestJwt rejects x509_hash when client_id does not match leaf hash", async () => {

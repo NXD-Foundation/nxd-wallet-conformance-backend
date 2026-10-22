@@ -237,7 +237,7 @@ describe("keyAttestationProof", () => {
         },
       };
       try {
-        await verifyKeyAttestationProofChain(kaJwt, credConfig, {});
+        await verifyKeyAttestationProofChain(kaJwt, credConfig, { wallet_provider_trust_mode: "strict" });
         expect.fail("expected rejection");
       } catch (e) {
         expect(String(e.message)).to.match(/wallet_provider_trust_anchors|x5c|not trusted by issuer policy/i);

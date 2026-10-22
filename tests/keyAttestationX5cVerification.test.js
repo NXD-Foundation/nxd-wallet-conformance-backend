@@ -89,10 +89,20 @@ describe("keyAttestationX5cVerification", () => {
     ).to.throw(/header\.jwk is not accepted/i);
   });
 
+  it("warn mode permits a self-signed signer without claiming configured trust", async () => {
+    const fixtures = await createWalletProviderKeyAttestationCertFixtures();
+    const x5c = [pemToX5cDerB64(fixtures.caPem)];
+    expect(resolveKeyAttestationVerificationJwkFromX5c({ alg: "ES256", x5c }, {})).to.have.property("kty", "EC");
+    expect(() => resolveKeyAttestationVerificationJwkFromX5c(
+      { alg: "ES256", x5c },
+      { wallet_provider_trust_mode: "strict", wallet_provider_trust_anchors: fixtures.issuerConfigAnchors },
+    )).to.throw(/self-signed/);
+  });
+
   it("rejects when wallet_provider_trust_anchors is missing", async () => {
     const fixtures = await createWalletProviderKeyAttestationCertFixtures();
     expect(() =>
-      resolveKeyAttestationVerificationJwkFromX5c({ alg: "ES256", x5c: fixtures.x5c }, {})
+      resolveKeyAttestationVerificationJwkFromX5c({ alg: "ES256", x5c: fixtures.x5c }, { wallet_provider_trust_mode: "strict" })
     ).to.throw(/wallet_provider_trust_anchors are required/i);
   });
 
@@ -117,7 +127,7 @@ describe("keyAttestationX5cVerification", () => {
     expect(() =>
       resolveKeyAttestationVerificationJwkFromX5c(
         { alg: "ES256", x5c },
-        { wallet_provider_trust_anchors: fixtures.issuerConfigAnchors }
+        { wallet_provider_trust_anchors: fixtures.issuerConfigAnchors, wallet_provider_trust_mode: "strict" }
       )
     ).to.throw(/trust anchor certificate must not appear in the x5c/i);
   });

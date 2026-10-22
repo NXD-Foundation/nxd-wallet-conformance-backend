@@ -218,10 +218,24 @@ export function resolveKeyAttestationVerificationJwkFromX5c(decodedHeader, issue
   }
   const chainPems = certificatesFromX5cHeader(x5c);
   const anchors = getWalletProviderTrustAnchorPems(issuerConfig);
-  validateWalletProviderCertificatePath({
-    certificateChain: chainPems,
-    anchorCertificates: anchors,
-  });
+  // Always reject malformed/expired certificates and invalid signing usage,
+  // even when framework trust has not been established yet.
+  for (const pem of chainPems) certificateAt(pem, new Date());
+  if (!hasDigitalSignatureKeyUsage(chainPems[0])) {
+    throw new Error("Key attestation: signing certificate is not permitted for digital signatures");
+  }
+  const mode = issuerConfig?.wallet_provider_trust_mode ?? process.env.WALLET_PROVIDER_TRUST_MODE ?? "warn";
+  if (!["warn", "strict"].includes(mode)) throw new Error("Invalid WALLET_PROVIDER_TRUST_MODE; expected warn or strict");
+  try {
+    validateWalletProviderCertificatePath({
+      certificateChain: chainPems,
+      anchorCertificates: anchors,
+    });
+  } catch (error) {
+    const unestablishedTrust = /wallet_provider_trust_anchors are required|must not be self-signed|does not terminate at a configured Wallet Provider trust anchor|trust anchor certificate must not appear/.test(error.message);
+    if (mode === "strict" || !unestablishedTrust) throw error;
+    console.warn(`[trust] Wallet Provider trust not established; continuing in warn mode: ${error.message}`);
+  }
   try {
     const leafDer = Buffer.from(String(x5c[0]).replace(/\s+/g, ""), "base64");
     const cert = new X509Certificate(leafDer);

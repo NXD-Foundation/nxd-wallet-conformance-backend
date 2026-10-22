@@ -1,3 +1,4 @@
+import { assertCertificateValidity, handleUnestablishedTrust } from "./trustPolicy.js";
 import fetch from "node-fetch";
 import crypto from "node:crypto";
 import { jwtVerify, createLocalJWKSet, importJWK, importX509 } from "jose";
@@ -659,6 +660,7 @@ function assertClientIdSchemeConsistentWithX509Hash(payload) {
 
 export async function verifyAuthorizationRequestJwt(requestJwt, { expectedClientId }) {
   const { header, payload } = decodeJwt(requestJwt);
+  if (Array.isArray(header?.x5c) && header.x5c.length) assertCertificateValidity(header.x5c);
   if (!header?.alg || header.alg === "none") {
     throw new Error("Authorization request JWT must be signed");
   }
@@ -693,6 +695,7 @@ export async function verifyAuthorizationRequestJwt(requestJwt, { expectedClient
     const pem = x509LeafPemFromX5cFirst(header.x5c[0]);
     const certKey = await importX509(pem, header.alg);
     const verified = await jwtVerify(requestJwt, certKey, { clockTolerance: 300 });
+    handleUnestablishedTrust("Verifier request signer");
     return {
       header: verified.protectedHeader || header,
       payload: verified.payload,
@@ -736,6 +739,7 @@ export async function verifyAuthorizationRequestJwt(requestJwt, { expectedClient
   }
 
   for (const metadata of metadataCandidates) {
+    if (Array.isArray(metadata?.x5c) && metadata.x5c.length) assertCertificateValidity(metadata.x5c);
     if (metadata?.jwks?.keys?.length) {
       verificationAttempts.push(async () => jwtVerify(requestJwt, createLocalJWKSet(metadata.jwks), { clockTolerance: 300 }));
     }
@@ -770,6 +774,7 @@ export async function verifyAuthorizationRequestJwt(requestJwt, { expectedClient
   for (const attempt of verificationAttempts) {
     try {
       const verified = await attempt();
+      handleUnestablishedTrust("Verifier request signer");
       return {
         header: verified.protectedHeader || header,
         payload: verified.payload,

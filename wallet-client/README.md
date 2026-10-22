@@ -73,3 +73,19 @@ When neither is configured, the existing local development certificate and key
 are used. These fixtures do not establish trust with an external issuer: deploy
 material whose chain that issuer accepts. External WUA tokens must also carry
 `x5c` and verify under its first certificate; `jwk`-only WUA tokens are rejected.
+
+### Interim framework trust policy
+
+`WALLET_TRUST_MODE=warn` is the default while the APTITUDE trust framework is absent.
+After successful signature verification, signed issuer metadata, verifier requests,
+and external key attestations log that framework trust is not established. Missing
+verification keys, bad signatures, expired certificates/tokens, nonce mismatches,
+and holder-key mismatches still reject. Self-signed development certificates may be
+used, but do not establish an approved identity.
+
+`WALLET_TRUST_MODE=strict` rejects these unestablished framework trust decisions;
+wallet trusted-list integration is not implemented yet. This setting does not add
+cryptographic verification to existing structural-only mdoc validation.
+
+The issuer uses its separate `WALLET_PROVIDER_TRUST_MODE` setting for incoming key
+attestations. Neither warning mode bypasses TLS verification.

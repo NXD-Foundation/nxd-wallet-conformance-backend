@@ -3,7 +3,8 @@
 import fs from "node:fs";
 import { createPrivateKey, createPublicKey, X509Certificate } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { compactVerify, decodeProtectedHeader } from "jose";
+import { jwtVerify, decodeProtectedHeader } from "jose";
+import { assertCertificateValidity, handleUnestablishedTrust } from "./trustPolicy.js";
 
 const fixtureKey = fileURLToPath(new URL("../../x509EC/ec_private_pkcs8.key", import.meta.url));
 const fixtureCert = fileURLToPath(new URL("../../x509EC/client_certificate.crt", import.meta.url));
@@ -46,7 +47,9 @@ export async function validateExternalWuaSignature(jwt) {
       throw new Error("requires typ key-attestation+jwt, alg ES256 and x5c without jwk");
     }
     const certificates = header.x5c.map((entry) => new X509Certificate(Buffer.from(entry, "base64")));
-    await compactVerify(jwt, certificates[0].publicKey, { algorithms: ["ES256"] });
+    assertCertificateValidity(header.x5c);
+    await jwtVerify(jwt, certificates[0].publicKey, { algorithms: ["ES256"] });
+    handleUnestablishedTrust("External Wallet Provider attestation signer");
   } catch (error) {
     throw new Error(`External WUA certificate/signature is invalid: ${error.message}`);
   }

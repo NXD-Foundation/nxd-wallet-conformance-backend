@@ -215,9 +215,33 @@ describe("WUA validation (routeUtils)", () => {
       }
       const result = await validateWUA(compact, null, {
         wallet_provider_trust_anchors: failure === "trust" ? [] : fixtures.issuerConfigAnchors,
+        wallet_provider_trust_mode: "strict",
       });
       expect(result.valid).to.equal(false);
       expect(result.error).to.match(failure === "expiration" ? /expired/i : /signature|trust anchor/i);
+    });
+  }
+
+  for (const failure of [null, "signature", "expiration"]) {
+    it(`default warn mode without anchors ${failure ? "rejects " + failure : "accepts a valid signature"}`, async () => {
+      const fixtures = await import("./helpers/wpKeyAttestationCertFixtures.mjs").then((m) =>
+        m.createWalletProviderKeyAttestationCertFixtures()
+      );
+      const key = await jose.exportJWK((await jose.generateKeyPair("ES256")).publicKey);
+      let compact = await buildMinimalWuaX5c({
+        fixtures, attestedKeys: [key],
+        claims: failure === "expiration" ? { exp: Math.floor(Date.now() / 1000) - 10 } : {},
+      });
+      if (failure === "signature") {
+        const parts = compact.split(".");
+        const bytes = Buffer.from(parts[2], "base64url");
+        bytes[0] ^= 1;
+        parts[2] = bytes.toString("base64url");
+        compact = parts.join(".");
+      }
+      const result = await validateWUA(compact, null, {});
+      expect(result.valid).to.equal(failure === null);
+      if (failure) expect(result.error).to.match(failure === "signature" ? /signature/i : /expired/i);
     });
   }
 

@@ -3277,7 +3277,7 @@ export const validateWUA = async (wuaJwt, sessionId = null, issuerMetadata = nul
     // TODO: Check revocation status using status_list if present
 
     if (sessionId) {
-      await logInfo(sessionId, "WUA validated (signature + configured Wallet Provider trust)", {
+      await logInfo(sessionId, "WUA validated (signature + Wallet Provider trust policy)", {
         wuaIssuer: decoded.payload.iss,
         wuaExp: decoded.payload.exp,
         wuaIat: decoded.payload.iat,
@@ -3286,7 +3286,7 @@ export const validateWUA = async (wuaJwt, sessionId = null, issuerMetadata = nul
         hasStatus,
         attestedKeysCount: decoded.payload.attested_keys?.length || 0,
         signatureVerification: 'verified',
-        walletProviderTrustPolicy: 'x5c_to_wallet_provider_trust_anchors',
+        walletProviderTrustPolicy: meta.wallet_provider_trust_mode ?? process.env.WALLET_PROVIDER_TRUST_MODE ?? 'warn',
         revocationCheck: 'pending'
       }).catch(() => {});
     }

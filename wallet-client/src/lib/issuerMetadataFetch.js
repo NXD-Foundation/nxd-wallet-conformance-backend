@@ -1,3 +1,4 @@
+import { assertCertificateValidity, handleUnestablishedTrust } from "./trustPolicy.js";
 import { jwtVerify, decodeProtectedHeader, importX509 } from "jose";
 
 /** OpenID4VCI 1.0 §12.2.2 — prefer signed metadata, fall back to JSON. */
@@ -68,9 +69,11 @@ export async function verifyIssuerMetadataJws(compactJwt) {
     throw new Error(`Signed issuer metadata JWS uses unsupported alg: ${alg ?? "(none)"}`);
   }
   const derB64 = typeof x5c[0] === "string" ? x5c[0] : Buffer.from(x5c[0]).toString("base64");
+  assertCertificateValidity(x5c);
   const leafPem = pemFromDerBase64(derB64);
   const key = await importX509(leafPem, alg);
   const { payload } = await jwtVerify(compactJwt, key, { algorithms: [alg] });
+  handleUnestablishedTrust("Issuer metadata signer");
   return { payload, header };
 }
 

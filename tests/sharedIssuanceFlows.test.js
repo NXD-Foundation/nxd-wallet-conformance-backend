@@ -170,7 +170,8 @@ describe('Shared Issuance Flows', () => {
     // Preserve reads of dependency source files while overriding issuer fixtures.
     globalSandbox.stub(fs, 'readFileSync').callThrough()
       .withArgs(sinon.match(/issuer-config\.json/)).returns(JSON.stringify({
-        wallet_provider_trust_anchors: wpKaFixtures.issuerConfigAnchors,
+        // Exercise the APTITUDE default without a deployed trust framework.
+        wallet_provider_trust_anchors: [],
         credential_configurations_supported: {
           'test-cred-config': {
             format: 'dc+sd-jwt',

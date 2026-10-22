@@ -1022,3 +1022,17 @@ This makes `wallet-client` a **comprehensive test wallet** that exercises all is
 - **EUDI Wallet ARF**: [Architecture and Reference Framework](https://github.com/eu-digital-identity-wallet/eudi-doc-architecture-and-reference-framework/releases)
 - **ISO/IEC 18013-5:2021**: [Mobile driving licence (mDL)](https://www.iso.org/standard/69084.html)
 
+
+### Interim APTITUDE Wallet Provider trust policy
+
+Until the trust framework is deployed, credential key attestations default to
+`WALLET_PROVIDER_TRUST_MODE=warn`. Missing anchors, unestablished certificate paths,
+and self-signed development signers produce console warnings rather than rejection.
+The issuer still requires `x5c`, a valid signing certificate with digital-signature
+usage, and a valid JWT signature. Expiration, credential nonce, and holder-key binding
+checks remain mandatory. Malformed certificates and invalid CA path constraints fail.
+
+Set `WALLET_PROVIDER_TRUST_MODE=strict` (or issuer-config
+`wallet_provider_trust_mode: "strict"`) to require a chain accepted by configured
+`wallet_provider_trust_anchors`. Warn-mode acceptance does not establish Wallet
+Provider identity or production trust-framework conformance.
