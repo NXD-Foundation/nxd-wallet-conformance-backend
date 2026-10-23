@@ -1317,6 +1317,13 @@ async function generateMdlCredentialWithAuth0Library(
     // are omitted rather than present with `undefined` values.
     normalizeIssuerAuthHeaders(preparedIssuerSigned);
 
+    // @auth0/mdl signs with a single leaf. Preserve the configured issuer path
+    // in the unprotected x5chain header; this does not change the COSE signature.
+    preparedIssuerSigned.issuerAuth[1].set(
+      33,
+      issuerX509Material.x5c.map((der) => Buffer.from(der, "base64")),
+    );
+
     // Encode the properly prepared IssuerSigned structure using the library's cborEncode
     // which uses cbor-x with the correct options for ISO 18013-5 compliance
     // Note: cborEncode is exported from @auth0/mdl/lib/cbor, not the main module

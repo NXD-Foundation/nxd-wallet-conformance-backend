@@ -816,6 +816,7 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
           const trustDecision = await checkVerifierCredentialTrust({
             session: vpSession,
             certificatePem: mdocResult.issuerCertificate?.certificatePem,
+            certificateChain: mdocResult.issuerCertificate?.certificateChain,
             format: "mso_mdoc",
             doctype: mdocResult.docType,
             operation: "verify-credential",

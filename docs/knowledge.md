@@ -648,7 +648,9 @@ Section 3.6 and Section 4.2.
   context (`vct`/`doctype`) to explicit WP4 provider roles, and composes trust
   results with the existing signature, key-binding, DCQL, and status checks.
   Both shared and legacy mdoc paths extract the COSE issuer-authentication
-  `x5chain` leaf for trust evaluation.
+  `x5chain` leaf and full certificate chain for trust evaluation. Trust-enabled
+  mdoc issuance preserves the configured PID issuer chain in COSE header 33,
+  allowing a listed CA anchor to match just as with SD-JWT `x5c`.
   Enforcement is activated only by the session policy created with
   `trustFramework=true` at VP request generation. Non-opted-in sessions retain
   compatibility behavior. mdoc issuer-certificate extraction and WRPAC/WRPRC

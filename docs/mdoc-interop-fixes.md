@@ -1,6 +1,6 @@
 # mdoc Interop Fixes
 
-This note captures two mdoc interoperability bugs fixed in this branch so they can be checked and ported to other branches consistently.
+This note captures mdoc interoperability bugs fixed in this repository so they can be checked and ported to other branches consistently.
 
 ## Scope
 
@@ -8,6 +8,7 @@ The fixes cover:
 
 1. Issuer metadata for PID `mso_mdoc`
 2. Wallet-client mdoc presentation for OpenID4VP / HAIP
+3. PID certificate-chain preservation for Trust Framework Integration
 
 ---
 
@@ -171,3 +172,25 @@ npm test
   mdoc `vp_token` is a base64url-encoded `DeviceResponse` and carries device authentication over the session transcript
 - HAIP 1.0:
   mdoc presentations in OpenID4VP flows use `DeviceResponse`
+
+
+## Bug 3: Trust Framework Integration mdoc certificate chains
+
+Trust-enabled PID issuance loaded the configured leaf and CA chain but passed
+only the leaf to `@auth0/mdl`. Its emitted COSE `x5chain` therefore omitted the CA.
+Both shared and legacy verifier paths also extracted only the leaf, causing
+`ANCHOR_MISMATCH` when the PID trusted list authorized the CA rather than the
+signing leaf. SD-JWT retained its configured `x5c` chain.
+
+Issuance now preserves the configured leaf-first chain in unprotected COSE
+header 33 after signing, leaving the signed payload and protected headers intact.
+The shared extraction helper accepts a certificate array or a single byte string
+and returns the complete chain. Both verifier paths pass that chain to the
+existing trust policy, which still requires an independently listed anchor and
+validates the certificate path.
+
+`tests/mdocCertificateChain.test.js` covers both PID configuration identifiers,
+actual wallet-client presentation construction, issuer signature preservation,
+CA-backed trust evaluation, malformed chains, and rejection of missing,
+unrelated, or injected unrelated anchors. Reissue credentials minted before
+this fix: their omitted chain cannot be restored by updating verification alone.

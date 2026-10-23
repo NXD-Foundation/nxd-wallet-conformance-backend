@@ -1219,6 +1219,7 @@ export async function validateCs02SdJwtEntriesInVpToken(
           credentialTrust = await checkVerifierCredentialTrust({
             session: verificationContext.session,
             certificatePem: mdocResult?.issuerCertificate?.certificatePem,
+            certificateChain: mdocResult?.issuerCertificate?.certificateChain,
             format: MDOC_FORMAT,
             doctype: credQuery?.meta?.doctype_value,
             operation: "verify-credential",

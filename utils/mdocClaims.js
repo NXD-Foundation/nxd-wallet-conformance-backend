@@ -76,11 +76,14 @@ export function extractMdocIssuerCertificate(mdocInput) {
 
   const headers = coseSign1[1];
   const x5chain = headers instanceof Map ? headers.get(33) || headers.get("33") : headers?.[33] || headers?.["33"];
-  const leaf = Array.isArray(x5chain) ? x5chain[0] : null;
-  if (!(Buffer.isBuffer(leaf) || leaf instanceof Uint8Array)) return null;
-  const certificatePem = derToPem(leaf);
+  // COSE permits a single certificate as a bstr as well as an array of bstr.
+  const chain = Array.isArray(x5chain) ? x5chain : [x5chain];
+  if (!chain.length || chain.some((cert) => !(cert instanceof Uint8Array))) return null;
+  const certificateChain = chain.map((cert) => derToPem(cert));
+  const certificatePem = certificateChain[0];
   return {
     certificatePem,
+    certificateChain,
     certificateFingerprint: certificateFingerprint(certificatePem),
   };
 }
