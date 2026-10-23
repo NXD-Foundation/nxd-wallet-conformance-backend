@@ -888,3 +888,13 @@ profile interpretation, protocol support claim, or documentation location.
 | TS-12 / CS-12 payment SCA and transaction data              | CS-12 SCA payments, then TS-12 SCA with wallet                |
 | mdoc metadata, issuance, or presentation                    | mdoc generation and mdoc interop fixes                                    |
 | X.509 JAR signing certificates                              | JAR x5c certificate-chain plan                                            |
+
+### Native Android wallet evidence
+
+`routes/walletReporting.js` adds `/itb-wallet/v1` pairing and telemetry endpoints.
+One UUID maps to one ITB execution; native wallet protocol handling stays upstream.
+Evidence uses separate Redis keys with atomic updates, ordered events and idempotent
+completion. ITB displays wallet outcomes, not independent verifier verdicts.
+Configure ITB_WALLET_SERVICE_KEY and ITB_WALLET_TOKEN_SECRET (32+ characters).
+The same service key and ITB_WALLET_BACKEND origin are configured on Java test services.
+See [wallet reporting](wallet-reporting.md) for operation and wire format.

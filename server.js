@@ -16,6 +16,8 @@ import batchRouter from "./routes/batchRequestRoutes.js";
 import receiptRouter from "./routes/receiptsRoutes.js";
 import mdlRouter from "./routes/verify/mdlRoutes.js";
 import loggingRouter from "./routes/loggingRoutes.js";
+import { WalletReporting, walletReportingRouter } from "./routes/walletReporting.js";
+import { client as walletReportingRedis } from "./services/cacheServiceRedis.js";
 import vciStandardRouter from "./routes/issue/vciStandardRoutes.js";
 import dcApiIssuanceRouter from "./routes/issue/dcApiIssuanceRoutes.js";
 import vpStandardRouter from "./routes/verify/vpStandardRoutes.js";
@@ -39,6 +41,9 @@ const apiSpec = path.join(process.cwd(), "openapi.yaml");
 
 const app = express();
 const port = 3000;
+
+// Pairing capabilities and service credentials must bypass generic protocol logging.
+app.use("/itb-wallet/v1", walletReportingRouter(new WalletReporting(walletReportingRedis)));
 
 app.get("/status-lists/credentials/:listId", async (req, res) => {
   try {
