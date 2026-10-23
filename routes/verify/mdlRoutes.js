@@ -69,8 +69,8 @@ const AGE_VERIFICATION_DCQL_QUERY = {
  * Generate VP request with presentation definition
  */
 mdlRouter.get("/generateVPRequest", validateCs02InvocationScheme, async (req, res) => {
+  const sessionId = req.query.sessionId || uuidv4();
   try {
-    const sessionId = req.query.sessionId || uuidv4();
     const responseMode = req.query.response_mode || CONFIG.DEFAULT_RESPONSE_MODE;
     
     await logInfo(sessionId, "Starting mDL VP request generation", {
@@ -171,8 +171,8 @@ mdlRouter.get("/generateVPRequestDCQL", validateCs02InvocationScheme, async (req
 mdlRouter
   .route("/VPrequest/:id?")
   .post(express.urlencoded({ extended: true }), async (req, res) => {
+    const sessionId = req.params.id;
     try {
-      const sessionId = req.params.id;
       const { wallet_nonce: walletNonce, wallet_metadata: walletMetadata } = req.body;
 
       await logInfo(sessionId, "Processing POST mDL VP request", {
