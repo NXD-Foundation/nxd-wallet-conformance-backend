@@ -42,6 +42,11 @@ issuance storage. The public protocol shape is mostly configured through
 
 ### Session And Log Context
 
+Native Android reporting (`routes/walletReporting.js`) accepts bounded structured
+`diagnostic` events as well as milestones; these events participate in the same
+acknowledgement and completion sequence contract. See
+[wallet-reporting.md](wallet-reporting.md#android-diagnostic-batches).
+
 Sessions remain Redis-only and retain their existing service-specific keys and
 TTLs: pre-authorized issuance, authorization-code issuance, VP, and wallet
 test sessions are separate lifecycles with distinct session IDs. Every newly
@@ -117,15 +122,15 @@ LoTL content; runtime still fetches the published LoTL and referenced lists.
 
 ### Raidiam relying-party registration certificates
 
-Ordinary remote CS-02 requests use the original EUDI preproduction verifier
+Ordinary remote CS-02 and non-trust CS-07 presentation/payment requests use the original EUDI preproduction verifier
 P12 (`certs/WE-BUILD-Verifier.p12`, issued by PID Issuer CA 02) and its
 `certs/pidissuerca02_eu.pem` chain. Their signing profile and derived
 `x509_hash` identity are pinned in the VP session and retained on retrieval.
 They do not attach Raidiam registrar data or WRPRCs: those registrations belong
 to the Raidiam identity. This ordinary EUDI interoperability mode does not satisfy
 CS-02 v1.2's mandatory `verifier_info` requirement; full-profile registration
-coverage uses explicit `trustFramework=true` cases. CS-03 and CS-07 retain their
-existing certificate selection and registration behaviour.
+coverage uses explicit `trustFramework=true` cases. CS-03 (including DC API
+qualified signing) retains its existing certificate selection and registration behaviour.
 
 Trust-enabled requests require a locally activated, trusted WRPRC
 for the selected scenario and include its base64url-encoded registration token.
@@ -896,5 +901,9 @@ One UUID maps to one ITB execution; native wallet protocol handling stays upstre
 Evidence uses separate Redis keys with atomic updates, ordered events and idempotent
 completion. ITB displays wallet outcomes, not independent verifier verdicts.
 Configure ITB_WALLET_SERVICE_KEY and ITB_WALLET_TOKEN_SECRET (32+ characters).
-The same service key and ITB_WALLET_BACKEND origin are configured on Java test services.
+The same service key and ITB_WALLET_BACKEND service base URL (including reverse-proxy prefix) are configured on Java test services.
 See [wallet reporting](wallet-reporting.md) for operation and wire format.
+
+Native Android wallet reporting executions allow four minutes for pairing/testing;
+the native-wallet ITB suite uses millisecond receive timeouts, four-minute polling
+and a one-minute callback margin. Existing executions retain their original expiry.

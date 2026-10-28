@@ -7,12 +7,12 @@ const fail = (status, message) => { const error = new Error(message); error.stat
 const equal = (a, b) => typeof a === 'string' && typeof b === 'string' && timingSafeEqual(Buffer.from(hash(a)), Buffer.from(hash(b)));
 const id = value => uuid.test(value || '') ? value.toLowerCase() : fail(400, 'Expected UUID');
 const outcomes = new Set(['response_produced', 'cancelled', 'error', 'interrupted']);
-const eventNames = new Set(['presentation_started', 'request_received', 'request_validated', 'response_intent_ready', 'connected', 'disconnected', 'response_produced', 'response_sent', 'cancelled', 'error', 'interrupted']);
+const eventNames = new Set(['diagnostic', 'presentation_started', 'request_received', 'request_validated', 'response_intent_ready', 'connected', 'disconnected', 'response_produced', 'response_sent', 'cancelled', 'error', 'interrupted']);
 const cas = `if redis.call('GET',KEYS[1]) == ARGV[1] then redis.call('SET',KEYS[1],ARGV[2],'KEEPTTL'); return 1 else return 0 end`;
 
 // Separate evidence storage: atomic compare-and-swap avoids concurrent upload loss.
 export class WalletReporting {
-  constructor(redis, { now = () => Date.now(), secret = process.env.ITB_WALLET_TOKEN_SECRET, executionMs = 1800000, graceMs = 86400000 } = {}) {
+  constructor(redis, { now = () => Date.now(), secret = process.env.ITB_WALLET_TOKEN_SECRET, executionMs = 240000, graceMs = 86400000 } = {}) {
     this.redis = redis; this.now = now; this.secret = secret; this.executionMs = executionMs; this.graceMs = graceMs;
   }
   token(s) {
@@ -66,7 +66,24 @@ export class WalletReporting {
       const metadata = { event: e.metadata.event };
       if (['dc_api', 'openid4vp', 'proximity'].includes(e.metadata.transport)) metadata.transport = e.metadata.transport;
       if (typeof e.metadata.errorType === 'string' && /^[A-Za-z0-9_$]{1,96}$/.test(e.metadata.errorType)) metadata.errorType = e.metadata.errorType;
-      return { eventId: e.eventId, attemptId, sequence: e.sequence, timestamp: new Date(e.timestamp).toISOString(), level: e.metadata.event === 'error' ? 'error' : 'info', message: e.metadata.event.replaceAll('_', ' '), metadata };
+      const stages = ['qr_engagement_ready', 'connecting', 'redirect_received', 'key_unlock_check',
+        'key_unlocked', 'response_generation_started', 'response_generated', 'response_dispatch_started',
+        'selection_updated', 'transfer_callback', 'request_processing', 'generate_or_send_response'];
+      if (stages.includes(e.metadata.stage)) metadata.stage = e.metadata.stage;
+      for (const key of ['elapsedMs', 'combinationCount', 'matchCount', 'credentialCount',
+        'selectionCount', 'selectedClaimCount', 'unlockedKeyCount']) {
+        if (Number.isSafeInteger(e.metadata[key]) && e.metadata[key] >= 0) metadata[key] = e.metadata[key];
+      }
+      for (const key of ['verifierFullyVerified', 'authenticationRequired']) {
+        if (typeof e.metadata[key] === 'boolean') metadata[key] = e.metadata[key];
+      }
+      if (typeof e.metadata.exceptionClass === 'string' && /^[A-Za-z0-9_.$]{1,256}$/.test(e.metadata.exceptionClass)) metadata.exceptionClass = e.metadata.exceptionClass;
+      if (typeof e.metadata.causeClasses === 'string' && e.metadata.causeClasses.length <= 2048 &&
+        e.metadata.causeClasses.split(' -> ').every(c => /^[A-Za-z0-9_.$]{1,256}$/.test(c))) metadata.causeClasses = e.metadata.causeClasses;
+      // Frame syntax only; never persist throwable messages or arbitrary debug text.
+      if (typeof e.metadata.stackTrace === 'string' && e.metadata.stackTrace.length <= 4096 &&
+        e.metadata.stackTrace.split('\n').every(line => /^(?:(?:Caused by: )?[A-Za-z0-9_.$]+|at [A-Za-z0-9_.$<>]+\([A-Za-z0-9_.$ :+-]+\))$/.test(line))) metadata.stackTrace = e.metadata.stackTrace;
+      return { eventId: e.eventId, attemptId, sequence: e.sequence, timestamp: new Date(e.timestamp).toISOString(), level: e.metadata.event === 'error' ? 'error' : e.metadata.event === 'diagnostic' ? 'debug' : 'info', message: e.metadata.event.replaceAll('_', ' '), metadata };
     });
     return this.mutate(sessionId, s => {
       this.authorize(s, token);

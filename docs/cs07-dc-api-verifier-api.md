@@ -65,6 +65,15 @@ Configuration is validated at verifier startup. Origins are canonical HTTPS
 origins and are matched exactly. The checked-in configuration intentionally
 authorizes no RP origins.
 
+Ordinary presentation and payment profiles (including `ts12-dpc-pid`) use
+`certs/WE-BUILD-Verifier.p12`, the EUDI preproduction verifier certificate,
+unless `trustFramework=true` is explicitly requested. The certificate selection
+and its derived `x509_hash` identity are pinned in the session. These ordinary
+requests omit Raidiam registration data. Trust-enabled profiles and CS-03
+qualified signing retain their Raidiam certificate and registration policy.
+Create a new session after deploying a certificate-selection change; existing
+sessions retain their pinned identity.
+
 ## Request lifecycle
 
 The RP sends `POST /vp/dc-api/request` with the selected profile identifier and

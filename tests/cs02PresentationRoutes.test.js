@@ -34,6 +34,36 @@ describe("CS-02 / CS-03 presentation route regressions", () => {
   app.use(vpStandardRouter);
   app.use(ts12PaymentRouter);
 
+  for (const compatibility of [false, true]) {
+    it(`DC API DPC+PID uses the EUDI certificate without trust framework (compatibility=${compatibility})`, async () => {
+      process.env.VERIFIER_CS02_COMPATIBILITY = String(compatibility);
+      process.env.DC_API_RP_ORIGINS = "https://rp.example";
+      process.env.DC_API_RP_PROFILES = "ts12-dpc-pid";
+      const { default: router } = await import(`../routes/verify/dcApiRoutes.js?eudi-regression=${compatibility}`);
+      const dcApp = express();
+      dcApp.use(express.json());
+      dcApp.use(router);
+      const sessionId = `dc-eudi-${compatibility}`;
+      const response = await request(dcApp).post("/vp/dc-api/request")
+        .set("Origin", "https://rp.example")
+        .send({ profile: "ts12-dpc-pid", sessionId, transaction_id: "tx-eudi",
+          merchant: "Test Shop", payee_id: "shop-1", currency: "EUR", amount: "12.34" });
+      expect(response.status, JSON.stringify(response.body)).to.equal(200);
+      const token = response.body.request.data.request;
+      const header = decodeProtectedHeader(token);
+      expect(header.x5c).to.deep.equal([loadVerifierP12().certChain[0]]);
+      const pem = `-----BEGIN CERTIFICATE-----\n${header.x5c[0]}\n-----END CERTIFICATE-----`;
+      const { payload } = await jwtVerify(token, await importX509(pem, "ES256"));
+      assertX509HashLeafMatchesClientId(payload.client_id, header.x5c[0]);
+      expect(payload.response_mode).to.equal("dc_api.jwt");
+      expect(payload.dcql_query.credentials).to.have.length(2);
+      expect(payload).not.to.have.property("verifier_info");
+      const session = await getVPSession(sessionId);
+      expect(session.verifier_signing_profile).to.equal("eudi-p12");
+      expect(session).not.to.have.property("registrarDatasetSelection");
+    });
+  }
+
   for (const endpoint of ["generateVPRequestDCQL", "generateVPRequestDCQLGET", "generateVPRequestTransaction"]) {
     it(`${endpoint} keeps default CS-03 signing on plaintext direct_post`, async () => {
       const sessionId = `cs03-default-${endpoint}`;

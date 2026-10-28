@@ -1295,15 +1295,15 @@ export async function generateVPRequest(params) {
   const useConfiguredWrpac = cs07DcApi
     || String(clientId || "").startsWith("x509_")
     || (cs02StrictMode && !cs03Signing);
-  const ordinaryCs02 = cs02StrictMode && !cs03Signing && !cs07DcApi &&
+  const ordinaryEudiPresentation = (cs02StrictMode || cs07DcApi) && !cs03Signing &&
     !isTrustFrameworkSession({ trustPolicy });
-  const verifierSigningMaterial = ordinaryCs02
+  const verifierSigningMaterial = ordinaryEudiPresentation
     ? loadVerifierP12()
     : useConfiguredWrpac ? loadTrustFrameworkVerifierMaterial() : null;
   const effectiveClientId = resolveCs02PresentationClientId({
     clientId,
     cs03Signing,
-    strict: cs02StrictMode,
+    strict: cs02StrictMode || cs07DcApi,
     verifierSigningMaterial,
   });
 
@@ -1348,7 +1348,7 @@ export async function generateVPRequest(params) {
     state: cs07DcApi ? null : state,
     jar_alg: jarAlg || CONFIG.DEFAULT_JAR_ALG,
     client_id: effectiveClientId,
-    verifier_signing_profile: ordinaryCs02 ? "eudi-p12" : "raidiam",
+    verifier_signing_profile: ordinaryEudiPresentation ? "eudi-p12" : "raidiam",
   };
   if (trustPolicy) {
     sessionData.trustPolicy = trustPolicy;
@@ -1380,7 +1380,7 @@ export async function generateVPRequest(params) {
     sessionData.wrprcSelection = selected.selection;
     sessionData.verifier_info = selected.verifierInfo;
     sessionData.registrationCertificateTrust = selected.trustDecision;
-  } else if (cs02StrictMode && !ordinaryCs02) {
+  } else if (cs02StrictMode && !ordinaryEudiPresentation) {
     if (!verifierSigningMaterial) throw new Error("CS-02 registrar dataset requires WRPAC signing material");
     const selected = await selectRegistrarDataset({
       scenario: wrprcScenario, cs07ProfileId, cs03Signing, query: effectiveDcqlQuery,
