@@ -24,6 +24,9 @@ import forge from "node-forge";
 import { computeX509HashClientIdFromLeafCertBase64 } from "../../utils/cs02ClientIdBinding.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { loadTrustProfile } from "../../trust/profile.js";
+import { createTrustResolver } from "../../trust/resolver.js";
+import { certificateFingerprint } from "../../trust/crypto.js";
 
 const TRUST_FIXTURE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../tests/fixtures/trust/webuild-wp4/keys");
 
@@ -31,6 +34,35 @@ describe("wallet WE BUILD trust framework helpers", () => {
   afterEach(() => {
     clearTrustResolverForTests();
     setWalletTrustSessionStorageForTests(null);
+  });
+  it("stores a credential from an EAA issuer listed with the generic granted status", async () => {
+    const profile = await loadTrustProfile("data/trust/webuild-wp4-pilot.json");
+    const keys = forge.pki.rsa.generateKeyPair(1024);
+    const certificate = forge.pki.createCertificate();
+    certificate.publicKey = keys.publicKey;
+    certificate.serialNumber = "01";
+    certificate.validity.notBefore = new Date("2025-01-01T00:00:00Z");
+    certificate.validity.notAfter = new Date("2035-01-01T00:00:00Z");
+    certificate.setSubject([{ name: "commonName", value: "EAA issuer" }]);
+    certificate.setIssuer(certificate.subject.attributes);
+    certificate.setExtensions([{ name: "keyUsage", digitalSignature: true }]);
+    certificate.sign(keys.privateKey, forge.md.sha256.create());
+    const cert = forge.pki.certificateToPem(certificate);
+    const sessions = new Map([["wallet:test-session:granted-issuer", JSON.stringify({
+      sessionId: "granted-issuer", trustPolicy: { mode: "webuild", profile: profile.id },
+    })]]);
+    setWalletTrustSessionStorageForTests({ get: async (key) => sessions.get(key), set: async (key, value) => sessions.set(key, value) });
+    const snapshot = {
+      profile, profileId: profile.id,
+      lotl: { source: { url: "https://example.test/lotl" }, format: "json", scheme: { sequence: 1 }, signer: { fingerprint: "a".repeat(64) } },
+      lists: { "eaa-provider": { source: { url: "https://example.test/nxd.xml" }, format: "xml", scheme: { sequence: 1 },
+        entities: [{ id: "nxd", services: [{ type: "issuance", status: "http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted", certificates: [certificateFingerprint(cert)], certificatePems: [cert] }] }] } },
+    };
+    setTrustResolverForTests(createTrustResolver({ profile, snapshot }));
+    const x5c = [Buffer.from(cert.replace(/-----[^-]+-----/g, "").replace(/\s+/g, ""), "base64").toString("base64")];
+    const decision = await enforceIssuedCredentialTrust({ sessionId: "granted-issuer", payload: { iss: "issuer.example" }, header: { x5c }, format: "dc+sd-jwt", vct: "urn:example:unknown" });
+    expect(decision).to.include({ trusted: true, reasonCode: "TRUSTED" });
+    expect(decision.evidence.role).to.equal("eaa-provider");
   });
   it("maps only explicitly approved credential types to provider roles", async () => {
     expect(await resolveIssuerRole({ vct: "urn:eu.europa.ec.eudi:pid:1" })).to.equal("pid-provider");

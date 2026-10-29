@@ -20,6 +20,7 @@
     ]
   },
   "acceptedStatuses": [
+    "http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted",
     "http://uri.etsi.org/19602/PubEAAProvidersList/SvcStatus/notified",
     "http://uri.etsi.org/19602/EAAProvidersList/SvcStatus/notified",
     "http://uri.etsi.org/19602/QEAAProvidersList/SvcStatus/granted",

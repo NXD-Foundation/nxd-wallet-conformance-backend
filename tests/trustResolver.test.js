@@ -56,6 +56,16 @@ describe("Phase 2 explicit trust resolver", () => {
     expect(revocation).to.include({ trusted: false, state: "indeterminate", reasonCode: "REVOCATION_UNKNOWN" });
   });
 
+  it("accepts the NXD generic granted status while rejecting withdrawn services", () => {
+    const candidate = structuredClone(snapshot);
+    const service = candidate.lists["eaa-provider"].entities[0].services[0];
+    service.status = "http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted";
+    const request = { snapshot: candidate, role: "eaa-provider", presentedIdentity: { entityId: "entity-eaa-provider" } };
+    expect(evaluateTrust(request)).to.include({ trusted: true, reasonCode: "TRUSTED" });
+    service.status = "http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/withdrawn";
+    expect(evaluateTrust(request)).to.include({ trusted: false, reasonCode: "ENTITY_STATUS_INVALID" });
+  });
+
   it("trusts a certificate found in any authenticated same-role LoTE and retains unrelated failures", () => {
     const multiSnapshot = structuredClone(snapshot);
     const first = multiSnapshot.lists["pub-eaa-provider"];
