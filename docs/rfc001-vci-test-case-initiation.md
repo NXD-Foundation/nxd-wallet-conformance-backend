@@ -266,3 +266,13 @@ curl -s "$BASE/issueStatus?sessionId=$SESSION" | jq .
 - `docs/vci-authorization-code-wallet-matrix.md` — wallet-side matrix for the authorization-code flow.
 - `docs/vci-preauth-pid-x509-wallet-matrix.md` — wallet-side matrix for the pre-auth X.509 PID flow (baseline for VCI-006 / VCI-007).
 - `docs/mdoc-credential-generation.md` — mdoc issuance internals (VCI-005 / VCI-008).
+
+### Deferred issuance test setup
+
+Use the standardized `/vci/offer` endpoint with `issuance_mode=deferred` for either `flow=authorization_code` or `flow=pre_authorized_code`. Optionally set `deferred_ready_after_seconds` to a non-negative integer (default: 10). The delay starts when the credential request is accepted. For example:
+
+```
+GET /vci/offer?flow=pre_authorized_code&issuance_mode=deferred&deferred_ready_after_seconds=10
+```
+
+The issuer returns a transaction ID and polling interval. Until ready, polling returns HTTP 202 with the same transaction ID and interval; the completed response is HTTP 200. The wallet retains its DPoP and encryption context during the active session. This test mode does not implement user-controlled stop/resume or recovery after a process restart.

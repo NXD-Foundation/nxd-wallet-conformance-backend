@@ -1,3 +1,4 @@
+import { encryptDeferredRequest } from "./credentialResponseEncryption.js";
 import { resolveWalletProfile, isWebuildCs01Profile } from "./profile.js";
 import { createDpopNonceState, requestWithDpopNonce } from "./dpopNonce.js";
 import { storeWalletCredentialByType } from "./cache.js";
@@ -317,10 +318,12 @@ export async function postCredentialRequest({
   createDPoP,
   fetchImpl,
   parseCredentialResponsePayload,
+  issuerMeta,
   dpopNonceState = createDpopNonceState(),
 }) {
   let credentialDpopJwt = null;
-  const bodyString = JSON.stringify(credentialRequest);
+  const encryptedRequest = Boolean(credentialRequest.credential_response_encryption && issuerMeta);
+  const bodyString = encryptedRequest ? await encryptDeferredRequest(credentialRequest, issuerMeta) : JSON.stringify(credentialRequest);
   const response = await requestWithDpopNonce({
     url: credentialEndpoint, state: dpopNonceState,
     privateJwk: dpopPrivateJwk, publicJwk: dpopPublicJwk,
@@ -330,7 +333,7 @@ export async function postCredentialRequest({
       credentialDpopJwt = proof;
       return fetchImpl(credentialEndpoint, {
         method: "POST", headers: {
-          "content-type": "application/json",
+          "content-type": encryptedRequest ? "application/jwt" : "application/json",
           authorization: `${proof ? "DPoP" : "Bearer"} ${accessToken}`,
           ...(proof ? { DPoP: proof } : {}),
         }, body: bodyString,
@@ -384,6 +387,8 @@ export async function pollDeferredCredential({
   postJson,
   parseCredentialResponsePayload,
   dpopNonceState = createDpopNonceState(),
+  issuerMeta,
+  credentialResponseEncryption,
 }) {
   const start = Date.now();
   const timeout = pollTimeoutMs ?? 30000;
@@ -392,40 +397,32 @@ export async function pollDeferredCredential({
   while (Date.now() - start < timeout) {
     await sleep(nextDelayMs);
 
+    const pollBody = credentialResponseEncryption
+      ? await encryptDeferredRequest({ transaction_id: transactionId, credential_response_encryption: credentialResponseEncryption }, issuerMeta)
+      : { transaction_id: transactionId };
     const response = await requestWithDpopNonce({
       url: deferredEndpoint, state: dpopNonceState,
       privateJwk: dpopPrivateJwk, publicJwk: dpopPublicJwk,
       enabled: isDpopBoundAccessToken(tokenBody, accessToken),
       ath: computeAthForDpop(accessToken), signer: createDPoP,
-      send: (proof) => postJson(deferredEndpoint, { transaction_id: transactionId }, proof,
-        { Authorization: `${proof ? "DPoP" : "Bearer"} ${accessToken}` }),
+      send: (proof) => postJson(deferredEndpoint, pollBody, proof,
+        { Authorization: `${proof ? "DPoP" : "Bearer"} ${accessToken}`, ...(credentialResponseEncryption ? { "content-type": "application/jwt" } : {}) }),
     });
     const responseText = await response.text().catch(() => "");
     const contentType = response.headers.get("content-type") || "";
 
     if (response.ok) {
       const body = await parseCredentialResponsePayload(responseText, contentType);
-      if (!body || typeof body !== "object") {
-        throw new Error("credential_error: invalid deferred credential response");
+      if (!body || typeof body !== "object") throw new Error("credential_error: invalid deferred response");
+      if (response.status === 202) {
+        if (body.transaction_id !== transactionId) throw new Error("credential_error: invalid deferred transaction_id");
+        nextDelayMs = getNextPollDelayMs(body.interval, pollIntervalMs);
+        continue;
       }
-      return body;
+      if (response.status === 200) return body;
+      throw new Error(`credential_error: unexpected deferred status ${response.status}`);
     }
-
-    const outcome = await resolveDeferredPollResult({
-      status: response.status,
-      ok: false,
-      contentType,
-      responseText,
-      decryptionPrivateKey: null,
-    });
-
-    if (outcome.kind === "success") {
-      return outcome.body;
-    }
-    if (outcome.kind === "pending") {
-      nextDelayMs = getNextPollDelayMs(outcome.interval, pollIntervalMs);
-      continue;
-    }
+    const outcome = await resolveDeferredPollResult({ status: response.status, ok: false, contentType, responseText, decryptionPrivateKey: null });
     throw new Error(formatDeferredTerminalError(outcome));
   }
 

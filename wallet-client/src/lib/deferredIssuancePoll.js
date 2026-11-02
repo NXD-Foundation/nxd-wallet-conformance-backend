@@ -75,13 +75,6 @@ export async function resolveDeferredPollResult({
 
   const code = errorBody.error;
 
-  if (status >= 400 && status < 500 && code === "issuance_pending") {
-    return {
-      kind: "pending",
-      interval: errorBody.interval,
-    };
-  }
-
   if (code === "invalid_transaction_id" || code === "expired_transaction_id") {
     return { kind: "terminal", status, errorBody };
   }

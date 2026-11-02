@@ -124,14 +124,7 @@ async function dedupeAttestedKeysToCnfList(attestedKeys) {
 const DPOP_MAX_IAT_SKEW_SECONDS = 300; // 5 minutes clock skew window
 const DPOP_MAX_FUTURE_IAT_SKEW_SECONDS = 60; // allow small future skew
 
-// OID4VCI 1.0 §9 / RFC001 §6.3, §7.6 — deferred credential polling policy.
-//   DEFERRED_INTERVAL_SECONDS: retry hint returned in `interval` on both the
-//     initial 202 from /credential and on subsequent `issuance_pending` errors.
-//   DEFERRED_EXPIRES_IN_SECONDS: how long a `transaction_id` remains usable
-//     before returning `expired_transaction_id`.
-//   DEFERRED_PENDING_POLLS: number of polls to answer with `issuance_pending`
-//     before the credential is declared ready. Defaults to 0 so that the
-//     synchronous-on-poll generation path remains the default behavior.
+// Deferred issuance polling interval and transaction lifetime.
 const parseIntEnv = (name, fallback) => {
   const raw = process.env[name];
   if (raw === undefined || raw === "") return fallback;
@@ -140,7 +133,6 @@ const parseIntEnv = (name, fallback) => {
 };
 const getDeferredIntervalSeconds = () => parseIntEnv("DEFERRED_INTERVAL_SECONDS", 5);
 const getDeferredExpiresInSeconds = () => parseIntEnv("DEFERRED_EXPIRES_IN_SECONDS", 900);
-const getDeferredPendingPolls = () => parseIntEnv("DEFERRED_PENDING_POLLS", 0);
 
 /** OpenID4VCI1.0 §8.2 — JWT proof header type */
 const OID4VCI_PROOF_JWT_TYP = "openid4vci-proof+jwt";
@@ -1341,16 +1333,15 @@ const handleDeferredCredentialIssuance = async (requestBody, sessionObject, sess
 
   const nowSeconds = Math.floor(Date.now() / 1000);
 
+  delete sessionObject.deferred_issued;
   sessionObject.transaction_id = transaction_id;
   sessionObject.notification_id = notification_id;
   sessionObject.requestBody = requestBody;
-  // RFC001 §6.3 / OID4VCI 1.0 §9 — readiness is tracked per session; defaults
-  // to "not ready" so /credential_deferred responds with `issuance_pending`
-  // until the backend flips this flag (or, under the default policy below,
-  // after DEFERRED_PENDING_POLLS polls have elapsed).
+  // Simulate asynchronous readiness without tying it to the number of polls.
   sessionObject.isCredentialReady = false;
   sessionObject.deferred_poll_count = 0;
   sessionObject.deferred_created_at = nowSeconds;
+  sessionObject.deferred_ready_at = Date.now() + (sessionObject.deferredReadyAfterSeconds ?? 10) * 1000;
   sessionObject.deferred_expires_at = nowSeconds + getDeferredExpiresInSeconds();
   sessionObject.attempt = 0;
 
@@ -2718,7 +2709,8 @@ sharedRouter.post("/credential_deferred", async (req, res) => {
   let sessionId = null;
   let deferredFlowType = "code";
   try {
-    const { transaction_id } = req.body;
+    const deferredRequest = await parseCredentialEndpointBody(req);
+    const { transaction_id } = deferredRequest;
 
     if (!transaction_id) {
       return res.status(400).json({
@@ -2807,16 +2799,25 @@ sharedRouter.post("/credential_deferred", async (req, res) => {
       nowSeconds > sessionObject.deferred_expires_at
     ) {
       return res.status(400).json({
-        error: "expired_transaction_id",
+        error: "invalid_transaction_id",
         error_description: "The transaction_id has expired; start a new issuance.",
       });
     }
 
+    if (sessionObject.deferred_issued) {
+      return res.status(400).json({ error: "invalid_transaction_id", error_description: "The transaction_id has already been used." });
+    }
+    if (sessionObject.status === "failed" || sessionObject.error === "credential_request_denied") {
+      return res.status(400).json({ error: "credential_request_denied", error_description: "The deferred credential request was denied." });
+    }
     const issuerConfig = loadIssuerConfig();
-    const encParams =
-      req.body.credential_response_encryption !== undefined
-        ? req.body.credential_response_encryption
-        : sessionObject.requestBody?.credential_response_encryption;
+    const encParams = deferredRequest.credential_response_encryption;
+    if (issuerConfig.credential_response_encryption?.encryption_required && !encParams) {
+      return res.status(400).json({ error: "invalid_encryption_parameters", error_description: "Credential response encryption is required." });
+    }
+    if (encParams && typeof req.body !== "string") {
+      return res.status(400).json({ error: "invalid_encryption_parameters", error_description: "Deferred requests containing encryption parameters must be encrypted" });
+    }
     if (encParams) {
       validateCredentialResponseEncryptionParams(
         encParams,
@@ -2824,42 +2825,13 @@ sharedRouter.post("/credential_deferred", async (req, res) => {
       );
     }
 
-    // RFC001 §6.3, §7.6 / OID4VCI 1.0 §9 — if the credential is not yet ready,
-    // respond with `issuance_pending` and tell the wallet how long to wait.
-    // Readiness is driven either explicitly (`sessionObject.isCredentialReady`)
-    // or, by default policy, after N polls have been observed on this
-    // transaction_id. N comes from the session override
-    // `deferred_pending_polls_override` when set, otherwise from the
-    // environment via DEFERRED_PENDING_POLLS (default 0).
-    sessionObject.deferred_poll_count = (sessionObject.deferred_poll_count || 0) + 1;
-    sessionObject.attempt = (sessionObject.attempt || 0) + 1;
-
-    const pendingBudget =
-      typeof sessionObject.deferred_pending_polls_override === "number"
-        ? sessionObject.deferred_pending_polls_override
-        : getDeferredPendingPolls();
-
-    const explicitlyReady = sessionObject.isCredentialReady === true;
-    const pollsSatisfied = sessionObject.deferred_poll_count > pendingBudget;
-    const credentialReady = explicitlyReady || pollsSatisfied;
-
-    if (!credentialReady) {
-      try {
-        if (deferredFlowType === "code") {
-          await storeCodeFlowSession(sessionId, sessionObject);
-        } else {
-          await storePreAuthSession(sessionId, sessionObject);
-        }
-      } catch (persistErr) {
-        console.error("Failed to persist deferred poll state:", persistErr);
-      }
+    // A deferred test transaction becomes ready after the configured elapsed time.
+    const readyAt = sessionObject.deferred_ready_at ??
+      ((sessionObject.deferred_created_at ?? Math.floor(Date.now() / 1000)) * 1000 +
+       (sessionObject.deferredReadyAfterSeconds ?? 10) * 1000);
+    if (!sessionObject.isCredentialReady && Date.now() < readyAt) {
       res.set("Cache-Control", "no-store");
-      return res.status(400).json({
-        error: "issuance_pending",
-        error_description:
-          "The credential is not yet ready. Retry after the suggested interval.",
-        interval: getDeferredIntervalSeconds(),
-      });
+      return sendCredentialSuccessResponse(res, 202, { transaction_id, interval: getDeferredIntervalSeconds() }, deferredRequest);
     }
 
     const deferredBody = sessionObject.requestBody || {};
@@ -2891,6 +2863,7 @@ sharedRouter.post("/credential_deferred", async (req, res) => {
 
     try {
       sessionObject.isCredentialReady = true;
+      sessionObject.deferred_issued = true;
       sessionObject.status = "success";
       sessionObject.notification_id = notification_id;
       if (deferredFlowType === "code") {

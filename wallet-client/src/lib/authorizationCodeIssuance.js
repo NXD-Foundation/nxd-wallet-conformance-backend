@@ -1,3 +1,4 @@
+import { prepareCredentialResponseEncryption, parseCredentialResponsePayload, encryptDeferredRequest } from "./credentialResponseEncryption.js";
 import { createDpopNonceState, requestWithDpopNonce } from "./dpopNonce.js";
 import { computeAthForDpop } from "../../utils/tokenUtils.js";
 import fetch from "node-fetch";
@@ -724,7 +725,9 @@ export function createAuthorizationCodeIssuance(deps) {
       keyAttestation: proofBundle.keyAttestation,
     });
 
-    const credReqBody = JSON.stringify(credReq);
+    const encryptionContext = await prepareCredentialResponseEncryption(issuerMeta);
+    if (encryptionContext) credReq.credential_response_encryption = encryptionContext.credential_response_encryption;
+    const credReqBody = encryptionContext ? await encryptDeferredRequest(credReq, issuerMeta) : JSON.stringify(credReq);
     // Validate sender constraining before dispatch, including missing-key failures.
     const credentialProof = await createResourceRequestDpopProof({
       binding: dpopBinding, tokenBody, accessToken, htu: credentialEndpoint, profile,
@@ -735,7 +738,7 @@ export function createAuthorizationCodeIssuance(deps) {
       enabled: Boolean(credentialProof), ath: computeAthForDpop(accessToken), log: slog,
       send: (proof) => fetchImpl(credentialEndpoint, {
         method: "POST", body: credReqBody,
-        headers: { "content-type": "application/json", ...buildResourceRequestHeaders(accessToken, proof, tokenBody) },
+        headers: { "content-type": encryptionContext ? "application/jwt" : "application/json", ...buildResourceRequestHeaders(accessToken, proof, tokenBody) },
       }),
     });
 
@@ -744,7 +747,7 @@ export function createAuthorizationCodeIssuance(deps) {
     if (credRes.status === 202) {
       let credBody;
       try {
-        credBody = JSON.parse(responseText);
+        credBody = await parseCredentialResponsePayload(responseText, credRes.headers.get("content-type"), encryptionContext?.privateKey);
       } catch (e) {
         throw new Error(`credential_error ${credRes.status}: invalid JSON response`);
       }
@@ -752,6 +755,7 @@ export function createAuthorizationCodeIssuance(deps) {
       const deferredEndpoint = issuerMeta.credential_deferred_endpoint || `${apiBase}/credential_deferred`;
       const defBody = await pollDeferredCredentialIssuance({
         transactionId: transaction_id,
+        issuerMeta, encryptionContext,
         issuerIntervalSeconds: issuerInterval,
         pollTimeoutMs,
         pollIntervalMs,
@@ -811,7 +815,7 @@ export function createAuthorizationCodeIssuance(deps) {
 
     let credBody;
     try {
-      credBody = JSON.parse(responseText);
+      credBody = await parseCredentialResponsePayload(responseText, credRes.headers.get("content-type"), encryptionContext?.privateKey);
     } catch (e) {
       throw new Error(`credential_error: invalid JSON response - ${e?.message}`);
     }

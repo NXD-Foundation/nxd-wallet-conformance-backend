@@ -1693,6 +1693,18 @@ export function resolveCodeFlowOfferIssuanceOptions(req) {
   return { isDynamic: false, isDeferred: false, includeCredentialType: true };
 }
 
+export function configureDeferredOfferSession(req, session, isDeferred) {
+  const raw = req.query?.deferred_ready_after_seconds;
+  if (raw !== undefined && (!/^\d+$/.test(String(raw)) || !Number.isSafeInteger(Number(raw)))) {
+    throw new Error("deferred_ready_after_seconds must be a non-negative integer");
+  }
+  if (isDeferred) {
+    session.isDeferred = true;
+    session.deferredReadyAfterSeconds = raw === undefined ? 10 : Number(raw);
+  }
+  return session;
+}
+
 // ============================================================================
 // SESSION MANAGEMENT UTILITIES
 // ============================================================================

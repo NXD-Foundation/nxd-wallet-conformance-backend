@@ -1,3 +1,4 @@
+import { configureDeferredOfferSession } from "../../utils/routeUtils.js";
 import express, { urlencoded } from "express";
 import fs from "fs";
 import path from "path";
@@ -125,6 +126,7 @@ async function emitOfferCodeSdJwt(req, res, fixedIssuance, routeLabel) {
       issuance.isDeferred,
       signatureType,
     );
+    configureDeferredOfferSession(req, sessionData, issuance.isDeferred);
     await manageSession(sessionId, sessionData);
 
     const invocationScheme = getCredentialOfferSchemeFromRequest(req);

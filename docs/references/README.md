@@ -3,8 +3,8 @@
 Fetched on `2026-07-15` to support the core specs in `docs/core/`. Those
 APTITUDE RFCs were last refreshed from
 https://github.com/APTITUDE-Consortium/aptitude-eudi-wallet-specs/tree/main/docs/RFCs
-on `2026-09-24` (`RFC001.md` v1.0, `RFC002.md` Draft, `RFC003.md` v0.1,
-`RFC004.md` v0.1, `RFC005.md` Draft).
+on `2026-11-02`. The local `RFC001.md`–`RFC005.md` files were verified
+against the upstream Git blob hashes on that date.
 
 ## Local copies
 

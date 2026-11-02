@@ -3364,7 +3364,7 @@ describe('Shared Issuance Flows', () => {
     });
 
     // A6 / RFC001 §6.3, §7.6 / OID4VCI 1.0 §9 — pending / expiry paths.
-    it('MUST return issuance_pending with interval when credential is not yet ready', async function () {
+    it('MUST return 202 with the transaction ID and interval when credential is not yet ready', async function () {
       if (!cacheServiceRedis.client?.isReady) {
         this.skip();
       }
@@ -3390,7 +3390,7 @@ describe('Shared Issuance Flows', () => {
         transaction_id: transactionId,
         isCredentialReady: false,
         deferred_poll_count: 0,
-        deferred_pending_polls_override: 3,
+        deferred_ready_at: Date.now() + 30000,
         deferred_created_at: nowSec,
         deferred_expires_at: nowSec + 900
       });
@@ -3400,14 +3400,14 @@ describe('Shared Issuance Flows', () => {
         .set('Authorization', `Bearer ${accessToken}`)
         .send({ transaction_id: transactionId });
 
-      expect(response.status).to.equal(400);
-      expect(response.body).to.have.property('error', 'issuance_pending');
+      expect(response.status).to.equal(202);
+      expect(response.body).to.have.property('transaction_id', transactionId);
       expect(response.body).to.have.property('interval');
       expect(response.body.interval).to.be.a('number');
       expect(response.body.interval).to.be.greaterThan(0);
     });
 
-    it('MUST return expired_transaction_id after the transaction lifetime', async function () {
+    it('MUST return invalid_transaction_id after the transaction lifetime', async function () {
       if (!cacheServiceRedis.client?.isReady) {
         this.skip();
       }
@@ -3441,7 +3441,7 @@ describe('Shared Issuance Flows', () => {
         .send({ transaction_id: transactionId });
 
       expect(response.status).to.equal(400);
-      expect(response.body).to.have.property('error', 'expired_transaction_id');
+      expect(response.body).to.have.property('error', 'invalid_transaction_id');
     });
   });
 

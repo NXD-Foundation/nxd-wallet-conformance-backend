@@ -1032,7 +1032,7 @@ function makeTxCode(cfg) {
 
 async function httpPostJson(url, body, logSessionId, extraHeaders = {}) {
   const slog = logSessionId ? makeSessionLogger(logSessionId) : (() => {});
-  const bodyString = JSON.stringify(body || {});
+  const bodyString = typeof body === "string" ? body : JSON.stringify(body || {});
   const requestId = `req_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
   const headers = { "content-type": "application/json", ...extraHeaders };
 
@@ -1439,6 +1439,7 @@ async function runPreAuthorizedIssuance(
     dpopNonceState,
     credentialEndpoint,
     credentialRequest: credReq,
+    issuerMeta,
     accessToken,
     tokenBody,
     dpopPrivateJwk,
@@ -1457,6 +1458,8 @@ async function runPreAuthorizedIssuance(
     ? await pollDeferredCredential({
         dpopNonceState,
         deferredEndpoint: issuerMeta.credential_deferred_endpoint || `${apiBase}/credential_deferred`,
+        issuerMeta,
+        credentialResponseEncryption: credReq.credential_response_encryption,
         transactionId: initialCredentialResponse.body.transaction_id,
         initialInterval: initialCredentialResponse.body.interval,
         pollTimeoutMs,
@@ -1857,6 +1860,7 @@ async function runAuthorizationCodeIssuance(
     dpopNonceState,
     credentialEndpoint,
     credentialRequest: credReq,
+    issuerMeta,
     accessToken,
     tokenBody,
     dpopPrivateJwk,
@@ -1875,6 +1879,8 @@ async function runAuthorizationCodeIssuance(
     ? await pollDeferredCredential({
         dpopNonceState,
         deferredEndpoint: issuerMeta.credential_deferred_endpoint || `${apiBase}/credential_deferred`,
+        issuerMeta,
+        credentialResponseEncryption: credReq.credential_response_encryption,
         transactionId: initialCredentialResponse.body.transaction_id,
         initialInterval: initialCredentialResponse.body.interval,
         pollTimeoutMs,

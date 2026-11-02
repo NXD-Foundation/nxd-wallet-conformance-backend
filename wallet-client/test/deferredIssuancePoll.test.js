@@ -34,7 +34,7 @@ describe("deferredIssuancePoll", () => {
       expect(out.body.credentials).to.have.length(1);
     });
 
-    it("returns pending for issuance_pending 400", async () => {
+    it("treats HTTP 400 as terminal", async () => {
       const out = await resolveDeferredPollResult({
         status: 400,
         ok: false,
@@ -45,8 +45,7 @@ describe("deferredIssuancePoll", () => {
         }),
         decryptionPrivateKey: null,
       });
-      expect(out.kind).to.equal("pending");
-      expect(out.interval).to.equal(3);
+      expect(out.kind).to.equal("terminal");
     });
 
     it("returns terminal for invalid_transaction_id", async () => {

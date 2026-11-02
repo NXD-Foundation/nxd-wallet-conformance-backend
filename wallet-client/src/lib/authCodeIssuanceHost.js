@@ -1,3 +1,4 @@
+import { prepareCredentialResponseEncryption, parseCredentialResponsePayload, encryptDeferredRequest } from "./credentialResponseEncryption.js";
 import { makeSessionLogger } from "./logger.js";
 import { createDpopNonceState, requestWithDpopNonce } from "./dpopNonce.js";
 import { ensureOrCreateEcKeyPair } from "./crypto.js";
@@ -194,7 +195,9 @@ async function issueCredentialTargets({
       profile,
       stage: "credential request",
     });
-    const requestBody = JSON.stringify(proofBundle.credentialRequest);
+    const encryptionContext = await prepareCredentialResponseEncryption(issuerMeta);
+    if (encryptionContext) proofBundle.credentialRequest.credential_response_encryption = encryptionContext.credential_response_encryption;
+    const requestBody = encryptionContext ? await encryptDeferredRequest(proofBundle.credentialRequest, issuerMeta) : JSON.stringify(proofBundle.credentialRequest);
     const response = await requestWithDpopNonce({
       url: credentialEndpoint, state: dpopBinding.nonceState,
       privateJwk: dpopBinding.privateJwk, publicJwk: dpopBinding.publicJwk,
@@ -202,14 +205,14 @@ async function issueCredentialTargets({
       log: logSessionId ? makeSessionLogger(logSessionId) : undefined,
       send: (proof) => fetchImpl(credentialEndpoint, {
         method: "POST", headers: {
-          "content-type": "application/json",
+          "content-type": encryptionContext ? "application/jwt" : "application/json",
           ...buildResourceRequestHeaders(accessToken, proof, tokenBody),
         }, body: requestBody,
       }),
     });
     const text = await response.text().catch(() => "");
     let body = null;
-    try { body = text ? JSON.parse(text) : null; } catch {}
+    try { body = text ? await parseCredentialResponsePayload(text, response.headers.get("content-type"), encryptionContext?.privateKey) : null; } catch {}
     if (!response.ok) {
       throw new Error(`credential_error ${response.status}: ${JSON.stringify(body || { error: "invalid_response", error_description: text })}`);
     }
@@ -217,6 +220,7 @@ async function issueCredentialTargets({
       const deferredEndpoint = issuerMeta.credential_deferred_endpoint || `${apiBase}/credential_deferred`;
       body = await pollDeferredCredentialIssuance({
         transactionId: body?.transaction_id,
+        issuerMeta, encryptionContext,
         issuerIntervalSeconds: body?.interval,
         pollTimeoutMs,
         pollIntervalMs,

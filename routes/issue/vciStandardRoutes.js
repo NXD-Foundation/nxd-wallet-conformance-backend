@@ -1,3 +1,4 @@
+import { configureDeferredOfferSession } from "../../utils/routeUtils.js";
 import express from "express";
 import { v4 as uuidv4 } from "uuid";
 import {
@@ -106,6 +107,7 @@ vciStandardRouter.get("/vci/offer", async (req, res) => {
         internalSignatureType
       );
       
+      configureDeferredOfferSession(req, sessionData, issuance.isDeferred);
       await storeCodeFlowSession(sessionId, sessionData);
 
       const invocationScheme = getCredentialOfferSchemeFromRequest(req);
@@ -152,6 +154,7 @@ vciStandardRouter.get("/vci/offer", async (req, res) => {
         txCodeRequired ? { requireTxCode: true } : {},
       ));
 
+      configureDeferredOfferSession(req, sessionData, issuance.isDeferred);
       await storePreAuthSession(sessionId, sessionData);
 
       // Determine endpoint path based on tx_code_required

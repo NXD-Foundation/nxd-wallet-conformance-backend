@@ -1,3 +1,4 @@
+import { encryptDeferredRequest, parseCredentialResponsePayload } from "./credentialResponseEncryption.js";
 import { requestWithDpopNonce } from "./dpopNonce.js";
 import { computeAthForDpop } from "../../utils/tokenUtils.js";
 export function resolveDeferredPollIntervalMs(issuerIntervalSeconds, pollIntervalMs) {
@@ -47,6 +48,8 @@ export async function pollDeferredCredentialIssuance({
   logSessionId,
   sleep,
   log = () => {},
+  issuerMeta,
+  encryptionContext,
 }) {
   const timeout = pollTimeoutMs ?? 30000;
   let intervalMs = resolveDeferredPollIntervalMs(issuerIntervalSeconds, pollIntervalMs);
@@ -56,37 +59,32 @@ export async function pollDeferredCredentialIssuance({
 
   while (Date.now() - start < timeout) {
     const poll = await buildPollRequest();
+    const body = encryptionContext
+      ? await encryptDeferredRequest({ ...poll.body, credential_response_encryption: encryptionContext.credential_response_encryption }, issuerMeta)
+      : poll.body;
     const defRes = await requestWithDpopNonce({
       url: deferredEndpoint, state: poll.dpopBinding?.nonceState,
       privateJwk: poll.dpopBinding?.privateJwk, publicJwk: poll.dpopBinding?.publicJwk,
       enabled: Boolean(poll.headers?.DPoP),
       ath: poll.accessToken ? computeAthForDpop(poll.accessToken) : null,
-      send: (proof) => httpPostJson(deferredEndpoint, poll.body, logSessionId,
-        { ...poll.headers, ...(proof ? { DPoP: proof } : {}) }),
+      send: (proof) => httpPostJson(deferredEndpoint, body, logSessionId,
+        { ...poll.headers, ...(encryptionContext ? { "content-type": "application/jwt" } : {}), ...(proof ? { DPoP: proof } : {}) }),
       log,
     });
     log("deferred poll", { status: defRes.status, transactionId });
 
-    if (defRes.status === 202) {
-      const { body: pendingBody } = await parseDeferredPollResponseBody(defRes);
-      intervalMs = resolveDeferredPollIntervalMs(pendingBody?.interval, intervalMs);
+    const responseText = await defRes.text().catch(() => "");
+    if (defRes.status === 202 || defRes.status === 200) {
+      const responseBody = await parseCredentialResponsePayload(responseText, defRes.headers.get("content-type"), encryptionContext?.privateKey);
+      if (!responseBody || typeof responseBody !== "object") throw new Error("Invalid deferred response");
+      if (defRes.status === 200) return responseBody;
+      if (responseBody.transaction_id !== transactionId) throw new Error("Invalid deferred transaction_id");
+      intervalMs = resolveDeferredPollIntervalMs(responseBody.interval, intervalMs);
       await sleep(intervalMs);
       continue;
     }
+    throw new Error(`credential_error ${defRes.status}: ${responseText}`);
 
-    const { text: responseText, body: responseBody } = await parseDeferredPollResponseBody(defRes);
-
-    if (defRes.status === 200) {
-      return responseBody ?? {};
-    }
-
-    if (isTerminalDeferredPollError(defRes.status, responseBody)) {
-      throw new Error(
-        `credential_error ${defRes.status}: ${responseText || JSON.stringify(responseBody)}`,
-      );
-    }
-
-    await sleep(intervalMs);
   }
 
   throw new Error("timeout: Deferred issuance timed out");

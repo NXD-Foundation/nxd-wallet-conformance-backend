@@ -1,3 +1,4 @@
+import { configureDeferredOfferSession, resolveCodeFlowOfferIssuanceOptions as resolveDeferredOptions } from "../../utils/routeUtils.js";
 import express from "express";
 import {
   storePreAuthSession,
@@ -123,6 +124,7 @@ router.get("/offer-tx-code", async (req, res) => {
     const sessionData = applyPreAuthTxCode(createBaseSession("pre-auth", false, signatureType, {
       requireTxCode: true,
     }));
+    configureDeferredOfferSession(req, sessionData, resolveDeferredOptions(req).isDeferred);
     const storedSession = await manageSession(sessionId, sessionData);
 
     const invocationScheme = getCredentialOfferSchemeFromRequest(req);
@@ -178,6 +180,7 @@ router.get("/offer-no-code", async (req, res) => {
     const signatureType = getSignatureType(req);
 
     const sessionData = createBaseSession("pre-auth", false, signatureType);
+    configureDeferredOfferSession(req, sessionData, resolveDeferredOptions(req).isDeferred);
     await manageSession(sessionId, sessionData);
 
     const invocationScheme = getCredentialOfferSchemeFromRequest(req);

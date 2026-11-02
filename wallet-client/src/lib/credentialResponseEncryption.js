@@ -1,4 +1,4 @@
-import { compactDecrypt, exportJWK, generateKeyPair } from "jose";
+import { compactDecrypt, exportJWK, generateKeyPair, CompactEncrypt, importJWK } from "jose";
 
 /**
  * OID4VCI credential_response_encryption object for the credential request body.
@@ -61,4 +61,16 @@ export async function parseCredentialResponsePayload(responseText, contentType, 
   }
 
   return JSON.parse(trimmed);
+}
+
+/** Encrypt a deferred request carrying response encryption parameters to the issuer. */
+export async function encryptDeferredRequest(body, issuerMeta) {
+  const meta = issuerMeta?.credential_request_encryption;
+  const key = meta?.jwks?.keys?.find((candidate) => candidate.alg === "ECDH-ES" && candidate.kty === "EC");
+  const enc = meta?.enc_values_supported?.find((value) => value === "A256GCM" || value === "A128GCM");
+  if (!key || !enc) throw new Error("Issuer metadata lacks supported deferred request encryption");
+  const publicKey = await importJWK(key, key.alg);
+  return new CompactEncrypt(new TextEncoder().encode(JSON.stringify(body)))
+    .setProtectedHeader({ alg: key.alg, enc, ...(key.kid ? { kid: key.kid } : {}) })
+    .encrypt(publicKey);
 }
