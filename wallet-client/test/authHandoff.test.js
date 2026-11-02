@@ -1,4 +1,7 @@
 import { expect } from "chai";
+import { Readable } from "node:stream";
+import { Response } from "node-fetch";
+import { createAuthCodeIssuanceHost } from "../src/lib/authCodeIssuanceHost.js";
 import {
   isAuthHandoffEnabled,
   resolveOAuthRedirectUri,
@@ -103,6 +106,51 @@ describe("auth handoff pending context", () => {
 });
 
 describe("authorization code prepare (handoff)", () => {
+  it("preserves streamed PAR and token responses after HTTP logging", async () => {
+    const host = createAuthCodeIssuanceHost({
+      discoverAuthorizationServerMetadata: async () => cs01AuthorizationServerMetadata,
+      httpPostForm: async (url) => {
+        const body = String(url).includes("/par")
+          ? { request_uri: "urn:example:par:streamed", expires_in: 120 }
+          : { access_token: "at", token_type: "Bearer", authorization_details: [{
+              type: "openid_credential", credential_configuration_id: "VerifiableIdCard",
+              credential_identifiers: ["first", "second"],
+            }] };
+        const response = new Response(Readable.from([JSON.stringify(body)]), { status: 200 });
+        response._responseText = await response.clone().text();
+        response._parsedBody = JSON.parse(response._responseText);
+        return response;
+      },
+      httpPostJson: async () => { throw new Error("reached nonce endpoint"); },
+      validateAndStoreCredential: async () => {},
+      sleep: async () => {},
+      fetchImpl: async () => { throw new Error("unexpected credential fetch"); },
+    });
+    const authCode = host.getAuthCodeIssuance();
+    const prepared = await authCode.prepareAuthorization({
+      profile: WALLET_PROFILES.COMPATIBILITY,
+      walletClientId: CS01_CLIENT_ID,
+      apiBase: cs01IssuerMetadata.credential_issuer,
+      issuerMeta: { ...cs01IssuerMetadata },
+      configurationId: "VerifiableIdCard",
+      redirectUri: "https://wallet.example/oauth/callback",
+    });
+    const url = new URL(prepared.authorizationUrl);
+    expect(url.searchParams.get("request_uri")).to.equal("urn:example:par:streamed");
+    expect(url.searchParams.has("authorization_details")).to.equal(false);
+
+    // A successful token response must reach credential handling, not fail JSON parsing.
+    try {
+      await authCode.completeAuthorization(
+        deserializePendingContext(serializePendingContext(prepared)),
+        { code: "code", state: prepared.state },
+      );
+      throw new Error("expected credential handling to run");
+    } catch (error) {
+      expect(error.message).to.equal("reached nonce endpoint");
+    }
+  });
+
   it("returns authorizationUrl without fetching /authorize", async () => {
     const fetchCalls = [];
     const authCode = createAuthorizationCodeIssuance({

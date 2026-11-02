@@ -380,7 +380,7 @@ app.get("/oauth/callback", async (req, res) => {
       message: "Credential issuance finished. You can close this tab and return to the test.",
     });
   } catch (callbackError) {
-    await logError(sessionId, "[/oauth/callback] error:", callbackError);
+    await logError(sessionId, "[/oauth/callback] error:", callbackError.message || String(callbackError));
     await updateWalletTestSession(sessionId, "failed", {
       error: callbackError.message || String(callbackError),
     });

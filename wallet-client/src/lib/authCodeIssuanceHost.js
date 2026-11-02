@@ -141,7 +141,7 @@ async function httpPostFormWithAttestationChallengeRetry({
   let res = await dispatch();
   challengeState?.updateFromResponse(res.headers);
 
-  const responseText = typeof res.bodyText === "string" ? res.bodyText : await res.clone().text().catch(() => "");
+  const responseText = typeof res._responseText === "string" ? res._responseText : await res.clone().text().catch(() => "");
   const { shouldRetry, challenge } = shouldRetryWithAttestationChallenge(res, responseText);
   if (shouldRetry && challenge) {
     challengeState?.set(challenge);

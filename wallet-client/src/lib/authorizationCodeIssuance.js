@@ -371,7 +371,7 @@ export function createAuthorizationCodeIssuance(deps) {
           challengeState: attestationChallengeState,
         });
         if (parRes.ok) {
-          const parBody = parRes.parsedBody || (await parRes.json().catch(() => ({})));
+          const parBody = parRes._parsedBody || (await parRes.json().catch(() => ({})));
           const requestUri = parBody.request_uri;
           parExpiresIn = parBody.expires_in ?? null;
           assertParResponse(profile, {
