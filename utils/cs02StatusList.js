@@ -6,7 +6,7 @@
  * - reject malformed, suspended, or revoked credentials after fetching status-list tokens
  */
 
-import { decodeJwt, importJWK, jwtVerify } from "jose";
+import { decodeJwt, errors as joseErrors, importJWK, jwtVerify } from "jose";
 import { readCredentialStatusToken } from "./credentialStatusList.js";
 import { CredentialStatusFreshnessError, evaluateCredentialStatusFreshness } from "./credentialStatusFreshness.js";
 
@@ -44,6 +44,8 @@ function normalizeStatusListOptions(optionsOrEnv = process.env) {
   return {
     strictMissingStatus,
     trustPolicyOptions,
+    enforceStatus: input.enforceStatus === true,
+    jwksUri: typeof input.jwksUri === "string" ? input.jwksUri : undefined,
     log: typeof input.log === "function" ? input.log : () => {},
   };
 }
@@ -158,6 +160,53 @@ export function validateCs02StatusListReference(status, options = { strictMissin
   };
 }
 
+async function enforceFetchedCredentialStatus(reference, credentialIssuer, options) {
+  const issuer = typeof credentialIssuer === "string" ? credentialIssuer.replace(/\/$/, "") : null;
+  try {
+    const response = await fetch(reference.uri, { headers: { Accept: "application/statuslist+jwt" }, redirect: "error" });
+    if (!response.ok) throw new Error(`status list HTTP ${response.status}`);
+    const token = await response.text();
+    const header = JSON.parse(Buffer.from(token.split(".")[0], "base64url").toString("utf8"));
+    if (header.typ !== "statuslist+jwt") throw new Error("invalid status-list typ");
+    if (header.alg !== "ES256") throw new Error("unsupported status-list algorithm");
+    if (!issuer) throw new Error("credential issuer is missing");
+    const jwksUri = options.jwksUri || `${issuer}/jwks`;
+    const jwksResponse = await fetch(jwksUri, { headers: { Accept: "application/json" }, redirect: "error" });
+    if (!jwksResponse.ok) throw new Error(`issuer JWKS HTTP ${jwksResponse.status}`);
+    const jwks = await jwksResponse.json();
+    const jwk = Array.isArray(jwks?.keys) && (jwks.keys.find((key) => key.kid === header.kid) || jwks.keys.find((key) => key.use === "sig") || jwks.keys[0]);
+    if (!jwk) throw new Error("issuer JWKS has no signing key");
+    await jwtVerify(token, await importJWK(jwk, "ES256"), { algorithms: ["ES256"] });
+    const result = readCredentialStatusToken(token, reference.idx);
+    if (result.payload.sub !== reference.uri) throw new Error("status-list subject mismatch");
+    const now = Math.floor(Date.now() / 1000);
+    const freshness = evaluateCredentialStatusFreshness({
+      iat: result.payload.iat,
+      exp: result.payload.exp,
+      ttl: result.payload.ttl,
+      fetchedAt: now,
+      now,
+    });
+    if (result.status !== 0) throw new Cs02StatusListError("Credential status is INVALID", "invalid_credential", "revoked");
+    return {
+      ...reference,
+      statusState: "valid",
+      enforced: true,
+      issuer,
+      freshness,
+    };
+  } catch (error) {
+    if (error instanceof Cs02StatusListError) throw error;
+    if (error instanceof CredentialStatusFreshnessError) {
+      throw new Cs02StatusListError(error.message, "invalid_credential", error.reason === "stale" ? "stale" : "malformed");
+    }
+    if (error instanceof joseErrors.JWTExpired) {
+      throw new Cs02StatusListError(error.message, "invalid_credential", "stale");
+    }
+    throw new Cs02StatusListError(`Unable to validate credential status: ${error.message}`, "invalid_credential", "status_unavailable");
+  }
+}
+
 export async function validateCs02CredentialStatusList(sdJwt, optionsOrEnv = process.env) {
   const options = normalizeStatusListOptions(optionsOrEnv);
   const payload = decodeSdJwtIssuerPayload(sdJwt);
@@ -166,7 +215,7 @@ export async function validateCs02CredentialStatusList(sdJwt, optionsOrEnv = pro
   }
 
   const reference = validateCs02StatusListReference(payload.status, options);
-  if (reference.placeholder) {
+  if (reference.placeholder && options.enforceStatus !== true) {
     logStatusPlaceholder(options.log, "status-list trust framework is not configured", {
       issuer: typeof payload.iss === "string" ? payload.iss : null,
       statusState: reference.statusState,
@@ -175,53 +224,7 @@ export async function validateCs02CredentialStatusList(sdJwt, optionsOrEnv = pro
     });
   }
   if (reference.present && options.trustPolicyOptions?.skipStatusFetch !== true && options.enforceStatus === true) {
-    let response;
-    try {
-      response = await fetch(reference.uri, { headers: { Accept: "application/statuslist+jwt" }, redirect: "error" });
-      if (!response.ok) throw new Error(`status list HTTP ${response.status}`);
-      const token = await response.text();
-      const header = JSON.parse(Buffer.from(token.split(".")[0], "base64url").toString("utf8"));
-      if (header.typ !== "statuslist+jwt") throw new Error("invalid status-list typ");
-      if (header.alg !== "ES256") throw new Error("unsupported status-list algorithm");
-      const issuer = typeof payload.iss === "string" ? payload.iss.replace(/\/$/, "") : null;
-      if (!issuer) throw new Error("credential issuer is missing");
-      const jwksUri = options.jwksUri || `${issuer}/jwks`;
-      const jwksResponse = await fetch(jwksUri, { headers: { Accept: "application/json" }, redirect: "error" });
-      if (!jwksResponse.ok) throw new Error(`issuer JWKS HTTP ${jwksResponse.status}`);
-      const jwks = await jwksResponse.json();
-      const jwk = Array.isArray(jwks?.keys) && (jwks.keys.find((key) => key.kid === header.kid) || jwks.keys.find((key) => key.use === "sig") || jwks.keys[0]);
-      if (!jwk) throw new Error("issuer JWKS has no signing key");
-      await jwtVerify(token, await importJWK(jwk, "ES256"), { algorithms: ["ES256"] });
-      const result = readCredentialStatusToken(token, reference.idx);
-      if (result.payload.sub !== reference.uri) throw new Error("status-list subject mismatch");
-      const now = Math.floor(Date.now() / 1000);
-      let freshness;
-      try {
-        freshness = evaluateCredentialStatusFreshness({
-          iat: result.payload.iat,
-          exp: result.payload.exp,
-          ttl: result.payload.ttl,
-          fetchedAt: now,
-          now,
-        });
-      } catch (error) {
-        if (error instanceof CredentialStatusFreshnessError) {
-          throw new Cs02StatusListError(error.message, "invalid_credential", error.reason === "stale" ? "stale" : "malformed");
-        }
-        throw error;
-      }
-      if (result.status !== 0) throw new Cs02StatusListError("Credential status is INVALID", "invalid_credential", "revoked");
-      return {
-        ...reference,
-        statusState: "valid",
-        enforced: true,
-        issuer: typeof payload.iss === "string" ? payload.iss : null,
-        freshness,
-      };
-    } catch (error) {
-      if (error instanceof Cs02StatusListError) throw error;
-      throw new Cs02StatusListError(`Unable to validate credential status: ${error.message}`, "invalid_credential", "status_unavailable");
-    }
+    return enforceFetchedCredentialStatus(reference, payload.iss, options);
   }
   return {
     ...reference,

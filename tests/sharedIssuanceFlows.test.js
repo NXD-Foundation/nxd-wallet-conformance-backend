@@ -3293,6 +3293,19 @@ describe('Shared Issuance Flows', function () {
       expect(response.body).to.have.property('sessionId', sessionId);
     });
 
+    it('returns the allocated credential status once issuance has stored it', async () => {
+      const sessionId = 'test-session-id-' + uuidv4();
+      const credentialStatus = { status_list: { uri: 'https://issuer.example/status-lists/credentials/list-1', idx: 9 } };
+      await cacheServiceRedis.storePreAuthSession(sessionId, { status: 'success', credentialStatus });
+
+      const response = await request(app)
+        .get('/issueStatus')
+        .query({ sessionId: sessionId })
+        .expect(200);
+
+      expect(response.body.credentialStatus).to.deep.equal(credentialStatus);
+    });
+
     it('should return code flow session status', async () => {
       const sessionId = 'test-session-id-' + uuidv4();
       const codeFlowSession = { status: 'pending' };

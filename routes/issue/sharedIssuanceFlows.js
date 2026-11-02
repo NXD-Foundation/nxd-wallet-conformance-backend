@@ -119,7 +119,7 @@ import {
   getDeferredSessionAccessToken,
   isDeferredCredentialDenied,
 } from "../../utils/deferredCredentialPoll.js";
-import { applyIssuerOwnedCredentialStatus, issueDeferredCredentialOnce } from "../../utils/credentialStatusIssuance.js";
+import { applyIssuerOwnedCredentialStatus, issueDeferredCredentialOnce, publishedCredentialStatus, recordCredentialStatus } from "../../utils/credentialStatusIssuance.js";
 import { sessionRevocationEnabled } from "../../utils/sessionContext.js";
 import { sessionWalletAttestation } from "../../utils/sessionContext.js";
 import {
@@ -139,7 +139,7 @@ import {
   getProofIssBindingFromSession,
   resolveTokenClientBinding,
 } from "../../utils/openid4vciProofIss.js";
-import { allocateCredentialStatus } from "../../utils/credentialStatusList.js";
+import { allocateIssuedCredentialStatus } from "../../utils/credentialStatusList.js";
 
 const sharedRouter = express.Router();
 
@@ -914,10 +914,10 @@ const handleImmediateCredentialIssuance = async (
     format = 'mDL'; // Use 'mDL' for internal processing
   }
 
-  applyIssuerOwnedCredentialStatus(requestBody, {
+  recordCredentialStatus(sessionObject, applyIssuerOwnedCredentialStatus(requestBody, {
     enabled: sessionRevocationEnabled(sessionObject) && (format === "dc+sd-jwt" || format === "vc+sd-jwt"),
-    allocate: () => allocateCredentialStatus({ baseUrl: getServerUrl() }).status,
-  });
+    allocate: () => allocateIssuedCredentialStatus({ baseUrl: getServerUrl(), revoked: sessionObject?.issueRevoked === true }),
+  }));
 
   const credential = await handleCredentialGenerationBasedOnFormat(
     requestBody,
@@ -2667,10 +2667,10 @@ sharedRouter.post("/credential_deferred", async (req, res) => {
     }
 
     const { credential, reused } = await issueDeferredCredentialOnce(sessionObject, () => {
-      applyIssuerOwnedCredentialStatus(sessionObject.requestBody, {
+      recordCredentialStatus(sessionObject, applyIssuerOwnedCredentialStatus(sessionObject.requestBody, {
         enabled: sessionRevocationEnabled(sessionObject),
-        allocate: () => allocateCredentialStatus({ baseUrl: getServerUrl() }).status,
-      });
+        allocate: () => allocateIssuedCredentialStatus({ baseUrl: getServerUrl(), revoked: sessionObject?.issueRevoked === true }),
+      }));
       return handleCredentialGenerationBasedOnFormatDeferred(sessionObject, getServerUrl());
     });
     if (!reused) await persistDeferredSession(sessionObject, sessionId, flowType);
@@ -2875,13 +2875,16 @@ sharedRouter.get("/issueStatus", async (req, res) => {
     const codeFlowSession = await getCodeFlowSession(sessionId);
     const codeFlowStatus = codeFlowSession ? codeFlowSession.status : null;
 
+    const session = existingPreAuthSession || codeFlowSession;
     const result = perAuthStatus || codeFlowStatus;
+    const credentialStatus = publishedCredentialStatus(session);
     
     if (result) {
       res.json({
         status: result,
         reason: "ok",
         sessionId: sessionId,
+        ...(credentialStatus ? { credentialStatus } : {}),
       });
     } else {
       res.json({

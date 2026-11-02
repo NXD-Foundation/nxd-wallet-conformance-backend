@@ -11,6 +11,7 @@ import {
   loadConfiguredAccessCertificate,
   preprodPkiAccessCaEnabled,
   isTrustFrameworkSession,
+  issuanceSessionProps,
   recordTrustDecision,
   setTrustResolverForTests,
   trustFrameworkSessionProps,
@@ -19,6 +20,14 @@ import {
 
 describe("Phase 3 Wallet Provider trust policy", () => {
   afterEach(() => clearTrustResolverForTests());
+
+  it("copies an already-revoked issuance flag onto the session", () => {
+    expect(issuanceSessionProps({ revocation: "true", issueRevoked: "true" })).to.include({
+      revocationEnabled: true,
+      issueRevoked: true,
+    });
+    expect(issuanceSessionProps({ issueRevoked: "false" })).to.deep.equal({ issueRevoked: false, walletAttestationProfile: "auto" });
+  });
 
   it("normalizes the explicit request flag into a session policy", () => {
     expect(trustFrameworkSessionProps({ trustFramework: true })).to.deep.equal({

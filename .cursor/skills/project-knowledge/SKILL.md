@@ -38,6 +38,12 @@ to upstream WP4 ITB material or a separately hosted instance.
 When evaluating interop, conformance, or "what ITB expects", check what this
 repository actually implements — not an assumed external test bed.
 
+Protocol checks are implemented in this codebase as well. The issuer, the
+verifier, and `wallet-client/` perform them. An ITB suite drives those
+implementations the same way the CS-01 and CS-02 suites drive issuance and
+presentation. The GITB messaging service only forwards calls those components
+already expose.
+
 ## Route from Fast Lookup
 
 Use the **Fast Lookup** table in `knowledge.md` to pick the first documents to
@@ -66,6 +72,10 @@ and implementation detail. Read only what the task needs.
   when a linked decision, profile interpretation, or support claim changes.
 - When a plan is implemented, move its summary from pending to current behaviour
   in `knowledge.md`; keep the plan as historical rationale.
+- Protocol checks, including CS-10 attestation revocation, are implemented in
+  this codebase as well: the issuer, the verifier, and `wallet-client/` perform
+  them. ITB suites drive those implementations. The GITB messaging service only
+  forwards calls those components already expose.
 - Every confirmed bug fix MUST include a focused unit regression test in the
   same change set that fails before the fix and passes afterward. Keep it in
   the automated suite to prevent recurrence. Protocol-boundary fixes also need

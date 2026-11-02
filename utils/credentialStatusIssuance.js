@@ -23,6 +23,24 @@ export function applyIssuerOwnedCredentialStatus(requestBody, { enabled = false,
   return status;
 }
 
+export function recordCredentialStatus(session, status) {
+  if (!session || typeof session !== "object") return null;
+  const published = publishedCredentialStatus({ credentialStatus: status });
+  if (!published) {
+    delete session.credentialStatus;
+    return null;
+  }
+  session.credentialStatus = published;
+  return published;
+}
+
+export function publishedCredentialStatus(session) {
+  const statusList = session?.credentialStatus?.status_list;
+  if (!statusList || typeof statusList.uri !== "string" || statusList.uri.length === 0) return null;
+  if (!Number.isInteger(statusList.idx) || statusList.idx < 0) return null;
+  return { status_list: { uri: statusList.uri, idx: statusList.idx } };
+}
+
 export function disclosureFrameWithoutStatus(frame) {
   if (!frame || typeof frame !== "object" || Array.isArray(frame)) return frame;
   const copy = { ...frame };

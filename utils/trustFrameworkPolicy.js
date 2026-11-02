@@ -33,8 +33,16 @@ export function revocationSessionProps(input = {}) {
   throw new Error("revocation must be a boolean");
 }
 
+export function issueRevokedSessionProps(input = {}) {
+  const value = input.issueRevoked ?? input.issue_revoked;
+  if (value === undefined || value === null || value === "") return {};
+  if (value === true || value === "true" || value === "1") return { issueRevoked: true };
+  if (value === false || value === "false" || value === "0") return { issueRevoked: false };
+  throw new Error("issueRevoked must be a boolean");
+}
+
 export function issuanceSessionProps(input = {}) {
-  return { ...trustFrameworkSessionProps(input), ...revocationSessionProps(input), walletAttestationProfile: resolveWalletAttestationProfile(input.walletAttestationProfile ?? input.wallet_attestation_profile) };
+  return { ...trustFrameworkSessionProps(input), ...revocationSessionProps(input), ...issueRevokedSessionProps(input), walletAttestationProfile: resolveWalletAttestationProfile(input.walletAttestationProfile ?? input.wallet_attestation_profile) };
 }
 
 export function resolveWalletAttestationProfile(value) {

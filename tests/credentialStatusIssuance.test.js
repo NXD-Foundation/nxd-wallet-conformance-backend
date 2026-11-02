@@ -4,6 +4,8 @@ import {
   disclosureFrameWithoutStatus,
   embedIssuerOwnedStatus,
   issueDeferredCredentialOnce,
+  publishedCredentialStatus,
+  recordCredentialStatus,
 } from "../utils/credentialStatusIssuance.js";
 
 describe("issuer-owned credential status", () => {
@@ -42,6 +44,17 @@ describe("issuer-owned credential status", () => {
     expect(payload.status).to.equal(issuerStatus);
     expect(payload.credentialSubject).to.not.have.property("status");
     expect(payload.family_name).to.equal("Neslo");
+  });
+
+  it("keeps the allocated status reference on the session for the issuance poll", () => {
+    const session = {};
+    const status = { status_list: { uri: "https://issuer.example/status-lists/credentials/list-1", idx: 9 } };
+
+    expect(recordCredentialStatus(session, status)).to.deep.equal(status);
+    expect(publishedCredentialStatus(session)).to.deep.equal(status);
+    expect(recordCredentialStatus(session, null)).to.equal(null);
+    expect(session).to.not.have.property("credentialStatus");
+    expect(publishedCredentialStatus({ credentialStatus: { status_list: { uri: "https://issuer.example/list", idx: -1 } } })).to.equal(null);
   });
 
   it("removes status from the selective disclosure frame", () => {

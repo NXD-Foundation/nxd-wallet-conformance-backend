@@ -32,7 +32,9 @@ configuration, wallet client, and tests — as what "ITB" or "ITB+" means here,
 unless a document explicitly points at the upstream WP4 ITB specification or
 a separately hosted instance. The WE BUILD CS profiles describe what the test
 bed is meant to validate; this repository is the running implementation that
-ITB+ scenarios exercise against.
+ITB+ scenarios exercise against. Protocol checks are implemented in this
+codebase as well: the issuer, the verifier, and `wallet-client/` perform them,
+and an ITB suite drives those implementations.
 
 The primary supported credential families are SD-JWT VC, JWT VC, and
 `mso_mdoc` (mDL/PID). Redis provides session, state, nonce, and deferred
@@ -56,7 +58,12 @@ trust policy and decisions, credential revocation, and correlation metadata;
 legacy flat fields stay present while routes are migrated. Issuance sessions
 record `sessionContext.revocation.enabled`, mirrored to `revocationEnabled`.
 Pre-authorized, authorization-code, DC API, and batch offer builders copy that
-flag from the offer request. A credential request cannot supply `status` or
+flag from the offer request. While revocation is enabled, revocable SD-JWT
+credentials share one active status list and receive a random unused index in
+that list. The retrieval path is `/credential-status/{listId}`. `/status-lists/`
+belongs to the wallet provider's WIA and KA lists. An offer may also set `issueRevoked=true`; the issuer then marks
+that index INVALID before the credential response is returned, so a wallet
+under test receives an already-revoked credential. A credential request cannot supply `status` or
 `status_reference`. Deferred issuance signs the credential once and returns
 that same token on later polls. Status-list cache lifetime is the earliest of
 `exp`, fetch time plus `ttl` (60 seconds when `ttl` is absent), and five
@@ -873,6 +880,11 @@ profile interpretation, protocol support claim, or documentation location.
   needs parity tests.
 - When fixing a bug, add or extend an automated test in the same change set
   that would have failed before the fix. See [`AGENTS.md`](../AGENTS.md).
+- Protocol checks, including CS-10 attestation revocation, are implemented in
+  this codebase as well: the issuer, the verifier, and `wallet-client/` perform
+  them. An ITB suite drives those implementations the same way the CS-01 and
+  CS-02 suites drive issuance and presentation. The GITB messaging service only
+  forwards calls those components already expose.
 
 
 
@@ -882,6 +894,7 @@ profile interpretation, protocol support claim, or documentation location.
 | If you are changing...                                      | Read first                                                                |
 | ----------------------------------------------------------- | ------------------------------------------------------------------------- |
 | Credential offers, PAR, token, proofs, or deferred issuance | CS-01, attestation options, relevant VCI matrix, OpenID4VCI JWT proof `iss` |
+| CS-10 attestation revocation                                | CS-10, issuer status-list routes, verifier status check, `wallet-client/`    |
 | ITB browser auth handoff (headless wallet `/session`)       | [wallet-client auth handoff](../wallet-client/docs/auth-handoff-itb.md)   |
 | WUA/WIA/KA validation, trust, or status-list publication    | CS-04, Token Status List draft-20, wallet-client publisher, future WUA enforcement |
 | Trust framework, LoTL/LoTE, or `trustFramework=true`        | [`docs/trust/SOURCE.md`](./trust/SOURCE.md), UC-TE-03/06, Annex E profile; runtime in `trust/` |
