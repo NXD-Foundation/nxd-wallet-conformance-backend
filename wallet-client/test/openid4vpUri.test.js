@@ -6,9 +6,10 @@ import {
   OPENID4VP_PRESENT_URI,
   isOpenId4VpDeepLink,
   isOpenId4VpPresentInvocation,
+  parseOpenId4VpDeepLink,
 } from "../src/lib/openid4vpUri.js";
 
-describe("openid4vp URI helpers (RFC002 present invocation)", () => {
+describe("openid4vp URI helpers (local present convention)", () => {
   it("defines present authority constants", () => {
     expect(OPENID4VP_PRESENT_HOST).to.equal("present");
     expect(OPENID4VP_PRESENT_URI).to.equal("openid4vp://present");
@@ -16,7 +17,7 @@ describe("openid4vp URI helpers (RFC002 present invocation)", () => {
   });
 
   describe("isOpenId4VpDeepLink", () => {
-    it("matches openid4vp://present and legacy bare links", () => {
+    it("matches openid4vp links with present and empty hostnames", () => {
       expect(isOpenId4VpDeepLink("openid4vp://present?request_uri=x")).to.equal(true);
       expect(isOpenId4VpDeepLink("openid4vp://?request_uri=x")).to.equal(true);
     });
@@ -33,14 +34,14 @@ describe("openid4vp URI helpers (RFC002 present invocation)", () => {
       expect(isOpenId4VpPresentInvocation(url)).to.equal(true);
     });
 
-    it("is false for legacy bare openid4vp:// authority", () => {
+    it("is false for empty openid4vp:// authority", () => {
       const url = new URL("openid4vp://?request_uri=https%3A%2F%2Fexample.com");
       expect(isOpenId4VpPresentInvocation(url)).to.equal(false);
     });
   });
 
   describe("buildVPbyValue", () => {
-    it("MUST emit openid4vp://present? per RFC002 wallet invocation", () => {
+    it("emits the local canonical openid4vp://present? form", () => {
       const link = buildVPbyValue(
         "verifier-client",
         null,
@@ -57,5 +58,38 @@ describe("openid4vp URI helpers (RFC002 present invocation)", () => {
       expect(url.searchParams.get("client_id")).to.equal("verifier-client");
       expect(url.searchParams.get("response_uri")).to.equal("https://verifier.example/response");
     });
+  });
+});
+
+
+describe("presentation invocation query parsing", () => {
+  const query = new URLSearchParams({
+    client_id: "x509_hash:verifier-hash",
+    request_uri: "https://verifier.example/request/123",
+    request_uri_method: "post",
+  }).toString();
+
+  for (const scheme of ["openid4vp", "eu-eaap", "mdoc-openid4vp"]) {
+    for (const host of ["", "present", "authorize", "another-invocation.example"]) {
+      it(`resolves ${scheme} with hostname ${JSON.stringify(host)} from its query`, () => {
+        expect(parseOpenId4VpDeepLink(`${scheme}://${host}?${query}`)).to.deep.equal({
+          requestUri: "https://verifier.example/request/123",
+          clientId: "x509_hash:verifier-hash",
+          method: "post",
+        });
+      });
+    }
+  }
+
+  it("defaults request retrieval to GET", () => {
+    expect(parseOpenId4VpDeepLink("openid4vp://authorize?request_uri=https%3A%2F%2Fverifier.example%2Frequest").method).to.equal("get");
+  });
+
+  it("rejects unsupported schemes even with presentation query parameters", () => {
+    expect(() => parseOpenId4VpDeepLink(`https://authorize?${query}`)).to.throw("Unsupported request scheme");
+  });
+
+  it("rejects malformed invocation URIs", () => {
+    expect(() => parseOpenId4VpDeepLink("openid4vp://[invalid")).to.throw();
   });
 });

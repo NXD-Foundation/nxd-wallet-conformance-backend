@@ -41,10 +41,7 @@ import {
   presentationFormatFromDcqlQuery,
   selectWalletCredentialsForDcql,
 } from "./dcqlCredentialSelection.js";
-import {
-  isOpenId4VpPresentInvocation,
-  OPENID4VP_PRESENT_HOST,
-} from "./openid4vpUri.js";
+import { parseOpenId4VpDeepLink } from "./openid4vpUri.js";
 import { filterSdJwtByDcqlClaims } from "./sdJwtDisclosureSelection.js";
 
 function makeSessionLogger(sessionId) {
@@ -108,33 +105,6 @@ function makeSessionLogger(sessionId) {
       appendWalletLog(sessionId, logEntry).catch(() => {});
     } catch {}
   };
-}
-
-function parseOpenId4VpDeepLink(deepLink) {
-  console.log("[present] Parsing deep link:", deepLink);
-  const url = new URL(deepLink);
-  if (url.protocol === "openid4vp:") {
-    if (url.hostname && url.hostname !== OPENID4VP_PRESENT_HOST) {
-      throw new Error(
-        `Unsupported openid4vp authority "${url.hostname}"; expected "${OPENID4VP_PRESENT_HOST}" or bare openid4vp://`,
-      );
-    }
-    if (isOpenId4VpPresentInvocation(url)) {
-      console.log("[present] RFC002 openid4vp://present invocation");
-    } else {
-      console.log("[present] Legacy bare openid4vp:// invocation (empty authority)");
-    }
-  } else {
-    const supported = new Set(["mdoc-openid4vp:", "eu-eaap:"]);
-    if (!supported.has(url.protocol)) {
-      throw new Error(`Unsupported request scheme: ${url.protocol}`);
-    }
-  }
-  const requestUri = url.searchParams.get("request_uri");
-  const clientId = url.searchParams.get("client_id");
-  const method = url.searchParams.get("request_uri_method") || "get";
-  console.log("[present] Parsed deep link →", { requestUri, clientId, method });
-  return { requestUri, clientId, method };
 }
 
 /**

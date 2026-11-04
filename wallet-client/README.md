@@ -89,3 +89,27 @@ cryptographic verification to existing structural-only mdoc validation.
 
 The issuer uses its separate `WALLET_PROVIDER_TRUST_MODE` setting for incoming key
 attestations. Neither warning mode bypasses TLS verification.
+
+## Presentation invocation URI policy
+
+For the currently supported presentation schemes (`openid4vp://`, `eu-eaap://`,
+and `mdoc-openid4vp://`), the wallet accepts any hostname, including an empty
+hostname. For example, `openid4vp://?…`, `openid4vp://present?…`,
+`openid4vp://authorize?…`, and `openid4vp://another-name?…` use the same query
+processing. The hostname and path do not select presentation behavior or
+identify or authenticate the verifier. Request retrieval uses the query's
+`request_uri`, with `request_uri_method` defaulting to `get`; the existing
+request and verifier validation then applies.
+
+Generated OpenID4VP links continue to use `openid4vp://present?…` as this
+implementation's canonical output convention. This hostname is not required by
+OpenID4VP or APTITUDE RFC002. Hostname-independent reception is a local
+interoperability policy, not a claim that the standards require every hostname
+to be accepted. It applies only to the supported custom presentation schemes,
+not to HTTPS endpoints or OAuth callbacks. URI syntax is parsed with `URL`.
+
+APTITUDE [RFC002 §8.1](https://github.com/APTITUDE-Consortium/aptitude-eudi-wallet-specs/blob/main/docs/RFCs/RFC002.md#81-wallet-invocation-interface)
+recommends documenting custom invocation schemes. OpenID4VP
+[§9](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-9)
+and [§13.1.2](https://openid.net/specs/openid-4-verifiable-presentations-1_0.html#section-13.1.2)
+describe custom-scheme invocation without prescribing `present` or `authorize`.

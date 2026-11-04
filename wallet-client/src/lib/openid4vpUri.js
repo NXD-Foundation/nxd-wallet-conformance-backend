@@ -1,7 +1,7 @@
 /**
- * OpenID4VP wallet invocation uses `openid4vp://present?…` (RFC 3986 authority).
- * Bare `openid4vp://` remains accepted for legacy links; `present` is the
- * recommended authority for same-device invocation (RFC002 / OpenID4VP 1.0).
+ * Local canonical URI for generated OpenID4VP presentation links.
+ * The receiver also accepts empty and arbitrary hostnames; `present` is a
+ * local convention, not a hostname prescribed by RFC002 or OpenID4VP 1.0.
  */
 export const OPENID4VP_PRESENT_HOST = "present";
 
@@ -20,8 +20,21 @@ export function isOpenId4VpDeepLink(value) {
 
 /**
  * Returns true when the URL uses the `present` authority.
- * Legacy bare `openid4vp://?…` links (empty authority) remain accepted by the wallet parser.
+ * This identifies the local output convention, not the set of accepted links.
  */
 export function isOpenId4VpPresentInvocation(url) {
   return url?.protocol === "openid4vp:" && url.hostname === OPENID4VP_PRESENT_HOST;
+}
+
+/** Parse invocation parameters independently of the custom URI hostname/path. */
+export function parseOpenId4VpDeepLink(deepLink) {
+  const url = new URL(deepLink);
+  const supported = new Set(["openid4vp:", "mdoc-openid4vp:", "eu-eaap:"]);
+  if (!supported.has(url.protocol)) {
+    throw new Error(`Unsupported request scheme: ${url.protocol}`);
+  }
+  const requestUri = url.searchParams.get("request_uri");
+  const clientId = url.searchParams.get("client_id");
+  const method = url.searchParams.get("request_uri_method") || "get";
+  return { requestUri, clientId, method };
 }
