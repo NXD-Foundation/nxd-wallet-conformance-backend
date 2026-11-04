@@ -167,6 +167,12 @@ and dataset checks and were activated; original quarantine files remain retained
 
 ### CS-01 High-Assurance Issuance
 
+- The wallet checks the selected JWT proof's `key_attestations_required`
+  metadata against the generated key attestation's `key_storage` and
+  `user_authentication` claims, using the CS-01 ISO 18045 level ordering.
+  Unsupported or malformed requirements and insufficient levels fail before
+  the credential request. Attestation material remains a local test fixture;
+  this comparison does not establish certification or issuer trust.
 - The CS-01 reference target is SD-JWT-VC issuance through PAR, PKCE S256,
 sender-constrained tokens (such as DPoP or mTLS), Wallet Unit Attestation
 (WUA) client authentication, and a credential proof bound to the Wallet

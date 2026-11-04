@@ -41,6 +41,32 @@ export class CredentialProofBindingError extends Error {
   }
 }
 
+const ATTESTATION_LEVELS = ["iso_18045_basic", "iso_18045_enhanced-basic", "iso_18045_moderate", "iso_18045_high"];
+
+export function assertKeyAttestationRequirements(requirements, claims) {
+  if (requirements === undefined) return;
+  if (!requirements || typeof requirements !== "object" || Array.isArray(requirements)) {
+    throw new CredentialProofBindingError("Invalid key_attestations_required metadata");
+  }
+  for (const field of ["key_storage", "user_authentication"]) {
+    if (!Object.hasOwn(requirements, field)) continue;
+    const required = requirements[field];
+    if (!Array.isArray(required) || required.length === 0 || required.some((value) => typeof value !== "string" || !value)) {
+      throw new CredentialProofBindingError(`Invalid key_attestations_required ${field}: expected a non-empty string array`);
+    }
+    if (required.some((value) => !ATTESTATION_LEVELS.includes(value))) {
+      throw new CredentialProofBindingError(`Unsupported key_attestations_required ${field} level`);
+    }
+    const actual = claims?.[field];
+    if (!Array.isArray(actual) || !actual.some((value) => {
+      const level = ATTESTATION_LEVELS.indexOf(value);
+      return level >= 0 && required.some((minimum) => level >= ATTESTATION_LEVELS.indexOf(minimum));
+    })) {
+      throw new CredentialProofBindingError(`Key attestation ${field} does not meet issuer requirements`);
+    }
+  }
+}
+
 export function selectProofSigningAlgorithm(issuerMeta, configurationId) {
   const supported =
     issuerMeta?.proof_types_supported?.jwt?.proof_signing_alg_values_supported ||
@@ -223,11 +249,16 @@ export async function buildCredentialProofRequest({
     key_attestation: keyAttestation.attestationJwt,
   });
 
-  validateWalletUnitKeyAttestation({
+  const { payload: attestationClaims } = validateWalletUnitKeyAttestation({
     attestationJwt: keyAttestation.attestationJwt,
     proofPublicJwk: subjectKey.publicJwk,
     expectedNonce: cNonce,
   });
+
+  assertKeyAttestationRequirements(
+    issuerMeta?.credential_configurations_supported?.[configurationId]?.proof_types_supported?.jwt?.key_attestations_required,
+    attestationClaims,
+  );
 
   assertCs01CredentialProofRequirements(profile, {
     subjectKey,

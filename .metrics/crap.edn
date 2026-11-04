@@ -1,24 +1,16 @@
 {:entries [
-  {:name "validateCs02CredentialStatusList", :namespace "utils.cs02StatusList", :complexity 32, :coverage nil, :crap nil}
-  {:name "validateCs02StatusListReference", :namespace "utils.cs02StatusList", :complexity 15, :coverage nil, :crap nil}
-  {:name "normalizeStatusListOptions", :namespace "utils.cs02StatusList", :complexity 8, :coverage nil, :crap nil}
-  {:name "POST /status-lists/credentials/:listId/entries/:idx/revoke", :namespace "routes.credentialStatusRoutes", :complexity 6, :coverage nil, :crap nil}
-  {:name "readCredentialStatusToken", :namespace "utils.credentialStatusList", :complexity 6, :coverage nil, :crap nil}
-  {:name "decodeSdJwtIssuerPayload", :namespace "utils.cs02StatusList", :complexity 6, :coverage nil, :crap nil}
-  {:name "revokeCredentialStatus", :namespace "utils.credentialStatusList", :complexity 5, :coverage nil, :crap nil}
-  {:name "truthyEnv", :namespace "utils.cs02StatusList", :complexity 5, :coverage nil, :crap nil}
-  {:name "unusedIndex", :namespace "utils.credentialStatusList", :complexity 4, :coverage nil, :crap nil}
-  {:name "GET /status-lists/credentials/:listId", :namespace "routes.credentialStatusRoutes", :complexity 3, :coverage nil, :crap nil}
-  {:name "encodedList", :namespace "utils.credentialStatusList", :complexity 3, :coverage nil, :crap nil}
-  {:name "signCredentialStatusList", :namespace "utils.credentialStatusList", :complexity 3, :coverage nil, :crap nil}
-  {:name "logStatusPlaceholder", :namespace "utils.cs02StatusList", :complexity 3, :coverage nil, :crap nil}
-  {:name "chooseListId", :namespace "utils.credentialStatusList", :complexity 2, :coverage nil, :crap nil}
-  {:name "list", :namespace "utils.credentialStatusList", :complexity 2, :coverage nil, :crap nil}
-  {:name "credentialStatusRouter", :namespace "routes.credentialStatusRoutes", :complexity 1, :coverage nil, :crap nil}
-  {:name "allocateCredentialStatus", :namespace "utils.credentialStatusList", :complexity 1, :coverage nil, :crap nil}
-  {:name "openList", :namespace "utils.credentialStatusList", :complexity 1, :coverage nil, :crap nil}
-  {:name "resetCredentialStatusListsForTests", :namespace "utils.credentialStatusList", :complexity 1, :coverage nil, :crap nil}
-  {:name "statusListStoreForTests", :namespace "utils.credentialStatusList", :complexity 1, :coverage nil, :crap nil}
-  {:name "resolveCs02StatusListOptions", :namespace "utils.cs02StatusList", :complexity 1, :coverage nil, :crap nil}
-  {:name "constructor", :namespace "utils.cs02StatusList.Cs02StatusListError", :complexity 1, :coverage nil, :crap nil}
+  {:name "assertKeyAttestationRequirements", :namespace "lib.credentialProofBinding", :complexity 16, :coverage nil, :crap nil}
+  {:name "selectProofSigningAlgorithm", :namespace "lib.credentialProofBinding", :complexity 14, :coverage nil, :crap nil}
+  {:name "assertDeferredIssuanceBindingContext", :namespace "lib.credentialProofBinding", :complexity 9, :coverage nil, :crap nil}
+  {:name "assertCs01CredentialProofRequirements", :namespace "lib.credentialProofBinding", :complexity 8, :coverage nil, :crap nil}
+  {:name "buildCredentialProofRequest", :namespace "lib.credentialProofBinding", :complexity 7, :coverage nil, :crap nil}
+  {:name "describeSenderConstrainingContext", :namespace "lib.credentialProofBinding", :complexity 5, :coverage nil, :crap nil}
+  {:name "buildCredentialProofBindingContext", :namespace "lib.credentialProofBinding", :complexity 4, :coverage nil, :crap nil}
+  {:name "resolveOpenid4VciProofIssuerClaim", :namespace "lib.credentialProofBinding", :complexity 4, :coverage nil, :crap nil}
+  {:name "resolveProofAudience", :namespace "lib.credentialProofBinding", :complexity 3, :coverage nil, :crap nil}
+  {:name "buildDeferredCredentialPollRequest", :namespace "lib.credentialProofBinding", :complexity 2, :coverage nil, :crap nil}
+  {:name "describeWalletUnitSubjectKey", :namespace "lib.credentialProofBinding", :complexity 1, :coverage nil, :crap nil}
+  {:name "resolveWalletUnitSubjectKey", :namespace "lib.credentialProofBinding", :complexity 1, :coverage nil, :crap nil}
+  {:name "toKeyBindingMaterial", :namespace "lib.credentialProofBinding", :complexity 1, :coverage nil, :crap nil}
+  {:name "constructor", :namespace "lib.credentialProofBinding.CredentialProofBindingError", :complexity 1, :coverage nil, :crap nil}
 ]}

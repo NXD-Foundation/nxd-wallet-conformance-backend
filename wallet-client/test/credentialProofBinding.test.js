@@ -8,6 +8,7 @@ import {
   resolveOpenid4VciProofIssuerClaim,
   buildCredentialProofBindingContext,
   buildCredentialProofRequest,
+  assertKeyAttestationRequirements,
   assertDeferredIssuanceBindingContext,
   buildDeferredCredentialPollRequest,
   toKeyBindingMaterial,
@@ -44,6 +45,30 @@ describe("wallet-client credentialProofBinding (Phase 8)", () => {
   it("selects a supported proof signing algorithm", () => {
     expect(selectProofSigningAlgorithm(issuerMeta, "PID")).to.equal("ES256");
     expect(selectProofSigningAlgorithm({}, "PID")).to.equal("ES256");
+  });
+
+  it("compares both actual attestation levels against issuer alternatives", () => {
+    const claims = { key_storage: ["iso_18045_moderate"], user_authentication: ["iso_18045_enhanced-basic"] };
+    expect(() => assertKeyAttestationRequirements({ key_storage: ["iso_18045_high", "iso_18045_basic"], user_authentication: ["iso_18045_basic"] }, claims)).not.to.throw();
+    expect(() => assertKeyAttestationRequirements({ key_storage: ["iso_18045_high"] }, claims)).to.throw(/key_storage.*does not meet/);
+    expect(() => assertKeyAttestationRequirements({ user_authentication: ["iso_18045_moderate"] }, claims)).to.throw(/user_authentication.*does not meet/);
+    expect(() => assertKeyAttestationRequirements({}, claims)).not.to.throw();
+    expect(() => assertKeyAttestationRequirements(undefined, claims)).not.to.throw();
+    expect(() => assertKeyAttestationRequirements({ key_storage: [] }, claims)).to.throw(/Invalid.*key_storage/);
+    expect(() => assertKeyAttestationRequirements({ user_authentication: ["unknown"] }, claims)).to.throw(/Unsupported/);
+    expect(() => assertKeyAttestationRequirements(null, claims)).to.throw(/Invalid/);
+    expect(() => assertKeyAttestationRequirements({ key_storage: ["iso_18045_basic"] }, {})).to.throw(/does not meet/);
+  });
+
+  it("rejects unsupported issuer attestation requirements before returning a credential request", async () => {
+    const metadata = structuredClone(issuerMeta);
+    metadata.credential_configurations_supported.PID.proof_types_supported.jwt.key_attestations_required = { key_storage: ["unknown"] };
+    let error;
+    try {
+      await buildCredentialProofRequest({ profile: WALLET_PROFILES.WEBUILD_CS01, issuerMeta: metadata, apiBase: "https://issuer.example.com", configurationId: "PID", cNonce: "nonce-123", credentialEndpoint: "https://issuer.example.com/credential", clientId: DEFAULT_WALLET_CLIENT_ID });
+    } catch (err) { error = err; }
+    expect(error).to.be.instanceOf(CredentialProofBindingError);
+    expect(error.message).to.match(/unsupported/i);
   });
 
   it("resolves a Wallet Unit subject key with explicit role metadata", async () => {
