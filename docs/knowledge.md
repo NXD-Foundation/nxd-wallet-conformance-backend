@@ -127,6 +127,17 @@ LoTL content; runtime still fetches the published LoTL and referenced lists.
 
 ## Architectural Decisions And Constraints
 
+### CS-13 intermediary presentation
+
+For trust-enabled OpenID4VP presentations, the wallet accepts a signed RP WRPRC
+whose `intermediary.sub` matches the WRPAC subject identifier. It checks the
+registrar dataset and DCQL scope against that RP registration and logs RP
+identity, registration evidence, and an optional intermediary-name mismatch in
+wallet session logs. Direct-RP binding remains in effect without an intermediary
+member. Registration failures fail closed. This headless wallet does not display
+or obtain user approval, parse an undefined WRPAC association encoding, or accept
+ISO DeviceRequests carrying `euWrprc`; these are limits on CS-13 conformance.
+
 ### Raidiam relying-party registration certificates
 
 Ordinary remote CS-02 and non-trust CS-07 presentation/payment requests use the original EUDI preproduction verifier

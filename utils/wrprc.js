@@ -79,7 +79,7 @@ export function decodeRegistrationCertificate(data) {
   return token;
 }
 
-export async function verifyWrprc(token, { entityId, intendedUseId, serviceId, checkTrust, currentDate } = {}) {
+export async function verifyWrprc(token, { entityId, intendedUseId, serviceId, checkTrust, currentDate, allowIntermediary = false } = {}) {
   encodeRegistrationCertificate(token);
   if (!entityId || typeof checkTrust !== "function") fail("entity identity and trust callback required");
   const header = decodeProtectedHeader(token);
@@ -87,7 +87,11 @@ export async function verifyWrprc(token, { entityId, intendedUseId, serviceId, c
   if (!Array.isArray(header.x5c) || !header.x5c.length || header.x5c.some((cert) => typeof cert !== "string" || !/^[A-Za-z0-9+/]+={0,2}$/.test(cert))) fail("signing certificate chain required");
   const certificateChain = header.x5c.map((cert) => derToPem(Buffer.from(cert, "base64")));
   const { payload } = await jwtVerify(token, await importX509(certificateChain[0], header.alg), { algorithms: [header.alg], requiredClaims: ["exp", "sub"], currentDate });
-  if (payload.sub !== entityId) fail("subject does not match WRPAC");
+  if (allowIntermediary && Object.hasOwn(payload, "intermediary")) {
+    const intermediary = payload.intermediary;
+    if (!intermediary || typeof intermediary !== "object" || Array.isArray(intermediary) || typeof intermediary.sub !== "string" || !intermediary.sub) fail("intermediary subject is missing or malformed");
+    if (intermediary.sub !== entityId) fail("intermediary subject does not match WRPAC");
+  } else if (payload.sub !== entityId) fail("subject does not match WRPAC");
   if (!Array.isArray(payload.entitlements) || !payload.entitlements.includes("https://uri.etsi.org/19475/Entitlement/Service_Provider")) fail("Service Provider entitlement required");
   const trustDecision = await checkTrust({ certificatePem: certificateChain[0], certificateChain, role: "wrprc-provider", operation: "verify-registration-certificate" });
   if (!trustDecision?.trusted) fail("registration signing chain is not trusted");

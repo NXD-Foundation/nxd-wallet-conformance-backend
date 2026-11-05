@@ -463,6 +463,28 @@ describe("wallet registration certificate request boundary", () => {
     await rejects(payload, "signature verification failed");
     await rejects(await request({ exp: 1 }), '"exp" claim');
   });
+  it("accepts an intermediary only when the signed registration names the WRPAC subject", async () => {
+    const payload = await request({ sub: "bank-a", intermediary: { sub: "test-verifier-001" } }, { identifier: "bank-a" });
+    expect((await check(payload)).trusted).to.equal(true);
+    await rejects(await request({ sub: "bank-a", intermediary: { sub: "other" } }, { identifier: "bank-a" }), "intermediary subject does not match WRPAC");
+    await rejects(await request({ sub: "bank-a", intermediary: {} }, { identifier: "bank-a" }), "intermediary subject");
+  });
+  it("accepts a matching intermediary identifier even if its optional name differs", async () => {
+    expect((await check(await request({ sub: "bank-a", intermediary: { sub: "test-verifier-001", sname: "Wrong name" } }, { identifier: "bank-a" }))).trusted).to.equal(true);
+  });
+  it("checks intermediary scope and logs when dataset fields lack signed evidence", async () => {
+    const log = sinon.stub(console, "log");
+    try {
+      const payload = await request({ sub: "bank-a", name: "Bank A", intermediary: { sub: "test-verifier-001" }, privacyPolicy: undefined }, { identifier: "bank-a", serviceId: "bank-service" });
+      expect((await check(payload)).trusted).to.equal(true);
+      const entry = log.getCalls().find(call => call.args[0] === "[TRUST] intermediary registration")?.args[1];
+      expect(entry.relyingPartyName).to.equal("Bank A");
+      expect(entry.registrarDataset.privacyPolicy.evidence).to.equal("request_only");
+      expect(entry.registrarDataset.serviceId.evidence).to.equal("request_only");
+      payload.dcql_query.credentials[0] = { ...credential, claims: [{ path: ["not-registered"] }] };
+      await rejects(payload, "exceeds intended-use");
+    } finally { log.restore(); }
+  });
   it("rejects WRPAC identity and registrar dataset mismatches", async () => {
     await rejects(await request({ sub: "another-rp" }), "subject does not match WRPAC");
     await rejects(await request({}, { policyURI: "https://attacker.example/" }), "privacy policy mismatch");

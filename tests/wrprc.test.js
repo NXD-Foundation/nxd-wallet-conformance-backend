@@ -98,6 +98,13 @@ describe("WRPRC cryptographic verification", () => {
     await rejects(await token({ exp: undefined }), options(), "exp");
     await rejects(await token({ sub: "other" }), options(), "subject");
   });
+  it("binds an intermediary registration to its named intermediary without weakening direct binding", async () => {
+    const value = await token({ sub: "bank", intermediary: { sub: "rp" } });
+    expect((await verifyWrprc(value, { ...options(), allowIntermediary: true })).payload.sub).to.equal("bank");
+    await rejects(value, options(), "subject does not match WRPAC");
+    await rejects(await token({ sub: "bank", intermediary: { sub: "other" } }), { ...options(), allowIntermediary: true }, "intermediary subject does not match");
+    await rejects(await token({ intermediary: null }), { ...options(), allowIntermediary: true }, "intermediary subject");
+  });
   it("rejects untrusted signer, missing entitlement, invalid type and tampered signature", async () => {
     await rejects(await token(), { ...options(), checkTrust: async () => ({ trusted: false }) }, "not trusted");
     await rejects(await token({ entitlements: [] }), options(), "entitlement");

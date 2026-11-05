@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { X509Certificate } from "node:crypto";
+import forge from "node-forge";
 import { decodeProtectedHeader, importX509, jwtVerify } from "jose";
 import { walletRedisClient } from "./cache.js";
 import { makeSessionLogger } from "./logger.js";
@@ -176,9 +177,13 @@ export async function enforceIssuedCredentialTrust({ sessionId, payload, header,
   return decision;
 }
 
-function entityIdentifier(certificatePem) {
-  const subject = new X509Certificate(certificatePem).subject.split("\n").map((value) => value.trim());
-  return subject.find((value) => /^(organizationIdentifier|serialNumber)=/i.test(value))?.replace(/^[^=]+=/, "") || null;
+function certificateSubject(certificatePem) {
+  const attributes = forge.pki.certificateFromPem(certificatePem).subject.attributes;
+  const find = (names) => attributes.find((attribute) => names.includes(attribute.type) || names.includes(attribute.name))?.value || null;
+  return {
+    entityId: find(["2.5.4.97", "organizationIdentifier"]) || find(["2.5.4.5", "serialNumber"]),
+    commonName: find(["2.5.4.3", "commonName"]),
+  };
 }
 
 export function assertVerifierCertificateBinding({ clientId, certificatePem, entityId }) {
@@ -291,7 +296,7 @@ export async function enforceVerifierPresentationTrust({ sessionId, requestHeade
   }
   const evidence = x5cEvidence(requestHeader);
   if (!evidence) throw new WalletTrustError("Verifier request has no WRPAC x5c");
-  const entityId = entityIdentifier(evidence.certificatePem);
+  const { entityId, commonName } = certificateSubject(evidence.certificatePem);
   await assertVerifierAttestationBinding({ clientId, requestHeader });
   assertVerifierCertificateBinding({ clientId, certificatePem: evidence.certificatePem, entityId });
   const accessDecision = await checkAccessCertificateTrust({
@@ -309,16 +314,37 @@ export async function enforceVerifierPresentationTrust({ sessionId, requestHeade
     const intendedUseId = dataset.intendedUseIdentifier;
     const serviceId = dataset.serviceId || dataset.serviceIdentifier || dataset.service_id;
     const accessServiceId = new X509Certificate(evidence.certificatePem).subject.match(/(?:^|\n)OU\s*=\s*([^\n]+)/)?.[1]?.trim();
-    if (serviceId && accessServiceId && serviceId !== accessServiceId) throw new WalletTrustError("Registrar dataset service does not match WRPAC");
     const { payload: registration, intendedUse, trustDecision } = await verifyWrprc(token, {
-      entityId, intendedUseId, serviceId,
+      entityId, intendedUseId, serviceId, allowIntermediary: true,
       checkTrust: (material) => checkAccessCertificateTrust({ ...material, session, operation: "wallet-verify-wrprc" }),
     });
-    assertRegistrarDataset(dataset, { registration, intendedUse, entityId, intendedUseId, serviceId });
+    const intermediated = Object.hasOwn(registration, "intermediary");
+    if (!intermediated && serviceId && accessServiceId && serviceId !== accessServiceId) throw new WalletTrustError("Registrar dataset service does not match WRPAC");
+    assertRegistrarDataset(dataset, { registration, intendedUse, entityId: registration.sub, intendedUseId, serviceId });
     assertQueryScope(requestPayload.dcql_query, intendedUse);
     await recordWalletTrustDecision(sessionId, trustDecision, "wallet-verify-wrprc");
+    if (intermediated) {
+      const nameMismatch = registration.intermediary.sname !== undefined && registration.intermediary.sname !== commonName;
+      makeSessionLogger(sessionId)("[TRUST] intermediary registration", {
+        relyingPartyId: registration.sub,
+        relyingPartyName: registration.name || null,
+        service: registration.srv_description || registration.srvDescription || null,
+        registrarDataset: {
+          serviceDescription: { value: dataset.srvDescription, evidence: (registration.srv_description ?? registration.srvDescription) !== undefined ? "verified_against_wrprc" : "request_only" },
+          registryURI: { value: dataset.registryURI, evidence: (registration.registry_uri ?? registration.registryURI) !== undefined ? "verified_against_wrprc" : "request_only" },
+          serviceId: { value: serviceId || null, evidence: (registration.serviceId ?? registration.serviceIdentifier ?? registration.service_id ?? registration.service_identifier ?? intendedUse.serviceId ?? intendedUse.serviceIdentifier ?? intendedUse.service_id ?? intendedUse.service_identifier) !== undefined ? "verified_against_wrprc" : "request_only" },
+          intendedUseId: { value: intendedUseId, evidence: (registration.intendedUse ?? registration.intendedUses ?? registration.intendedUseIdentifier ?? registration.intendedUseId ?? registration.intended_use_id) !== undefined ? "verified_against_wrprc" : "request_only" },
+          purpose: { value: dataset.purpose, evidence: "verified_against_wrprc" },
+          privacyPolicy: { value: dataset.policyURI, evidence: (intendedUse.privacy_policy ?? intendedUse.privacyPolicy ?? registration.privacy_policy ?? registration.privacyPolicy) !== undefined ? "verified_against_wrprc" : "request_only" },
+        },
+        intermediaryBinding: "matched",
+        warnings: nameMismatch ? ["INTERMEDIARY_NAME_MISMATCH"] : [],
+        privacyPolicyEvidence: (intendedUse.privacy_policy ?? intendedUse.privacyPolicy ?? registration.privacy_policy ?? registration.privacyPolicy) !== undefined ? "verified_against_wrprc" : "request_only",
+      });
+    }
     return trustDecision;
   } catch (error) {
+    makeSessionLogger(sessionId)("[TRUST] verifier registration warning", { code: error.message.includes("intermediary subject") ? "UP-INT-01" : "VERIFIER_REGISTRATION_INVALID", message: error.message, registrationUsable: false });
     const decision = { trusted: false, state: "not_trusted", reasonCode: "VERIFIER_REGISTRATION_INVALID", evidence: { entityId, message: error.message } };
     await recordWalletTrustDecision(sessionId, decision, "wallet-verify-wrprc");
     throw new WalletTrustError(error.message, decision);
