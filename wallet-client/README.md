@@ -57,12 +57,9 @@ Nonce negotiation applies to PAR, token, nonce, credential, deferred credential,
 
 ### Credential key-attestation policy
 
-In the default `compatibility` profile, JWT credential proofs include
-`key_attestation` only when the selected credential configuration advertises
-`proof_types_supported.jwt.key_attestations_required`. An empty object (`{}`)
-still requires attestation. `webuild-cs01` retains the RFC001 mandatory
-attestation policy even when that metadata field is absent. The `attestation`
-proof type always carries key attestation directly.
+RFC001 JWT credential proofs always include a Wallet Unit Attestation in the
+protected `key_attestation` header, regardless of issuer metadata or wallet
+profile. The `attestation` proof type carries the WUA directly.
 
 Generated key attestations use an ES256 signing certificate chain in `x5c`,
 without an embedded `jwk` header. Configure both `WALLET_WUA_SIGNING_KEY_PATH`

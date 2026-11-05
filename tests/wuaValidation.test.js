@@ -7,7 +7,6 @@ import {
   proofKeyMatchesAnyWUAAttestedKey,
   verifyWuaJwtSignature,
   isWuaWalletProviderTrustedByPolicy,
-  credentialConfigRequiresJwtProofKeyAttestation,
 } from "../utils/routeUtils.js";
 
 async function buildMinimalWuaX5c({ fixtures, attestedKeys, claims = {} }) {
@@ -16,71 +15,6 @@ async function buildMinimalWuaX5c({ fixtures, attestedKeys, claims = {} }) {
 }
 
 describe("WUA validation (routeUtils)", () => {
-  describe("credentialConfigRequiresJwtProofKeyAttestation (RFC001 §7.5.1)", () => {
-    it("is true for ETSI PID vc+sd-jwt / vc+jwt / x509_attr with EUDI PID vct", () => {
-      expect(
-        credentialConfigRequiresJwtProofKeyAttestation({
-          format: "vc+sd-jwt",
-          vct: "urn:eu.europa.ec.eudi:pid:1",
-          proof_types_supported: { jwt: { proof_signing_alg_values_supported: ["ES256"] } },
-        })
-      ).to.equal(true);
-      expect(
-        credentialConfigRequiresJwtProofKeyAttestation({
-          format: "vc+jwt",
-          vct: "urn:eu.europa.ec.eudi:pid:1",
-          proof_types_supported: { jwt: {} },
-        })
-      ).to.equal(true);
-      expect(
-        credentialConfigRequiresJwtProofKeyAttestation({
-          format: "x509_attr",
-          vct: "urn:eu.europa.ec.eudi:pid:1",
-          proof_types_supported: { jwt: {} },
-        })
-      ).to.equal(true);
-    });
-
-    it("is true when proof_types_supported.jwt.key_attestation_required is true", () => {
-      expect(
-        credentialConfigRequiresJwtProofKeyAttestation({
-          format: "dc+sd-jwt",
-          proof_types_supported: {
-            jwt: { proof_signing_alg_values_supported: ["ES256"], key_attestation_required: true },
-          },
-        })
-      ).to.equal(true);
-    });
-
-    it("is true when metadata advertises key_attestations_required", () => {
-      expect(
-        credentialConfigRequiresJwtProofKeyAttestation({
-          format: "dc+sd-jwt",
-          proof_types_supported: {
-            jwt: { proof_signing_alg_values_supported: ["ES256"], key_attestations_required: {} },
-          },
-        })
-      ).to.equal(true);
-    });
-
-    it("is false for generic configs without opt-in", () => {
-      expect(
-        credentialConfigRequiresJwtProofKeyAttestation({
-          format: "dc+sd-jwt",
-          vct: "urn:eu.europa.ec.eudi:pid:1",
-          proof_types_supported: { jwt: { proof_signing_alg_values_supported: ["ES256"] } },
-        })
-      ).to.equal(false);
-      expect(
-        credentialConfigRequiresJwtProofKeyAttestation({
-          format: "vc+sd-jwt",
-          vct: "urn:other:vct",
-          proof_types_supported: { jwt: {} },
-        })
-      ).to.equal(false);
-    });
-  });
-
   it("isWuaWalletProviderTrustedByPolicy requires x5c chain to configured anchors", async () => {
     const fixtures = await import("./helpers/wpKeyAttestationCertFixtures.mjs").then((m) =>
       m.createWalletProviderKeyAttestationCertFixtures()

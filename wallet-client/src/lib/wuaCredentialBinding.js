@@ -91,7 +91,6 @@ export async function validateCredentialProofsBeforeDispatch({
   wuaJwt,
   keyPairs,
   expectedCNonce = null,
-  keyAttestationRequired = true,
 }) {
   if (proofMode === "attestation") {
     const list = proofs?.attestation;
@@ -115,7 +114,6 @@ export async function validateCredentialProofsBeforeDispatch({
   if (proofHeader.typ !== PROOF_JWT_TYP) {
     throw new Error(`wua_binding: proof JWT typ must be ${PROOF_JWT_TYP}`);
   }
-  if (!keyAttestationRequired && !wuaJwt && !proofHeader.key_attestation) return;
   if (!proofHeader.key_attestation) {
     throw new Error("wua_binding: proof JWT must include key_attestation (WUA)");
   }

@@ -2040,6 +2040,40 @@ describe('Shared Issuance Flows', () => {
       expect(res.body.error_description).to.match(/key_attestation/i);
     });
 
+    it('rejects missing key_attestation when JWT proof metadata does not require it', async function () {
+      process.env.ENFORCE_ETSI_ISSUANCE_PROFILE = 'true';
+      if (!cacheServiceRedis.client?.isReady) {
+        this.skip();
+      }
+      const sessionKey = 'p11-no-key-attestation-' + uuidv4();
+      const accessToken = 'test-access-token-p11-' + uuidv4();
+      const nonce = cryptoUtils.generateNonce();
+      await cacheServiceRedis.storeNonce(nonce, 300);
+      await cacheServiceRedis.storePreAuthSession(sessionKey, {
+        status: 'success',
+        isDeferred: false,
+        accessToken,
+        c_nonce: nonce,
+      });
+      const proof = signProofJwt({
+        nonce,
+        iss: 'did:holder:test',
+        aud: process.env.SERVER_URL,
+      });
+
+      const res = await request(app)
+        .post('/credential')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({
+          credential_configuration_id: 'test-cred-config',
+          proofs: { jwt: [proof] },
+        });
+
+      expect(res.status).to.equal(400);
+      expect(res.body).to.have.property('error', 'invalid_proof');
+      expect(res.body.error_description).to.match(/key_attestation/i);
+    });
+
     it('rejects device-bound issuance without key_attestation even when ENFORCE_ETSI_ISSUANCE_PROFILE=false', async function () {
       if (!cacheServiceRedis.client?.isReady) {
         this.skip();

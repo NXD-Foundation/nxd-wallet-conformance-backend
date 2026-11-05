@@ -1,5 +1,4 @@
 import { encryptDeferredRequest } from "./credentialResponseEncryption.js";
-import { resolveWalletProfile, isWebuildCs01Profile } from "./profile.js";
 import { createDpopNonceState, requestWithDpopNonce } from "./dpopNonce.js";
 import { storeWalletCredentialByType } from "./cache.js";
 import { resolveWalletInstanceClientId } from "./walletClientId.js";
@@ -262,7 +261,6 @@ export async function fetchCredentialNonce({
 
 export async function buildCredentialRequest({
   issuerMeta,
-  profile = resolveWalletProfile(),
   configurationId,
   tokenBody,
   proofMode,
@@ -277,11 +275,7 @@ export async function buildCredentialRequest({
   buildCredentialRequestSelector,
   prepareCredentialResponseEncryption,
 }) {
-  const proofMetadata = issuerMeta?.credential_configurations_supported?.[configurationId]?.proof_types_supported?.[proofMode];
-  const keyAttestationRequired = isWebuildCs01Profile(profile) ||
-    Object.prototype.hasOwnProperty.call(proofMetadata || {}, "key_attestations_required");
   const { proofs, proofJwt } = await buildCredentialRequestProofs({
-    keyAttestationRequired,
     proofMode,
     credentialEndpoint,
     aud: audience,

@@ -3350,30 +3350,6 @@ export const extractWIAFromTokenRequest = (reqBody, reqHeaders) => {
 };
 
 /**
- * Whether this credential configuration requires a device-bound `proofs.jwt` path per RFC001 §7.5.1:
- * the proof JWT MUST carry a Wallet Unit Attestation in the protected header (`key_attestation`),
- * and the proof signature MUST verify under WUA `attested_keys[0]`.
- *
- * Triggered when:
- * - `proof_types_supported.jwt.key_attestations_required` is present, or
- * - legacy `proof_types_supported.jwt.key_attestation_required === true`, or
- * - ETSI RFC001 PID profile: `vct` is the EUDI PID and `format` is `vc+sd-jwt`, `vc+jwt`, or `x509_attr`.
- *
- * @param {object} credConfig - entry from `credential_configurations_supported`
- * @returns {boolean}
- */
-export function credentialConfigRequiresJwtProofKeyAttestation(credConfig) {
-  if (!credConfig || typeof credConfig !== "object") return false;
-  const jwtProofType = credConfig.proof_types_supported?.jwt;
-  if (jwtProofType?.key_attestation_required === true) return true;
-  if (Object.hasOwn(jwtProofType ?? {}, "key_attestations_required")) return true;
-  const vct = credConfig.vct;
-  if (!PID_SD_JWT_VCTS.includes(vct)) return false;
-  const fmt = credConfig.format;
-  return fmt === "vc+sd-jwt" || fmt === "vc+jwt" || fmt === "x509_attr";
-}
-
-/**
  * Extracts WUA from credential request
  * WUA can be in proofs.attestation or in the header of proofs.jwt
  * 

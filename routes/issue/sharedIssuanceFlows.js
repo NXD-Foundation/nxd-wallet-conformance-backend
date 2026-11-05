@@ -65,7 +65,6 @@ import {
   extractWIAFromTokenRequest,
   extractWUAFromCredentialRequest,
   proofKeyMatchesWUAAttestedKeys,
-  credentialConfigRequiresJwtProofKeyAttestation,
   assertOpenidCredentialAuthorizationDetails,
   resolveCredentialIdentifierFromOpenidCredentialEntry,
   getPublicIssuerBaseUrl,
@@ -2050,19 +2049,10 @@ sharedRouter.post("/credential", async (req, res) => {
     }
 
     const issuerConfigForCredential = loadIssuerConfig();
-    const credConfigForCredential =
-      effectiveConfigurationId &&
-      issuerConfigForCredential.credential_configurations_supported[effectiveConfigurationId];
-    const jwtProofRequiresKeyAttestation =
-      requestBody.credentialRequestProofKind === "jwt" &&
-      credentialConfigRequiresJwtProofKeyAttestation(credConfigForCredential);
+    const jwtProofRequiresKeyAttestation = requestBody.credentialRequestProofKind === "jwt";
 
-    // Optional key-attestation alongside JWT proof (mode 2): in EUDI this object is the WUA (Wallet
-    // Provider–signed). Issuer trust for the WP (e.g. Trusted List) is not enforced yet — see
-    // routeUtils.isWuaWalletProviderTrustedByPolicy (stub true). Combined with proofs.jwt PoP → possession + assurance.
-    // TS3: https://github.com/eu-digital-identity-wallet/eudi-doc-standards-and-technical-specifications/blob/main/docs/technical-specifications/ts3-wallet-unit-attestation.md
-    //
-    // RFC001 §7.5.1 device-bound path: WUA is mandatory in proofs.jwt protected header and validated in the proof pipeline (not here).
+    // JWT proofs carry their WUA in the protected header and are validated below.
+    // Attestation proofs retain their existing WUA validation path.
     const wuaJwt = extractWUAFromCredentialRequest(requestBody);
     let wuaValidationResult = null;
     if (jwtProofRequiresKeyAttestation) {
@@ -2102,23 +2092,7 @@ sharedRouter.post("/credential", async (req, res) => {
       }
     }
 
-    // Validate proof if configuration ID is available
-    //
-    // Intuition for OID4VCI proof shapes (what the wallet is asserting):
-    //
-    // 1) JWT proof without key attestation (proofs.jwt only, no separate attestation object):
-    //    "I control this key right now." — issuer gets holder binding via PoP; enough when only
-    //    possession matters.
-    //
-    // 2) JWT proof with key attestation (e.g. key material in header, or WUA / attested_keys
-    //    validated alongside proofs.jwt):
-    //    "I control this key right now, and here is trusted evidence that this key has certain
-    //    security properties." — present possession plus assurance about the nature of the key.
-    //
-    // 3) Attestation proof type (proofs.attestation — key attestation JWT, not a holder PoP JWT):
-    //    "Here is trusted evidence about the key; I am not doing a proof-of-possession step for
-    //    that key in this proof format." — OID4VCI defines this as key attestation without using
-    //    PoP of the attested key in this request; issuance binds from attested_keys instead.
+    // Validate the JWT proof and its WUA, or the direct attestation proof.
     if (effectiveConfigurationId) {
       try {
         const issuerConfigForProof = loadIssuerConfig();
@@ -2190,7 +2164,6 @@ sharedRouter.post("/credential", async (req, res) => {
             throw error;
           }
         } else {
-          // Mode (1) baseline: JWT proof — verify holder PoP ("I control this key right now") for cnf binding.
           // RFC001 §7.5.1 device-bound: require key_attestation (WUA), validate WUA, verify proof with attested_keys[0].
           const headerForVerification = validateProofJWT(
             requestBody.proofJwt,
@@ -2198,115 +2171,50 @@ sharedRouter.post("/credential", async (req, res) => {
             sessionId
           );
 
-          let publicKeyForProof;
-          if (jwtProofRequiresKeyAttestation) {
-            const wuaCompact = headerForVerification.key_attestation;
-            publicKeyForProof = await resolveProofJwtPublicJwk(headerForVerification, {
-              sessionId,
-              messages: ERROR_MESSAGES,
-              specRefVciProof: SPEC_REFS.VCI_PROOF,
-            });
-            await verifyProofJWT(
-              requestBody.proofJwt,
-              publicKeyForProof,
-              flowType,
-              sessionId,
-              sessionObject,
-              req,
+          const wuaCompact = headerForVerification.key_attestation;
+          const publicKeyForProof = await resolveProofJwtPublicJwk(headerForVerification, {
+            sessionId,
+            messages: ERROR_MESSAGES,
+            specRefVciProof: SPEC_REFS.VCI_PROOF,
+          });
+          await verifyProofJWT(
+            requestBody.proofJwt,
+            publicKeyForProof,
+            flowType,
+            sessionId,
+            sessionObject,
+            req,
+          );
+          if (typeof wuaCompact !== "string" || !wuaCompact.trim()) {
+            throw new Error(
+              `${ERROR_MESSAGES.INVALID_PROOF}: proofs.jwt MUST include protected-header parameter 'key_attestation' (Wallet Unit Attestation) (RFC001 §7.5.1). See ${SPEC_REFS.VCI_PROOF}`
             );
-            if (typeof wuaCompact !== "string" || !wuaCompact.trim()) {
+          } else {
+            const wuaStrict = await validateWUA(wuaCompact, sessionId, issuerConfigForProof);
+            if (!wuaStrict.valid) {
               throw new Error(
-                `${ERROR_MESSAGES.INVALID_PROOF}: proofs.jwt MUST include protected-header parameter 'key_attestation' (Wallet Unit Attestation) for this credential configuration (RFC001 §7.5.1). See ${SPEC_REFS.VCI_PROOF}`
+                `${ERROR_MESSAGES.INVALID_PROOF}: Wallet Unit Attestation in key_attestation could not be validated. ${wuaStrict.error || ""}`.trim()
               );
             } else {
-              const wuaStrict = await validateWUA(wuaCompact, sessionId, issuerConfigForProof);
-              if (!wuaStrict.valid) {
+              const attested = wuaStrict.payload?.attested_keys;
+              if (!Array.isArray(attested) || !attested[0] || typeof attested[0] !== "object") {
                 throw new Error(
-                  `${ERROR_MESSAGES.INVALID_PROOF}: Wallet Unit Attestation in key_attestation could not be validated. ${wuaStrict.error || ""}`.trim()
+                  `${ERROR_MESSAGES.INVALID_PROOF}: WUA attested_keys[0] is required for device-bound issuance (RFC001 §7.5.1). See ${SPEC_REFS.VCI_PROOF}`
+                );
+              } else if (!proofKeyMatchesWUAAttestedKeys(publicKeyForProof, wuaStrict.payload)) {
+                throw new Error(
+                  `${ERROR_MESSAGES.INVALID_PROOF}: proof signing key MUST match WUA attested_keys[0] (RFC001 §7.5.1). See ${SPEC_REFS.VCI_PROOF}`
                 );
               } else {
-                const attested = wuaStrict.payload?.attested_keys;
-                if (!Array.isArray(attested) || !attested[0] || typeof attested[0] !== "object") {
-                  throw new Error(
-                    `${ERROR_MESSAGES.INVALID_PROOF}: WUA attested_keys[0] is required for device-bound issuance (RFC001 §7.5.1). See ${SPEC_REFS.VCI_PROOF}`
-                  );
-                } else if (!proofKeyMatchesWUAAttestedKeys(publicKeyForProof, wuaStrict.payload)) {
-                  throw new Error(
-                    `${ERROR_MESSAGES.INVALID_PROOF}: proof signing key MUST match WUA attested_keys[0] (RFC001 §7.5.1). See ${SPEC_REFS.VCI_PROOF}`
-                  );
-                } else {
-                  requestBody._credentialBindingCnfList = await dedupeAttestedKeysToCnfList(attested);
-                  if (slog) {
-                    try {
-                      slog("[CREDENTIAL] Device-bound proof verified; multi-key cnf list", {
-                        wuaIssuer: wuaStrict.payload?.iss,
-                        attestedKeyCount: requestBody._credentialBindingCnfList?.length ?? 0,
-                      });
-                    } catch {}
-                  }
-                }
-              }
-            }
-          } else {
-            publicKeyForProof = await resolveProofJwtPublicJwk(headerForVerification, {
-              sessionId,
-              messages: ERROR_MESSAGES,
-              specRefVciProof: SPEC_REFS.VCI_PROOF,
-            });
-            await verifyProofJWT(
-              requestBody.proofJwt,
-              publicKeyForProof,
-              flowType,
-              sessionId,
-              sessionObject,
-              req,
-            );
-
-            // Mode (2): JWT proof + validated WUA — PoP key must match the first attested key ("possession + assurance").
-            // EUDI Wallet ARF / ETSI-style binding: credential cnf aligns with the primary attested key.
-            if (wuaJwt && wuaValidationResult?.valid && wuaValidationResult?.payload) {
-              if (slog) {
-                try {
-                  const attestedKeysCount = Array.isArray(wuaValidationResult.payload.attested_keys)
-                    ? wuaValidationResult.payload.attested_keys.length
-                    : 0;
-                  slog("[CREDENTIAL] Checking proof key against WUA first attested key", {
-                    proofKeyKty: publicKeyForProof?.kty,
-                    proofKeyCrv: publicKeyForProof?.crv,
-                    attestedKeysCount,
-                    wuaIssuer: wuaValidationResult.payload?.iss,
-                  });
-                } catch {}
-              }
-              if (!proofKeyMatchesWUAAttestedKeys(publicKeyForProof, wuaValidationResult.payload)) {
-                const attestedKeysCount = Array.isArray(wuaValidationResult.payload.attested_keys)
-                  ? wuaValidationResult.payload.attested_keys.length
-                  : 0;
-                const errorMsg = `invalid_proof: The key used in the proof (credential binding/cnf) must match the first key in the Wallet Unit Attestation attested_keys array (primary attested key).`;
+                requestBody._credentialBindingCnfList = await dedupeAttestedKeysToCnfList(attested);
                 if (slog) {
                   try {
-                    slog("[CREDENTIAL] [ERROR] Proof key does not match WUA first attested key", {
-                      proofKeyKty: publicKeyForProof?.kty,
-                      proofKeyCrv: publicKeyForProof?.crv,
-                      proofKeyX: publicKeyForProof?.x?.substring(0, 16) + "...",
-                      attestedKeysCount,
-                      wuaIssuer: wuaValidationResult.payload?.iss,
-                      error: errorMsg,
+                    slog("[CREDENTIAL] Device-bound proof verified; multi-key cnf list", {
+                      wuaIssuer: wuaStrict.payload?.iss,
+                      attestedKeyCount: requestBody._credentialBindingCnfList?.length ?? 0,
                     });
                   } catch {}
                 }
-                throw new Error(errorMsg);
-              }
-              if (slog) {
-                try {
-                  slog("[CREDENTIAL] Proof key validated against WUA first attested key", {
-                    proofKeyKty: publicKeyForProof?.kty,
-                    proofKeyCrv: publicKeyForProof?.crv,
-                    attestedKeysCount: Array.isArray(wuaValidationResult.payload.attested_keys)
-                      ? wuaValidationResult.payload.attested_keys.length
-                      : 0,
-                  });
-                } catch {}
               }
             }
           }

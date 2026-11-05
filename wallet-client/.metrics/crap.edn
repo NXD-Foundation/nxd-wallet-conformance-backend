@@ -1,0 +1,11 @@
+{:entries [
+  {:name "validateCredentialProofsBeforeDispatch", :namespace "lib.wuaCredentialBinding", :complexity 18, :coverage nil, :crap nil}
+  {:name "assertAttestedKeyPairsForWua", :namespace "lib.wuaCredentialBinding", :complexity 11, :coverage nil, :crap nil}
+  {:name "validateWuaMatchesAttestedKeyPairs", :namespace "lib.wuaCredentialBinding", :complexity 9, :coverage nil, :crap nil}
+  {:name "redactProofsForLog", :namespace "lib.credentialRequestProofs", :complexity 5, :coverage nil, :crap nil}
+  {:name "assertWuaNonceMatchesCNonce", :namespace "lib.wuaCredentialBinding", :complexity 4, :coverage nil, :crap nil}
+  {:name "stripPrivateJwkMaterial", :namespace "lib.wuaCredentialBinding", :complexity 3, :coverage nil, :crap nil}
+  {:name "buildCredentialRequestProofs", :namespace "lib.credentialRequestProofs", :complexity 2, :coverage nil, :crap nil}
+  {:name "orderedAttestedPublicJwks", :namespace "lib.wuaCredentialBinding", :complexity 1, :coverage nil, :crap nil}
+  {:name "publicJwksMatch", :namespace "lib.wuaCredentialBinding", :complexity 1, :coverage nil, :crap nil}
+]}
