@@ -27,6 +27,7 @@ import {
 } from "../../services/cacheServiceRedis.js";
 import { makeSessionLogger, logHttpRequest, logHttpResponse } from "../../utils/sessionLogger.js";
 import { issuanceSessionProps } from "../../utils/trustFrameworkPolicy.js";
+import { getIssuerProfile, assertProfileCredential, profileIssuerUrl } from "../../utils/issuerProfiles.js";
 
 const vciStandardRouter = express.Router();
 
@@ -61,6 +62,22 @@ vciStandardRouter.get("/vci/offer", async (req, res) => {
     const credentialType = req.query.credential_type || getCredentialType(req);
     const credentialFormat = req.query.credential_format || "sd-jwt";
     const signatureType = req.query.signature_type || getSignatureType(req);
+    const profileId = req.query.issuer_profile;
+    if (profileId) {
+      if (process.env.ISSUER_PROFILES_ENABLED !== "true") return res.status(503).json({ error: "temporarily_unavailable", error_description: "Issuer profiles are not enabled" });
+      try { assertProfileCredential(profileId, credentialType); } catch (error) { return res.status(400).json({ error: "invalid_request", error_description: error.message }); }
+      if (!["authorization_code", "pre_authorized_code"].includes(flow)) return res.status(400).json({ error: "invalid_request", error_description: "Unsupported flow" });
+      if (signatureType !== "x509") return res.status(400).json({ error: "invalid_request", error_description: "Profile issuance requires x509 signing" });
+      const extras = { ...issuanceSessionProps(req.query), issuerProfile: profileId, credentialConfigurationId: credentialType, requestedCredentialConfigurationIds: [credentialType] };
+      const session = flow === "authorization_code"
+        ? createCodeFlowSession("x509_san_dns", "code", true, false, "x509", extras)
+        : createPreAuthSessionData({ signatureType: "x509", credentialType, txCodeRequired, additionalProps: extras });
+      if (flow === "authorization_code") await storeCodeFlowSession(sessionId, session);
+      else await storePreAuthSession(sessionId, session);
+      const offerUrl = `${SERVER_URL}/issuer/${encodeURIComponent(profileId)}/offer/${encodeURIComponent(sessionId)}`;
+      const deepLink = `${URL_SCHEMES.STANDARD}?credential_offer_uri=${encodeURIComponent(offerUrl)}`;
+      return res.json(await createCredentialOfferResponse(deepLink, sessionId, txCodeRequired ? session.expectedTxCode : undefined));
+    }
 
     requestId = logHttpRequest(slog, "GET", "/vci/offer", req.headers, req.query);
     try { slog("[ISSUER] [VCI] [START] Processing standardized VCI offer request", { flow, txCodeRequired, credentialType, credentialFormat, signatureType }); } catch {}
@@ -171,6 +188,18 @@ vciStandardRouter.get("/vci/offer", async (req, res) => {
     }
     handleRouteError(error, "vci/offer", res, sessionId);
   }
+});
+
+vciStandardRouter.get("/issuer/:profile/offer/:id", async (req, res) => {
+  const { profile, id } = req.params;
+  if (!getIssuerProfile(profile) || process.env.ISSUER_PROFILES_ENABLED !== "true") return res.sendStatus(404);
+  const preAuth = await getPreAuthSession(id);
+  const session = preAuth || await getCodeFlowSession(id);
+  if (!session || session.issuerProfile !== profile) return res.sendStatus(404);
+  try { assertProfileCredential(profile, session.credentialConfigurationId); } catch { return res.sendStatus(400); }
+  const config = createCredentialOfferConfig(session.credentialConfigurationId, id, preAuth?.txCodeRequired === true, preAuth ? undefined : "authorization_code");
+  config.credential_issuer = profileIssuerUrl(SERVER_URL, profile);
+  return res.json(config);
 });
 
 /**

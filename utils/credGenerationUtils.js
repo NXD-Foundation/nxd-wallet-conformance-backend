@@ -15,6 +15,7 @@ import {
   loadTrustFrameworkIssuerMaterial,
 } from "../utils/cryptoUtils.js";
 import { isTrustFrameworkSession } from "../utils/trustFrameworkPolicy.js";
+import { loadProfileCredentialSigningMaterial } from "./issuerProfileSigning.js";
 import {
   computeDidJwkIssuerDidAndKidFromDidKeys,
   getIssuerJwkPairAlignedWithDidDocument,
@@ -87,6 +88,7 @@ const certificatePemX509 = fs.readFileSync(
  * certificate. Every other session keeps the local x509EC pair.
  */
 function resolveX509IssuanceMaterial(sessionObject) {
+  if (sessionObject?.issuerProfile) return loadProfileCredentialSigningMaterial(sessionObject.issuerProfile);
   if (isTrustFrameworkSession(sessionObject)) {
     const { privateKeyPkcs8, certChain } = loadTrustFrameworkIssuerMaterial();
     return {

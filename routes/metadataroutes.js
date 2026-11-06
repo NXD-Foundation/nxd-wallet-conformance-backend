@@ -1,7 +1,10 @@
 import express from "express";
 import fs from "fs";
+import { X509Certificate } from "node:crypto";
 import { pemToJWK } from "../utils/cryptoUtils.js";
-import { signCredentialIssuerMetadataFromConfiguredP12 } from "../utils/issuerMetadataSigning.js";
+import { signCredentialIssuerMetadataFromConfiguredP12, signCredentialIssuerMetadata } from "../utils/issuerMetadataSigning.js";
+import { loadProfileCredentialSigningMaterial } from "../utils/issuerProfileSigning.js";
+import { getIssuerProfile, profileIssuerUrl } from "../utils/issuerProfiles.js";
 import { PROXY_PATH } from "../utils/routeUtils.js";
 import { buildStrictCs02ClientMetadata } from "../utils/cs02TrustPolicy.js";
 const metadataRouter = express.Router();
@@ -93,14 +96,23 @@ metadataRouter.get(
 
     // If the suffix matches PROXY_PATH, don't add it again since SERVER_URL already includes it
     const serverURL = getServerURL();
-    const issuerBase = (normalizedSuffix && normalizedSuffix !== PROXY_PATH) ? `${serverURL}/${normalizedSuffix}` : serverURL;
+    const publicPath = new URL(serverURL).pathname.replace(/^\/+|\/+$/g, "");
+    const prefix = [publicPath, "issuer"].filter(Boolean).join("/") + "/";
+    const profileId = normalizedSuffix.startsWith(prefix) ? normalizedSuffix.slice(prefix.length) : null;
+    if (profileId !== null && !getIssuerProfile(profileId)) return res.sendStatus(404);
+    const profile = profileId !== null ? getIssuerProfile(profileId) : null;
+    if (profile && process.env.ISSUER_PROFILES_ENABLED !== "true") return res.status(503).json({ error: "temporarily_unavailable", error_description: "Issuer profiles are not enabled" });
+    const issuerBase = profile ? profileIssuerUrl(serverURL, profileId) : (normalizedSuffix && normalizedSuffix !== PROXY_PATH) ? `${serverURL}/${normalizedSuffix}` : serverURL;
+    const issuerConfig = structuredClone(JSON.parse(fs.readFileSync("./data/issuer-config.json", "utf-8")));
 
     issuerConfig.credential_issuer = issuerBase;
     issuerConfig.authorization_servers = [serverURL];
-    issuerConfig.credential_endpoint = issuerBase + "/credential";
-    issuerConfig.deferred_credential_endpoint = issuerBase + "/credential_deferred";
-    issuerConfig.nonce_endpoint = issuerBase + "/nonce";
-    issuerConfig.notification_endpoint = issuerBase + "/notification";
+    const endpointBase = profile ? serverURL : issuerBase;
+    issuerConfig.credential_endpoint = endpointBase + "/credential";
+    issuerConfig.deferred_credential_endpoint = endpointBase + "/credential_deferred";
+    issuerConfig.nonce_endpoint = endpointBase + "/nonce";
+    issuerConfig.notification_endpoint = endpointBase + "/notification";
+    if (profile) issuerConfig.credential_configurations_supported = Object.fromEntries(Object.entries(issuerConfig.credential_configurations_supported || {}).filter(([id]) => profile.credentialConfigurationIds.includes(id)));
 
     // OID4VCI §8.2: Credential Request encryption MUST be used when the Wallet
     // includes credential_response_encryption (to prevent substitution). Advertise
@@ -121,7 +133,22 @@ metadataRouter.get(
 
     if (acceptsSignedIssuerMetadata(req)) {
       try {
-        const signedMetadata = await signCredentialIssuerMetadataFromConfiguredP12(issuerConfig);
+        let signedMetadata;
+        if (profile) {
+          const name = profileId.toUpperCase().replaceAll("-", "_");
+          const material = loadProfileCredentialSigningMaterial(profileId, {
+            certPath: process.env[`ISSUER_${name}_ACCESS_CERT_PATH`] || "certs/we-build-wrpac.pem",
+            keyPath: process.env[`ISSUER_${name}_ACCESS_KEY_PATH`] || "certs/dev-i4mlab.aegean.gr.key.pem",
+          });
+          // The pilot access certificate is directly listed as a trust anchor.
+          // Configured chains may contain intermediates; omit self-signed roots.
+          const x5c = material.x5c.filter((der, index) => {
+            if (index === 0) return true;
+            const cert = new X509Certificate(Buffer.from(der, "base64"));
+            return !(cert.ca && cert.checkIssued(cert) && cert.verify(cert.publicKey));
+          });
+          signedMetadata = await signCredentialIssuerMetadata(issuerConfig, { privateKeyPkcs8: material.privateKeyPem, certChain: x5c });
+        } else signedMetadata = await signCredentialIssuerMetadataFromConfiguredP12(issuerConfig);
         return res.type("application/jwt").send(signedMetadata);
       } catch (error) {
         console.error("Unable to produce signed Credential Issuer metadata:", error.message);

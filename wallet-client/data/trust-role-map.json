@@ -4,6 +4,17 @@
     "urn:eu.europa.ec.eudi:pid:1": "pid-provider",
     "urn:eudi:pid:1": "pid-provider",
     "urn:eudi:pid:lsp:1": "pid-provider",
-    "eu.europa.ec.av.1": "pub-eaa-provider"
+    "urn:eu.europa.ec.eudi:pid:1:mso_mdoc": "pid-provider",
+    "urn:eudi:pid:lsp:1:mso_mdoc": "pid-provider",
+    "eu.europa.ec.av.1": "pub-eaa-provider",
+    "VerifiablePortableDocumentA1SDJWT": "pub-eaa-provider",
+    "VerifiablePortableDocumentA2SDJWT": "pub-eaa-provider",
+    "VerifiableePassportCredentialSDJWT": "pub-eaa-provider",
+    "PhotoID": "pub-eaa-provider",
+    "PCD": "pub-eaa-provider",
+    "VerifiableStudentIDSDJWT": "eaa-provider",
+    "VerifiableFerryBoardingPassCredentialSDJWT": "eaa-provider",
+    "VerifiableReceipt": "eaa-provider",
+    "LoyaltyCard": "eaa-provider"
   }
 }

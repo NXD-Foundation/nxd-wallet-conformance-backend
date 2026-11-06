@@ -10,7 +10,6 @@ import {
   checkVerifierCredentialTrust,
   checkAccessCertificateTrust,
   loadConfiguredAccessCertificate,
-  preprodPkiAccessCaEnabled,
   applyWalletTrustDirective,
   isTrustFrameworkSession,
   issuanceSessionProps,
@@ -189,38 +188,19 @@ describe("Phase 3 Wallet Provider trust policy", () => {
     expect(resolve.firstCall.args[0].presentedIdentity.certificateChain).to.deep.equal([leaf, anchor]);
   });
 
-  it("accepts a WRPAC issued by the preprod.pki.eudiw.dev CA when the LoTE does not", async () => {
+  it("keeps a LoTE rejection for a PID Issuer CA 02 chain when trust is enforced", async () => {
+    // Regression: the WE-BUILD Verifier certificate chains to PID Issuer CA 02,
+    // and a hardcoded preprod anchor used to accept it after ENTITY_NOT_LISTED.
     const resolve = sinon.stub().resolves({ trusted: false, state: "not_trusted", reasonCode: "ENTITY_NOT_LISTED", evidence: {} });
     setTrustResolverForTests({ resolve });
-    const previous = process.env.TRUST_ALLOW_PREPROD_PKI_ACCESS_CA;
-    delete process.env.TRUST_ALLOW_PREPROD_PKI_ACCESS_CA;
     const certificatePem = certificateFromX5c(loadVerifierP12().certChain);
     const result = await checkAccessCertificateTrust({
       session: { trustPolicy: { mode: "webuild", profile: "webuild-wp4-pilot" } },
       certificatePem,
       role: "wrpac-provider",
-    });
-    expect(result.trusted).to.equal(true);
-    expect(result.evidence.alternative).to.equal("preprod.pki.eudiw.dev");
-    if (previous === undefined) delete process.env.TRUST_ALLOW_PREPROD_PKI_ACCESS_CA;
-    else process.env.TRUST_ALLOW_PREPROD_PKI_ACCESS_CA = previous;
-  });
-
-  it("keeps a LoTE rejection when TRUST_ALLOW_PREPROD_PKI_ACCESS_CA=false", async () => {
-    const resolve = sinon.stub().resolves({ trusted: false, state: "not_trusted", reasonCode: "ENTITY_NOT_LISTED", evidence: {} });
-    setTrustResolverForTests({ resolve });
-    const previous = process.env.TRUST_ALLOW_PREPROD_PKI_ACCESS_CA;
-    process.env.TRUST_ALLOW_PREPROD_PKI_ACCESS_CA = "false";
-    expect(preprodPkiAccessCaEnabled()).to.equal(false);
-    const certificatePem = certificateFromX5c(loadVerifierP12().certChain);
-    const result = await checkAccessCertificateTrust({
-      session: { trustPolicy: { mode: "webuild", profile: "webuild-wp4-pilot" } },
-      certificatePem,
-      role: "wrpac-provider",
+      operation: "verify-issuer-metadata",
     });
     expect(result).to.include({ trusted: false, reasonCode: "ENTITY_NOT_LISTED" });
-    if (previous === undefined) delete process.env.TRUST_ALLOW_PREPROD_PKI_ACCESS_CA;
-    else process.env.TRUST_ALLOW_PREPROD_PKI_ACCESS_CA = previous;
   });
 
   it("does not apply the preprod CA alternative to an unrelated access certificate", async () => {

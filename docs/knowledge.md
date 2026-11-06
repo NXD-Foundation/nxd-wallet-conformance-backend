@@ -713,12 +713,9 @@ Section 3.6 and Section 4.2.
   are included as diagnostic evidence; if no list for the role authenticates,
   the opted-in result is indeterminate and fails closed. A profile may set
   `pointerUrl` to deliberately restrict a role to one LoTL publisher.
-- Verifier access certificates (WRPAC) may also chain to the hardcoded
-  `preprod.pki.eudiw.dev` anchor `certs/pidissuerca02_eu.pem` (PID Issuer CA 02)
-  when no LoTE lists that certificate. Set
-  `TRUST_ALLOW_PREPROD_PKI_ACCESS_CA=false` to disable that alternative and
-  require a LoTE decision. The alternative does not apply to WRPRC or issuer
-  credential checks.
+- A trust-enforced access-certificate decision is the trusted-list result.
+  A chain to PID Issuer CA 02 does not override `ENTITY_NOT_LISTED` or any
+  other LoTE rejection. The same rule covers signed issuer metadata.
 - Registrars are generic: registration data may describe approved attestation
   types, while LoTEs publish provider anchors and status. NXD's current EAA
   LoTE has provider services and anchors but no registrar reference or
@@ -798,8 +795,7 @@ deliberately separate:
   and `x509EC/client_certificate.crt`.
 - `certs/WE-BUILD-Verifier.p12` is the X.509 verifier/JAR and signed issuer
   metadata signing material. `certs/pidissuerca02_eu.pem` is the CA used to
-  extend the JAR `x5c` chain and the hardcoded `preprod.pki.eudiw.dev` WRPAC
-  alternative anchor.
+  extend the JAR `x5c` chain. It is not a trust-decision anchor.
 - Explicit `trustFramework=true` verifier requests, CS-03, and CS-07
   are signed with the Raidiam sandbox WRPAC
   `certs/raidiam/uAaqzBHXMTOW0maXduvtPyAgFWY2RppjzxH5ucvky7U.pem` and its P-256 EC private key

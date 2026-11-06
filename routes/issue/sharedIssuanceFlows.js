@@ -1,4 +1,5 @@
 import { withDpcCardDisplay } from "../../utils/dpcCardDisplay.js";
+import { assertProfileCredential, sessionIssuerUrl } from "../../utils/issuerProfiles.js";
 import express from "express";
 import fs from "fs";
 import path from "path";
@@ -578,7 +579,7 @@ const verifyProofJWT = async (proofJwt, publicKeyForProof, flowType, sessionId =
       await publicKeyToPem(publicKeyForProof),
       {
         algorithms: [jwt.decode(proofJwt, { complete: true })?.header?.alg],
-        audience: getServerUrl(),
+        audience: sessionIssuerUrl(getServerUrl(), sessionObject),
       }
     );
 
@@ -922,7 +923,7 @@ const handleImmediateCredentialIssuance = async (
   const credential = await handleCredentialGenerationBasedOnFormat(
     requestBody,
     sessionObject,
-    getServerUrl(),
+    sessionIssuerUrl(getServerUrl(), sessionObject),
     format
   );
 
@@ -1769,6 +1770,14 @@ sharedRouter.post("/credential", async (req, res) => {
       });
     }
 
+    if (sessionObject.issuerProfile) {
+      try {
+        assertProfileCredential(sessionObject.issuerProfile, effectiveConfigurationId);
+        if (sessionObject.credentialConfigurationId !== effectiveConfigurationId) throw new Error("Credential configuration was not selected in this issuer profile offer");
+      } catch (error) {
+        return res.status(400).json({ error: "invalid_credential_request", error_description: error.message });
+      }
+    }
     const refreshConfigurations = sessionObject.authorizedCredentialConfigurationIds || sessionObject.refreshBinding?.credentialConfigurationIds;
     if (refreshConfigurations?.length && !refreshConfigurations.includes(effectiveConfigurationId)) {
       return res.status(400).json({ error: "invalid_credential_request", error_description: "Credential configuration is outside the refresh-token authorization" });
@@ -2671,7 +2680,7 @@ sharedRouter.post("/credential_deferred", async (req, res) => {
         enabled: sessionRevocationEnabled(sessionObject),
         allocate: () => allocateIssuedCredentialStatus({ baseUrl: getServerUrl(), revoked: sessionObject?.issueRevoked === true }),
       }));
-      return handleCredentialGenerationBasedOnFormatDeferred(sessionObject, getServerUrl());
+      return handleCredentialGenerationBasedOnFormatDeferred(sessionObject, sessionIssuerUrl(getServerUrl(), sessionObject));
     });
     if (!reused) await persistDeferredSession(sessionObject, sessionId, flowType);
 

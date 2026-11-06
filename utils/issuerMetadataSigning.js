@@ -7,9 +7,9 @@ function requireEs256Material({ privateKeyPkcs8, certChain }) {
   if (typeof privateKeyPkcs8 !== "string" || !privateKeyPkcs8.includes("PRIVATE KEY")) {
     throw new Error("Issuer metadata signing material does not contain a PKCS#8 private key");
   }
-  if (!Array.isArray(certChain) || certChain.length < 2 || certChain.some((cert) => !cert)) {
+  if (!Array.isArray(certChain) || certChain.length < 1 || certChain.some((cert) => !cert)) {
     throw new Error(
-      "Issuer metadata signing requires an x5c chain with a leaf certificate and issuing CA"
+      "Issuer metadata signing requires an x5c chain with a leaf certificate"
     );
   }
 }

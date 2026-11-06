@@ -1,0 +1,9 @@
+# Add inside the existing HTTPS server block after profile-aware issuer support
+# is deployed. This is an example, not an applied Nginx configuration.
+location ^~ /.well-known/openid-credential-issuer/rfc-issuer/issuer/ {
+    # No URI suffix: forward the full well-known path unchanged.
+    proxy_pass http://195.251.182.31:3002;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+}

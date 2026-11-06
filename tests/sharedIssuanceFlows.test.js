@@ -1893,6 +1893,20 @@ describe('Shared Issuance Flows', function () {
       expect(response.body.error).to.equal('invalid_credential_request');
     });
 
+    it('rejects a credential configuration from a different issuer profile', async () => {
+      issuerConfigOverride = JSON.stringify({ credential_configurations_supported: {
+        PhotoID: { format: 'dc+sd-jwt', proof_types_supported: { jwt: { proof_signing_alg_values_supported: ['ES256'] } } },
+      } });
+      const sessionId = uuidv4();
+      const accessToken = `profile-bound-${uuidv4()}`;
+      await cacheServiceRedis.storePreAuthSession(sessionId, { status: 'success', accessToken, accessTokenExpiresAt: Date.now() + 3600000, issuerProfile: 'pid', credentialConfigurationId: 'urn:eu.europa.ec.eudi:pid:1' });
+      const response = await request(app).post('/credential').set('Authorization', resourceAuthorizationHeader(accessToken))
+        .send({ credential_configuration_id: 'PhotoID', proofs: { jwt: [signProofJwt({ aud: process.env.SERVER_URL })] } });
+      expect(response.status, JSON.stringify(response.body)).to.equal(400);
+      expect(response.body.error).to.equal('invalid_credential_request');
+      expect(response.body.error_description).to.include('profile');
+    });
+
     it('starts a replacement deferred transaction without reusing the previously signed credential', async () => {
       const sessionKey = `deferred-replacement-${uuidv4()}`;
       const accessToken = `deferred-access-${uuidv4()}`;

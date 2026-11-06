@@ -87,6 +87,16 @@ async function issueHaipDeferredCredential(signatureType) {
 }
 
 describe("issuer signing alignment", () => {
+  it("uses profile-specific signing material rather than silently falling back to PID", async () => {
+    const old = process.env.ISSUER_EAA_CERT_PATH;
+    process.env.ISSUER_EAA_CERT_PATH = "/missing/eaa-certificate.pem";
+    try {
+      await assert.rejects(issueCredential("x509", { ...TRUST_FRAMEWORK_SESSION, issuerProfile: "eaa" }), /signing material unavailable/);
+    } finally {
+      if (old === undefined) delete process.env.ISSUER_EAA_CERT_PATH;
+      else process.env.ISSUER_EAA_CERT_PATH = old;
+    }
+  });
   it("did:jwk issuance signs with the key embedded in the issued kid", async () => {
     const credential = await issueCredential("did:jwk");
     const issuedJws = extractIssuedJws(credential);
