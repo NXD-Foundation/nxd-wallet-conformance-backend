@@ -446,6 +446,41 @@ describe("wallet registration certificate request boundary", () => {
   it("accepts an authenticated CS-02 verifier_info array with matching scope", async () => {
     expect((await check(await request())).trusted).to.equal(true);
   });
+  it("accepts a certificate-only request and enforces its signed scope", async () => {
+    const payload = await request();
+    payload.verifier_info.shift();
+    expect(parseVerifierInfo(payload.verifier_info).dataset).to.equal(undefined);
+    expect((await check(payload)).trusted).to.equal(true);
+    payload.dcql_query.credentials[0] = { ...credential, claims: [{ path: ["unregistered"] }] };
+    await rejects(payload, "exceeds intended-use");
+  });
+  it("accepts a certificate-only request with one nested intended use", async () => {
+    const payload = await request({ intendedUses: [{ credentials: [credential] }] });
+    payload.verifier_info.shift();
+    expect((await check(payload)).trusted).to.equal(true);
+  });
+  it("rejects certificate-only requests with ambiguous or missing scope", async () => {
+    for (const overrides of [{ intendedUses: [{ credentials: [credential] }, { credentials: [credential] }] }, { credentials: [] }]) {
+      const payload = await request(overrides);
+      payload.verifier_info.shift();
+      await rejects(payload, overrides.intendedUses ? "ambiguous" : "scope is not declared");
+    }
+  });
+  it("accepts a certificate-only intermediary without inventing dataset evidence", async () => {
+    const payload = await request({ sub: "bank-a", intermediary: { sub: "test-verifier-001" } });
+    payload.verifier_info.shift();
+    expect((await check(payload)).trusted).to.equal(true);
+  });
+  it("rejects a certificate-only direct registration for another WRPAC service", async () => {
+    const payload = await request({ serviceId: "another-service" });
+    payload.verifier_info.shift();
+    await rejects(payload, "service does not match WRPAC");
+  });
+  it("rejects duplicate or malformed datasets alongside a certificate", async () => {
+    const payload = await request();
+    expect(() => parseVerifierInfo([...payload.verifier_info, payload.verifier_info[0]])).to.throw();
+    expect(() => parseVerifierInfo([{ format: "registrar_dataset", data: null }, payload.verifier_info[1]])).to.throw();
+  });
   it("rejects object, missing, duplicate, raw JWT and padded certificate encodings", async () => {
     const payload = await request();
     for (const value of [undefined, {}, [payload.verifier_info[0]], [...payload.verifier_info, payload.verifier_info[1]]]) {

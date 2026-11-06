@@ -158,6 +158,13 @@ The wallet applies the signed-token, identity, dataset and scope checks when
 trust enforcement is enabled; WRPRCs are registration JWTs, not X.509 access
 certificates.
 
+For trust-enabled presentations, the wallet also accepts `verifier_info` with a
+registration certificate and no registrar dataset. It verifies the WRPRC and
+checks the DCQL request against its single unambiguous credential scope; a
+present dataset remains subject to the existing consistency checks. This is an
+interoperability mode, not a claim that certificate-only requests meet CS-02
+v1.2, which requires the dataset. Verifier generation continues to send both.
+
 Use `node scripts/provisionRaidiamWrprc.js` to register/renew the 13 checked-in
 scenarios. It uses separate mTLS transport credentials, retains issued tokens
 that fail validation in quarantine, and activates only verified registrations.

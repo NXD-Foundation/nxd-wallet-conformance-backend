@@ -226,12 +226,12 @@ export function authorizeVerifierRegistrationScope({ registration, requested, in
 }
 
 export function parseVerifierInfo(verifierInfo) {
-  if (!Array.isArray(verifierInfo)) throw new WalletTrustError("verifier_info must be an array containing a registrar dataset and registration certificate");
+  if (!Array.isArray(verifierInfo)) throw new WalletTrustError("verifier_info must be an array containing a registration certificate");
   const datasets = verifierInfo.filter((entry) => entry?.format === "registrar_dataset");
   const certificates = verifierInfo.filter((entry) => entry?.format === "registration_cert");
-  if (datasets.length !== 1 || certificates.length !== 1) throw new WalletTrustError("verifier_info requires exactly one registrar dataset and registration certificate");
-  const dataset = datasets[0].data;
-  if (!dataset || typeof dataset !== "object" || Array.isArray(dataset) || !dataset.intendedUseIdentifier) throw new WalletTrustError("Registrar dataset must identify the selected intended use");
+  if (datasets.length > 1 || certificates.length !== 1) throw new WalletTrustError("verifier_info requires exactly one registration certificate and at most one registrar dataset");
+  const dataset = datasets[0]?.data;
+  if (datasets.length && (!dataset || typeof dataset !== "object" || Array.isArray(dataset) || !dataset.intendedUseIdentifier)) throw new WalletTrustError("Registrar dataset must identify the selected intended use");
   return { dataset, token: decodeRegistrationCertificate(certificates[0].data) };
 }
 
@@ -311,8 +311,8 @@ export async function enforceVerifierPresentationTrust({ sessionId, requestHeade
   if (!accessDecision?.trusted) throw new WalletTrustError(`Verifier access certificate trust rejected: ${accessDecision?.reasonCode || "TRUST_EVALUATION_INDETERMINATE"}`, accessDecision);
   try {
     const { dataset, token } = parseVerifierInfo(requestPayload?.verifier_info);
-    const intendedUseId = dataset.intendedUseIdentifier;
-    const serviceId = dataset.serviceId || dataset.serviceIdentifier || dataset.service_id;
+    const intendedUseId = dataset?.intendedUseIdentifier;
+    const serviceId = dataset?.serviceId || dataset?.serviceIdentifier || dataset?.service_id;
     const accessServiceId = new X509Certificate(evidence.certificatePem).subject.match(/(?:^|\n)OU\s*=\s*([^\n]+)/)?.[1]?.trim();
     const { payload: registration, intendedUse, trustDecision } = await verifyWrprc(token, {
       entityId, intendedUseId, serviceId, allowIntermediary: true,
@@ -320,7 +320,9 @@ export async function enforceVerifierPresentationTrust({ sessionId, requestHeade
     });
     const intermediated = Object.hasOwn(registration, "intermediary");
     if (!intermediated && serviceId && accessServiceId && serviceId !== accessServiceId) throw new WalletTrustError("Registrar dataset service does not match WRPAC");
-    assertRegistrarDataset(dataset, { registration, intendedUse, entityId: registration.sub, intendedUseId, serviceId });
+    const registeredServiceId = registration.serviceId ?? registration.serviceIdentifier ?? registration.service_id ?? registration.service_identifier ?? intendedUse.serviceId ?? intendedUse.serviceIdentifier ?? intendedUse.service_id ?? intendedUse.service_identifier;
+    if (!dataset && !intermediated && registeredServiceId && accessServiceId && registeredServiceId !== accessServiceId) throw new WalletTrustError("Registration service does not match WRPAC");
+    if (dataset) assertRegistrarDataset(dataset, { registration, intendedUse, entityId: registration.sub, intendedUseId, serviceId });
     assertQueryScope(requestPayload.dcql_query, intendedUse);
     await recordWalletTrustDecision(sessionId, trustDecision, "wallet-verify-wrprc");
     if (intermediated) {
@@ -329,17 +331,17 @@ export async function enforceVerifierPresentationTrust({ sessionId, requestHeade
         relyingPartyId: registration.sub,
         relyingPartyName: registration.name || null,
         service: registration.srv_description || registration.srvDescription || null,
-        registrarDataset: {
+        registrarDataset: dataset ? {
           serviceDescription: { value: dataset.srvDescription, evidence: (registration.srv_description ?? registration.srvDescription) !== undefined ? "verified_against_wrprc" : "request_only" },
           registryURI: { value: dataset.registryURI, evidence: (registration.registry_uri ?? registration.registryURI) !== undefined ? "verified_against_wrprc" : "request_only" },
           serviceId: { value: serviceId || null, evidence: (registration.serviceId ?? registration.serviceIdentifier ?? registration.service_id ?? registration.service_identifier ?? intendedUse.serviceId ?? intendedUse.serviceIdentifier ?? intendedUse.service_id ?? intendedUse.service_identifier) !== undefined ? "verified_against_wrprc" : "request_only" },
           intendedUseId: { value: intendedUseId, evidence: (registration.intendedUse ?? registration.intendedUses ?? registration.intendedUseIdentifier ?? registration.intendedUseId ?? registration.intended_use_id) !== undefined ? "verified_against_wrprc" : "request_only" },
           purpose: { value: dataset.purpose, evidence: "verified_against_wrprc" },
           privacyPolicy: { value: dataset.policyURI, evidence: (intendedUse.privacy_policy ?? intendedUse.privacyPolicy ?? registration.privacy_policy ?? registration.privacyPolicy) !== undefined ? "verified_against_wrprc" : "request_only" },
-        },
+        } : null,
         intermediaryBinding: "matched",
         warnings: nameMismatch ? ["INTERMEDIARY_NAME_MISMATCH"] : [],
-        privacyPolicyEvidence: (intendedUse.privacy_policy ?? intendedUse.privacyPolicy ?? registration.privacy_policy ?? registration.privacyPolicy) !== undefined ? "verified_against_wrprc" : "request_only",
+        privacyPolicyEvidence: (intendedUse.privacy_policy ?? intendedUse.privacyPolicy ?? registration.privacy_policy ?? registration.privacyPolicy) !== undefined ? "verified_against_wrprc" : (dataset ? "request_only" : null),
       });
     }
     return trustDecision;
