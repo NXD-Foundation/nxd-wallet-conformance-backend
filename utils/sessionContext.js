@@ -48,8 +48,14 @@ function buildContext(input = {}) {
       transactionData: source.transactionData ?? request.transactionData ?? null,
     },
     trust: {
-      enabled: source.trustEnabled ?? trust.enabled ?? false,
-      policy: clone(source.trustPolicy ?? trust.policy ?? null),
+      enabled: Object.hasOwn(source, "trustEnabled") && source.trustEnabled !== undefined
+        ? Boolean(source.trustEnabled)
+        : (Object.hasOwn(source, "trustPolicy") && source.trustPolicy !== undefined
+          ? Boolean(source.trustPolicy)
+          : (trust.enabled ?? false)),
+      policy: clone(Object.hasOwn(source, "trustPolicy") && source.trustPolicy !== undefined
+        ? source.trustPolicy
+        : (trust.policy ?? null)),
       decisions: clone(source.trustDecisions ?? trust.decisions ?? (source.trustDecision ? [source.trustDecision] : [])),
     },
     revocation: {
@@ -103,7 +109,7 @@ class SessionContextBuilder {
   toSession(legacySession = {}) {
     const context = this.toJSON();
     const latestDecision = context.trust.decisions.at(-1) || null;
-    return {
+    const session = {
       ...legacySession,
       ...(context.trust.policy ? { trustPolicy: context.trust.policy } : {}),
       ...(latestDecision ? { trustDecision: latestDecision } : {}),
@@ -111,6 +117,8 @@ class SessionContextBuilder {
       walletAttestation: clone(context.walletAttestation),
       sessionContext: context,
     };
+    if (!context.trust.policy) delete session.trustPolicy;
+    return session;
   }
 }
 
@@ -137,7 +145,9 @@ export function sessionContextFor(session = {}) {
 }
 
 export function sessionTrustPolicy(session = {}) {
-  return sessionContextFor(session)?.trust?.policy ?? session?.trustPolicy ?? null;
+  const context = sessionContextFor(session);
+  if (context?.trust && Object.hasOwn(context.trust, "policy")) return context.trust.policy ?? null;
+  return session?.trustPolicy ?? null;
 }
 
 export function sessionRevocationEnabled(session = {}) {

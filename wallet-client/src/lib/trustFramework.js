@@ -8,9 +8,11 @@ import { walletRedisClient } from "./cache.js";
 import { makeSessionLogger } from "./logger.js";
 import { createWalletContext } from "../../../utils/sessionContext.js";
 import {
+  applyWalletTrustDirective,
   checkAccessCertificateTrust,
   checkVerifierCredentialTrust,
   isTrustFrameworkSession,
+  walletTrustDirective,
 } from "../../../utils/trustFrameworkPolicy.js";
 import { validateVerifierAttestationTrust } from "../../../utils/cs02TrustPolicy.js";
 import { certificateFromX5c, certificatesFromX5c } from "../../../trust/crypto.js";
@@ -54,6 +56,34 @@ export async function loadWalletTrustSession(sessionId) {
   if (!sessionId) return null;
   const raw = await getSessionValue(`wallet:test-session:${sessionId}`);
   return raw ? JSON.parse(raw) : null;
+}
+
+export async function storeWalletTrustDirective({ sessionId, trustFramework, flow = "issuance", replace = false, trustPolicy = null } = {}) {
+  const directive = walletTrustDirective(trustFramework, { replace });
+  if (trustPolicy && directive.action === "enable") {
+    directive.trustPolicy = trustPolicy;
+    directive.trustEnabled = true;
+  }
+  if (directive.action === "leave") return loadWalletTrustSession(sessionId);
+  if (!sessionId) {
+    if (directive.action === "enable") {
+      const error = new Error("trustFramework=true requires sessionId so wallet trust decisions can be persisted");
+      error.errorCode = "invalid_request";
+      throw error;
+    }
+    return null;
+  }
+  const existing = await loadWalletTrustSession(sessionId);
+  const next = applyWalletTrustDirective(existing || { sessionId, status: "pending" }, directive, { sessionId, flow });
+  await setSessionValue(`wallet:test-session:${sessionId}`, Number(process.env.WALLET_TEST_SESSION_TTL || 86400), JSON.stringify(next));
+  return next;
+}
+
+export async function metadataTrustSessionFor(sessionId, { required = false } = {}) {
+  const session = await loadWalletTrustSession(sessionId);
+  if (isTrustFrameworkSession(session)) return session;
+  if (required) throw new Error("Trust-enabled metadata discovery requires a wallet trust session");
+  return null;
 }
 
 export async function recordWalletTrustDecision(sessionId, decision, operation) {

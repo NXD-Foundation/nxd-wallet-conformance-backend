@@ -6,6 +6,8 @@ import {
   credentialTypeFromJwtVcPayload,
   enforceIssuedCredentialTrust,
   enforceVerifierPresentationTrust,
+  metadataTrustSessionFor,
+  storeWalletTrustDirective,
   resolveIssuerRole,
   assertVerifierCertificateBinding,
   assertVerifierAttestationBinding,
@@ -16,6 +18,7 @@ import {
 } from "../src/lib/trustFramework.js";
 import {
   clearTrustResolverForTests,
+  isTrustFrameworkSession,
   setTrustResolverForTests,
 } from "../../utils/trustFrameworkPolicy.js";
 import fs from "node:fs/promises";
@@ -68,6 +71,59 @@ describe("wallet WE BUILD trust framework helpers", () => {
     expect(await resolveIssuerRole({ vct: "urn:eu.europa.ec.eudi:pid:1" })).to.equal("pid-provider");
     expect(await resolveIssuerRole({ doctype: "eu.europa.ec.av.1" })).to.equal("pub-eaa-provider");
     expect(await resolveIssuerRole({ vct: "urn:example:unknown" })).to.equal(null);
+  });
+
+  it("stores issuer-metadata trust only for a trust-framework session", async () => {
+    const sessions = new Map();
+    setWalletTrustSessionStorageForTests({
+      get: async (key) => sessions.get(key) ?? null,
+      set: async (key, value) => { sessions.set(key, value); },
+    });
+    const enabled = await storeWalletTrustDirective({ sessionId: "meta", trustFramework: true, flow: "issuance" });
+    expect(isTrustFrameworkSession(enabled)).to.equal(true);
+    expect(isTrustFrameworkSession(await metadataTrustSessionFor("meta"))).to.equal(true);
+
+    const kept = await storeWalletTrustDirective({ sessionId: "meta", trustFramework: "yes", flow: "issuance" });
+    expect(isTrustFrameworkSession(kept)).to.equal(true);
+
+    const cleared = await storeWalletTrustDirective({ sessionId: "meta", trustFramework: "false", flow: "issuance" });
+    expect(isTrustFrameworkSession(cleared)).to.equal(false);
+    expect(await metadataTrustSessionFor("meta")).to.equal(null);
+
+    await storeWalletTrustDirective({ sessionId: "meta", trustFramework: "true", flow: "issuance" });
+    const replaced = await storeWalletTrustDirective({ sessionId: "meta", replace: true, flow: "issuance" });
+    expect(isTrustFrameworkSession(replaced)).to.equal(false);
+
+    expect(await storeWalletTrustDirective({ trustFramework: false, flow: "issuance" })).to.equal(null);
+    let missingSession;
+    try {
+      await storeWalletTrustDirective({ trustFramework: true, flow: "issuance" });
+    } catch (error) { missingSession = error; }
+    expect(missingSession?.message).to.include("sessionId");
+
+    setWalletTrustSessionStorageForTests({
+      get: async () => null,
+      set: async () => { throw new Error("redis down"); },
+    });
+    let writeError;
+    try {
+      await storeWalletTrustDirective({ sessionId: "meta", trustFramework: true, flow: "issuance" });
+    } catch (error) { writeError = error; }
+    expect(writeError?.message).to.equal("redis down");
+
+    let required;
+    try {
+      await metadataTrustSessionFor("missing", { required: true });
+    } catch (error) { required = error; }
+    expect(required?.message).to.include("wallet trust session");
+  });
+
+  it("declares node-forge so Docker wallet installs can load trustFramework", async () => {
+    // Regression: trustFramework.js imports node-forge, but the wallet image only
+    // installs wallet-client/package.json deps (not the repo root package.json).
+    const pkg = JSON.parse(await fs.readFile(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../package.json"), "utf8"));
+    expect(pkg.dependencies?.["node-forge"]).to.be.a("string").and.not.empty;
+    await import("node-forge");
   });
 
   it("extracts conventional JWT VC type for trust scope evaluation", () => {

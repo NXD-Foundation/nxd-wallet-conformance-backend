@@ -54,9 +54,10 @@ import {
   describeWuaStatusListPublisher,
 } from "./lib/wuaStatusList.js";
 import { createWuaStatusListRouter } from "./routes/wuaStatusListRoutes.js";
-import { normalizeTrustFrameworkFlag, trustFrameworkSessionProps } from "../../utils/trustFrameworkPolicy.js";
+import { applyWalletTrustDirective, normalizeTrustFrameworkFlag, trustFrameworkSessionProps, walletTrustDirective, checkAccessCertificateTrust } from "../../utils/trustFrameworkPolicy.js";
+import { certificatesFromX5c } from "../../trust/crypto.js";
 import { createWalletContext } from "../../utils/sessionContext.js";
-import { credentialTypeFromJwtVcPayload, enforceIssuedCredentialTrust, resolveIssuerScopeEvidence, loadWalletTrustSession } from "./lib/trustFramework.js";
+import { credentialTypeFromJwtVcPayload, enforceIssuedCredentialTrust, resolveIssuerScopeEvidence, loadWalletTrustSession, metadataTrustSessionFor, storeWalletTrustDirective } from "./lib/trustFramework.js";
 import {
   buildCredentialProofRequest,
   buildCredentialProofBindingContext,
@@ -115,25 +116,14 @@ export function isDirectWalletTrustEnabled(trustFramework) {
   return normalizeTrustFrameworkFlag(trustFramework);
 }
 
+async function issuerMetadataTrustSession(trustFramework, sessionId, { replace = false } = {}) {
+  const required = walletTrustDirective(trustFramework, { replace }).action === "enable";
+  return metadataTrustSessionFor(sessionId, { required });
+}
+
 async function ensureDirectWalletTrustSession({ sessionId, trustFramework, flow, trustPolicy = null }) {
   if (!isDirectWalletTrustEnabled(trustFramework)) return;
-  if (!sessionId) {
-    const error = new Error("trustFramework=true requires sessionId so wallet trust decisions can be persisted");
-    error.errorCode = "invalid_request";
-    throw error;
-  }
-  const key = `wallet:test-session:${sessionId}`;
-  const raw = await walletRedisClient.get(key);
-  const existing = raw ? JSON.parse(raw) : { sessionId, status: "pending" };
-  const policy = trustPolicy || trustFrameworkSessionProps({ trustFramework: true }).trustPolicy;
-  const next = createWalletContext({
-    sessionContext: existing.sessionContext,
-    id: sessionId,
-    flow,
-    status: existing.status || "pending",
-    trustPolicy: policy,
-  }).withWalletSession({ ...existing, trustPolicy: policy }).toSession({ ...existing, trustPolicy: policy });
-  await walletRedisClient.setEx(key, Number(process.env.WALLET_TEST_SESSION_TTL || 86400), JSON.stringify(next));
+  await storeWalletTrustDirective({ sessionId, trustFramework, flow, trustPolicy });
 }
 
 function logFlowError(slog, label, error, extra = {}) {
@@ -171,7 +161,7 @@ async function runGuardedAsync(slog, label, fn, extra = {}) {
 app.post("/issue", async (req, res) => {
   return runWithLogContext(req.body.sessionId, async () => {
     try {
-      await ensureDirectWalletTrustSession({ sessionId: req.body.sessionId, trustFramework: req.body.trustFramework, flow: "issuance" });
+      await storeWalletTrustDirective({ sessionId: req.body.sessionId, trustFramework: req.body.trustFramework, flow: "issuance" });
       const issuerBase = (req.body.issuer || "http://localhost:3000").replace(/\/$/, "");
       const deepLink = req.body.offer || (await getOfferDeepLink(issuerBase, req.body.fetchOfferPath, req.body.credential));
       await logInfo(req.body.sessionId, "[/issue] deepLink:", deepLink || "<none>");
@@ -189,7 +179,7 @@ app.post("/issue", async (req, res) => {
       } catch {}
       const { grants } = offerConfig;
       const apiBase = (offerConfig.credential_issuer || issuerBase).replace(/\/$/, "");
-      const issuerMeta = await discoverIssuerMetadata(apiBase);
+      const issuerMeta = await discoverIssuerMetadata(apiBase, req.body.sessionId, fetch, { trustSession: await issuerMetadataTrustSession(req.body.trustFramework, req.body.sessionId) });
       try {
         await logInfo(req.body.sessionId, "[/issue] issuerMeta.token_endpoint=", issuerMeta?.token_endpoint);
         await logInfo(req.body.sessionId, "[/issue] issuerMeta.credential_endpoint=", issuerMeta?.credential_endpoint);
@@ -461,27 +451,43 @@ app.post("/session", async (req, res) => {
   const key = `wallet:test-session:${sessionId}`;
   const ttlInSeconds = parseInt(process.env.WALLET_TEST_SESSION_TTL || "86400");
 
-  async function setStatus(status, extra) {
+  async function setStatus(status, extra, { failOnWriteError = false, replaceTrust = false } = {}) {
     let previous = null;
     try {
       const stored = await walletRedisClient.get(key);
       previous = stored ? JSON.parse(stored) : null;
     } catch {}
-    const legacySession = { sessionId, status, ...(extra || {}), updatedAt: new Date().toISOString() };
-    const payload = createWalletContext({
+    const flow = isOpenId4VpDeepLink(deepLink) ? "presentation" : "issuance";
+    const directive = replaceTrust ? walletTrustDirective(trustFramework, { replace: true }) : null;
+    const legacySession = {
+      ...(directive ? applyWalletTrustDirective(previous, directive, { sessionId, flow, status }) : { sessionContext: previous?.sessionContext }),
+      sessionId,
+      status,
+      ...(extra || {}),
+      updatedAt: new Date().toISOString(),
+    };
+    if (directive?.action === "disable") delete legacySession.trustPolicy;
+    const payload = directive ? legacySession : createWalletContext({
       sessionContext: previous?.sessionContext,
       id: sessionId,
-      flow: isOpenId4VpDeepLink(deepLink) ? "presentation" : "issuance",
+      flow,
       status,
       trustPolicy: legacySession.trustPolicy ?? previous?.trustPolicy,
     }).withWalletSession(legacySession).toSession(legacySession);
-    try { await walletRedisClient.setEx(key, ttlInSeconds, JSON.stringify(payload)); } catch (e) { await logError(sessionId, "[session-flow] Redis set error", e); }
+    try { await walletRedisClient.setEx(key, ttlInSeconds, JSON.stringify(payload)); } catch (e) {
+      await logError(sessionId, "[session-flow] Redis set error", e);
+      if (failOnWriteError) throw e;
+    }
     return payload;
   }
 
   const sessionLog = makeSessionLogger(sessionId);
 
-  await setStatus("pending", trustFrameworkSessionProps({ trustFramework }));
+  try {
+    await setStatus("pending", {}, { failOnWriteError: true, replaceTrust: true });
+  } catch (e) {
+    return res.status(500).json({ error: "server_error", error_description: e.message || String(e) });
+  }
 
   return runWithLogContext(sessionId, async () => {
     try {
@@ -502,7 +508,7 @@ app.post("/session", async (req, res) => {
       const offeredConfigurationIds = getOfferedConfigurationIds(offerCfg);
       const { grants } = offerCfg;
       const apiBase = (offerCfg.credential_issuer || issuerBaseDefault).replace(/\/$/, "");
-      const issuerMeta = await discoverIssuerMetadata(apiBase, sessionId);
+      const issuerMeta = await discoverIssuerMetadata(apiBase, sessionId, fetch, { trustSession: await issuerMetadataTrustSession(trustFramework, sessionId, { replace: true }) });
       try {
         sessionLog("[/session] offer.credential_issuer=", offerCfg?.credential_issuer);
         sessionLog("[/session] offer.config_ids=", offeredConfigurationIds);
@@ -735,7 +741,7 @@ app.post("/present", async (req, res) => {
 app.post("/issue-codeflow", async (req, res) => {
   return runWithLogContext(req.body.sessionId, async () => {
     try {
-      await ensureDirectWalletTrustSession({ sessionId: req.body.sessionId, trustFramework: req.body.trustFramework, flow: "issuance" });
+      await storeWalletTrustDirective({ sessionId: req.body.sessionId, trustFramework: req.body.trustFramework, flow: "issuance" });
       const issuerBaseInput = (req.body.issuer || "http://localhost:3000").replace(/\/$/, "");
       const deepLink = req.body.offer || (await getOfferDeepLink(issuerBaseInput, req.body.fetchOfferPath, req.body.credential));
       await logInfo(req.body.sessionId, "[/issue-codeflow] deepLink:", deepLink || "<none>");
@@ -751,7 +757,7 @@ app.post("/issue-codeflow", async (req, res) => {
       } catch {}
       const { grants } = offerCfg;
       const apiBase = (offerCfg.credential_issuer || issuerBaseInput).replace(/\/$/, "");
-      const issuerMeta = await discoverIssuerMetadata(apiBase);
+      const issuerMeta = await discoverIssuerMetadata(apiBase, req.body.sessionId, fetch, { trustSession: await issuerMetadataTrustSession(req.body.trustFramework, req.body.sessionId) });
       try {
         await logInfo(req.body.sessionId, "[/issue-codeflow] issuerMeta.token_endpoint=", issuerMeta?.token_endpoint);
         await logInfo(req.body.sessionId, "[/issue-codeflow] issuerMeta.credential_endpoint=", issuerMeta?.credential_endpoint);
@@ -894,7 +900,7 @@ function pickConfigurationId(offer, requestedId) {
   return ids.length > 0 ? ids[0] : undefined;
 }
 
-export async function discoverIssuerMetadata(credentialIssuerBase, logSessionId, fetchImpl = fetch) {
+export async function discoverIssuerMetadata(credentialIssuerBase, logSessionId, fetchImpl = fetch, { trustSession = null } = {}) {
   const slog = logSessionId ? makeSessionLogger(logSessionId) : (() => {});
   const base = credentialIssuerBase.replace(/\/$/, "");
   // RFC: if credential_issuer contains a path, well-known URI keeps path suffix
@@ -916,7 +922,7 @@ export async function discoverIssuerMetadata(credentialIssuerBase, logSessionId,
   let meta = null; let lastErr = null;
   console.log("[issuer-meta] trying candidates:", candidates); try { slog("[issuer-meta] candidates", { candidates }); } catch {}
   for (const url of candidates) {
-    for (const accept of ["application/jwt, application/json", "application/json"]) {
+    for (const accept of trustSession ? ["application/jwt"] : ["application/jwt, application/json", "application/json"]) {
       try {
         const res = await fetchImpl(url, { headers: { Accept: accept } });
         console.log("[issuer-meta]", url, "->", res.status); try { slog("[issuer-meta] fetch", { url, status: res.status, accept }); } catch {}
@@ -932,8 +938,15 @@ export async function discoverIssuerMetadata(credentialIssuerBase, logSessionId,
             if (verified.payload?.sub !== credentialIssuerBase) {
               throw new Error("signed issuer metadata sub does not match credential issuer");
             }
+            if (trustSession) {
+              if (verified.payload?.credential_issuer !== credentialIssuerBase) throw new Error("signed issuer metadata credential_issuer does not match issuer");
+              const chain = certificatesFromX5c(header.x5c);
+              const decision = await checkAccessCertificateTrust({ session: trustSession, certificatePem: chain[0], certificateChain: chain, operation: "verify-issuer-metadata" });
+              if (!decision?.trusted) throw new Error(`issuer metadata access certificate is not trusted: ${decision?.reasonCode || "unknown"}`);
+            }
             meta = { ...verified.payload, _signedMetadata: true, _metadataX5c: header.x5c };
           } else {
+            if (trustSession) throw new Error("signed issuer metadata is required");
             meta = await res.json();
           }
           console.log("[issuer-meta] selected:", url); break;

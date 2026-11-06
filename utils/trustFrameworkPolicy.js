@@ -7,7 +7,7 @@ import { X509Certificate } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { sessionTrustPolicy } from "./sessionContext.js";
+import { createWalletContext, sessionTrustPolicy } from "./sessionContext.js";
 
 const WEBUILD_PROFILE = "webuild-wp4-pilot";
 const DEFAULT_TRUST_PROFILE_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../data/trust/webuild-wp4-pilot.json");
@@ -23,6 +23,36 @@ export function normalizeTrustFrameworkFlag(value) {
 export function trustFrameworkSessionProps(input = {}) {
   if (!normalizeTrustFrameworkFlag(input.trustFramework ?? input.trust_framework)) return {};
   return { trustPolicy: { mode: "webuild", profile: WEBUILD_PROFILE } };
+}
+
+export function walletTrustDirective(value, { replace = false } = {}) {
+  if (value === true || value === "true") {
+    return { action: "enable", trustPolicy: { mode: "webuild", profile: WEBUILD_PROFILE }, trustEnabled: true };
+  }
+  if (replace || value === false || value === "false") {
+    return { action: "disable", trustPolicy: null, trustEnabled: false };
+  }
+  return { action: "leave" };
+}
+
+export function applyWalletTrustDirective(existing, directive, { sessionId, flow, status } = {}) {
+  if (!directive || directive.action === "leave") return existing ?? null;
+  const base = { ...(existing || {}) };
+  const legacy = {
+    ...base,
+    sessionId: sessionId ?? base.sessionId,
+    status: status ?? base.status ?? "pending",
+  };
+  if (directive.trustPolicy) legacy.trustPolicy = directive.trustPolicy;
+  else delete legacy.trustPolicy;
+  return createWalletContext({
+    sessionContext: base.sessionContext,
+    id: legacy.sessionId ?? null,
+    flow: flow ?? base.sessionContext?.flow ?? null,
+    status: legacy.status,
+    trustPolicy: directive.trustPolicy,
+    trustEnabled: directive.trustEnabled,
+  }).withWalletSession(legacy).toSession(legacy);
 }
 
 export function revocationSessionProps(input = {}) {

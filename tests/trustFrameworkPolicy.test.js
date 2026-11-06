@@ -1,4 +1,5 @@
 import { expect } from "chai";
+import { createWalletContext } from "../utils/sessionContext.js";
 import fs from "node:fs/promises";
 import sinon from "sinon";
 import { certificateFromX5c } from "../trust/crypto.js";
@@ -10,8 +11,10 @@ import {
   checkAccessCertificateTrust,
   loadConfiguredAccessCertificate,
   preprodPkiAccessCaEnabled,
+  applyWalletTrustDirective,
   isTrustFrameworkSession,
   issuanceSessionProps,
+  walletTrustDirective,
   recordTrustDecision,
   setTrustResolverForTests,
   trustFrameworkSessionProps,
@@ -35,6 +38,37 @@ describe("Phase 3 Wallet Provider trust policy", () => {
     });
     expect(trustFrameworkSessionProps({ trustFramework: false })).to.deep.equal({});
     expect(isTrustFrameworkSession({ trustPolicy: { mode: "webuild", profile: "webuild-wp4-pilot" } })).to.equal(true);
+  });
+
+  it("replaces session trust from the request and clears it on an explicit false", () => {
+    const trusted = {
+      sessionId: "s1",
+      status: "pending",
+      trustPolicy: { mode: "webuild", profile: "webuild-wp4-pilot" },
+      trustDecision: { trusted: true, reasonCode: "TRUSTED" },
+    };
+    trusted.sessionContext = createWalletContext({
+      id: "s1",
+      flow: "issuance",
+      trustPolicy: trusted.trustPolicy,
+      trustDecision: trusted.trustDecision,
+    }).toJSON();
+
+    expect(walletTrustDirective("yes").action).to.equal("leave");
+    expect(walletTrustDirective(true).action).to.equal("enable");
+    expect(walletTrustDirective("false").action).to.equal("disable");
+    expect(walletTrustDirective(undefined, { replace: true }).action).to.equal("disable");
+
+    const left = applyWalletTrustDirective(trusted, walletTrustDirective("yes"), { sessionId: "s1", flow: "issuance" });
+    expect(left).to.equal(trusted);
+
+    const cleared = applyWalletTrustDirective(trusted, walletTrustDirective(false), { sessionId: "s1", flow: "issuance" });
+    expect(isTrustFrameworkSession(cleared)).to.equal(false);
+    expect(cleared.trustPolicy).to.equal(undefined);
+    expect(cleared.sessionContext.trust.decisions[0].reasonCode).to.equal("TRUSTED");
+
+    const replaced = applyWalletTrustDirective(trusted, walletTrustDirective(undefined, { replace: true }), { sessionId: "s1", flow: "issuance" });
+    expect(isTrustFrameworkSession(replaced)).to.equal(false);
   });
 
   it("resolves Wallet Provider identity from the WIA/KA x5c certificate", async () => {

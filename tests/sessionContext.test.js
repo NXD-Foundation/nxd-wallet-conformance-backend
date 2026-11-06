@@ -79,6 +79,40 @@ describe("session context", () => {
     expect(completed.sessionContext.trust.policy).to.deep.equal(pending.trustPolicy);
   });
 
+  it("clears a stored trust policy when the update passes null and keeps prior decisions", () => {
+    const pending = createWalletContext({
+      id: "wallet-1",
+      flow: "issuance",
+      trustPolicy: { mode: "webuild", profile: "webuild-wp4-pilot" },
+    }).withTrustDecision({ trusted: true, reasonCode: "TRUSTED" }).toSession({ sessionId: "wallet-1", status: "pending", trustPolicy: { mode: "webuild", profile: "webuild-wp4-pilot" } });
+    const cleared = createWalletContext({
+      sessionContext: pending.sessionContext,
+      id: "wallet-1",
+      flow: "issuance",
+      status: "pending",
+      trustPolicy: null,
+      trustEnabled: false,
+    }).toSession(pending);
+
+    expect(sessionTrustPolicy(cleared)).to.equal(null);
+    expect(cleared.trustPolicy).to.equal(undefined);
+    expect(cleared.sessionContext.trust.decisions).to.deep.equal([{ trusted: true, reasonCode: "TRUSTED" }]);
+  });
+
+  it("keeps a stored trust policy when an update omits the policy", () => {
+    const pending = createWalletContext({
+      id: "wallet-1",
+      trustPolicy: { mode: "webuild", profile: "webuild-wp4-pilot" },
+    }).toSession({ status: "pending" });
+    const updated = createWalletContext({
+      sessionContext: pending.sessionContext,
+      id: "wallet-1",
+      status: "ok",
+      trustPolicy: undefined,
+    }).toSession({ status: "ok" });
+    expect(sessionTrustPolicy(updated)).to.deep.equal(pending.trustPolicy);
+  });
+
   it("keeps revocation on the canonical context when the legacy field is changed", () => {
     const session = createIssuanceContext({ id: "issue-1", revocationEnabled: false }).toSession({
       status: "pending",

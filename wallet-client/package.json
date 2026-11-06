@@ -13,27 +13,28 @@
   },
   "dependencies": {
     "@animo-id/mdoc": "^0.5.2",
+    "@cef-ebsi/key-did-resolver": "^2.0.5",
     "@noble/curves": "^1.9.2",
     "@noble/hashes": "^1.8.0",
     "@panva/hkdf": "^1.2.1",
     "@peculiar/x509": "^1.12.4",
-    "jose": "^5.2.4",
-    "node-fetch": "^3.3.2",
-    "express": "^4.19.2",
-    "redis": "^4.7.0",
-    "@sd-jwt/decode": "^0.6.1",
     "@sd-jwt/crypto-nodejs": "^0.7.2",
-    "cbor-x": "^1.6.0",
-    "base64url": "^3.0.1",
-    "jsonwebtoken": "^9.0.2",
-    "did-resolver": "^4.1.0",
-    "@cef-ebsi/key-did-resolver": "^2.0.5",
+    "@sd-jwt/decode": "^0.6.1",
     "@xmldom/xmldom": "^0.8.10",
+    "base64url": "^3.0.1",
+    "cbor-x": "^1.6.0",
+    "did-resolver": "^4.1.0",
+    "express": "^4.19.2",
+    "jose": "^5.2.4",
+    "jsonwebtoken": "^9.0.2",
+    "node-fetch": "^3.3.2",
+    "node-forge": "^1.4.3",
+    "redis": "^4.7.0",
     "xml-crypto": "^6.1.2",
     "xpath": "^0.0.33"
   },
   "devDependencies": {
-    "mocha": "^11.5.0",
-    "chai": "^5.2.0"
+    "chai": "^5.2.0",
+    "mocha": "^11.5.0"
   }
 }

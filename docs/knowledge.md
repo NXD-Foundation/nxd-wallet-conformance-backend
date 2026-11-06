@@ -318,11 +318,16 @@ For example, `https://issuer.example/tenant` resolves to
 - A Wallet is recommended to send an `Accept` header identifying the metadata
 media types it supports. Every conforming issuer MUST support unsigned
 `application/json`; signed `application/jwt` metadata is optional.
-- The wallet client must request `application/json` until it implements
-signed-metadata verification. Do not decode or use a JWT metadata payload
-without signature verification and an established trust policy for its
-signer. Supporting signed metadata is a separate security feature, not a
-parsing fallback.
+- Issuer-metadata trust checks run only when the stored wallet session is a
+  trust-framework session. The wallet then requests `application/jwt`, requires
+  a signed document, checks that `credential_issuer` matches the issuer, and
+  evaluates the presented access certificate. It does not retry JSON after
+  failure. `POST /session` stores that policy only for `trustFramework=true`
+  or `"true"` and replaces any previous policy for the same session id. On
+  `/issue` and `/issue-codeflow`, `false` or `"false"` clears the stored
+  policy and any other value leaves it in place. A failed write of that
+  policy fails the request before metadata is fetched. Compatibility sessions
+  may still fall back to JSON.
 - The EUDI Android Demo wallet configures issuer trust with signed metadata
   required. This deployment therefore returns `application/jwt` metadata when
   the client advertises that media type. The JWT uses
@@ -720,7 +725,10 @@ Section 3.6 and Section 4.2.
   `vct`/`doctype` scope. Trusted registrar scope evidence is enforced when
   available; absent evidence is temporarily allowed as `scope-unverified` and
   must be revisited before production hardening.
-- Wallet-side trust enforcement follows the same session opt-in model. With
+- Wallet-side trust enforcement follows the same session opt-in model. Issuer
+  metadata discovery uses the stored session, including the `credential_issuer`
+  binding and access-certificate check described under Credential Issuer
+  Metadata Discovery. With
   `trustFramework=true`, the wallet checks the credential issuer's role-specific
   LoTE anchor before storing an SD-JWT/JWT credential. A trust-enabled JWT VC
   must have its signature verified by the same presented `x5c` certificate
