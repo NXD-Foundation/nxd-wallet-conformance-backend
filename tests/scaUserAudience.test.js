@@ -13,7 +13,7 @@ describe('SCA-User configured RP URL audience regression', () => {
     expect(payload.disclosureFrame).to.deep.equal({});
   });
   it('refuses issuance without an explicitly configured HTTPS RP URL', () => {
-    for (const value of ['', 'http://bank.example', 'x509_hash:abc', 'https://user:password@bank.example', 'https://bank.example/#fragment']) {
+    for (const value of ['', 'http://bank.example', 'x509_hash:abc', 'https:bank.example', 'https://user:password@bank.example', 'https://bank.example/#fragment']) {
       process.env.RP_URL = value;
       expect(() => createTs12ScaUserAttestationPayload()).to.throw(/RP_URL/);
     }
@@ -35,6 +35,7 @@ describe('SCA-User configured RP URL audience regression', () => {
         expect(validateTs12PaymentPresentationResponse(input).code).to.equal('aud_mismatch');
         input.extractedClaims[0].aud = 'https://bank.example/service';
         delete input.vpSession.ts12_rp_url;
+        input.rpClientId = 'https://bank.example/service';
         expect(validateTs12PaymentPresentationResponse(input).ok).to.equal(false);
       });
     }

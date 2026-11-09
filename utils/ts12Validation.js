@@ -272,7 +272,12 @@ export function validateTs12PaymentPresentationResponse({
     ? vpSession.transaction_data[0]
     : vpSession?.ts12_encoded_transaction_data;
   const expectedVct = vpSession?.ts12_expected_vct || TS12_SCA_IBAN_VCT;
-  const resolvedRpClientId = vpSession?.ts12_rp_url || rpClientId || null;
+  // For SCA-User, only the RP URL pinned when this payment session was created
+  // is authoritative. A call-site fallback could otherwise validate an
+  // unbound or stale session against a different identifier.
+  const resolvedRpClientId = expectedVct === "https://webuildconsortium.eu/sca/sca-user/1.0"
+    ? vpSession?.ts12_rp_url || null
+    : (vpSession?.ts12_rp_url || rpClientId || null);
 
   const kbResult = validateTs12KeyBindingJwt({
     kbPayload,
