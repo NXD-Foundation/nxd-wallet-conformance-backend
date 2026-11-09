@@ -1,3 +1,5 @@
+import { X509Certificate } from 'node:crypto';
+import { buildCredentialProofRequest } from '../src/lib/credentialProofBinding.js';
 import { expect } from 'chai';
 import { decodeProtectedHeader, decodeJwt, jwtVerify, importJWK } from 'jose';
 import { buildCredentialRequest } from '../src/lib/issuance.js';
@@ -24,10 +26,32 @@ describe('credential attestation policy', () => {
     const { proofJwt, keys } = await request({ metadata: { selected: { proof_types_supported: { jwt: {} } } } });
     const wua = decodeProtectedHeader(proofJwt).key_attestation;
     expect(wua).to.be.a('string');
+    const header = decodeProtectedHeader(wua);
+    expect(header.jwk).to.equal(undefined);
+    const certificate = new X509Certificate(Buffer.from(header.x5c[0], 'base64'));
+    const verifiedWua = await jwtVerify(wua, certificate.publicKey);
+    expect(verifiedWua.payload.nonce).to.equal('nonce');
     expect(decodeJwt(wua).attested_keys[0]).to.deep.include({ x: keys.publicJwk.x, y: keys.publicJwk.y });
     const { payload } = await jwtVerify(proofJwt, await importJWK(keys.publicJwk, 'ES256'), { audience: 'https://issuer.example' });
     expect(payload.nonce).to.equal('nonce');
     expect(payload.iss).to.equal('wallet');
+  });
+  it('authorization-code compatibility binds certificate-backed WUA to holder and nonce', async () => {
+    const result = await buildCredentialProofRequest({
+      profile: 'compatibility', issuerMeta: {}, apiBase: 'https://issuer.example',
+      configurationId: 'selected', credentialIdentifier: 'credential-1', cNonce: 'fresh-nonce',
+      credentialEndpoint: 'https://issuer.example/credential', clientId: 'wallet',
+    });
+    const wua = decodeProtectedHeader(result.proofJwt).key_attestation;
+    const header = decodeProtectedHeader(wua);
+    expect(header.jwk).to.equal(undefined);
+    const certificate = new X509Certificate(Buffer.from(header.x5c[0], 'base64'));
+    const { payload } = await jwtVerify(wua, certificate.publicKey);
+    expect(payload.nonce).to.equal('fresh-nonce');
+    expect(payload.attested_keys[0]).to.deep.include({ x: result.subjectKey.publicJwk.x, y: result.subjectKey.publicJwk.y });
+    const proof = await jwtVerify(result.proofJwt, await importJWK(result.subjectKey.publicJwk, 'ES256'));
+    expect(proof.payload.nonce).to.equal(payload.nonce);
+    expect(result.credentialRequest.credential_identifier).to.equal('credential-1');
   });
   for (const [title, metadata, profile] of [
     ['empty required object', { selected: { proof_types_supported: { jwt: { key_attestations_required: {} } } } }, 'compatibility'],

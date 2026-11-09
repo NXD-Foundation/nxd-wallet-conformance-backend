@@ -20,6 +20,7 @@ import {
   createWalletUnitCredentialKeyAttestation,
   validateWalletUnitKeyAttestation,
 } from "./walletUnitAttestation.js";
+import { buildCredentialRequestProofs } from "./credentialRequestProofs.js";
 import { isWebuildCs01Profile } from "./profile.js";
 import {
   createResourceRequestDpopProof,
@@ -201,33 +202,54 @@ export async function buildCredentialProofRequest({
   const audience = resolveProofAudience(issuerMeta, apiBase);
   const proofIssuer = resolveOpenid4VciProofIssuerClaim({ clientId, anonymousAccess });
 
-  const keyAttestation = await createWalletUnitCredentialKeyAttestation({
-    profile,
-    keyPath,
-    proofPublicJwk: subjectKey.publicJwk,
-    credentialEndpoint,
-    subjectPrivateJwk: subjectKey.privateJwk,
-    subjectPublicJwk: subjectKey.publicJwk,
-    nonce: cNonce,
-    alg: proofAlg,
-  });
+  let keyAttestation;
+  let proofJwt;
+  if (isWebuildCs01Profile(profile)) {
+    keyAttestation = await createWalletUnitCredentialKeyAttestation({
+      profile,
+      keyPath,
+      proofPublicJwk: subjectKey.publicJwk,
+      credentialEndpoint,
+      subjectPrivateJwk: subjectKey.privateJwk,
+      subjectPublicJwk: subjectKey.publicJwk,
+      nonce: cNonce,
+      alg: proofAlg,
+    });
 
-  const proofJwt = await createProofJwt({
-    privateJwk: subjectKey.privateJwk,
-    publicJwk: subjectKey.publicJwk,
-    audience,
-    nonce: cNonce,
-    issuer: proofIssuer,
-    typ: "openid4vci-proof+jwt",
-    alg: proofAlg,
-    key_attestation: keyAttestation.attestationJwt,
-  });
+    proofJwt = await createProofJwt({
+      privateJwk: subjectKey.privateJwk,
+      publicJwk: subjectKey.publicJwk,
+      audience,
+      nonce: cNonce,
+      issuer: proofIssuer,
+      typ: "openid4vci-proof+jwt",
+      alg: proofAlg,
+      key_attestation: keyAttestation.attestationJwt,
+    });
 
-  validateWalletUnitKeyAttestation({
-    attestationJwt: keyAttestation.attestationJwt,
-    proofPublicJwk: subjectKey.publicJwk,
-    expectedNonce: cNonce,
-  });
+    validateWalletUnitKeyAttestation({
+      attestationJwt: keyAttestation.attestationJwt,
+      proofPublicJwk: subjectKey.publicJwk,
+      expectedNonce: cNonce,
+    });
+  } else {
+    const bundle = await buildCredentialRequestProofs({
+      proofMode: "jwt",
+      credentialEndpoint,
+      aud: audience,
+      c_nonce: cNonce,
+      keyPairs: [subjectKey],
+      selectedAlg: proofAlg,
+      clientId,
+      anonymousAccess,
+    });
+    proofJwt = bundle.proofJwt;
+    keyAttestation = {
+      attestationJwt: bundle.wuaJwt,
+      source: "local-key",
+      trustFrameworkIntegrated: false,
+    };
+  }
 
   assertCs01CredentialProofRequirements(profile, {
     subjectKey,
