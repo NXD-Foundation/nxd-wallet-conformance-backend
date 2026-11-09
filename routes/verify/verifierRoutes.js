@@ -340,7 +340,7 @@ async function validateTs12PaymentSessionOrRespond({
     extractedClaims: claimsFromExtraction,
     vpSession,
     seenJti: new Set(ts12JtiCache.getCurrentArray()),
-    rpClientId: vpSession?.client_id || null,
+    rpClientId: vpSession?.ts12_rp_url || null,
   });
 
   if (result.ok) {

@@ -156,7 +156,7 @@ describe("wallet-client ts12Presentation", () => {
     expect(() => assertTs12RequestDelivery({ method: "post", encrypted: true, payload })).to.not.throw();
   });
 
-  it("rejects combined SCA DCQL and sca-user aud mismatch", () => {
+  it("rejects combined SCA DCQL but accepts and logs unresolved sca-user audience binding", () => {
     const combined = {
       credentials: [
         ...buildTs12DcqlQuery("sca-iban").credentials,
@@ -185,8 +185,10 @@ describe("wallet-client ts12Presentation", () => {
       }),
     ).to.throw(/at most one of sca-iban/);
 
+    const logs = [];
     expect(() =>
       assertTs12ScaPresentationConstraints({
+        log: (...entry) => logs.push(entry),
         dcqlQuery: buildTs12DcqlQuery("sca-user"),
         stored: {
           metadata: {
@@ -197,7 +199,10 @@ describe("wallet-client ts12Presentation", () => {
         },
         clientId: "x509_san_dns:localhost",
       }),
-    ).to.throw(/aud does not include/);
+    ).to.not.throw();
+    expect(logs).to.have.lengthOf(1);
+    expect(logs[0][0]).to.include("SCA-User audience binding check skipped");
+    expect(logs[0][1]).to.include({ code: "sca_user_audience_binding_unresolved", decision: "continue", audienceBindingValidated: false });
   });
 
   it("hashes generic transaction_data as the received base64url string", () => {

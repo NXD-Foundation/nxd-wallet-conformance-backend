@@ -1,3 +1,4 @@
+import { resolveScaUserRpUrl } from "./scaUserAudience.js";
 import fs from "fs";
 import { v4 as uuidv4 } from "uuid";
 import qr from "qr-image";
@@ -1442,6 +1443,9 @@ export async function generateVPRequest(params) {
 
   if (ts12Payment) {
     sessionData.ts12_payment = true;
+    if (ts12ExpectedVct === "https://webuildconsortium.eu/sca/sca-user/1.0") {
+      sessionData.ts12_rp_url = resolveScaUserRpUrl();
+    }
     sessionData.ts12_payment_payload = ts12PaymentPayload || null;
     sessionData.ts12_encoded_transaction_data =
       typeof transactionData === "string" ? transactionData : null;

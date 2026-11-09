@@ -272,7 +272,7 @@ export function validateTs12PaymentPresentationResponse({
     ? vpSession.transaction_data[0]
     : vpSession?.ts12_encoded_transaction_data;
   const expectedVct = vpSession?.ts12_expected_vct || TS12_SCA_IBAN_VCT;
-  const resolvedRpClientId = rpClientId || vpSession?.client_id || null;
+  const resolvedRpClientId = vpSession?.ts12_rp_url || rpClientId || null;
 
   const kbResult = validateTs12KeyBindingJwt({
     kbPayload,

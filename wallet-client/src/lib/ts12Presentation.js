@@ -1,7 +1,5 @@
-import { parseSdJwtClaims } from "../../utils/sdJwtClaims.js";
 import ts12PaymentSchema from "../../data/ts12-urn-eudi-sca-payment-1-data-model.json" with { type: "json" };
 import {
-  audienceIncludesRp,
   assertSingleScaAttestationInDcql,
   computeTs12TransactionDataHash,
   getTs12AttestationTypeByVct,
@@ -192,7 +190,7 @@ export function assertTs12RequestDelivery({ method, encrypted, payload }) {
   }
 }
 
-export function assertTs12ScaPresentationConstraints({ dcqlQuery, stored, clientId }) {
+export function assertTs12ScaPresentationConstraints({ dcqlQuery, stored, clientId, log = () => {} }) {
   try {
     assertSingleScaAttestationInDcql(dcqlQuery);
   } catch (error) {
@@ -208,20 +206,16 @@ export function assertTs12ScaPresentationConstraints({ dcqlQuery, stored, client
     return;
   }
 
-  let aud = stored?.metadata?.aud || stored?.claims?.aud;
-  if (aud == null) {
-    const token = typeof stored?.credential === "string"
-      ? stored.credential
-      : stored?.credential?.credential || stored?.credential?.token;
-    if (typeof token === "string") {
-      try {
-        aud = parseSdJwtClaims(token)?.claims?.aud;
-      } catch {}
-    }
-  }
-  if (!audienceIncludesRp(aud, clientId)) {
-    throw new Error("sca-user attestation aud does not include the Relying Party identifier");
-  }
+  // TODO(CS-12): Define the authenticated binding from x509_hash to the bank RP URL.
+  // See docs/issues/cs12-sca-user-rp-url-binding.md. Continue for interoperability
+  // while recording that the wallet has not established RP audience permission.
+  log("[PRESENTATION] [WARNING] SCA-User audience binding check skipped", {
+    code: "sca_user_audience_binding_unresolved",
+    decision: "continue",
+    audienceBindingValidated: false,
+    clientId,
+    reason: "Authenticated request-to-RP-URL binding is not specified; verifier enforces credential aud",
+  });
 }
 
 export function buildTs12ProofClaims({

@@ -367,7 +367,7 @@ dcApiRouter.post("/vp/dc-api/response/:sessionId", enforceBodyLimit(MAX_RESPONSE
         extractedClaims,
         vpSession: session,
         seenJti: new Set(ts12JtiCache.getCurrentArray()),
-        rpClientId: session.client_id || null,
+        rpClientId: session.ts12_rp_url || null,
       });
       if (!ts12Result.ok) {
         session.status = "failed";

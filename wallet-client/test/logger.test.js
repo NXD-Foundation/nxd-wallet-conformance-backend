@@ -1,5 +1,7 @@
+import { assertTs12ScaPresentationConstraints } from "../src/lib/ts12Presentation.js";
 import { strict as assert } from "assert";
 import {
+  makeSessionLogger,
   registerLogSinks,
   runWithLogContext,
 } from "../src/lib/logger.js";
@@ -19,6 +21,21 @@ describe("wallet logger", () => {
         globalEntries.push(entry);
       },
     });
+  });
+
+  it("records the skipped SCA-User audience binding check on the owning wallet session", async () => {
+    assertTs12ScaPresentationConstraints({
+      dcqlQuery: { credentials: [] },
+      stored: { metadata: { configurationId: "https://webuildconsortium.eu/sca/sca-user/1.0" } },
+      clientId: "x509_hash:request-certificate",
+      log: makeSessionLogger("sca-wallet-session"),
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(sessionEntries.length, 1);
+    assert.equal(sessionEntries[0].sessionId, "sca-wallet-session");
+    assert.equal(sessionEntries[0].entry.data.code, "sca_user_audience_binding_unresolved");
+    assert.equal(sessionEntries[0].entry.data.audienceBindingValidated, false);
+    assert.equal(sessionEntries[0].entry.data.decision, "continue");
   });
 
   it("captures plain console output in global logs", async () => {

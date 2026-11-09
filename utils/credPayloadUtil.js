@@ -4,7 +4,7 @@ import fs from "fs";
 import qr from "qr-image";
 import imageDataURI from "image-data-uri";
 import { streamToBuffer } from "@jorgeferrero/stream-to-buffer";
-import { rpClientIdFromServerUrl } from "./ts12PaymentUtils.js";
+import { resolveScaUserRpUrl } from "./scaUserAudience.js";
 
 const face_data = fs.readFileSync("./data/face.data", "utf8");
 // Helper functions to create payloads for different credential types
@@ -896,9 +896,9 @@ export const createTs12ScaIbanAttestationPayload = () => {
   return { claims, disclosureFrame };
 };
 
-export const createTs12ScaUserAttestationPayload = (serverURL) => {
+export const createTs12ScaUserAttestationPayload = () => {
   const claims = {
-    aud: rpClientIdFromServerUrl(serverURL),
+    aud: resolveScaUserRpUrl(),
     sub: "37774a3f-ab14-43c3-96bc-bb1066a30a1d",
     masked_psu_id: "DE89****3000",
   };

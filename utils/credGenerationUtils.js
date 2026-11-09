@@ -639,7 +639,7 @@ export async function handleCredentialGenerationBasedOnFormat(
       credPayload = createTs12ScaIbanAttestationPayload();
       break;
     case TS12_SCA_USER_VCT:
-      credPayload = createTs12ScaUserAttestationPayload(resolvedServerURL);
+      credPayload = createTs12ScaUserAttestationPayload();
       break;
     case TS12_SCA_CARD_DPC_VCT:
       credPayload = createTs12ScaCardDpcAttestationPayload();
@@ -1495,7 +1495,7 @@ export async function handleCredentialGenerationBasedOnFormatDeferred(
       credPayload = createTs12ScaIbanAttestationPayload();
       break;
     case TS12_SCA_USER_VCT:
-      credPayload = createTs12ScaUserAttestationPayload(resolvedServerURL);
+      credPayload = createTs12ScaUserAttestationPayload();
       break;
     case TS12_SCA_CARD_DPC_VCT:
       credPayload = createTs12ScaCardDpcAttestationPayload();

@@ -668,8 +668,10 @@ describe("TS12 payment routes", () => {
 
   let app;
   const originalServerUrl = CONFIG.SERVER_URL;
+  const originalRpUrl = process.env.RP_URL;
 
   before(() => {
+    process.env.RP_URL = "https://bank.example/service";
     CONFIG.SERVER_URL = "https://localhost:3000";
     app = express();
     app.use(express.json());
@@ -678,6 +680,7 @@ describe("TS12 payment routes", () => {
   });
 
   after(() => {
+    if (originalRpUrl === undefined) delete process.env.RP_URL; else process.env.RP_URL = originalRpUrl;
     CONFIG.SERVER_URL = originalServerUrl;
   });
 
@@ -720,6 +723,16 @@ describe("TS12 payment routes", () => {
     expect(sigOnly.body.error_description).to.match(/encryption keys/);
   });
 
+  it("refuses an SCA-User payment request when RP_URL is missing", async () => {
+    const saved = process.env.RP_URL;
+    delete process.env.RP_URL;
+    try {
+      const response = await request(app).post("/ts12/payment/request")
+        .send({ ...validPayment, attestation_type: "sca-user" }).expect(500);
+      expect(JSON.stringify(response.body)).to.include("RP_URL");
+    } finally { process.env.RP_URL = saved; }
+  });
+
   it("stores the selected attestation VCT and returns an encrypted JAR on POST", async function () {
     this.timeout(15000);
 
@@ -733,6 +746,7 @@ describe("TS12 payment routes", () => {
       .expect(200);
 
     expect((await getVPSession(created.body.sessionId)).response_mode).to.equal("direct_post.jwt");
+    expect((await getVPSession(created.body.sessionId)).ts12_rp_url).to.equal(process.env.RP_URL);
     expect(created.body.attestationType).to.equal("sca-user");
     expect(created.body.expectedVct).to.equal(TS12_SCA_USER_VCT);
     expect(created.body.includePid).to.equal(false);

@@ -950,3 +950,22 @@ See [wallet reporting](wallet-reporting.md) for operation and wire format.
 Native Android wallet reporting executions allow four minutes for pairing/testing;
 the native-wallet ITB suite uses millisecond receive timeouts, four-minute polling
 and a one-minute callback margin. Existing executions retain their original expiry.
+
+### SCA-User RP URL audience
+
+Set `RP_URL=https://<bank-presentation-service>` explicitly for SCA-User issuance
+and payment requests. Normal and trust framework flows issue this exact URL in
+credential `aud` and pin it as `ts12_rp_url` in each SCA-User payment session.
+The verifier checks exact audience membership using the verified credential,
+independently of request `client_id`, KB-JWT audience and DC API origin. Missing
+or invalid `RP_URL` prevents SCA-User issuance/request generation. Configuration
+changes do not rewrite an existing session's pinned audience. Existing sessions
+without this binding require a new payment request. The URL must represent the
+issuing organization's own RP service; it is not derived from a hostname,
+certificate hash or organization identifier. Trust framework checks still apply.
+
+The reference wallet-client's URL-to-authenticated-request binding remains
+unresolved. The wallet continues presentation and records a warning in the wallet
+session logs that audience binding was skipped and not validated; the verifier
+still enforces credential audience membership. See the
+[draft CS-12 clarification issue](issues/cs12-sca-user-rp-url-binding.md).

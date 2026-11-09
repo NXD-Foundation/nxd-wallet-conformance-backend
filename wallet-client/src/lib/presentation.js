@@ -526,6 +526,7 @@ async function buildPresentableVpTokenForSelection({
   }
 
   assertTs12ScaPresentationConstraints({
+    log: slog,
     dcqlQuery: payload?.dcql_query,
     stored,
     clientId,
@@ -1156,6 +1157,7 @@ export async function performPresentation(
       throw new Error("Credential not found in wallet cache");
 
     assertTs12ScaPresentationConstraints({
+      log: slog,
       dcqlQuery: payload?.dcql_query,
       stored,
       clientId,
