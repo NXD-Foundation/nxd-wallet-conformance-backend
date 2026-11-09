@@ -4,7 +4,10 @@ Run it with:
 
 ```bash
 npm run test:pre-ship
+npm run test:pre-ship-no-trust
 ```
+
+`test:pre-ship` sends `trustFramework=true` on every issuer request and wallet session. `test:pre-ship-no-trust` runs the same twelve cases with that flag omitted on the issuer and set to `false` on the wallet. `did:web`, `jwk`, and `kid-jwk` stay out of both commands. The wallet profile stays `webuild-cs01` for both.
 
 When port 6379 is closed, the command starts a `redis:7-alpine` container named `pre-ship-redis` on `127.0.0.1:6379` and removes it at the end. An existing Redis on that port is left as it is. With `ISSUER` and `WALLET` unset, the command starts ngrok for ports 3000 and 4000, then starts the issuer and `wallet-client` when those ports are free. Set both variables to use tunnels that are already up:
 
@@ -16,6 +19,7 @@ One case, or a comma-separated list:
 
 ```bash
 npm run test:pre-ship -- --case=VCI-001,VP-001
+npm run test:pre-ship-no-trust -- --case=VCI-001,VP-001
 ```
 
 The command stops the Redis container, issuer, wallet, and ngrok process it started. A case passes when issuer or verifier status is `success`, and a presentation also has `claims`. `did:web` stays out of this run.
@@ -80,7 +84,9 @@ curl -sS -D- "$ISSUER/.well-known/openid-credential-issuer" | head
 ## Shared calls
 
 Use a new UUID for every case. Keep it for the offer, the wallet session,
-the status poll, and the logs.
+the status poll, and the logs. The curls below are `test:pre-ship`. For
+`test:pre-ship-no-trust`, drop `trustFramework` from the issuer query and
+send `"trustFramework": false` on the wallet session.
 
 Issuance offer. Set `PATH` to the row in the table below.
 
@@ -213,7 +219,7 @@ VCI-005 mdoc is the stored mdoc. VCI-008 issues that mdoc type again.
 
 ## Trust stop
 
-Leave `trustFramework=true` on every request. A wallet rejection because
+This applies to `test:pre-ship`. Leave `trustFramework=true` on every request in that command. A wallet rejection because
 `verifier_info` has no `registrar_dataset`, or because WRPRC material is
 missing, is a counterpart stop. Record the wallet error and both logs, and
 stop the remaining presentation cases. That result is not a reason to turn

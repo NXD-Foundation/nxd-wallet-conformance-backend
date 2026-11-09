@@ -16,6 +16,7 @@ import {
 } from "./preShipItbCases.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const trustFramework = !process.argv.includes("--no-trust");
 const CASE_TIMEOUT_MS = 180_000;
 const children = [];
 
@@ -295,7 +296,7 @@ async function runCase(testCase, { issuer, wallet }) {
   const sessionId = randomUUID();
   const started = Date.now();
   try {
-    const created = await requestJson(`${issuer}${testCase.path}?${caseRequest(testCase, sessionId)}`);
+    const created = await requestJson(`${issuer}${testCase.path}?${caseRequest(testCase, sessionId, { trustFramework })}`);
     if (created.httpStatus !== 200 || !created.body?.deepLink) {
       return { id: testCase.id, result: "fail", detail: `offer HTTP ${created.httpStatus}`, sessionId, ms: Date.now() - started };
     }
@@ -322,11 +323,12 @@ async function runCase(testCase, { issuer, wallet }) {
         sessionId,
         issuer,
         pin,
+        trustFramework,
       })),
     });
     if (walletResponse.httpStatus !== 200 || walletResponse.body?.status !== "ok") {
       const text = walletResponse.body?.error_description || walletResponse.body?.error || JSON.stringify(walletResponse.body);
-      const classified = classifyWalletFailure(testCase, text);
+      const classified = classifyWalletFailure(testCase, text, { trustFramework });
       const excerpt = await failureExcerpt(issuer, wallet, sessionId);
       return { id: testCase.id, ...classified, detail: [classified.detail, excerpt].filter(Boolean).join("\n"), sessionId, ms: Date.now() - started };
     }
@@ -346,7 +348,7 @@ async function runCase(testCase, { issuer, wallet }) {
 }
 
 function printResults(results) {
-  console.log("\nPre-ship ITB results");
+  console.log(`\nPre-ship ITB results (${trustFramework ? "trust framework" : "no trust framework"})`);
   for (const result of results) {
     const detail = result.detail ? ` ${result.detail.split("\n")[0]}` : "";
     console.log(`${result.result.padEnd(16)} ${result.id.padEnd(8)} ${result.sessionId || ""} ${result.ms || 0}ms${detail}`);

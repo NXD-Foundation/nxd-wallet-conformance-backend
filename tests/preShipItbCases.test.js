@@ -97,6 +97,23 @@ describe("pre-ship ITB cases", () => {
     expect(judgeVerificationStatus({ status: "success", claims: null }).result).to.equal("fail");
   });
 
+  it("omits trustFramework for the non-trust run of the same cases", () => {
+    const query = caseRequest(CASES.find((entry) => entry.id === "VCI-001"), "session-1", { trustFramework: false });
+    expect(query.get("trustFramework")).to.equal(null);
+    expect(query.get("signatureType")).to.equal("x509");
+    expect(walletSessionBody({
+      deepLink: "openid-credential-offer://example",
+      sessionId: "session-1",
+      issuer: "https://issuer.example",
+      trustFramework: false,
+    }).trustFramework).to.equal(false);
+    expect(classifyWalletFailure(
+      { id: "VP-001", optional: false },
+      "verifier_info is missing registrar_dataset",
+      { trustFramework: false },
+    ).result).to.equal("fail");
+  });
+
   it("classifies a missing registrar dataset as a counterpart stop", () => {
     expect(classifyWalletFailure(
       { id: "VP-001", optional: false },

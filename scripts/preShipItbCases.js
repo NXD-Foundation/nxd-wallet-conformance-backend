@@ -26,11 +26,11 @@ export const CASES = [
   { id: "VCI-008", kind: "issue", path: "/offer-no-code", credentialType: MDOC },
 ];
 
-export function caseRequest(testCase, sessionId) {
+export function caseRequest(testCase, sessionId, { trustFramework = true } = {}) {
   const params = new URLSearchParams();
   params.set("credentialType", testCase.credentialType);
   params.set("sessionId", sessionId);
-  params.set("trustFramework", "true");
+  if (trustFramework) params.set("trustFramework", "true");
   if (testCase.kind === "issue") params.set("signatureType", "x509");
   if (testCase.responseMode) params.set("response_mode", testCase.responseMode);
   if (testCase.invocationScheme) params.set("invocation_scheme", testCase.invocationScheme);
@@ -70,11 +70,11 @@ export function checkInvocationLink({ deepLink, sessionId, issuer, scheme, metho
   return { ok: true };
 }
 
-export function walletSessionBody({ deepLink, sessionId, issuer, pin }) {
+export function walletSessionBody({ deepLink, sessionId, issuer, pin, trustFramework = true }) {
   const body = {
     deepLink,
     sessionId,
-    trustFramework: true,
+    trustFramework,
     issuer,
     verifier: issuer,
   };
@@ -93,12 +93,12 @@ export function judgeVerificationStatus(body) {
   return { result: "fail", detail: body?.reason || body?.status || "missing verification status" };
 }
 
-export function classifyWalletFailure(testCase, text) {
+export function classifyWalletFailure(testCase, text, { trustFramework = true } = {}) {
   const detail = String(text || "wallet request failed");
   if (testCase.optional && UNSUPPORTED_SCHEME.test(detail)) {
     return { result: "skipped", detail };
   }
-  if (COUNTERPART_STOP.test(detail)) {
+  if (trustFramework && COUNTERPART_STOP.test(detail)) {
     return { result: "counterpart-stop", detail };
   }
   return { result: "fail", detail };

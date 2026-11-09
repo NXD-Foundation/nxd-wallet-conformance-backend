@@ -16,6 +16,7 @@
     "test:cs07": "mocha tests/cs07DcApi.test.js tests/cs07SuccessfulFlow.test.js tests/verifierEncryptionKeys.test.js --exit",
     "test:cs07-issuance": "mocha tests/cs07DcApiIssuerClient.test.js tests/cs07DcApiIssuanceRoutes.test.js tests/callerSdJwtPayload.test.js --exit",
     "test:pre-ship": "node scripts/preShipItbFlow.js",
+    "test:pre-ship-no-trust": "node scripts/preShipItbFlow.js --no-trust",
     "fcaf:disposition-template": "node scripts/fcafDispositionRegister.js",
     "dev": "SERVER_URL=https://9748-2a02-85f-ec74-200-91b7-3225-5b2e-ce62.ngrok-free.app node server.js",
     "dc-api:demo": "node clients/dc-api/serve.js",
