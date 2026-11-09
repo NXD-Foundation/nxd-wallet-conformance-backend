@@ -7,7 +7,14 @@ import { getIssuerProfile } from "./issuerProfiles.js";
 export function loadProfileCredentialSigningMaterial(profileId, { certPath, keyPath } = {}) {
   if (!getIssuerProfile(profileId)) throw new Error(`Unknown issuer profile: ${profileId}`);
   const envPrefix = `ISSUER_${profileId.toUpperCase().replaceAll("-", "_")}`;
-  const certificatePath = certPath || process.env[`${envPrefix}_CERT_PATH`] || (profileId === "pid" ? "certs/id-union-pid-certificate.pem" : `certs/pilot-${profileId}-placeholder.pem`);
+  const defaultCertificates = {
+    pid: "certs/id-union-pid-certificate.pem",
+    // Temporary pilot fallback: IdUnion has not issued a generic EAA leaf yet.
+    eaa: "certs/id-union-pid-certificate.pem",
+    "pub-eaa": "certs/idunion/idunon_pub_eaa.pem",
+    qeaa: "certs/idunion/id_union_qeea_prov.pem",
+  };
+  const certificatePath = certPath || process.env[`${envPrefix}_CERT_PATH`] || defaultCertificates[profileId];
   const privateKeyPath = keyPath || process.env[`${envPrefix}_KEY_PATH`] || "certs/dev-i4mlab.aegean.gr.key.pem";
   if (!fs.existsSync(certificatePath) || !fs.existsSync(privateKeyPath)) throw new Error(`Issuer profile ${profileId} signing material unavailable`);
   const certificatePem = fs.readFileSync(certificatePath, "utf8");

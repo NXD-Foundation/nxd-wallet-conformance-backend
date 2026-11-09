@@ -32,10 +32,19 @@ describe("pilot issuer profiles", () => {
     expect(() => assertProfileCredential("unknown", "PhotoID")).to.throw("Unknown issuer profile");
   });
 
-  it("selects the configured role's placeholder and rejects a missing key", () => {
-    const material = loadProfileCredentialSigningMaterial("eaa");
-    const certificate = new X509Certificate(material.certificatePem);
-    expect(certificate.subject).to.include("UAegean");
+  it("selects the configured IdUnion certificate for each role and rejects a missing key", () => {
+    const expectedSerials = {
+      pid: "391F6DEAF83D8589D8930BF2BF9FF403",
+      eaa: "391F6DEAF83D8589D8930BF2BF9FF403",
+      "pub-eaa": "266DC3399B91DF86152AEE5C13BC93C2",
+      qeaa: "040A3FE435ABBD6A498A00580A9C4BFA",
+    };
+    for (const [profile, serial] of Object.entries(expectedSerials)) {
+      const material = loadProfileCredentialSigningMaterial(profile);
+      const certificate = new X509Certificate(material.certificatePem);
+      expect(certificate.serialNumber).to.equal(serial);
+      expect(certificate.subject).to.include("UAegean");
+    }
     expect(() => loadProfileCredentialSigningMaterial("eaa", { keyPath: "/no/such/key" })).to.throw("unavailable");
   });
 
@@ -54,7 +63,7 @@ describe("pilot issuer profiles", () => {
       expect(result.payload.credential_issuer).to.equal(result.payload.sub);
       expect(result.payload.credential_configurations_supported).to.have.property("urn:eu.europa.ec.eudi:pid:1");
       expect(result.payload.credential_configurations_supported).not.to.have.property("PhotoID");
-      expect(cert.serialNumber).to.equal("EF57E241597D6A4453E1829D2F96C0FE");
+      expect(cert.serialNumber).to.equal("391F6DEAF83D8589D8930BF2BF9FF403");
     } finally {
       if (old === undefined) delete process.env.SERVER_URL; else process.env.SERVER_URL = old;
       if (oldEnabled === undefined) delete process.env.ISSUER_PROFILES_ENABLED; else process.env.ISSUER_PROFILES_ENABLED = oldEnabled;

@@ -29,16 +29,19 @@ trust. Unprovisioned roles must fail closed.
 
 Credential signing material is selected by `issuerProfile` on a session, using
 `ISSUER_<PROFILE>_CERT_PATH` and `ISSUER_<PROFILE>_KEY_PATH` (hyphens become
-underscores), defaulting to the corresponding pilot placeholder and existing
-PID key. Missing or mismatched material fails; no other profile is used as a
-fallback. This selector does not authorize a profile or make offers by itself.
+underscores), defaulting to PID for `pid`, PID temporarily for generic `eaa`,
+`certs/idunion/idunon_pub_eaa.pem` for `pub-eaa`, and
+`certs/idunion/id_union_qeea_prov.pem` for `qeaa`. Missing or mismatched
+material fails; no other profile is used as a fallback. This selector does not
+authorize a profile or make offers by itself.
 
 Profile offers bind the selected profile and configuration to their Redis
 session; the credential endpoint checks this binding. The metadata JWT uses
 `ISSUER_<PROFILE>_ACCESS_CERT_PATH` and `ISSUER_<PROFILE>_ACCESS_KEY_PATH`,
-defaulting to the directly listed pilot access certificate and the existing key.
-JSON and JWT metadata advertise only that profile's configurations. This is
-pilot material, not verified role entitlement.
+defaulting to that profile's credential-signing certificate and key. JSON and
+JWT metadata advertise only that profile's configurations. DPC and SCA
+certificates remain reserved and are not silently assigned to generic EAA.
+This is pilot material, not verified role entitlement.
 
 Remaining work: verify profile bindings throughout authorization, token,
 deferred and refresh flows; wallet expected-role enforcement; full end-to-end

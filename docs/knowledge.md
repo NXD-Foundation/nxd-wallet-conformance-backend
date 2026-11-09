@@ -859,6 +859,7 @@ re-entering active protocol directories.
 | [mdoc credential generation](./mdoc-credential-generation.md)                    | How issuer-side ISO 18013-5 mdoc construction maps to OID4VCI                       |
 | [mdoc interop fixes](./mdoc-interop-fixes.md)                                    | Fixed mdoc metadata and wallet-presentation defects, plus porting checks            |
 | [SD-JWT key-binding fixes](./sd-jwt-key-binding-interop.md)                      | Required holder-key continuity between issuance and presentation                    |
+| [Pre-ship ITB flow](./pre-ship-itb-flow.md)                                      | Manual issuer, verifier, and wallet-client run of the CTS v1.1 trust-framework cases |
 
 
 
@@ -922,6 +923,7 @@ profile interpretation, protocol support claim, or documentation location.
 | If you are changing...                                      | Read first                                                                |
 | ----------------------------------------------------------- | ------------------------------------------------------------------------- |
 | Credential offers, PAR, token, proofs, or deferred issuance | CS-01, attestation options, relevant VCI matrix, OpenID4VCI JWT proof `iss` |
+| Pre-ship check of issuer, verifier, and wallet-client | [Pre-ship ITB flow](./pre-ship-itb-flow.md) |
 | CS-10 attestation revocation                                | CS-10, issuer status-list routes, verifier status check, `wallet-client/`    |
 | ITB browser auth handoff (headless wallet `/session`)       | [wallet-client auth handoff](../wallet-client/docs/auth-handoff-itb.md)   |
 | WUA/WIA/KA validation, trust, or status-list publication    | CS-04, Token Status List draft-20, wallet-client publisher, future WUA enforcement |

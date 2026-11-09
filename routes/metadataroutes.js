@@ -137,10 +137,12 @@ metadataRouter.get(
         if (profile) {
           const name = profileId.toUpperCase().replaceAll("-", "_");
           const material = loadProfileCredentialSigningMaterial(profileId, {
-            certPath: process.env[`ISSUER_${name}_ACCESS_CERT_PATH`] || "certs/we-build-wrpac.pem",
-            keyPath: process.env[`ISSUER_${name}_ACCESS_KEY_PATH`] || "certs/dev-i4mlab.aegean.gr.key.pem",
+            // By default, sign metadata with the same IdUnion role certificate
+            // advertised for this issuer profile. Deployments with a distinct
+            // access certificate can override these paths explicitly.
+            certPath: process.env[`ISSUER_${name}_ACCESS_CERT_PATH`] || undefined,
+            keyPath: process.env[`ISSUER_${name}_ACCESS_KEY_PATH`] || undefined,
           });
-          // The pilot access certificate is directly listed as a trust anchor.
           // Configured chains may contain intermediates; omit self-signed roots.
           const x5c = material.x5c.filter((der, index) => {
             if (index === 0) return true;
