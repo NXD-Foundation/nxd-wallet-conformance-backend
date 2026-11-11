@@ -1,5 +1,9 @@
 import { expect } from "chai";
 import crypto from "crypto";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import * as jose from "jose";
 import express from "express";
 import request from "supertest";
@@ -45,6 +49,37 @@ describe("signed Credential Issuer metadata", () => {
       .expect(200);
     expect(response.headers["content-type"]).to.include("application/json");
     expect(response.body.credential_issuer).to.be.a("string");
+  });
+
+  it("publishes the configured metadata WRPAC without adding the legacy verifier CA", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "issuer-metadata-wrpac-"));
+    const p12Path = join(directory, "metadata.p12");
+    const leafPath = join(directory, "leaf.pem");
+    const originalPath = process.env.ISSUER_METADATA_SIGNING_P12_PATH;
+    const app = express();
+    app.use("/", metadataRouter);
+
+    try {
+      const certificate = new crypto.X509Certificate(readFileSync("certs/we-build-wrpac.pem"));
+      writeFileSync(leafPath, certificate.toString());
+      execFileSync("openssl", ["pkcs12", "-export", "-in", leafPath,
+        "-inkey", "certs/dev-i4mlab.aegean.gr.key.pem", "-out", p12Path,
+        "-passout", "env:WEBUILD_P12_PASS"], {
+        env: { ...process.env, WEBUILD_P12_PASS: process.env.WEBUILD_P12_PASSWORD || "webuild" },
+      });
+      process.env.ISSUER_METADATA_SIGNING_P12_PATH = p12Path;
+      const response = await request(app)
+        .get("/.well-known/openid-credential-issuer")
+        .set("Accept", "application/jwt")
+        .expect(200);
+      const { protectedHeader, payload } = await jose.jwtVerify(response.text, certificate.publicKey);
+      expect(protectedHeader.x5c).to.deep.equal([certificate.raw.toString("base64")]);
+      expect(payload.sub).to.equal(payload.credential_issuer);
+    } finally {
+      if (originalPath === undefined) delete process.env.ISSUER_METADATA_SIGNING_P12_PATH;
+      else process.env.ISSUER_METADATA_SIGNING_P12_PATH = originalPath;
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it("does not downgrade JWT metadata requests when signing is unavailable", async () => {

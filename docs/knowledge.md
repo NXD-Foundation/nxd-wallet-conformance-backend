@@ -337,7 +337,9 @@ media types it supports. Every conforming issuer MUST support unsigned
   policy as VP-request signing. Set `WEBUILD_P12_PASSWORD` when the P12 does
   not use the existing `webuild` default and, when the file is not at
   `certs/WE-BUILD-Verifier.p12`, set
-  `ISSUER_METADATA_SIGNING_P12_PATH`. The chain must be trusted by the wallet
+  `ISSUER_METADATA_SIGNING_P12_PATH`. An explicitly configured bundle
+  supplies its own `x5c` chain. The legacy default still uses the verifier CA
+  configuration. The chain must be trusted by the wallet
   as a Wallet Relying Party Access certificate; a successful verifier
   registration alone is not sufficient evidence of that role.
 - OpenID4VCI does not require an OAuth Authorization Server metadata

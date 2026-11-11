@@ -45,8 +45,8 @@ export async function signCredentialIssuerMetadataFromConfiguredP12(metadata) {
   const p12Path = process.env.ISSUER_METADATA_SIGNING_P12_PATH;
   return signCredentialIssuerMetadata(
     metadata,
-    // Match the verifier VP-request signing path: loadVerifierP12 uses the
-    // configured WEBUILD_P12_PASSWORD, or its existing "webuild" default.
-    loadVerifierP12({ p12Path })
+    // An explicit metadata bundle supplies its own chain. The implicit legacy
+    // bundle still uses the verifier CA configuration.
+    loadVerifierP12({ p12Path, appendVerifierCa: !p12Path })
   );
 }

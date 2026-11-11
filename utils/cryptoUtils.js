@@ -134,7 +134,7 @@ function appendCaCertsIfNeeded(certChain, caPemPaths = resolveVerifierCaPemPaths
   return certChain;
 }
 
-export function loadVerifierP12({ p12Path, passphrase } = {}) {
+export function loadVerifierP12({ p12Path, passphrase, appendVerifierCa = true } = {}) {
   const resolvedP12Path = p12Path
     ? (path.isAbsolute(p12Path) ? p12Path : path.resolve(process.cwd(), p12Path))
     : path.resolve(process.cwd(), "certs", "WE-BUILD-Verifier.p12");
@@ -156,13 +156,13 @@ export function loadVerifierP12({ p12Path, passphrase } = {}) {
       `openssl pkcs12 -in "${resolvedP12Path}" -nodes -nocerts -passin env:WEBUILD_P12_PASS`,
       { encoding: "utf8", maxBuffer: 64 * 1024, env: envWithPass }
     );
-    const certChain = appendCaCertsIfNeeded(extractCertificateChain(certPem));
+    const certChain = extractCertificateChain(certPem);
     const privateKey = crypto.createPrivateKey(privateKeyPem);
     const privateKeyPkcs8 = privateKey.export({
       type: "pkcs8",
       format: "pem",
     });
-    return { privateKeyPkcs8, certChain };
+    return { privateKeyPkcs8, certChain: appendVerifierCa ? appendCaCertsIfNeeded(certChain) : certChain };
   } catch (err) {
     throw new Error(
       `Failed to extract cert/key from P12: ${err.message}. Ensure openssl is installed.`

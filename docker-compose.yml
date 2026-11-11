@@ -5,9 +5,18 @@ services:
     container_name: rfc-100
     build: .
     environment:
-      SERVER_URL: https://dss.aegean.gr/rfc-issuer
+      SERVER_URL: ${SERVER_URL:-https://dss.aegean.gr/rfc-issuer}
+      TRUST_WRPAC_KEY_PATH: /run/secrets/rfc-issuer/wrpac.key
+      ISSUER_METADATA_SIGNING_P12_PATH: /run/secrets/rfc-issuer/issuer-metadata.p12
       # DISABLE_SCA_WIA_KA_CHECKS: "true"   # default when unset — skip WIA/KA for SCA payment credentials
       # DISABLE_SCA_WIA_KA_CHECKS: "false"  # restore CS-04 WIA/KA enforcement for sca-iban/user/card-dpc
       # WALTID_DEMO: "true"                 # skip KB-JWT transaction_data_hashes and CS-12 SCA KB claims for walt.id Android demo
     ports:
       - "3000:3000"
+    volumes:
+      - type: bind
+        source: ${RFC_ISSUER_SECRETS_DIR:-./secrets}
+        target: /run/secrets/rfc-issuer
+        read_only: true
+        bind:
+          create_host_path: false
