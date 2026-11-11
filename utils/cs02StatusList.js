@@ -114,18 +114,10 @@ export function validateCs02StatusListReference(status, options = { strictMissin
 
   const statusList = status.status_list;
   if (statusList == null) {
-    if (options.strictMissingStatus) {
-      throw new Cs02StatusListError(
-        "Credential status claim is missing status_list",
-        "invalid_credential",
-      );
-    }
-    return {
-      ok: true,
-      present: false,
-      statusState: "absent",
-      enforced: false,
-    };
+    throw new Cs02StatusListError(
+      "Credential status claim is missing status_list",
+      "invalid_credential",
+    );
   }
 
   if (typeof statusList !== "object" || Array.isArray(statusList)) {

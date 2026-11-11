@@ -666,6 +666,37 @@ describe("CS-02 verifier response validation (Phase 4)", () => {
       }
     });
 
+    it("rejects an SD-JWT presentation with an incomplete status claim", async () => {
+      const keys = await keyMaterial();
+      const sdJwt = await buildSdJwtPresentation({
+        ...keys,
+        issuerPayload: { status: { status_type: "revocation" } },
+      });
+
+      try {
+        await validateCs02SdJwtPresentation({
+          sdJwt,
+          sessionNonce: "nonce-1",
+          clientId: "x509_san_dns:verifier.example",
+          credQuery: {
+            id: "cmwallet",
+            format: "dc+sd-jwt",
+            meta: { vct_values: ["test"] },
+            claims: [{ path: ["family_name"] }],
+          },
+          options: {
+            strict: true,
+            issuerVerificationJwk: keys.issuerPublicJwk,
+          },
+        });
+        expect.fail("expected an incomplete status claim to be rejected");
+      } catch (error) {
+        expect(error).to.be.instanceOf(Cs02VerifierResponseError);
+        expect(error.errorCode).to.equal("invalid_credential");
+        expect(error.message).to.match(/missing status_list/);
+      }
+    });
+
     it("rejects missing status through the verifier SD-JWT path when strict status is enabled", async () => {
       const keys = await keyMaterial();
       const sdJwt = await buildSdJwtPresentation(keys);

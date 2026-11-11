@@ -28,6 +28,12 @@ describe("CS-02 status-list reference validation", () => {
     ).to.throw(Cs02StatusListError, /missing required status/);
   });
 
+  it("rejects a present status claim without a status_list reference", () => {
+    expect(() =>
+      validateCs02StatusListReference({ status_type: "revocation" }, { strictMissingStatus: false }),
+    ).to.throw(Cs02StatusListError, /missing status_list/);
+  });
+
   it("rejects malformed status_list idx", () => {
     expect(() =>
       validateCs02StatusListReference(
