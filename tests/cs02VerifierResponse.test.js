@@ -2,6 +2,13 @@ import { expect } from "chai";
 import { encode } from "cbor-x";
 import * as jose from "jose";
 import { createHash } from "crypto";
+import { resetCredentialStatusCacheForTests } from "../utils/cs02StatusList.js";
+import {
+  installStatusListTestHooks,
+  resetStatusListTestHooks,
+  signStatusListToken,
+  stubStatusListFetch,
+} from "./helpers/wuaStatusListFixtures.js";
 import {
   validateCs02EncryptedAuthorizationResponse,
   Cs02VerifierResponseError,
@@ -559,46 +566,104 @@ describe("CS-02 verifier response validation (Phase 4)", () => {
       expect(result.credentialStatus).to.include({
         statusState: "absent",
         enforced: false,
-        placeholder: true,
       });
     });
 
-    it("invokes the status-list placeholder for SD-JWT presentations", async () => {
+    it("rejects an unexpired SD-JWT presentation whose status bit is INVALID", async () => {
       const keys = await keyMaterial();
+      const uri = "https://issuer.example/status-lists/credentials/list-1";
+      const issuerPrivateKey = await jose.importJWK(keys.issuerPrivateJwk, "ES256");
+      const token = await signStatusListToken({
+        privateKey: issuerPrivateKey,
+        uri,
+        statuses: [0, 0, 0, 1],
+        ttl: 120,
+      });
+      installStatusListTestHooks({ fetchImpl: stubStatusListFetch(token) });
       const sdJwt = await buildSdJwtPresentation({
         ...keys,
         issuerPayload: {
-          status: { status_list: { idx: 7, uri: "https://issuer.example/status/1" } },
+          status: { status_list: { idx: 3, uri } },
         },
       });
 
-      const result = await validateCs02SdJwtPresentation({
-        sdJwt,
-        sessionNonce: "nonce-1",
-        clientId: "x509_san_dns:verifier.example",
-        credQuery: {
-          id: "cmwallet",
-          format: "dc+sd-jwt",
-          meta: { vct_values: ["test"] },
-          claims: [{ path: ["family_name"] }],
-        },
-        options: {
-          strict: true,
-          issuerVerificationJwk: keys.issuerPublicJwk,
-          trustPolicyOptions: { strictStatus: false, hasTrustRegistry: false },
+      try {
+        await validateCs02SdJwtPresentation({
+          sdJwt,
+          sessionNonce: "nonce-1",
+          clientId: "x509_san_dns:verifier.example",
+          credQuery: {
+            id: "cmwallet",
+            format: "dc+sd-jwt",
+            meta: { vct_values: ["test"] },
+            claims: [{ path: ["family_name"] }],
+          },
+          options: {
+            strict: true,
+            issuerVerificationJwk: keys.issuerPublicJwk,
+          },
+        });
+        expect.fail("expected a revoked credential to be rejected");
+      } catch (error) {
+        expect(error).to.be.instanceOf(Cs02VerifierResponseError);
+        expect(error.errorCode).to.equal("invalid_credential");
+        expect(error.statusState).to.equal("revoked");
+      } finally {
+        resetCredentialStatusCacheForTests();
+        resetStatusListTestHooks();
+      }
+    });
+
+    it("accepts an SD-JWT presentation whose status bit is VALID", async () => {
+      const keys = await keyMaterial();
+      const uri = "https://issuer.example/status-lists/credentials/list-valid";
+      const issuerPrivateKey = await jose.importJWK(keys.issuerPrivateJwk, "ES256");
+      const token = await signStatusListToken({
+        privateKey: issuerPrivateKey,
+        uri,
+        statuses: Array.from({ length: 8 }, () => 0),
+        ttl: 120,
+      });
+      installStatusListTestHooks({ fetchImpl: stubStatusListFetch(token) });
+      const sdJwt = await buildSdJwtPresentation({
+        ...keys,
+        issuerPayload: {
+          status: { status_list: { idx: 7, uri } },
         },
       });
 
-      expect(result.credentialStatus).to.include({
-        statusState: "structurally_valid_placeholder",
-        enforced: false,
-        placeholder: true,
-        idx: 7,
-      });
-      expect(result.credentialStatus.trustPolicy).to.deep.equal({
-        hasTrustRegistry: false,
-        strictStatus: false,
-      });
+      try {
+        const result = await validateCs02SdJwtPresentation({
+          sdJwt,
+          sessionNonce: "nonce-1",
+          clientId: "x509_san_dns:verifier.example",
+          credQuery: {
+            id: "cmwallet",
+            format: "dc+sd-jwt",
+            meta: { vct_values: ["test"] },
+            claims: [{ path: ["family_name"] }],
+          },
+          options: {
+            strict: true,
+            issuerVerificationJwk: keys.issuerPublicJwk,
+            trustPolicyOptions: { strictStatus: false, hasTrustRegistry: false },
+          },
+        });
+
+        expect(result.credentialStatus).to.include({
+          statusState: "valid",
+          enforced: true,
+          idx: 7,
+          fromCache: false,
+        });
+        expect(result.credentialStatus.trustPolicy).to.deep.equal({
+          hasTrustRegistry: false,
+          strictStatus: false,
+        });
+      } finally {
+        resetCredentialStatusCacheForTests();
+        resetStatusListTestHooks();
+      }
     });
 
     it("rejects missing status through the verifier SD-JWT path when strict status is enabled", async () => {

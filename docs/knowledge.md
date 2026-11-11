@@ -384,6 +384,7 @@ Presentation Exchange paths still exist but are not the current baseline.
 In particular, state/nonce checks, DCQL response shape, transaction-data
 bindings, mdoc claim matching, and SD-JWT key binding each have explicit
 enforcement paths.
+- A presented `dc+sd-jwt` or `vc+sd-jwt` with a cleartext top-level `status.status_list` is checked with the same key that verified that credential. The verifier uses the shared Token Status List client: HTTPS, timeout, response-size limit, and private-address rejection. `bits` must be 1 and the value at `idx` must be VALID (`0`). An INVALID bit, a stale list, or an unavailable list rejects the presentation. The reason is `revoked`, `stale`, or `status_unavailable` on the verifier error and in the VP session log. A verified list is cached in the verifier process until the earlier of `exp`, fetch time plus `ttl` (60 seconds when `ttl` is absent), and five minutes. A `status` claim that arrives as a selective disclosure is rejected. A credential with no `status` claim is accepted unless `CS02_STRICT_STATUS_VALIDATION=true`. `mso_mdoc` presentations do not use this check.
 - Strict inbound verifier `client_metadata` may list additional SD-JWT and
 KB-JWT algorithms alongside the CS-02 profile set (OpenID4VP Appendix B.3.4).
 The wallet accepts the request when a profile algorithm is present in each

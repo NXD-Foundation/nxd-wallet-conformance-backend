@@ -8,7 +8,8 @@ import { performPresentation, resolveDeepLinkFromEndpoint } from "./lib/presenta
 import { storeWalletCredentialByType, getWalletCredentialByType, walletRedisClient, getWalletLogs, getGlobalLogs } from "./lib/cache.js";
 import { buildReissuanceBinding, runRefreshTokenReissuance } from "./lib/reissuance.js";
 import { validateCs02CredentialStatusList } from "../../utils/cs02StatusList.js";
-import { jwtVerify, decodeJwt, decodeProtectedHeader, createLocalJWKSet, importJWK, importX509 } from "jose";
+import { jwtVerify, decodeJwt, decodeProtectedHeader, createLocalJWKSet, importJWK, importX509, exportJWK } from "jose";
+import { publicJwkOnly } from "../../utils/wuaStatusListVerifier.js";
 import { decodeSdJwt, getClaims } from "@sd-jwt/decode";
 import { digest } from "@sd-jwt/crypto-nodejs";
 import { verifyReceivedMdlToken } from "../utils/mdlVerification.js";
@@ -2065,7 +2066,7 @@ async function validateAndStoreCredential({ configurationId, credential, issuerM
       console.log("[validate] detected SD-JWT format (contains '~')"); 
       try { slog("[validate] validating SD-JWT", { detectedFormat }); } catch {}
       const verified = await validateSdJwt({ sdJwt: token, issuerMeta, configurationId, expectedCNonce: metadata?.c_nonce, authorizationServerMeta: authorizationServerMeta || issuerMeta._authorizationServerMeta }, logSessionId);
-      await validateCs02CredentialStatusList(token, { strictMissingStatus: false, enforceStatus: true, jwksUri: issuerMeta?.jwks_uri, trustPolicyOptions: { skipStatusFetch: false } });
+      await validateCs02CredentialStatusList(token, { strictMissingStatus: false, verificationJwk: verified.verificationJwk });
       const scopeEvidence = await resolveIssuerScopeEvidence({ sessionId: logSessionId, issuerMetadata: issuerMeta });
       await enforceIssuedCredentialTrust({ sessionId: logSessionId, payload: verified.payload, header: verified.header, format: detectedFormat, vct: verified.payload?.vct, doctype: detectedDoctype, scopeEvidence, trustEvidenceBound: verified.x5cSignatureVerified });
     } else if (typeof token === 'string' && token.split('.').length >= 3) {
@@ -2235,6 +2236,7 @@ async function validateSdJwt({ sdJwt, issuerMeta, configurationId, expectedCNonc
   try { hdr = decodeProtectedHeader(jws); } catch {}
   let signatureVerified = false;
   let x5cSignatureVerified = false;
+  let issuerVerificationJwk = null;
   // DID-based signature verification (did:web, did:jwk)
   if ((hdr.kid && hdr.kid.startsWith('did:')) || (decoded.jwt.payload?.iss && String(decoded.jwt.payload.iss).startsWith('did:'))) {
     try {
@@ -2257,6 +2259,7 @@ async function validateSdJwt({ sdJwt, issuerMeta, configurationId, expectedCNonc
       console.log("[sd-jwt] JWS signature verified via x5c certificate"); try { slog("[sd-jwt] x5c signature verified"); } catch {}
       signatureVerified = true;
       x5cSignatureVerified = true;
+      issuerVerificationJwk = publicJwkOnly(await exportJWK(certKey));
     } catch (e) {
       console.warn("[sd-jwt] x5c certificate verification failed:", e?.message || e); try { slog("[sd-jwt] x5c verification failed", { error: e?.message || String(e) }); } catch {}
     }
@@ -2323,6 +2326,11 @@ async function validateSdJwt({ sdJwt, issuerMeta, configurationId, expectedCNonc
           await jwtVerify(jws, JWKS, { clockTolerance: 300 });
           console.log("[sd-jwt] JWS signature verified"); try { slog("[sd-jwt] JWS signature verified"); } catch {}
           signatureVerified = true;
+          const resolvedKeys = Array.isArray(jwks.keys) ? jwks.keys : [];
+          const matchedKey = hdr.kid
+            ? resolvedKeys.find((key) => key.kid === hdr.kid)
+            : resolvedKeys.find((key) => !key.use || key.use === "sig");
+          issuerVerificationJwk = publicJwkOnly(matchedKey);
         } catch (e) {
           jwksVerificationError = e?.message || String(e);
           console.error("[sd-jwt] JWS signature verification failed with JWKS resolver:", e?.message || e);
@@ -2349,6 +2357,7 @@ async function validateSdJwt({ sdJwt, issuerMeta, configurationId, expectedCNonc
                 await jwtVerify(jws, key, { clockTolerance: 300 });
                 console.log(`[sd-jwt] Verified with key[${idx}]`); try { slog(`[sd-jwt] verified with key ${idx}`); } catch {}
                 verified = true;
+                issuerVerificationJwk = publicJwkOnly(jwk);
                 break;
               } catch (err) {
                 const errMsg = err?.message || String(err);
@@ -2437,7 +2446,7 @@ async function validateSdJwt({ sdJwt, issuerMeta, configurationId, expectedCNonc
     configurationId,
     formatHint: "sd-jwt"
   });
-  return { payload: decoded.jwt.payload, header: hdr, x5cSignatureVerified };
+  return { payload: decoded.jwt.payload, header: hdr, x5cSignatureVerified, verificationJwk: issuerVerificationJwk };
 }
 
 async function validateJwtVc({ jwtVc, issuerMeta, apiBase, configurationId, publicJwk }, logSessionId) {

@@ -14,13 +14,12 @@ function sdJwtWithPayload(payload) {
   return `${b64Json({ alg: "ES256", typ: "dc+sd-jwt" })}.${b64Json(payload)}.sig~kb.jwt.part`;
 }
 
-describe("CS-02 status-list validation (Phase 5 placeholder)", () => {
+describe("CS-02 status-list reference validation", () => {
   it("allows missing status by default", () => {
     const result = validateCs02StatusListReference(undefined, { strictMissingStatus: false });
     expect(result.present).to.equal(false);
     expect(result.statusState).to.equal("absent");
     expect(result.enforced).to.equal(false);
-    expect(result.placeholder).to.equal(true);
   });
 
   it("rejects missing status when CS02_STRICT_STATUS_VALIDATION is enabled", () => {
@@ -53,15 +52,11 @@ describe("CS-02 status-list validation (Phase 5 placeholder)", () => {
       { strictMissingStatus: false },
     );
     expect(result.present).to.equal(true);
-    expect(result.statusState).to.equal("structurally_valid_placeholder");
-    expect(result.enforced).to.equal(false);
     expect(result.idx).to.equal(42);
-    expect(result.todos).to.be.an("array").that.is.not.empty;
-    expect(result.todos.join(" ")).to.match(/trusted status-list issuers/);
-    expect(result.todos.join(" ")).to.match(/maximum response size/);
+    expect(result.uri).to.equal("https://issuer.example/status/1");
   });
 
-  it("decodes issuer payload from SD-JWT and validates status placeholder", async () => {
+  it("rejects a present status reference when the credential issuer key is missing", async () => {
     const sdJwt = sdJwtWithPayload({
       iss: "https://issuer.example",
       status: { status_list: { idx: 1, uri: "https://issuer.example/status/1" } },
@@ -69,11 +64,13 @@ describe("CS-02 status-list validation (Phase 5 placeholder)", () => {
     const payload = decodeSdJwtIssuerPayload(sdJwt);
     expect(payload.iss).to.equal("https://issuer.example");
 
-    const result = await validateCs02CredentialStatusList(sdJwt, {});
-    expect(result.present).to.equal(true);
-    expect(result.statusState).to.equal("structurally_valid_placeholder");
-    expect(result.placeholder).to.equal(true);
-    expect(result.trustPolicy.strictStatus).to.equal(false);
+    try {
+      await validateCs02CredentialStatusList(sdJwt, {});
+      expect.fail("expected status validation to require the issuer key");
+    } catch (error) {
+      expect(error).to.be.instanceOf(Cs02StatusListError);
+      expect(error.statusState).to.equal("status_unavailable");
+    }
   });
 
   it("uses trust-policy strictStatus for missing status decisions", async () => {
@@ -104,25 +101,6 @@ describe("CS-02 status-list validation (Phase 5 placeholder)", () => {
       expect(error).to.be.instanceOf(Cs02StatusListError);
       expect(error.message).to.match(/missing required status/);
     }
-  });
-
-  it("logs placeholder decisions without treating them as enforced status proof", async () => {
-    const logs = [];
-    const sdJwt = sdJwtWithPayload({
-      iss: "https://issuer.example",
-      status: { status_list: { idx: 1, uri: "https://issuer.example/status/1" } },
-    });
-
-    const result = await validateCs02CredentialStatusList(sdJwt, {
-      trustPolicyOptions: { strictStatus: false, hasTrustRegistry: false },
-      log: (...args) => logs.push(args),
-    });
-
-    expect(result.enforced).to.equal(false);
-    expect(logs).to.have.length(1);
-    expect(logs[0][0]).to.equal("[CS02] status-list placeholder decision");
-    expect(logs[0][1].level).to.equal("debug");
-    expect(logs[0][1].statusState).to.equal("structurally_valid_placeholder");
   });
 
 });

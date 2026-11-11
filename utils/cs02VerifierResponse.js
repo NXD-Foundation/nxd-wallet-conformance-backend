@@ -5,6 +5,7 @@
 import {
   decodeProtectedHeader,
   decodeJwt,
+  exportJWK,
   importJWK,
   importX509,
   jwtVerify,
@@ -17,6 +18,7 @@ import {
 } from "./sdJwtKeyBinding.js";
 import { isWaltidDemoMode, resolveVerifierCs02Options } from "./cs02VerifierRequest.js";
 import { validateCs02CredentialStatusList, Cs02StatusListError } from "./cs02StatusList.js";
+import { publicJwkOnly } from "./wuaStatusListVerifier.js";
 import {
   validateCs02IssuerTrust,
   resolveCs02TrustPolicyOptions,
@@ -1007,6 +1009,7 @@ export async function validateCs02SdJwtIssuerAuthenticity({
     placeholder: true,
     reason: "no issuer verification key source configured",
   };
+  let verificationJwk = null;
   if (verificationKey) {
     try {
       await jwtVerify(issuerJwt, verificationKey, { clockTolerance: options.clockTolerance ?? 300 });
@@ -1016,6 +1019,7 @@ export async function validateCs02SdJwtIssuerAuthenticity({
         "invalid_credential",
       );
     }
+    verificationJwk = publicJwkOnly(await exportJWK(verificationKey));
     issuerSignature = {
       verified: true,
       enforced: true,
@@ -1060,6 +1064,7 @@ export async function validateCs02SdJwtIssuerAuthenticity({
     claims: parsedClaims.claims,
     disclosedClaimNames: Object.keys(parsedClaims.disclosureKeymap || {}),
     issuerSignature,
+    verificationJwk,
   };
 }
 
@@ -1153,12 +1158,13 @@ export async function validateCs02SdJwtPresentation({
     credentialStatus = await validateCs02CredentialStatusList(sdJwt, {
       env: context.env || options.env,
       trustPolicyOptions,
-      enforceStatus: String((context.env || options.env || process.env).CS10_STATUS_ENFORCEMENT || "").toLowerCase() === "true",
-      log: context.log || options.log,
+      verificationJwk: issuerAuthenticity.verificationJwk,
     });
   } catch (error) {
     if (error instanceof Cs02StatusListError) {
-      throw new Cs02VerifierResponseError(error.message, error.errorCode);
+      const statusError = new Cs02VerifierResponseError(error.message, error.errorCode);
+      statusError.statusState = error.statusState;
+      throw statusError;
     }
     throw error;
   }

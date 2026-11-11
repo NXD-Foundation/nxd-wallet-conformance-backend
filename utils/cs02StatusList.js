@@ -1,14 +1,23 @@
 /**
- * WE BUILD CS-02 placeholder status-list validation for SD-JWT-VC credentials.
+ * Verifier-side credential revocation check for a cleartext SD-JWT `status` claim.
  *
- * Future strict behavior (once trust framework exists):
- * - reject missing status when CS02_STRICT_STATUS_VALIDATION=true
- * - reject malformed, suspended, or revoked credentials after fetching status-list tokens
+ * A present `status.status_list` is fetched and verified with the same key that
+ * verified the credential. Lists are cached in this process until the freshness
+ * deadline. A missing status claim is accepted unless strict status validation
+ * is enabled. A selectively disclosed `status` claim is rejected.
  */
 
-import { decodeJwt, errors as joseErrors, importJWK, jwtVerify } from "jose";
-import { readCredentialStatusToken } from "./credentialStatusList.js";
+import { decodeJwt } from "jose";
 import { CredentialStatusFreshnessError, evaluateCredentialStatusFreshness } from "./credentialStatusFreshness.js";
+import {
+  evaluateWuaStatusList,
+  publicJwkOnly,
+  WuaStatusListValidationError,
+} from "./wuaStatusListVerifier.js";
+
+const CREDENTIAL_STATUS_BITS = new Set([1]);
+const statusListCache = new Map();
+const statusListFetches = new Map();
 
 export class Cs02StatusListError extends Error {
   constructor(message, errorCode = "invalid_credential", statusState = "structurally_invalid") {
@@ -44,20 +53,13 @@ function normalizeStatusListOptions(optionsOrEnv = process.env) {
   return {
     strictMissingStatus,
     trustPolicyOptions,
-    enforceStatus: input.enforceStatus === true,
-    jwksUri: typeof input.jwksUri === "string" ? input.jwksUri : undefined,
-    log: typeof input.log === "function" ? input.log : () => {},
+    verificationJwk: publicJwkOnly(input.verificationJwk),
   };
 }
 
-function logStatusPlaceholder(log, message, details) {
-  try {
-    log?.("[CS02] status-list placeholder decision", {
-      level: "debug",
-      message,
-      ...details,
-    });
-  } catch {}
+export function resetCredentialStatusCacheForTests() {
+  statusListCache.clear();
+  statusListFetches.clear();
 }
 
 export function decodeSdJwtIssuerPayload(sdJwt) {
@@ -69,6 +71,25 @@ export function decodeSdJwtIssuerPayload(sdJwt) {
   } catch {
     return null;
   }
+}
+
+function sdJwtDisclosureParts(sdJwt) {
+  const tail = String(sdJwt || "").split("~").slice(1).filter((part) => part.length > 0);
+  const last = tail[tail.length - 1];
+  const hasKeyBinding = Boolean(last && last.split(".").length === 3);
+  return hasKeyBinding ? tail.slice(0, -1) : tail;
+}
+
+export function sdJwtDisclosesStatus(sdJwt) {
+  for (const encoded of sdJwtDisclosureParts(sdJwt)) {
+    try {
+      const decoded = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
+      if (Array.isArray(decoded) && decoded[1] === "status") return true;
+    } catch {
+      // A malformed disclosure is rejected by SD-JWT claim reconstruction.
+    }
+  }
+  return false;
 }
 
 export function validateCs02StatusListReference(status, options = { strictMissingStatus: false }) {
@@ -84,9 +105,6 @@ export function validateCs02StatusListReference(status, options = { strictMissin
       present: false,
       statusState: "absent",
       enforced: false,
-      placeholder: true,
-      futureBehavior:
-        "When CS02_STRICT_STATUS_VALIDATION=true and trust framework exists, missing status will be rejected.",
     };
   }
 
@@ -107,9 +125,6 @@ export function validateCs02StatusListReference(status, options = { strictMissin
       present: false,
       statusState: "absent",
       enforced: false,
-      placeholder: true,
-      futureBehavior:
-        "When CS02_STRICT_STATUS_VALIDATION=true and trust framework exists, missing status_list will be rejected.",
     };
   }
 
@@ -144,94 +159,163 @@ export function validateCs02StatusListReference(status, options = { strictMissin
   return {
     ok: true,
     present: true,
-    statusState: "structurally_valid_placeholder",
-    enforced: false,
     idx,
     uri,
-    placeholder: true,
-    todos: [
-      "Load trusted status-list issuers from trust framework configuration",
-      "Define allowed status-list JWT algorithms",
-      "Fetch status-list token from uri with cache/timeout/max-size policy",
-      "Apply fetch timeout and maximum response size limits",
-      "Verify status-list token signature against trusted issuers",
-      "Decode bitstring and evaluate revoked/suspended bit for idx",
-    ],
   };
 }
 
-async function enforceFetchedCredentialStatus(reference, credentialIssuer, options) {
-  const issuer = typeof credentialIssuer === "string" ? credentialIssuer.replace(/\/$/, "") : null;
+function cacheKey(uri, verificationJwk) {
+  return `${uri}\n${JSON.stringify(verificationJwk)}`;
+}
+
+function statusFailure(error) {
+  if (error instanceof Cs02StatusListError) return error;
+  if (error instanceof CredentialStatusFreshnessError) {
+    return new Cs02StatusListError(
+      error.message,
+      "invalid_credential",
+      error.reason === "stale" ? "stale" : "status_unavailable",
+    );
+  }
+  if (error instanceof WuaStatusListValidationError && error.reason === "expired") {
+    return new Cs02StatusListError(error.message, "invalid_credential", "stale");
+  }
+  const message = error?.message || "credential status validation failed";
+  return new Cs02StatusListError(
+    `Unable to validate credential status: ${message}`,
+    "invalid_credential",
+    "status_unavailable",
+  );
+}
+
+function rejectionForStatus(status) {
+  if (status === 0) return null;
+  if (status === 1) {
+    return new Cs02StatusListError("Credential status is INVALID", "invalid_credential", "revoked");
+  }
+  return new Cs02StatusListError("Credential status is not VALID", "invalid_credential", "invalid");
+}
+
+function rememberedList(reference, verificationJwk, now) {
+  const key = cacheKey(reference.uri, verificationJwk);
+  const cached = statusListCache.get(key);
+  if (!cached || cached.cacheUntil <= now) return null;
+  return { key, cached };
+}
+
+function credentialStatusRequest(reference, verificationJwk, jwt) {
+  return {
+    uri: reference.uri,
+    idx: reference.idx,
+    verificationJwk,
+    kind: "credential",
+    allowHeaderKey: false,
+    allowedBits: CREDENTIAL_STATUS_BITS,
+    acceptInvalidStatus: true,
+    ...(jwt ? { jwt } : {}),
+  };
+}
+
+async function readCachedStatus(reference, verificationJwk, cached) {
+  const evaluated = await evaluateWuaStatusList(credentialStatusRequest(reference, verificationJwk, cached.jwt));
+  return { evaluated, fromCache: true, freshness: cached.freshness };
+}
+
+async function fetchCredentialStatus(reference, verificationJwk, now) {
+  const key = cacheKey(reference.uri, verificationJwk);
+  const pending = statusListFetches.get(key);
+  if (pending) {
+    await pending;
+    const cached = statusListCache.get(key);
+    if (!cached || cached.cacheUntil <= now) {
+      throw new Cs02StatusListError(
+        "Unable to validate credential status: status list was not cached",
+        "invalid_credential",
+        "status_unavailable",
+      );
+    }
+    return readCachedStatus(reference, verificationJwk, cached);
+  }
+
+  let resolveFetch;
+  let rejectFetch;
+  const gate = new Promise((resolve, reject) => {
+    resolveFetch = resolve;
+    rejectFetch = reject;
+  });
+  gate.catch(() => {});
+  statusListFetches.set(key, gate);
   try {
-    const response = await fetch(reference.uri, { headers: { Accept: "application/statuslist+jwt" }, redirect: "error" });
-    if (!response.ok) throw new Error(`status list HTTP ${response.status}`);
-    const token = await response.text();
-    const header = JSON.parse(Buffer.from(token.split(".")[0], "base64url").toString("utf8"));
-    if (header.typ !== "statuslist+jwt") throw new Error("invalid status-list typ");
-    if (header.alg !== "ES256") throw new Error("unsupported status-list algorithm");
-    if (!issuer) throw new Error("credential issuer is missing");
-    const jwksUri = options.jwksUri || `${issuer}/jwks`;
-    const jwksResponse = await fetch(jwksUri, { headers: { Accept: "application/json" }, redirect: "error" });
-    if (!jwksResponse.ok) throw new Error(`issuer JWKS HTTP ${jwksResponse.status}`);
-    const jwks = await jwksResponse.json();
-    const jwk = Array.isArray(jwks?.keys) && (jwks.keys.find((key) => key.kid === header.kid) || jwks.keys.find((key) => key.use === "sig") || jwks.keys[0]);
-    if (!jwk) throw new Error("issuer JWKS has no signing key");
-    await jwtVerify(token, await importJWK(jwk, "ES256"), { algorithms: ["ES256"] });
-    const result = readCredentialStatusToken(token, reference.idx);
-    if (result.payload.sub !== reference.uri) throw new Error("status-list subject mismatch");
-    const now = Math.floor(Date.now() / 1000);
+    const evaluated = await evaluateWuaStatusList(credentialStatusRequest(reference, verificationJwk));
     const freshness = evaluateCredentialStatusFreshness({
-      iat: result.payload.iat,
-      exp: result.payload.exp,
-      ttl: result.payload.ttl,
+      iat: evaluated.iat,
+      exp: evaluated.exp,
+      ttl: evaluated.ttl,
       fetchedAt: now,
       now,
     });
-    if (result.status !== 0) throw new Cs02StatusListError("Credential status is INVALID", "invalid_credential", "revoked");
-    return {
-      ...reference,
-      statusState: "valid",
-      enforced: true,
-      issuer,
-      freshness,
-    };
+    const loaded = { evaluated, fromCache: false, freshness };
+    statusListCache.set(key, { jwt: evaluated.jwt, cacheUntil: freshness.cacheUntil, freshness });
+    resolveFetch(loaded);
+    return loaded;
   } catch (error) {
-    if (error instanceof Cs02StatusListError) throw error;
-    if (error instanceof CredentialStatusFreshnessError) {
-      throw new Cs02StatusListError(error.message, "invalid_credential", error.reason === "stale" ? "stale" : "malformed");
-    }
-    if (error instanceof joseErrors.JWTExpired) {
-      throw new Cs02StatusListError(error.message, "invalid_credential", "stale");
-    }
-    throw new Cs02StatusListError(`Unable to validate credential status: ${error.message}`, "invalid_credential", "status_unavailable");
+    rejectFetch(error);
+    throw error;
+  } finally {
+    statusListFetches.delete(key);
   }
+}
+
+async function enforceCredentialStatus(reference, verificationJwk) {
+  if (!verificationJwk) {
+    throw new Cs02StatusListError(
+      "Credential status cannot be verified without the credential issuer key",
+      "invalid_credential",
+      "status_unavailable",
+    );
+  }
+  const now = Math.floor(Date.now() / 1000);
+  const remembered = rememberedList(reference, verificationJwk, now);
+  const loaded = remembered
+    ? await readCachedStatus(reference, verificationJwk, remembered.cached)
+    : await fetchCredentialStatus(reference, verificationJwk, now);
+  const rejected = rejectionForStatus(loaded.evaluated.status);
+  if (rejected) throw rejected;
+  return {
+    ...reference,
+    statusState: "valid",
+    enforced: true,
+    fromCache: loaded.fromCache,
+    freshness: loaded.freshness,
+  };
 }
 
 export async function validateCs02CredentialStatusList(sdJwt, optionsOrEnv = process.env) {
   const options = normalizeStatusListOptions(optionsOrEnv);
+  if (sdJwtDisclosesStatus(sdJwt)) {
+    throw new Cs02StatusListError(
+      "Credential status claim must be in the issuer-signed payload",
+      "invalid_credential",
+    );
+  }
   const payload = decodeSdJwtIssuerPayload(sdJwt);
   if (!payload) {
     throw new Cs02StatusListError("Unable to decode SD-JWT issuer payload", "invalid_credential");
   }
 
   const reference = validateCs02StatusListReference(payload.status, options);
-  if (reference.placeholder && options.enforceStatus !== true) {
-    logStatusPlaceholder(options.log, "status-list trust framework is not configured", {
-      issuer: typeof payload.iss === "string" ? payload.iss : null,
-      statusState: reference.statusState,
-      present: reference.present,
-      trustEnforced: options.trustPolicyOptions?.hasTrustRegistry === true,
-    });
-  }
-  if (reference.present && options.trustPolicyOptions?.skipStatusFetch !== true && options.enforceStatus === true) {
-    return enforceFetchedCredentialStatus(reference, payload.iss, options);
-  }
-  return {
-    ...reference,
-    issuer: typeof payload.iss === "string" ? payload.iss : null,
-    trustPolicy: {
-      hasTrustRegistry: options.trustPolicyOptions?.hasTrustRegistry === true,
-      strictStatus: options.strictMissingStatus === true,
-    },
+  const issuer = typeof payload.iss === "string" ? payload.iss : null;
+  const trustPolicy = {
+    hasTrustRegistry: options.trustPolicyOptions?.hasTrustRegistry === true,
+    strictStatus: options.strictMissingStatus === true,
   };
+  if (!reference.present) {
+    return { ...reference, issuer, trustPolicy };
+  }
+  try {
+    const enforced = await enforceCredentialStatus(reference, options.verificationJwk);
+    return { ...enforced, issuer, trustPolicy };
+  } catch (error) {
+    throw statusFailure(error);
+  }
 }

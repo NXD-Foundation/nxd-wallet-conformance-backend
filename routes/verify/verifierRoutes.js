@@ -199,6 +199,7 @@ async function runCs02SdJwtVpTokenChecks(sessionId, vpSession, vpTokenObject, cs
       await logError(sessionId, "CS-02 SD-JWT presentation validation failed", {
         error: error.message,
         errorCode: error.errorCode,
+        ...(error.statusState ? { statusState: error.statusState } : {}),
       }).catch(() => {});
       throw error;
     }

@@ -78,6 +78,7 @@ export function publicJwkOnly(jwk) {
 function kindLabel(kind) {
   if (kind === "wia") return "WIA";
   if (kind === "ka") return "KA";
+  if (kind === "credential") return "Credential";
   return "WUA";
 }
 
@@ -384,13 +385,13 @@ async function verifyStatusListJwt(jwt, verificationJwk, { uri, kind, now, clock
   return { payload, verificationJwk: usedJwk };
 }
 
-function evaluateBit(payload, idx, kind) {
+function evaluateBit(payload, idx, kind, allowedBits = ALLOWED_STATUS_LIST_BITS) {
   const statusList = payload.status_list;
   if (!statusList || typeof statusList !== "object") {
     fail(`${kindLabel(kind)} Status List Token missing status_list`, { kind, reason: "invalid_token" });
   }
-  if (!ALLOWED_STATUS_LIST_BITS.has(statusList.bits)) {
-    fail(`${kindLabel(kind)} Status List Token bits must be 1, 2, 4, or 8`, {
+  if (!allowedBits.has(statusList.bits)) {
+    fail(`${kindLabel(kind)} Status List Token bits must be ${[...allowedBits].join(", ")}`, {
       kind,
       reason: "unsupported_bits",
     });
@@ -403,21 +404,27 @@ function evaluateBit(payload, idx, kind) {
       reason: "idx_out_of_range",
     });
   }
-  if (bit === STATUS_INVALID) {
+  return { status: bit, bits: statusList.bits };
+}
+
+function rejectUnlessValid(bit, kind, acceptInvalidStatus) {
+  if (bit.status === STATUS_INVALID) {
+    if (acceptInvalidStatus === true) return { ok: false, reason: "revoked", status: bit.status };
     fail(`${kindLabel(kind)} has been revoked`, {
       kind,
       reason: "revoked",
       statusState: "revoked",
     });
   }
-  if (bit !== STATUS_VALID) {
+  if (bit.status !== STATUS_VALID) {
+    if (acceptInvalidStatus === true) return { ok: false, reason: "unexpected_status", status: bit.status };
     fail(`${kindLabel(kind)} status bit is not VALID`, {
       kind,
       reason: "unexpected_status",
       statusState: "invalid",
     });
   }
-  return { status: STATUS_VALID, bits: statusList.bits };
+  return { ok: true, reason: "valid", status: STATUS_VALID };
 }
 
 /**
@@ -439,21 +446,26 @@ export async function evaluateWuaStatusList({
   now,
   clockTolerance,
   allowHeaderKey,
+  jwt: suppliedJwt,
+  allowedBits,
+  acceptInvalidStatus = false,
 } = {}) {
   const required = parseReferencedTokenStatus(
     { status: { status_list: { uri, idx } } },
     { required: true, kind }
   );
-  const jwt = await fetchStatusListJwt(required.uri, {
-    kind,
-    fetchImpl,
-    resolveHostname,
-    timeoutMs,
-    maxBytes,
-    allowInsecureHttp,
-    allowPrivateAddresses,
-    allowedHosts,
-  });
+  const jwt = typeof suppliedJwt === "string" && suppliedJwt.length > 0
+    ? suppliedJwt
+    : await fetchStatusListJwt(required.uri, {
+      kind,
+      fetchImpl,
+      resolveHostname,
+      timeoutMs,
+      maxBytes,
+      allowInsecureHttp,
+      allowPrivateAddresses,
+      allowedHosts,
+    });
   const { payload, verificationJwk: statusListVerificationJwk } = await verifyStatusListJwt(jwt, verificationJwk, {
     uri: required.uri,
     kind,
@@ -461,16 +473,20 @@ export async function evaluateWuaStatusList({
     clockTolerance,
     allowHeaderKey,
   });
-  const bit = evaluateBit(payload, required.idx, kind);
+  const bit = evaluateBit(payload, required.idx, kind, allowedBits);
+  const decision = rejectUnlessValid(bit, kind, acceptInvalidStatus);
   return {
-    ok: true,
+    ok: decision.ok,
     kind,
     uri: required.uri,
     idx: required.idx,
-    status: bit.status,
+    status: decision.status,
+    reason: decision.reason,
     sub: payload.sub,
+    iat: payload.iat,
     exp: payload.exp,
     ttl: payload.ttl,
+    jwt,
     verificationJwk: statusListVerificationJwk,
   };
 }
