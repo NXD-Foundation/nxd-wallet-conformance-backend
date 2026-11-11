@@ -15,7 +15,6 @@ import {
   WuaStatusListValidationError,
 } from "./wuaStatusListVerifier.js";
 
-const CREDENTIAL_STATUS_BITS = new Set([1]);
 const statusListCache = new Map();
 const statusListFetches = new Map();
 
@@ -202,7 +201,6 @@ function credentialStatusRequest(reference, verificationJwk, jwt) {
     verificationJwk,
     kind: "credential",
     allowHeaderKey: false,
-    allowedBits: CREDENTIAL_STATUS_BITS,
     acceptInvalidStatus: true,
     ...(jwt ? { jwt } : {}),
   };

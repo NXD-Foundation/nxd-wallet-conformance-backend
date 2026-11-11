@@ -15,6 +15,14 @@ import {
   requestWithReissuanceBackoff,
 } from "../src/lib/reissuance.js";
 
+import { resetCredentialStatusCacheForTests } from "../../utils/cs02StatusList.js";
+import {
+  installStatusListTestHooks,
+  resetStatusListTestHooks,
+  signStatusListToken,
+  stubStatusListFetch,
+} from "../../tests/helpers/wuaStatusListFixtures.js";
+
 const cs01 = "webuild-cs01";
 const json = (body, headers = {}, status = 200) => new Response(JSON.stringify(body), { headers, status });
 
@@ -316,14 +324,20 @@ describe("CS-01 refresh re-issuance", () => {
     }
   });
 
-  it("the actual /reissue API validates and replaces the stored credential and reports changed claims", async () => {
+  it("the actual /reissue API accepts a VALID two-bit status list and replaces the stored credential and reports changed claims", async () => {
     const previousProfile = process.env.WALLET_PROFILE;
     process.env.WALLET_PROFILE = cs01;
     const sandbox = sinon.createSandbox();
     const keys = await ensureOrCreateEcKeyPair(null);
     const signingKey = await importJWK(keys.privateJwk, "ES256");
+    const statusUri = "https://issuer.example/status/refresh";
+    const statusJwt = await signStatusListToken({
+      privateKey: signingKey, uri: statusUri, bits: 2, statuses: [1, 0],
+    });
     let stored, replacement, endpoint;
-    const signCredential = name => new SignJWT({ iss: endpoint, vct: "urn:test:credential", name })
+    const signCredential = name => new SignJWT({ iss: endpoint, vct: "urn:test:credential", name,
+      status: { status_list: { uri: statusUri, idx: 1 } },
+    })
       .setProtectedHeader({ alg: "ES256", kid: "issuer-key" }).setIssuedAt().setExpirationTime("1h").sign(signingKey).then(jwt => jwt + "~");
     const issuer = createServer(async (req, res) => {
       res.setHeader("content-type", "application/json");
@@ -341,6 +355,7 @@ describe("CS-01 refresh re-issuance", () => {
     });
     await new Promise(resolve => issuer.listen(0, "127.0.0.1", resolve));
     try {
+      installStatusListTestHooks({ fetchImpl: stubStatusListFetch(statusJwt) });
       endpoint = `http://127.0.0.1:${issuer.address().port}`;
       const { binding } = await fixture();
       binding.apiBase = endpoint;
@@ -366,6 +381,8 @@ describe("CS-01 refresh re-issuance", () => {
       expect(response.body.result.issuanceContext.attributeDiff.changes).to.deep.equal([{ key: "name", previous: "Old", next: "New" }]);
       expect(response.body.result.issuanceContext).not.to.have.property("reissuanceBinding");
     } finally {
+      resetCredentialStatusCacheForTests();
+      resetStatusListTestHooks();
       sandbox.restore();
       await new Promise(resolve => issuer.close(resolve));
       if (previousProfile === undefined) delete process.env.WALLET_PROFILE; else process.env.WALLET_PROFILE = previousProfile;

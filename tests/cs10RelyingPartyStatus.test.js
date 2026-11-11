@@ -88,17 +88,21 @@ describe("CS-10 relying party status checks", () => {
     expect(fetches).to.equal(1);
   });
 
-  it("rejects an unexpired credential whose status bit is INVALID", async () => {
-    install(await statusToken({ bit: 1 }));
-    try {
-      await check();
-      expect.fail("expected a revoked credential");
-    } catch (error) {
-      expect(error).to.be.instanceOf(Cs02StatusListError);
-      expect(error.statusState).to.equal("revoked");
-      expect(error.message).to.equal("Credential status is INVALID");
-    }
-  });
+  for (const bits of [1, 2, 4, 8]) {
+    it(`accepts VALID and rejects INVALID entries in credential status lists with ${bits} bits per entry`, async () => {
+      install(await statusToken({ bits, statuses: [0, 1, 0, 1] }));
+
+      expect(await check(2)).to.include({ statusState: "valid", enforced: true });
+      await check(3).then(
+        () => expect.fail("expected a revoked credential"),
+        (error) => {
+          expect(error).to.be.instanceOf(Cs02StatusListError);
+          expect(error.statusState).to.equal("revoked");
+          expect(error.message).to.equal("Credential status is INVALID");
+        },
+      );
+    });
+  }
 
   it("rejects a status claim that is only selectively disclosed", async () => {
     try {
@@ -121,7 +125,7 @@ describe("CS-10 relying party status checks", () => {
     const cases = [
       { token: await statusToken({ sub: "https://issuer.example/other" }) },
       { token: await statusToken({ typ: "JWT" }) },
-      { token: await statusToken({ bits: 2, lst: "eNrbuRgAAhcBXQ" }) },
+      { token: await statusToken({ bits: 3, lst: "eNrbuRgAAhcBXQ" }) },
       { token: await statusToken({ privateKey: await generateKeyPair("ES256").then((keys) => keys.privateKey) }) },
       { token: await statusToken(), idx: 1000 },
     ];
