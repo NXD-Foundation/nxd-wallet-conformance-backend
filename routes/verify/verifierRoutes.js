@@ -45,8 +45,8 @@ import { encode as encodeCbor } from 'cbor-x';
 import {
   processCs03PresentationResponse,
   loadVerifierClientMetadataForRequests,
+  acknowledgeVerifierWalletError,
   sendVerifierRfc002Error,
-  sendVerifierWalletReportedError,
   VerifierRfc002Errors as VErr,
 } from "../../utils/routeUtils.js";
 import { loadVerifierEncryptionKey } from "../../utils/verifierEncryptionKeys.js";
@@ -297,6 +297,20 @@ verifierRouter.use("/did-jwk", didJwkRouter);
 /* ********************************************
          Authorization RESPONSES
 *******************************************/
+
+async function acknowledgeWalletAuthorizationError(res, sessionId, vpSession, error, description) {
+  vpSession.status = "failed";
+  vpSession.error = String(error);
+  vpSession.error_description = description == null ? "" : String(description);
+  try {
+    await storeVPSession(sessionId, vpSession);
+  } catch (storageError) {
+    await logError(sessionId, "Failed to persist wallet authorization error", {
+      error: storageError.message,
+    }).catch(() => {});
+  }
+  return acknowledgeVerifierWalletError(res);
+}
 
 verifierRouter.post("/direct_post/:id", async (req, res) => {
   try {
@@ -962,9 +976,10 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
           error: req.body.error,
           error_description: req.body.error_description
         });
-        return sendVerifierWalletReportedError(
+        return acknowledgeWalletAuthorizationError(
           res,
-          400,
+          sessionId,
+          vpSession,
           req.body.error,
           req.body.error_description,
         );
@@ -1999,9 +2014,10 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
             error: req.body.error,
             error_description: req.body.error_description
           });
-          return sendVerifierWalletReportedError(
+          return acknowledgeWalletAuthorizationError(
             res,
-            400,
+            sessionId,
+            vpSession,
             req.body.error,
             req.body.error_description,
           );

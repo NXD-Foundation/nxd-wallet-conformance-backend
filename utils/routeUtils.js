@@ -2150,6 +2150,11 @@ export function sendVerifierWalletReportedError(res, httpStatus, walletError, wa
   res.status(httpStatus).json(body);
 }
 
+/** Acknowledge a processed OpenID4VP Authorization Error Response (§8.2). */
+export function acknowledgeVerifierWalletError(res) {
+  return res.status(200).json({});
+}
+
 /**
  * Handle route errors consistently
  * @param {Error} error - Error object

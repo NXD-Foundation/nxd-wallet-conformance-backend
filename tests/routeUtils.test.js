@@ -29,9 +29,23 @@ import {
   createSessionWithMultiCredentialPayloads,
   buildCredentialOfferUrl,
   resolveVciOfferSignatureType,
+  acknowledgeVerifierWalletError,
 } from '../utils/routeUtils.js';
 
 describe('Route Utils', () => {
+  it('acknowledges a processed wallet authorization error with HTTP 200 and an empty JSON object', () => {
+    const response = {
+      statusCode: null,
+      body: null,
+      status(code) { this.statusCode = code; return this; },
+      json(body) { this.body = body; return this; },
+    };
+
+    expect(acknowledgeVerifierWalletError(response)).to.equal(response);
+    expect(response.statusCode).to.equal(200);
+    expect(response.body).to.deep.equal({});
+  });
+
   describe('resolveVciOfferSignatureType', () => {
     it('defaults EUDI PID SD-JWT offers to x509 when signature_type is omitted', () => {
       expect(
