@@ -156,6 +156,21 @@ async function failVpSessionAndRespond(res, sessionId, vpSession, errorCode, err
   return res.status(400).json({ error: errorCode, error_description: errorDescription });
 }
 
+async function acknowledgeWalletErrorResponse(res, sessionId, vpSession, errorCode, errorDescription) {
+  try {
+    Object.assign(vpSession, buildCs02FailedSessionPatch(errorCode, errorDescription));
+    await storeVPSession(sessionId, vpSession);
+  } catch (storageError) {
+    await logError(sessionId, "Failed to update session status after wallet authorization error", {
+      error: storageError.message,
+      stack: storageError.stack,
+    }).catch(() => {});
+  }
+  // A wallet-declared authorization error only needs the protocol receipt
+  // acknowledgement. Do not send the success-path status-page redirect.
+  return res.status(200).json({});
+}
+
 async function runCs02SdJwtVpTokenChecks(sessionId, vpSession, vpTokenObject, cs02ResponseOptions) {
   if (!cs02ResponseOptions.strict || !vpSession.dcql_query) return;
   try {
@@ -489,7 +504,7 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
         await logError(sessionId, "Wallet reported protocol error", submissionCheck.walletError).catch(
           () => {},
         );
-        return failVpSessionAndRespond(
+        return acknowledgeWalletErrorResponse(
           res,
           sessionId,
           vpSession,
@@ -1092,7 +1107,7 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
           error: req.body.error,
           error_description: req.body.error_description
         });
-        return failVpSessionAndRespond(
+        return acknowledgeWalletErrorResponse(
           res,
           sessionId,
           vpSession,
@@ -1520,7 +1535,7 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
             error: req.body.error,
             error_description: req.body.error_description
           });
-          return failVpSessionAndRespond(
+          return acknowledgeWalletErrorResponse(
             res,
             sessionId,
             vpSession,

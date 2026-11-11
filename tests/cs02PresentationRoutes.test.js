@@ -6,6 +6,7 @@ import request from "supertest";
 import { decodeProtectedHeader, importX509, jwtVerify } from "jose";
 import { assertX509HashLeafMatchesClientId } from "../utils/cs02ClientIdBinding.js";
 import ts12PaymentRouter from "../routes/verify/ts12PaymentRoutes.js";
+import verifierRouter from "../routes/verify/verifierRoutes.js";
 import vpStandardRouter from "../routes/verify/vpStandardRoutes.js";
 import x509Router from "../routes/verify/x509Routes.js";
 import { CONFIG } from "../utils/routeUtils.js";
@@ -30,6 +31,8 @@ describe("CS-02 / CS-03 presentation route regressions", () => {
   });
   const app = express();
   app.use(express.json());
+  app.use(express.urlencoded({ extended: true }));
+  app.use(verifierRouter);
   app.use(x509Router);
   app.use(vpStandardRouter);
   app.use(ts12PaymentRouter);
@@ -157,5 +160,23 @@ describe("CS-02 / CS-03 presentation route regressions", () => {
       expect(invocation.search).to.equal(original.search);
     }
     expect((await getVPSession("three-invocations")).response_mode).to.equal("direct_post.jwt");
+  });
+
+  it("acknowledges a processed direct_post wallet error with HTTP 200 and records the failed session", async () => {
+    const sessionId = "direct-post-access-denied-ack";
+    await request(app).get("/generateVPRequestDCQL").query({ sessionId }).expect(200);
+
+    const response = await request(app)
+      .post(`/direct_post/${sessionId}`)
+      .type("form")
+      .send({ error: "access_denied", error_description: "AccessDenied" })
+      .expect("Content-Type", /json/)
+      .expect(200);
+
+    expect(response.body).to.deep.equal({});
+    const session = await getVPSession(sessionId);
+    expect(session.status).to.equal("failed");
+    expect(session.error).to.equal("access_denied");
+    expect(session.error_description).to.equal("AccessDenied");
   });
 });
