@@ -37,6 +37,35 @@ describe("CS-02 / CS-03 presentation route regressions", () => {
   app.use(vpStandardRouter);
   app.use(ts12PaymentRouter);
 
+  it("accepts the TS-12 demo status option only from the trusted checkout backend", async () => {
+    const origin = "https://rp.example";
+    const serviceKey = "test-checkout-service-key-".repeat(2);
+    Object.assign(process.env, {
+      DC_API_RP_ORIGINS: origin,
+      DC_API_RP_PROFILES: "ts12-dpc-pid",
+      DC_API_CHECKOUT_SERVICE_KEY: serviceKey,
+    });
+    const { default: router } = await import("../routes/verify/dcApiRoutes.js?ts12-checkout-status");
+    const dcApp = express();
+    dcApp.use(express.json(), router);
+    const body = {
+      profile: "ts12-dpc-pid", credentialStatusCheck: "skip", transaction_id: "demo-payment",
+      merchant: "Test Shop", payee_id: "shop-1", currency: "EUR", amount: "12.34",
+    };
+
+    const denied = await request(dcApp).post("/vp/dc-api/request").set("Origin", origin).send(body);
+    expect(denied.status, JSON.stringify(denied.body)).to.equal(403);
+    expect(denied.body.error).to.equal("checkout_not_authorized");
+
+    const authorized = await request(dcApp).post("/vp/dc-api/request").set("Origin", origin)
+      .set("Authorization", `Bearer ${serviceKey}`).send(body);
+    expect(authorized.status, JSON.stringify(authorized.body)).to.equal(200);
+    const session = await getVPSession(authorized.body.sessionId);
+    expect(session.credentialStatusCheck).to.equal("skip");
+    expect(session.ts12_payment).to.equal(true);
+    expect(session.ts12_payment_payload.transaction_id).to.equal(body.transaction_id);
+  });
+
   for (const compatibility of [false, true]) {
     it(`DC API DPC+PID uses the EUDI certificate without trust framework (compatibility=${compatibility})`, async () => {
       process.env.VERIFIER_CS02_COMPATIBILITY = String(compatibility);

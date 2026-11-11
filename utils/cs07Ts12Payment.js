@@ -15,8 +15,10 @@ import {
 
 export const CS07_BASE_REQUEST_KEYS = new Set(["profile", "sessionId"]);
 
+const CS07_PRESENTATION_REQUEST_KEYS = new Set([...CS07_BASE_REQUEST_KEYS, "credentialStatusCheck"]);
+
 export const CS07_TS12_PAYMENT_REQUEST_KEYS = new Set([
-  ...CS07_BASE_REQUEST_KEYS,
+  ...CS07_PRESENTATION_REQUEST_KEYS,
   "amount",
   "value",
   "currency",
@@ -40,7 +42,9 @@ export const CS07_TS12_PAYMENT_REQUEST_KEYS = new Set([
 ]);
 
 export function assertCs07DcApiRequestBodyKeys(body, workflow) {
-  const allowed = workflow === "ts12-payment" ? CS07_TS12_PAYMENT_REQUEST_KEYS : CS07_BASE_REQUEST_KEYS;
+  const allowed = workflow === "ts12-payment" ? CS07_TS12_PAYMENT_REQUEST_KEYS
+    : workflow === "presentation" ? CS07_PRESENTATION_REQUEST_KEYS
+    : CS07_BASE_REQUEST_KEYS;
   const unexpected = Object.keys(body || {}).find((key) => !allowed.has(key));
   if (!unexpected) return;
   throw new Cs07DcApiResponseError(

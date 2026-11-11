@@ -1153,12 +1153,19 @@ export async function validateCs02SdJwtPresentation({
       throw trustError;
     }
   }
+  if (context.skipCredentialStatus && !issuerAuthenticity.issuerSignature.verified) {
+    throw new Cs02VerifierResponseError(
+      "SD-JWT-VC issuer signature must be verified before skipping credential status",
+      "invalid_credential",
+    );
+  }
   let credentialStatus;
   try {
     credentialStatus = await validateCs02CredentialStatusList(sdJwt, {
       env: context.env || options.env,
       trustPolicyOptions,
       verificationJwk: issuerAuthenticity.verificationJwk,
+      skip: context.skipCredentialStatus === true,
     });
   } catch (error) {
     if (error instanceof Cs02StatusListError) {
@@ -1257,7 +1264,12 @@ export async function validateCs02SdJwtEntriesInVpToken(
         context: verificationContext,
         options,
       });
-      decisions.push({ id: credQuery.id, format: credQuery.format, trust: result.credentialTrust || null });
+      decisions.push({
+        id: credQuery.id,
+        format: credQuery.format,
+        trust: result.credentialTrust || null,
+        ...(result.credentialStatus?.skipped ? { credentialStatusSkipped: true } : {}),
+      });
     }
   }
   return decisions;

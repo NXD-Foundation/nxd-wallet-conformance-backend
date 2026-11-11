@@ -50,6 +50,19 @@ const MAX_REQUEST_BODY_BYTES = 16 * 1024;
 const MAX_RESPONSE_BODY_BYTES = 2 * 1024 * 1024;
 const ts12JtiCache = new TimedArray(5 * 60 * 1000);
 
+function isTrustedCheckout(req) {
+  const key = process.env.DC_API_CHECKOUT_SERVICE_KEY;
+  const authorization = req.get("Authorization");
+  if (!key || key.length < 32 || !authorization) return false;
+  const digest = value => crypto.createHash("sha256").update(value).digest();
+  return crypto.timingSafeEqual(digest(authorization), digest(`Bearer ${key}`));
+}
+
+function requestLogHeaders(req) {
+  const { authorization, ...headers } = req.headers;
+  return authorization ? { ...headers, authorization: "[redacted]" } : headers;
+}
+
 function enforceBodyLimit(limit) {
   return (req, res, next) => {
     const length = Number(req.get("Content-Length"));
@@ -135,7 +148,7 @@ dcApiRouter.post("/vp/dc-api/request", enforceBodyLimit(MAX_REQUEST_BODY_BYTES),
     sessionId = uuidv4();
   }
   const slog = makeSessionLogger(sessionId);
-  const requestId = logHttpRequest(slog, "POST", "/vp/dc-api/request", req.headers, { sessionId });
+  const requestId = logHttpRequest(slog, "POST", "/vp/dc-api/request", requestLogHeaders(req), { sessionId });
   let verifierOrigin = null;
 
   try {
@@ -146,7 +159,14 @@ dcApiRouter.post("/vp/dc-api/request", enforceBodyLimit(MAX_REQUEST_BODY_BYTES),
       profileId: req.body?.profile,
       origin: verifierOrigin,
     });
-    assertCs07DcApiRequestBodyKeys(req.body, profile.workflow);
+    assertCs07DcApiRequestBodyKeys(req.body, profile.workflow || "presentation");
+    const credentialStatusCheck = req.body?.credentialStatusCheck;
+    if (credentialStatusCheck !== undefined) {
+      if (credentialStatusCheck !== "skip") {
+        throw new Cs07DcApiResponseError('credentialStatusCheck must be "skip"', "invalid_request");
+      }
+      if (!isTrustedCheckout(req)) return res.status(403).json({ error: "checkout_not_authorized" });
+    }
     const encryptionKey = loadVerifierEncryptionKey();
     const clientMetadata = JSON.parse(fs.readFileSync("./data/verifier-config.json", "utf8"));
     const cs03Signing = profile.workflow === "cs03-inline-signing";
@@ -179,15 +199,14 @@ dcApiRouter.post("/vp/dc-api/request", enforceBodyLimit(MAX_REQUEST_BODY_BYTES),
       cs07DcApi: true,
       cs07VerifierOrigin: verifierOrigin,
       cs07ProfileId: profile.id,
+      cs07CredentialStatusCheck: credentialStatusCheck,
+      cs07EncryptionKey: { kid: encryptionKey.kid, alg: encryptionKey.alg },
       usePostMethod: false,
       routePath: "/vp/x509VPrequest",
     });
 
     const storedSession = await getVPSession(sessionId);
     if (!storedSession) throw new Error("CS-07 session persistence failed");
-    storedSession.encryption_key_kid = encryptionKey.kid;
-    storedSession.encryption_key_alg = encryptionKey.alg;
-    await storeVPSession(sessionId, storedSession);
     // Join under SERVER_URL (may include a reverse-proxy prefix such as /rfc-issuer).
     // new URL("/absolute", base) would replace that prefix and break deployments behind a path.
     const serverBase = String(CONFIG.SERVER_URL || "").replace(/\/$/, "");
@@ -226,7 +245,7 @@ dcApiRouter.post("/vp/dc-api/request", enforceBodyLimit(MAX_REQUEST_BODY_BYTES),
 dcApiRouter.post("/vp/dc-api/response/:sessionId", enforceBodyLimit(MAX_RESPONSE_BODY_BYTES), async (req, res) => {
   const sessionId = req.params.sessionId;
   const slog = makeSessionLogger(sessionId);
-  const requestId = logHttpRequest(slog, "POST", `/vp/dc-api/response/${sessionId}`, req.headers, {
+  const requestId = logHttpRequest(slog, "POST", `/vp/dc-api/response/${sessionId}`, requestLogHeaders(req), {
     sessionId,
     protocol: req.body?.protocol,
     hasData: !!req.body?.data,
@@ -387,6 +406,7 @@ dcApiRouter.post("/vp/dc-api/response/:sessionId", enforceBodyLimit(MAX_RESPONSE
     session.status = "success";
     session.verified_credential_ids = validationResult.verifiedCredentialIds;
     session.verification = validationResult.verification;
+    session.credentialStatus = validationResult.credentialStatus;
     if (validationResult.trustDecisions?.length) {
       session.trustDecisions = validationResult.trustDecisions;
     }
@@ -399,6 +419,7 @@ dcApiRouter.post("/vp/dc-api/response/:sessionId", enforceBodyLimit(MAX_RESPONSE
       status: "success",
       sessionId,
       verified_credential_ids: validationResult.verifiedCredentialIds,
+      credentialStatus: validationResult.credentialStatus,
     });
   } catch (error) {
     logHttpResponse(slog, requestId, `/vp/dc-api/response/${sessionId}`, 500, "Internal Server Error", res.getHeaders(), {

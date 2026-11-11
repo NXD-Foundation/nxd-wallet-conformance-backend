@@ -468,6 +468,11 @@ validates the envelope, decrypts the JWE, checks DCQL shape, and dispatches
 SD-JWT/mDoc and specialized workflows through shared validators.
 Encrypted `dc_api.jwt` response parsing and shared SD-JWT/mDoc dispatch have
 dedicated CS-07 success-flow coverage.
+- A trusted checkout backend can request `credentialStatusCheck: "skip"`
+  for a demo DC API presentation or TS-12 payment session. The verifier
+  authorizes it with `DC_API_CHECKOUT_SERVICE_KEY` and reports `credentialStatus: "skipped"`
+  after a successful SD-JWT presentation. See the
+  [verifier integration guide](cs07-dc-api-verifier-api.md#demo-credential-status-override).
 The browser flow must use
 `openid4vp-v1-signed`, a compact signed request in `data.request`,
 `response_mode=dc_api.jwt`, configured `expected_origins`, a request-object

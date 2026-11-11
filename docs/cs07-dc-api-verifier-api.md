@@ -107,3 +107,23 @@ type checks still run. This is not CS-12 or OpenID4VP conformant.
 
 The reusable browser-side adapter is documented in
 `clients/dc-api/README.md` and implemented in `clients/dc-api/rp-client.js`.
+
+## Demo credential status override
+
+For demo deployments, set `DC_API_CHECKOUT_SERVICE_KEY` on the verifier to a
+dedicated random secret of at least 32 characters. The trusted checkout backend
+can create an ordinary presentation session with
+`{"profile":"pid-basic","credentialStatusCheck":"skip"}`, the configured
+browser RP `Origin`, and `Authorization: Bearer <service key>`. Keep the
+service key on the backend. A missing or invalid key yields HTTP 403. Omit
+`credentialStatusCheck` for standard status enforcement.
+
+The verifier stores the decision on the session. It still validates the
+SD-JWT issuer signature, issuer trust policy, holder binding, and status
+reference structure. It skips fetching and validating the referenced list,
+so revocation status remains unknown. Successful SD-JWT responses and
+subsequent polls report `credentialStatus: "skipped"`. The option applies to
+ordinary presentation and TS-12 payment profiles. For TS-12, include the option
+alongside the normal payment fields. The override applies to all SD-JWT
+credentials presented in that session, including the payment credential and
+any PID. TS-12 payment and transaction binding checks still run.

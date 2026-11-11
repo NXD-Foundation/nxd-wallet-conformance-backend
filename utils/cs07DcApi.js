@@ -247,6 +247,7 @@ export function buildCs07SessionStatusPayload(sessionId, session = {}) {
     error_description: session.error_description || undefined,
     verified_credential_ids: session.verified_credential_ids || undefined,
     verification: session.verification || undefined,
+    credentialStatus: session.credentialStatus || undefined,
     vp_response: storedVpResponse(session),
   };
 }

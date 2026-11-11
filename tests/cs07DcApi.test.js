@@ -649,6 +649,12 @@ describe("CS-07 TS12 payment DC API requests", () => {
     expect(built.transactionDataObj.credential_ids).to.deep.equal(["sca_card_dpc"]);
   });
 
+  it("allows the demo credential status option on TS-12 payment requests", () => {
+    expect(() => assertCs07DcApiRequestBodyKeys({
+      ...paymentInput, profile: "ts12-dpc-pid", credentialStatusCheck: "skip",
+    }, "ts12-payment")).to.not.throw();
+  });
+
   it("rejects payment fields on presentation profiles", () => {
     expect(() => assertCs07DcApiRequestBodyKeys({ profile: "pid-basic", amount: "12.34" }, "presentation"))
       .to.throw(Cs07DcApiResponseError, /Only profile and sessionId/);

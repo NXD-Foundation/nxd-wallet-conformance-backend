@@ -51,6 +51,7 @@ function normalizeStatusListOptions(optionsOrEnv = process.env) {
       : envOptions.strictMissingStatus);
   return {
     strictMissingStatus,
+    skip: input.skip === true,
     trustPolicyOptions,
     verificationJwk: publicJwkOnly(input.verificationJwk),
   };
@@ -299,6 +300,9 @@ export async function validateCs02CredentialStatusList(sdJwt, optionsOrEnv = pro
     hasTrustRegistry: options.trustPolicyOptions?.hasTrustRegistry === true,
     strictStatus: options.strictMissingStatus === true,
   };
+  if (options.skip === true) {
+    return { ...reference, issuer, trustPolicy, skipped: true, enforced: false };
+  }
   if (!reference.present) {
     return { ...reference, issuer, trustPolicy };
   }

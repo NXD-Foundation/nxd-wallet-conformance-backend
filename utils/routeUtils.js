@@ -1280,6 +1280,8 @@ export async function generateVPRequest(params) {
     cs07DcApi = false,
     cs07VerifierOrigin = null,
     cs07ProfileId = null,
+    cs07CredentialStatusCheck,
+    cs07EncryptionKey,
     trustPolicy = null,
     wrprcScenario = null,
     invocationScheme,
@@ -1396,6 +1398,11 @@ export async function generateVPRequest(params) {
     sessionData.verifier_origin = resolvedCs07Origin;
     sessionData.expected_audience = cs07ExpectedAudience(resolvedCs07Origin);
     sessionData.protocol = CS07_DC_API_PROTOCOL;
+    if (cs07CredentialStatusCheck === "skip") sessionData.credentialStatusCheck = "skip";
+    if (cs07EncryptionKey) {
+      sessionData.encryption_key_kid = cs07EncryptionKey.kid;
+      sessionData.encryption_key_alg = cs07EncryptionKey.alg;
+    }
   }
 
   if (effectivePresentationDefinition) {
