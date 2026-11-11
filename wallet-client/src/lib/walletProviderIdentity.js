@@ -110,8 +110,9 @@ export function shouldRetryTokenExchangeAfterRotatingWalletProviderKey(httpStatu
 }
 
 /**
- * Self-signed WIA + PoP for a PAR or Token endpoint audience.
- * `iss` = Wallet Provider id; `sub` = wallet instance id (Redis / file).
+ * WIA + PoP for a PAR or Token endpoint audience.
+ * The leaf certificate signs the WIA. `iss` is the configured Wallet Provider id.
+ * `sub` is the wallet instance id. PoP is signed by the `cnf` key.
  */
 export async function buildWiaBundleForParOrToken({
   endpointAudience,
@@ -120,22 +121,26 @@ export async function buildWiaBundleForParOrToken({
   challenge = null,
   cnfKeyPair = null,
 }) {
-  const { privateJwk, publicJwk } = await ensureWalletProviderKeyPair();
-  const providerId = resolveWalletProviderIdSync(publicJwk);
+  const material = loadWuaSigningMaterial();
+  const providerKeys = await ensureWalletProviderKeyPair();
+  const providerId = resolveWalletProviderIdSync(providerKeys.publicJwk);
   const instanceId = await getOrCreateWalletInstanceId();
+  const cnfJwk = cnfKeyPair?.publicJwk || providerKeys.publicJwk;
   const wiaJwt = await createWiaJwt({
-    privateJwk,
-    publicJwk,
+    privateKeyPem: material.privateKeyPem,
+    publicJwk: material.publicJwk,
+    includeJwkHeader: false,
+    headerParams: { x5c: material.x5c },
     issuer: providerId,
     subject: instanceId,
     audience: endpointAudience,
-    cnfJwk: cnfKeyPair?.publicJwk || publicJwk,
+    cnfJwk,
     ttlSeconds: wiaTtlSeconds,
   });
   // PoP `iss` MUST equal WIA `sub` (wallet instance id), not the Wallet Provider id.
   const wiaPopJwt = await createWiaPopJwt({
-    privateJwk: cnfKeyPair?.privateJwk || privateJwk,
-    publicJwk: cnfKeyPair?.publicJwk || publicJwk,
+    privateJwk: cnfKeyPair?.privateJwk || providerKeys.privateJwk,
+    publicJwk: cnfJwk,
     issuer: instanceId,
     audience: authorizationServerIssuer,
     challenge,

@@ -2,13 +2,13 @@
 
 ## Wallet Provider identity (testing only)
 
-This client uses **self-signed** attestation JWTs for development against the RFC issuer. **Do not use this key handling in production**—real deployments must use externally issued Wallet Provider and Wallet Instance material from a trusted source.
+WIA and KA are signed by the Wallet Provider leaf in `x509EC/client_certificate.crt`. Issuers anchor the CA in `x509EC/wallet_provider_ca.crt`. The leaf is the only certificate placed in `x5c`. **Do not use this key handling in production**—real deployments must use externally issued Wallet Provider and Wallet Instance material from a trusted source.
 
 ### Keys
 
 - **Device / proof / DPoP key** — default file `data/device-key.json` (override with CLI `--key` or `WALLET_DEVICE_KEY_PATH`). Used only for DPoP, OpenID4VCI proof JWTs, OpenID4VP key-binding, and presentation flows. Persists after first run; delete the file to mint a new device key.
-- **Wallet Provider key** — default file `data/wallet-provider-key.json` (override with `WALLET_PROVIDER_KEY_PATH`). A **separate** P-256 key used only for:
-  - Signs **WIA** (Wallet Instance Attestation) at PAR and Token. The device key referenced in WIA `cnf.jwk` signs the PoP and DPoP proofs. Headers `OAuth-Client-Attestation` + `OAuth-Client-Attestation-PoP` only (`typ: oauth-client-attestation+jwt` / `oauth-client-attestation-pop+jwt`). The client validates WIA `aud`, PoP `aud` (authorization server issuer), and `client_id` = WIA `sub` locally before each request (`wiaParTokenValidation.js`).
+- **Wallet Provider key** — default file `data/wallet-provider-key.json` (override with `WALLET_PROVIDER_KEY_PATH`). A **separate** P-256 key used only for the configured provider identifier when `WALLET_PROVIDER_ID` is unset. It does not sign WIA or KA.
+  - **WIA** (Wallet Instance Attestation) at PAR and Token is signed by the leaf certificate. The device key referenced in WIA `cnf.jwk` signs the PoP and DPoP proofs. Headers `OAuth-Client-Attestation` + `OAuth-Client-Attestation-PoP` only (`typ: oauth-client-attestation+jwt` / `oauth-client-attestation-pop+jwt`). The client validates the WIA signature under `x5c[0]`, WIA `aud`, PoP `aud` (authorization server issuer), and `client_id` = WIA `sub` locally before each request (`wiaParTokenValidation.js`).
   - **WUA** (Wallet Unit Attestation) at Credential: `proofs.jwt` `key_attestation` or `proofs.attestation` (`typ: key-attestation+jwt`). Before dispatch, `wuaCredentialBinding.js` checks one proof/WUA, `attested_keys[0]` = proof signing key, and stable multi-key order.
 
 The file is created on first use if missing. Rotate it independently of the device key. (If you previously used `walletprovider/ec-p256-es256.json`, copy or rename it to `data/wallet-provider-key.json`.)
@@ -61,15 +61,16 @@ RFC001 JWT credential proofs always include a Wallet Unit Attestation in the
 protected `key_attestation` header, regardless of issuer metadata or wallet
 profile. The `attestation` proof type carries the WUA directly.
 
-Generated key attestations use an ES256 signing certificate chain in `x5c`,
-without an embedded `jwk` header. Configure both `WALLET_WUA_SIGNING_KEY_PATH`
-(PKCS#8 PEM private key) and `WALLET_WUA_SIGNING_CERT_PATH` (PEM chain, signing
-certificate first), and mount these files into the service container. Incomplete,
-missing, or mismatched signing material fails before the credential request.
-When neither is configured, the existing local development certificate and key
-are used. These fixtures do not establish trust with an external issuer: deploy
-material whose chain that issuer accepts. External WUA tokens must also carry
-`x5c` and verify under its first certificate; `jwk`-only WUA tokens are rejected.
+Generated key attestations carry the ES256 signing certificate in `x5c[0]`,
+without an embedded `jwk` header. A self-signed CA later in the PEM file is not
+sent; issuers configure that certificate as the trust anchor. Configure both
+`WALLET_WUA_SIGNING_KEY_PATH` (PKCS#8 PEM private key) and
+`WALLET_WUA_SIGNING_CERT_PATH` (PEM chain, signing certificate first), and mount
+these files into the service container. Incomplete, missing, or mismatched
+signing material fails before the credential request. When neither is configured,
+the leaf and key in `x509EC/` are used, with `x509EC/wallet_provider_ca.crt` as
+the published anchor. External WUA tokens must also carry `x5c` and verify under
+its first certificate; `jwk`-only WUA tokens are rejected.
 
 ### Interim framework trust policy
 

@@ -2,6 +2,7 @@ import {
   decodeJwt,
   decodeProtectedHeader,
   importJWK,
+  importX509,
   jwtVerify,
   calculateJwkThumbprint,
 } from "jose";
@@ -30,6 +31,19 @@ function audienceIncludes(audClaim, expectedAudience) {
     return audClaim.some((a) => normalizeAudienceUrl(a) === expected);
   }
   return normalizeAudienceUrl(audClaim) === expected;
+}
+
+function pemFromX5cEntry(entry) {
+  const body = String(entry).replace(/\s+/g, "").match(/.{1,64}/g)?.join("\n") || "";
+  return `-----BEGIN CERTIFICATE-----\n${body}\n-----END CERTIFICATE-----\n`;
+}
+
+async function wiaVerificationKey(header) {
+  if (Array.isArray(header.x5c) && header.x5c.length > 0) {
+    return importX509(pemFromX5cEntry(header.x5c[0]), header.alg || "ES256");
+  }
+  if (header.jwk) return importJWK(header.jwk, header.alg || "ES256");
+  return null;
 }
 
 function assertCnfJwkIsPublicOnly(jwk) {
@@ -70,8 +84,8 @@ export async function validateWiaMaterialForParOrToken({
   }
 
   let wiaPayload;
-  if (wiaHeader.jwk) {
-    const wiaKey = await importJWK(wiaHeader.jwk, wiaHeader.alg || "ES256");
+  const wiaKey = await wiaVerificationKey(wiaHeader);
+  if (wiaKey) {
     ({ payload: wiaPayload } = await jwtVerify(wiaJwt, wiaKey, {
       clockTolerance,
       typ: WIA_JWT_TYP,

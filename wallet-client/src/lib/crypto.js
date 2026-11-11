@@ -11,12 +11,13 @@ export function pemCertificateChainToX5c(certPem) {
   if (!blocks?.length) {
     throw new Error("No certificates found in PEM data");
   }
-  return blocks.map((cert) =>
-    cert
-      .replace(/-----BEGIN CERTIFICATE-----/g, "")
-      .replace(/-----END CERTIFICATE-----/g, "")
-      .replace(/\s+/g, ""),
-  );
+  // The signing certificate is x5c[0]. A following self-signed certificate is the
+  // trust anchor and stays out of the header; the issuer configures it separately.
+  return blocks.flatMap((cert, index) => {
+    const parsed = new crypto.X509Certificate(cert);
+    if (index > 0 && parsed.subject === parsed.issuer) return [];
+    return [parsed.raw.toString("base64")];
+  });
 }
 
 export async function ensureOrCreateEcKeyPair(optionalPath, alg = "ES256") {
@@ -232,6 +233,7 @@ export async function createWIA({ privateJwk, publicJwk, issuer, audience, alg =
  */
 export async function createWiaJwt({
   privateJwk,
+  privateKeyPem = null,
   publicJwk,
   issuer,
   subject,
@@ -239,9 +241,16 @@ export async function createWiaJwt({
   cnfJwk,
   alg = "ES256",
   ttlSeconds = 300,
+  headerParams = null,
+  includeJwkHeader = true,
 }) {
   const now = Math.floor(Date.now() / 1000);
-  const header = { alg, typ: "oauth-client-attestation+jwt", jwk: publicJwk };
+  const header = {
+    alg,
+    typ: "oauth-client-attestation+jwt",
+    ...(includeJwkHeader ? { jwk: publicJwk } : {}),
+    ...(headerParams || {}),
+  };
   const payload = {
     iss: issuer,
     sub: subject,
@@ -255,7 +264,7 @@ export async function createWiaJwt({
     },
   };
 
-  const key = await importJWK(privateJwk, alg);
+  const key = privateKeyPem ? await importPKCS8(privateKeyPem, alg) : await importJWK(privateJwk, alg);
   const jwt = await new SignJWT(payload).setProtectedHeader(header).sign(key);
   return jwt;
 }

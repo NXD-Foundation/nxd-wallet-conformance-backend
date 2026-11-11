@@ -5,6 +5,7 @@ import { createPrivateKey, createPublicKey, X509Certificate } from "node:crypto"
 import { fileURLToPath } from "node:url";
 import { jwtVerify, decodeProtectedHeader } from "jose";
 import { assertCertificateValidity, handleUnestablishedTrust } from "./trustPolicy.js";
+import { pemCertificateChainToX5c } from "./crypto.js";
 
 const fixtureKey = fileURLToPath(new URL("../../x509EC/ec_private_pkcs8.key", import.meta.url));
 const fixtureCert = fileURLToPath(new URL("../../x509EC/client_certificate.crt", import.meta.url));
@@ -32,7 +33,7 @@ export function loadWuaSigningMaterial(env = process.env) {
     return {
       privateKeyPem,
       publicJwk: publicKey.export({ format: "jwk" }),
-      x5c: certificates.map((certificate) => certificate.raw.toString("base64")),
+      x5c: pemCertificateChainToX5c(certPem),
     };
   } catch (error) {
     throw new Error(`WUA signing material is unavailable or invalid: ${error.message}`);

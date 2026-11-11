@@ -31,7 +31,7 @@ describe("issuer metadata JWS (RFC001 P2-W-5)", () => {
   it("parses application/jwt metadata, verifies x5c, surfaces issuer_info registration_cert data", async () => {
     const crtPath = path.join(__dirname, "../x509EC/client_certificate.crt");
     const keyPath = path.join(__dirname, "../x509EC/ec_private_pkcs8.key");
-    const pem = fs.readFileSync(crtPath, "utf8");
+    const pem = fs.readFileSync(crtPath, "utf8").match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/)[0];
     const pkcs8 = fs.readFileSync(keyPath, "utf8");
     const x5c = [
       pem
@@ -91,7 +91,7 @@ describe("issuer metadata JWS (RFC001 P2-W-5)", () => {
   it("rejects compact JWS without JWT declaration", async () => {
     const crtPath = path.join(__dirname, "../x509EC/client_certificate.crt");
     const keyPath = path.join(__dirname, "../x509EC/ec_private_pkcs8.key");
-    const pem = fs.readFileSync(crtPath, "utf8");
+    const pem = fs.readFileSync(crtPath, "utf8").match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/)[0];
     const pkcs8 = fs.readFileSync(keyPath, "utf8");
     const x5c = [
       pem
