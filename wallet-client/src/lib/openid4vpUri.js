@@ -1,16 +1,10 @@
 /**
- * CS-02 §6.1.2 / §8.1 wallet invocation uses empty-authority URIs:
- * `openid4vp://?…`, `eu-eaap://?…`, and optionally `haip-vp://?…`.
- * `openid4vp://present?…` is a non-CS-02 compatibility form.
+ * CS-02 §6.1.2 / §8.1 invocation schemes are `openid4vp:`, `eu-eaap:`,
+ * and optionally `haip-vp:`. Generated links use an empty authority
+ * (`openid4vp://?…`). The receiver ignores the host: it is not a verifier
+ * identity, and the specs do not require rejecting other authorities.
  */
 export const CS02_INVOCATION_PROTOCOLS = ["openid4vp:", "eu-eaap:", "haip-vp:"];
-export const OPENID4VP_PRESENT_HOST = "present";
-
-/** Compatibility invocation URI with host `present` (not CS-02). */
-export const OPENID4VP_PRESENT_URI = `openid4vp://${OPENID4VP_PRESENT_HOST}`;
-
-/** Prefix for compatibility by-value VP deep links (`openid4vp://present?…`). */
-export const OPENID4VP_PRESENT_QUERY_PREFIX = `${OPENID4VP_PRESENT_URI}?`;
 
 /** CS-02 canonical invocation URI (empty RFC 3986 authority). */
 export const OPENID4VP_CS02_URI = "openid4vp://";
@@ -19,10 +13,12 @@ export const OPENID4VP_CS02_URI = "openid4vp://";
 export const OPENID4VP_CS02_QUERY_PREFIX = `${OPENID4VP_CS02_URI}?`;
 
 export function isCs02InvocationDeepLink(value) {
-  return (
-    typeof value === "string" &&
-    /^(openid4vp|eu-eaap|haip-vp):\/\//.test(value)
-  );
+  if (typeof value !== "string") return false;
+  try {
+    return CS02_INVOCATION_PROTOCOLS.includes(new URL(value).protocol);
+  } catch {
+    return false;
+  }
 }
 
 export function isOpenId4VpDeepLink(value) {
@@ -30,15 +26,21 @@ export function isOpenId4VpDeepLink(value) {
 }
 
 /**
- * Returns true when the URL uses the non-CS-02 `present` authority.
+ * Read invocation query parameters from a supported custom scheme.
+ * The host and path do not select behavior.
  */
-export function isOpenId4VpPresentInvocation(url) {
-  return url?.protocol === "openid4vp:" && url.hostname === OPENID4VP_PRESENT_HOST;
-}
-
-/**
- * Returns true when the URL uses CS-02 empty-authority `openid4vp://?…`.
- */
-export function isOpenId4VpEmptyAuthorityInvocation(url) {
-  return url?.protocol === "openid4vp:" && !url.hostname;
+export function parseInvocationDeepLink(deepLink) {
+  const url = new URL(deepLink);
+  if (!CS02_INVOCATION_PROTOCOLS.includes(url.protocol)) {
+    const error = new Error(`Unsupported request scheme: ${url.protocol}`);
+    error.code = "unsupported_scheme";
+    error.protocol = url.protocol;
+    throw error;
+  }
+  return {
+    url,
+    requestUri: url.searchParams.get("request_uri"),
+    clientId: url.searchParams.get("client_id"),
+    method: url.searchParams.get("request_uri_method") || "get",
+  };
 }

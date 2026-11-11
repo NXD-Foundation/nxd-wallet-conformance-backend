@@ -415,12 +415,14 @@ both `kid` and `alg`, uses that exact `alg`, prefers `A256GCM`, and returns a
   decryption must use this same registry rather than a separate hard-coded key.
 - Verifier metadata should use the OpenID4VP 1.0 verifier-metadata model, not
 older `client_metadata` representations.
-- CS-02 wallet invocation uses empty-authority
-  `openid4vp://?request_uri=...`, `eu-eaap://?request_uri=...`, and
-  `haip-vp://?request_uri=...` with the same query (CS-02 §8.1). The host
-  `present` is not part of the approved CS-02 text; treat
-  `openid4vp://present?...` as compatibility-only when
-  `CS02_ALLOW_PRESENT_INVOCATION` or legacy compatibility flags are set.
+- CS-02 §6.1.2 and §8.1 require the invocation schemes `openid4vp://` and
+  `eu-eaap://` (`haip-vp://` optional). Their examples use an empty authority
+  (`openid4vp://?request_uri=...` and the same query on the other schemes).
+  The host is not in the wallet's MUST-validate list and is not a verifier
+  identity. The wallet accepts any authority on those schemes and reads
+  `request_uri`, `client_id`, and `request_uri_method` from the query.
+  Generated links stay empty-authority. OpenID4VP 1.0 §9 and §13.1.2 likewise
+  name the custom scheme without prescribing a host.
 - URI-based verifier generation accepts `invocation_scheme=openid4vp`,
   `eu-eaap`, or `haip-vp` (default `openid4vp`). The returned `deepLink` and
   its QR encode that selected scheme. Invalid/empty/repeated values return

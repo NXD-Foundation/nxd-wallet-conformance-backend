@@ -10,7 +10,7 @@ The source FCAFS report is broad: it evaluates verifier and wallet behavior agai
 |---|---|---|
 | Request protection | All authorization requests must be signed JARs. | Mostly covered by `wallet-client/src/lib/cs02RequestValidation.js` and `utils/cs02VerifierRequest.js`. |
 | Credential query | DCQL must be used. | Covered for strict CS-02 paths by `wallet-client/src/lib/cs02DcqlValidation.js`; verifier generation also validates DCQL. |
-| Invocation | Wallet invocation uses `openid4vp://?request_uri=<URL>`. | Covered; `openid4vp://present` remains compatibility-only. |
+| Invocation | Wallet invocation uses `openid4vp://?request_uri=<URL>`. | Covered. Generated links stay empty-authority. The wallet accepts any authority on `openid4vp://`, `eu-eaap://`, and `haip-vp://`. |
 | Wallet validation | Wallet validates request signature, nonce freshness, audience, expiry, credential types, disclosure constraints, and integrity. | Much improved; `did:web` exact `kid` enforcement and strict `client_metadata_uri` wiring are covered. Remaining gaps are narrower disclosure/request-integrity edge cases and future remote-metadata fetch hardening. |
 | Credential format | SD-JWT-VC selective disclosure is mandatory. | Covered/partial for `dc+sd-jwt` and `vc+sd-jwt`; `mso_mdoc` remains allowed; other formats are compatibility-mode only. |
 | Holder binding | KB-JWT is mandatory for SD-JWT VCs and must bind proof to nonce and audience. | Covered for generated wallet responses and verifier checks. |

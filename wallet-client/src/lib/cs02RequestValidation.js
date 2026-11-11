@@ -14,10 +14,7 @@ import {
   exportJWK,
 } from "jose";
 import { X509Certificate } from "@peculiar/x509";
-import {
-  isOpenId4VpEmptyAuthorityInvocation,
-  isOpenId4VpPresentInvocation,
-} from "./openid4vpUri.js";
+import { parseInvocationDeepLink } from "./openid4vpUri.js";
 import { isWebuildCs02Profile, resolveWalletProfile } from "./profile.js";
 import {
   validateX509SanDnsTrustAnchor,
@@ -114,16 +111,11 @@ export function resolveCs02ValidationOptions(env = process.env) {
   const cs03Compatibility = truthyEnv(
     env.WALLET_CS03_COMPATIBILITY ?? env.CS03_COMPATIBILITY,
   );
-  const allowPresentInvocation =
-    truthyEnv(env.CS02_ALLOW_PRESENT_INVOCATION) ||
-    truthyEnv(env.CS02_ALLOW_LEGACY_INVOCATION);
   return {
     strict: isWebuildCs02Profile(profile) || !compatibility,
     allowCs03CredentialFormat: cs03Compatibility,
     cs03Compatibility,
     allowHttp: truthyEnv(env.CS02_ALLOW_HTTP),
-    allowPresentInvocation,
-    allowLegacyInvocation: allowPresentInvocation,
     trustedX509ClientIds: parseTrustedX509ClientIds(env.CS02_TRUSTED_X509_CLIENT_IDS),
     walletAudiences: parseWalletAudiences(env.CS02_WALLET_AUDIENCES),
     requestMaxLifetimeSec:
@@ -243,41 +235,22 @@ function logValidationFailure(log, check, details = {}) {
 }
 
 export function validateCs02DeepLink(deepLink, options, log = () => {}) {
-  let url;
+  let parsed;
   try {
-    url = new URL(deepLink);
-  } catch {
+    parsed = parseInvocationDeepLink(deepLink);
+  } catch (error) {
+    if (error?.code === "unsupported_scheme") {
+      logValidationFailure(log, "deep_link_scheme", { protocol: error.protocol });
+      throw new Cs02ValidationError("Unsupported request scheme", "invalid_request");
+    }
     logValidationFailure(log, "deep_link_parse");
     throw new Cs02ValidationError("Invalid openid4vp deep link", "invalid_request");
   }
 
-  const cs02InvocationProtocols = new Set(["openid4vp:", "eu-eaap:", "haip-vp:"]);
-  if (!cs02InvocationProtocols.has(url.protocol)) {
-    logValidationFailure(log, "deep_link_scheme", { protocol: url.protocol });
-    throw new Cs02ValidationError("Unsupported request scheme", "invalid_request");
-  }
+  validateCs02RequestUri(parsed.requestUri, options, log);
+  validateCs02RequestUriMethod(parsed.method, log);
 
-  const emptyAuthority = !url.hostname;
-  const presentAuthority = url.protocol === "openid4vp:" && isOpenId4VpPresentInvocation(url);
-  const allowPresent = options.allowPresentInvocation || options.allowLegacyInvocation;
-  if (!emptyAuthority && !(presentAuthority && allowPresent)) {
-    logValidationFailure(log, "deep_link_authority", { authority: url.hostname || "(empty)" });
-    throw new Cs02ValidationError(
-      presentAuthority
-        ? 'Unsupported openid4vp authority "present"; CS-02 requires empty-authority openid4vp://?'
-        : `Unsupported invocation authority "${url.hostname || ""}"; CS-02 requires empty-authority invocation URIs`,
-      "invalid_request",
-    );
-  }
-
-  const requestUri = url.searchParams.get("request_uri");
-  const clientId = url.searchParams.get("client_id");
-  const method = url.searchParams.get("request_uri_method") || "get";
-
-  validateCs02RequestUri(requestUri, options, log);
-  validateCs02RequestUriMethod(method, log);
-
-  return { requestUri, clientId, method, url };
+  return parsed;
 }
 
 export function validateCs02RequestUri(requestUri, options, log = () => {}) {

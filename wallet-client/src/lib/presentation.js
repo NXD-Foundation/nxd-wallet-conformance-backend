@@ -45,10 +45,7 @@ import {
   assertTs12ScaPresentationConstraints,
 } from "./ts12Presentation.js";
 import { isCompactJwe, isTs12PaymentRequestUri } from "../../utils/ts12PaymentUtils.js";
-import {
-  OPENID4VP_PRESENT_HOST,
-  isOpenId4VpPresentInvocation,
-} from "./openid4vpUri.js";
+import { parseInvocationDeepLink } from "./openid4vpUri.js";
 import {
   Cs02ValidationError,
   resolveCs02ValidationOptions,
@@ -94,25 +91,21 @@ function parseOpenId4VpDeepLink(deepLink, { cs02Options, log } = {}) {
     return parsed;
   }
 
-  const url = new URL(deepLink);
-  if (!/^(openid4vp|eu-eaap|haip-vp):$/.test(url.protocol)) {
-    throw new Error("Unsupported request scheme");
+  let parsed;
+  try {
+    parsed = parseInvocationDeepLink(deepLink);
+  } catch (error) {
+    if (error?.code === "unsupported_scheme") {
+      throw new Error("Unsupported request scheme");
+    }
+    throw error;
   }
-  if (url.hostname && !(url.protocol === "openid4vp:" && url.hostname === OPENID4VP_PRESENT_HOST)) {
-    throw new Error(
-      `Unsupported invocation authority "${url.hostname}"; expected empty-authority CS-02 invocation URI or compatibility openid4vp://present`,
-    );
-  }
-  if (isOpenId4VpPresentInvocation(url)) {
-    console.log("[present] Compatibility openid4vp://present invocation");
-  } else {
-    console.log(`[present] CS-02 empty-authority ${url.protocol}// invocation`);
-  }
-  const requestUri = url.searchParams.get("request_uri");
-  const clientId = url.searchParams.get("client_id");
-  const method = url.searchParams.get("request_uri_method") || "get";
-  console.log("[present] Parsed deep link →", { requestUri, clientId, method });
-  return { requestUri, clientId, method };
+  console.log("[present] Parsed deep link →", {
+    requestUri: parsed.requestUri,
+    clientId: parsed.clientId,
+    method: parsed.method,
+  });
+  return parsed;
 }
 
 async function fetchAuthorizationRequestJwt(requestUri, method) {

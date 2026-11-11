@@ -3,21 +3,14 @@ import { buildVPbyValue } from "../utils/tokenUtils.js";
 import {
   OPENID4VP_CS02_QUERY_PREFIX,
   OPENID4VP_CS02_URI,
-  OPENID4VP_PRESENT_HOST,
-  OPENID4VP_PRESENT_QUERY_PREFIX,
-  OPENID4VP_PRESENT_URI,
   isOpenId4VpDeepLink,
-  isOpenId4VpEmptyAuthorityInvocation,
-  isOpenId4VpPresentInvocation,
+  parseInvocationDeepLink,
 } from "../src/lib/openid4vpUri.js";
 
-describe("openid4vp URI helpers (CS-02 empty-authority invocation)", () => {
-  it("defines CS-02 empty-authority and compatibility present constants", () => {
+describe("openid4vp URI helpers (CS-02 invocation)", () => {
+  it("defines the empty-authority form used for generated links", () => {
     expect(OPENID4VP_CS02_URI).to.equal("openid4vp://");
     expect(OPENID4VP_CS02_QUERY_PREFIX).to.equal("openid4vp://?");
-    expect(OPENID4VP_PRESENT_HOST).to.equal("present");
-    expect(OPENID4VP_PRESENT_URI).to.equal("openid4vp://present");
-    expect(OPENID4VP_PRESENT_QUERY_PREFIX).to.equal("openid4vp://present?");
   });
 
   describe("isOpenId4VpDeepLink", () => {
@@ -32,16 +25,40 @@ describe("openid4vp URI helpers (CS-02 empty-authority invocation)", () => {
     });
   });
 
-  describe("isOpenId4VpPresentInvocation", () => {
-    it("is true for openid4vp://present authority", () => {
-      const url = new URL("openid4vp://present?request_uri=https%3A%2F%2Fexample.com");
-      expect(isOpenId4VpPresentInvocation(url)).to.equal(true);
+  describe("parseInvocationDeepLink", () => {
+    const query = new URLSearchParams({
+      client_id: "x509_hash:verifier-hash",
+      request_uri: "https://verifier.example/request/123",
+      request_uri_method: "post",
+    }).toString();
+
+    for (const scheme of ["openid4vp", "eu-eaap", "haip-vp"]) {
+      for (const host of ["", "present", "authorize", "another-invocation.example"]) {
+        it(`reads the query from ${scheme} with hostname ${JSON.stringify(host)}`, () => {
+          const parsed = parseInvocationDeepLink(`${scheme}://${host}?${query}`);
+          expect(parsed.requestUri).to.equal("https://verifier.example/request/123");
+          expect(parsed.clientId).to.equal("x509_hash:verifier-hash");
+          expect(parsed.method).to.equal("post");
+        });
+      }
+    }
+
+    it("defaults request retrieval to GET", () => {
+      expect(
+        parseInvocationDeepLink(
+          "openid4vp://authorize?request_uri=https%3A%2F%2Fverifier.example%2Frequest",
+        ).method,
+      ).to.equal("get");
     });
 
-    it("is false for CS-02 empty-authority openid4vp://", () => {
-      const url = new URL("openid4vp://?request_uri=https%3A%2F%2Fexample.com");
-      expect(isOpenId4VpPresentInvocation(url)).to.equal(false);
-      expect(isOpenId4VpEmptyAuthorityInvocation(url)).to.equal(true);
+    it("rejects unsupported schemes", () => {
+      expect(() => parseInvocationDeepLink(`https://authorize?${query}`)).to.throw(
+        "Unsupported request scheme",
+      );
+    });
+
+    it("rejects malformed invocation URIs", () => {
+      expect(() => parseInvocationDeepLink("openid4vp://[invalid")).to.throw();
     });
   });
 

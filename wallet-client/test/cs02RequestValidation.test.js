@@ -26,7 +26,7 @@ import {
   parseCs02ClientIdScheme,
   decodeJarParts,
 } from "../src/lib/cs02RequestValidation.js";
-import { OPENID4VP_CS02_URI, OPENID4VP_PRESENT_URI } from "../src/lib/openid4vpUri.js";
+import { OPENID4VP_CS02_URI } from "../src/lib/openid4vpUri.js";
 import { WALLET_PROFILES } from "../src/lib/profile.js";
 import { setCs02TrustPlaceholderRecorder } from "../../utils/cs02TrustPolicy.js";
 import { CS03_X509_DCQL_FORMAT } from "../../utils/cs02VerifierRequest.js";
@@ -79,8 +79,6 @@ function strictOptions(overrides = {}) {
     strict: true,
     allowCs03CredentialFormat: false,
     allowHttp: false,
-    allowPresentInvocation: false,
-    allowLegacyInvocation: false,
     trustedX509ClientIds: [],
     walletAudiences: ["https://self-issued.me/v2"],
     requestMaxLifetimeSec: 300,
@@ -139,8 +137,6 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
       const options = resolveCs02ValidationOptions({});
       expect(options.strict).to.equal(true);
       expect(options.allowHttp).to.equal(false);
-      expect(options.allowPresentInvocation).to.equal(false);
-      expect(options.allowLegacyInvocation).to.equal(false);
     });
 
     it("allows compatibility mode when CS02_COMPATIBILITY=true", () => {
@@ -176,24 +172,31 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
       }
     });
 
-    it("rejects openid4vp://present without override", () => {
-      const deepLink = `${OPENID4VP_PRESENT_URI}?request_uri=${encodeURIComponent("https://verifier.example/request")}`;
-      expect(() => validateCs02DeepLink(deepLink, strictOptions())).to.throw(Cs02ValidationError);
-      try {
-        validateCs02DeepLink(deepLink, strictOptions());
-      } catch (error) {
-        expect(error.errorCode).to.equal("invalid_request");
-        expect(error.message).to.match(/present/);
+    it("accepts any authority on CS-02 invocation schemes and reads the query", () => {
+      const requestUri = "https://verifier.example/request";
+      const query = new URLSearchParams({
+        client_id: "x509_hash:verifier-hash",
+        request_uri: requestUri,
+        request_uri_method: "post",
+      }).toString();
+      for (const scheme of ["openid4vp", "eu-eaap", "haip-vp"]) {
+        for (const host of ["", "present", "authorize", "another-invocation.example"]) {
+          const parsed = validateCs02DeepLink(`${scheme}://${host}?${query}`, strictOptions());
+          expect(parsed.requestUri).to.equal(requestUri);
+          expect(parsed.clientId).to.equal("x509_hash:verifier-hash");
+          expect(parsed.method).to.equal("post");
+        }
       }
     });
 
-    it("allows present invocation when CS02_ALLOW_PRESENT_INVOCATION is set", () => {
-      const deepLink = `${OPENID4VP_PRESENT_URI}?request_uri=${encodeURIComponent("https://verifier.example/request")}`;
-      const parsed = validateCs02DeepLink(
-        deepLink,
-        strictOptions({ allowPresentInvocation: true }),
+    it("rejects an unsupported scheme even when the query is a presentation request", () => {
+      const query = new URLSearchParams({
+        request_uri: "https://verifier.example/request",
+      }).toString();
+      expect(() => validateCs02DeepLink(`https://authorize?${query}`, strictOptions())).to.throw(
+        Cs02ValidationError,
+        "Unsupported request scheme",
       );
-      expect(parsed.requestUri).to.equal("https://verifier.example/request");
     });
 
     it("rejects missing request_uri", () => {
