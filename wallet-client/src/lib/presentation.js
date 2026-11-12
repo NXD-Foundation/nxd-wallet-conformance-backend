@@ -628,7 +628,7 @@ function assertClientIdSchemeConsistentWithX509Hash(payload) {
   }
 }
 
-export async function verifyAuthorizationRequestJwt(requestJwt, { expectedClientId }) {
+export async function verifyAuthorizationRequestJwt(requestJwt, { expectedClientId, invocationProtocol }) {
   const { header, payload } = decodeJwt(requestJwt);
   if (Array.isArray(header?.x5c) && header.x5c.length) assertCertificateValidity(header.x5c);
   if (!header?.alg || header.alg === "none") {
@@ -665,6 +665,12 @@ export async function verifyAuthorizationRequestJwt(requestJwt, { expectedClient
     const pem = x509LeafPemFromX5cFirst(header.x5c[0]);
     const certKey = await importX509(pem, header.alg);
     const verified = await jwtVerify(requestJwt, certKey, { clockTolerance: 300 });
+    // RFC002 uses eu-eaap or encrypted OpenID4VP for its ETSI request profile.
+    const requiresProtectedIat = invocationProtocol === "eu-eaap:" ||
+      (invocationProtocol === "openid4vp:" && verified.payload.response_mode === "direct_post.jwt");
+    if (requiresProtectedIat && !Number.isFinite(verified.protectedHeader.iat)) {
+      throwInvalidPresentationRequest("RFC002 authorization request requires numeric iat in the JWS protected header");
+    }
     handleUnestablishedTrust("Verifier request signer");
     return {
       header: verified.protectedHeader || header,
@@ -1291,6 +1297,7 @@ export async function performPresentation(
     });
     const verified = await verifyAuthorizationRequestJwt(requestJwt, {
       expectedClientId: clientId,
+      invocationProtocol: new URL(deepLink).protocol,
     });
     payload = verified.payload;
     parsedVerifierInfo = parseVerifierInfo(payload);

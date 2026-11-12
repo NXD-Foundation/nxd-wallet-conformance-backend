@@ -379,6 +379,11 @@ interoperability scenarios.
 | Encrypted VP responses | JWE decryption paths in `verifierRoutes.js`; verifier encryption capabilities in `data/verifier-config.json` | `tests/directPostJwt.test.js` |
 | Transaction data / remote signing | `utils/cs03Validation.js`, `utils/cryptoUtils.js`, and session construction in `utils/routeUtils.js` | `tests/cs03Validation.test.js`, `tests/cs03RemoteSigning.test.js`, `tests/paymentTransactionDataHash.test.js` |
 
+The non-API `x509_hash` signer includes `iat` in the JWS protected header.
+The wallet requires a numeric protected-header `iat` for `eu-eaap` and
+encrypted `openid4vp` requests in that path (ETSI TS 119 472-2 §6.4.2).
+JWT expiry validation still uses the payload's `exp` when present.
+
 ### Presentation Route Guide
 
 | Endpoint family | Use |

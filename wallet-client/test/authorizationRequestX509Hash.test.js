@@ -3,11 +3,13 @@ import crypto from "node:crypto";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { SignJWT, importPKCS8 } from "jose";
+import { SignJWT, importPKCS8, decodeProtectedHeader } from "jose";
 import {
   computeX509HashClientIdFromLeafX5c,
   verifyAuthorizationRequestJwt,
 } from "../src/lib/presentation.js";
+
+import { buildVpRequestJWT } from "../../utils/cryptoUtils.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoWalletRoot = path.join(__dirname, "..");
@@ -23,6 +25,48 @@ function certToX5c0() {
 }
 
 describe("authorization request JWT (RFC002 x509_hash)", () => {
+  it("signs the RFC002 Request Object with protected-header iat", async () => {
+    const cert = fs.readFileSync("x509/client_certificate.crt", "utf8")
+      .replace(/-----[^-]+-----|\s/g, "");
+    const jwt = await buildVpRequestJWT(
+      computeX509HashClientIdFromLeafX5c(cert), "https://rp.example/response",
+      null, null, {}, null, "https://rp.example", "vp_token", "nonce-1",
+      null, null, "direct_post.jwt",
+    );
+    expect(decodeProtectedHeader(jwt).iat).to.be.a("number");
+  });
+
+  for (const [name, invocationProtocol, responseMode] of [
+    ["encrypted OpenID4VP", "openid4vp:", "direct_post.jwt"],
+    ["eu-eaap", "eu-eaap:", "direct_post"],
+  ]) {
+    it(`requires protected-header iat and checks expiry for ${name}`, async () => {
+      const x5c0 = certToX5c0();
+      const client_id = computeX509HashClientIdFromLeafX5c(x5c0);
+      const key = await importPKCS8(fs.readFileSync(x509KeyPath, "utf8"), "RS256");
+      const now = Math.floor(Date.now() / 1000);
+      const options = { expectedClientId: client_id, invocationProtocol };
+      const sign = (claims, header = {}) => new SignJWT({ client_id, response_mode: responseMode, ...claims })
+        .setProtectedHeader({ alg: "RS256", x5c: [x5c0], ...header })
+        .sign(key);
+
+      const valid = await verifyAuthorizationRequestJwt(await sign({ exp: now + 120 }, { iat: now }), options);
+      expect(valid.header.iat).to.equal(now);
+      expect(valid.payload).not.to.have.property("iat");
+
+      for (const [claims, header, message] of [
+        [{ iat: now, exp: now + 120 }, {}, /protected header/],
+        [{ exp: now + 120 }, { iat: String(now) }, /protected header/],
+        [{ exp: now - 600 }, { iat: now - 900 }, /exp/],
+      ]) {
+        let failure;
+        try { await verifyAuthorizationRequestJwt(await sign(claims, header), options); }
+        catch (error) { failure = error; }
+        expect(failure?.message).to.match(message);
+      }
+    });
+  }
+
   it("rejects an unsigned authorization request before trust resolution", async () => {
     const unsigned = `${Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url")}.${Buffer.from(JSON.stringify({ client_id: "x509_hash:test" })).toString("base64url")}.`;
     try {

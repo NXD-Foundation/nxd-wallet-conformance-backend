@@ -532,6 +532,7 @@ export async function buildVpRequestJWT(
     const header = {
       alg: useEs256 ? "ES256" : "RS256",
       typ: "oauth-authz-req+jwt",
+      iat: now, // ETSI TS 119 472-2 §6.4.2
       x5c: certChain,
     };
 
