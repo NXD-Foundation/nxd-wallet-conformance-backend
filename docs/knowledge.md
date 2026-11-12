@@ -379,6 +379,10 @@ Presentation Exchange paths still exist but are not the current baseline.
 - Supported verifier identities in compatibility mode include X.509 SAN DNS,
   verifier attestation, `x509_hash`, and DID-based identifiers using the
   OpenID4VP `decentralized_identifier` prefix with `did:web` or `did:jwk`.
+- Strict non-API CS-02 requests carry a numeric `iat` in the JWS protected
+  header (ETSI TS 119 472-2 V1.2.1 §6.4.2). The wallet uses that timestamp
+  for freshness and maximum lifetime checks against the payload's `exp`.
+  The verifier also sends a payload copy for older wallets.
 - Strict CS-02 defaults presentation to `direct_post.jwt`. Compatibility mode
   still allows `direct_post`. Supported response modes include `direct_post`,
 `dc_api`, and `dc_api.jwt`.

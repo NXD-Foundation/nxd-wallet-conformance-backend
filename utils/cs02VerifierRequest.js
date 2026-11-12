@@ -330,6 +330,10 @@ export function validateCs02JarGenerationInput({
   validateCs02TransactionDataEntries(transaction_data, dcql_query, options);
 }
 
+export function requiresCs02ProtectedIat(responseMode, options) {
+  return options.strict && responseMode !== "dc_api" && responseMode !== "dc_api.jwt";
+}
+
 export function applyCs02JarTimestamps(jwtPayload, responseMode) {
   const now = Math.floor(Date.now() / 1000);
   jwtPayload.iat = now;
@@ -369,16 +373,21 @@ export function validateCs02SignedJar(requestJwt, options = { strict: true }) {
     );
   }
 
+  const requiresProtectedIat = requiresCs02ProtectedIat(payload.response_mode, options);
+  if (requiresProtectedIat && !Number.isFinite(header.iat)) {
+    throw new Cs02VerifierRequestError("Generated CS-02 JAR requires numeric iat in the protected header", "invalid_request");
+  }
+
   const requiredFields = [
     "client_id",
     "nonce",
     "response_type",
     "response_mode",
-    "iat",
     "exp",
     "dcql_query",
     "aud",
   ];
+  if (!requiresProtectedIat) requiredFields.push("iat");
   if (!isCs07DcApiRequest) requiredFields.push("state", "response_uri");
   if (isCs07DcApiRequest) requiredFields.push("expected_origins");
   for (const field of requiredFields) {
@@ -425,7 +434,7 @@ export function validateCs02SignedJar(requestJwt, options = { strict: true }) {
     }
   }
 
-  if (payload.exp - payload.iat > CS02_MAX_REQUEST_LIFETIME_SEC + 5) {
+  if (payload.exp - (requiresProtectedIat ? header.iat : payload.iat) > CS02_MAX_REQUEST_LIFETIME_SEC + 5) {
     if (payload.response_mode !== "dc_api" && payload.response_mode !== "dc_api.jwt") {
       throw new Cs02VerifierRequestError(
         "Generated CS-02 JAR lifetime exceeds five minutes",

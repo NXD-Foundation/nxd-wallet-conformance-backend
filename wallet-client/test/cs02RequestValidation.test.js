@@ -14,7 +14,7 @@ import {
   validateCs02RequestUriMethod,
   validateCs02RequestUriResponseContentType,
   validateCs02JarHeader,
-  validateCs02JarPayload,
+  validateCs02JarPayload as validateJarPayload,
   validateCs02Nonce,
   validateCs02TransactionData,
   validateCs02ResponseUri,
@@ -106,11 +106,16 @@ function baseJarPayload(overrides = {}) {
   };
 }
 
+function validateCs02JarPayload(payload, options, log, header = { iat: payload.iat }) {
+  return validateJarPayload(payload, options, log, header);
+}
+
 async function signJar(payload, headerOverrides = {}, { includeX5c = true } = {}) {
   let privateKey;
   let header = {
     alg: "ES256",
     typ: CS02_JAR_TYP,
+    iat: payload.iat,
     ...headerOverrides,
   };
 
@@ -277,7 +282,7 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
       const clientId = computeX509HashClientIdFromLeafCertBase64(leafB64);
       const key = await importPKCS8(fs.readFileSync(keyPath, "utf8"), "ES256");
       const requestJwt = await new SignJWT(baseJarPayload({ client_id: clientId }))
-        .setProtectedHeader({ alg: "ES256", typ: CS02_JAR_TYP, x5c: [leafB64] })
+        .setProtectedHeader({ alg: "ES256", typ: CS02_JAR_TYP, iat: Math.floor(Date.now() / 1000), x5c: [leafB64] })
         .sign(key);
       const { header, payload } = decodeJarParts(requestJwt);
       const verified = await verifyCs02JarSignature(requestJwt, header, payload, strictOptions());
@@ -380,6 +385,22 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
       ).to.throw(Cs02ValidationError);
     });
 
+    it("requires numeric protected-header iat even when the payload has iat", () => {
+      const payload = baseJarPayload();
+      for (const header of [{}, { iat: String(payload.iat) }]) {
+        expect(() => validateJarPayload(payload, strictOptions(), undefined, header))
+          .to.throw(Cs02ValidationError, /protected header/);
+      }
+    });
+
+    it("uses protected-header iat for freshness and maximum lifetime", () => {
+      const payload = baseJarPayload();
+      for (const [offset, error] of [[-301, /clock skew/], [301, /clock skew/], [-200, /lifetime/]]) {
+        expect(() => validateJarPayload(payload, strictOptions(), undefined, { iat: payload.iat + offset }))
+          .to.throw(Cs02ValidationError, error);
+      }
+    });
+
     it("rejects expired JAR", () => {
       const now = Math.floor(Date.now() / 1000);
       expect(() =>
@@ -467,6 +488,16 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
       }
       expect(ecLeafCertBase64()).to.equal(new X509Certificate(blocks[0]).raw.toString("base64"));
       expect(payload.client_id).to.equal(computeX509HashClientIdFromLeafCertBase64(header.x5c[0]));
+    });
+
+    it("accepts a signed CS-02 request with iat only in its protected header", async () => {
+      const { iat, ...payload } = baseJarPayload();
+      const requestJwt = await signJar(payload, { iat });
+      const verified = await validateAndVerifyCs02AuthorizationRequest(requestJwt, {
+        options: strictOptions(),
+      });
+      expect(verified.header.iat).to.equal(iat);
+      expect(verified.payload).not.to.have.property("iat");
     });
 
     it("accepts a valid ES256 x509_hash signed JAR", async () => {
@@ -639,7 +670,7 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
 
     async function signDidWebJar(headerOverrides = {}) {
       return new SignJWT(baseJarPayload({ client_id: didWebClientId }))
-        .setProtectedHeader({ alg: "ES256", typ: CS02_JAR_TYP, kid: didWebKid, ...headerOverrides })
+        .setProtectedHeader({ alg: "ES256", typ: CS02_JAR_TYP, iat: Math.floor(Date.now() / 1000), kid: didWebKid, ...headerOverrides })
         .sign(privateKey);
     }
 
@@ -750,7 +781,7 @@ describe("CS-02 wallet request validation (Phase 1)", () => {
 
     it("rejects bare did:web client_id even when the DID document is otherwise valid", async () => {
       const requestJwt = await new SignJWT(baseJarPayload({ client_id: didWebDid }))
-        .setProtectedHeader({ alg: "ES256", typ: CS02_JAR_TYP, kid: didWebKid })
+        .setProtectedHeader({ alg: "ES256", typ: CS02_JAR_TYP, iat: Math.floor(Date.now() / 1000), kid: didWebKid })
         .sign(privateKey);
 
       try {

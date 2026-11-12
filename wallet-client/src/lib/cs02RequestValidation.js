@@ -34,7 +34,7 @@ import {
   assertX509SanDnsResponseUriFqdn,
   parseTrustedX509ClientIds,
 } from "../../../utils/cs02ClientIdBinding.js";
-import { dcqlQueryUsesCs03CredentialFormat } from "../../../utils/cs02VerifierRequest.js";
+import { dcqlQueryUsesCs03CredentialFormat, requiresCs02ProtectedIat } from "../../../utils/cs02VerifierRequest.js";
 import { isStrictCs02Base64Url, decodeStrictCs02Base64Url, isStrictCs02EcP256Jwk } from "../../utils/cs02Encoding.js";
 import { isCompactJwe, TS12_PAYMENT_TRANSACTION_TYPE, isTs12PaymentRequestUri } from "../../utils/ts12PaymentUtils.js";
 
@@ -344,22 +344,26 @@ function audienceMatchesPolicy(aud, allowedAudiences) {
   return values.some((entry) => allowedAudiences.includes(entry));
 }
 
-export function validateCs02JarPayload(payload, options, log = () => {}) {
+export function validateCs02JarPayload(payload, options, log = () => {}, header = {}) {
   const isCs07DcApiRequest =
     payload?.response_mode === "dc_api.jwt" &&
     Array.isArray(payload?.expected_origins) &&
     payload?.state == null &&
     payload?.response_uri == null;
+  const requiresProtectedIat = requiresCs02ProtectedIat(
+    isCs07DcApiRequest && !options.nonApiInvocation ? payload.response_mode : undefined,
+    options,
+  );
   const requiredFields = [
     "client_id",
     "nonce",
     "response_type",
     "response_mode",
-    "iat",
     "exp",
     "dcql_query",
     "aud",
   ];
+  if (!requiresProtectedIat) requiredFields.push("iat");
   if (!isCs07DcApiRequest) requiredFields.splice(2, 0, "response_uri", "state");
   if (isCs07DcApiRequest) requiredFields.push("expected_origins");
   for (const field of requiredFields) {
@@ -378,7 +382,11 @@ export function validateCs02JarPayload(payload, options, log = () => {}) {
   }
 
   const now = Math.floor(Date.now() / 1000);
-  const iat = Number(payload.iat);
+  if (requiresProtectedIat && !Number.isFinite(header.iat)) {
+    logValidationFailure(log, "invalid_jar_protected_iat");
+    throw new Cs02ValidationError("Authorization request requires numeric iat in the protected header", "invalid_request");
+  }
+  const iat = requiresProtectedIat ? header.iat : Number(payload.iat);
   const exp = Number(payload.exp);
   if (!Number.isFinite(iat) || !Number.isFinite(exp)) {
     logValidationFailure(log, "invalid_jar_timestamps");
@@ -770,7 +778,7 @@ export async function validateAndVerifyCs02AuthorizationRequest(
 
   const { header, payload } = decodeJarParts(requestJwt);
   validateCs02JarHeader(header, log);
-  validateCs02JarPayload(payload, options, log);
+  validateCs02JarPayload(payload, { ...options, nonApiInvocation: Boolean(deepLinkUrl) }, log, header);
   if (options.strict && payload.response_mode === "direct_post.jwt" &&
       payload.client_metadata == null && payload.client_metadata_uri == null) {
     throw new Cs02ValidationError(

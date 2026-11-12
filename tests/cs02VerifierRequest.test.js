@@ -55,6 +55,9 @@ async function buildStandardCs02Jar(overrides = {}) {
       null,
       "state-phase3",
       "ES256",
+      false,
+      null,
+      overrides.verifierSigningMaterial,
     );
   } finally {
     process.env = previous;
@@ -175,7 +178,15 @@ describe("CS-02 verifier request generation (Phase 3)", () => {
   });
 
   it("generates ES256 signed JAR with required CS-02 payload fields", async () => {
-    const requestJwt = await buildStandardCs02Jar();
+    const certPem = fs.readFileSync("x509EC/client_certificate.crt", "utf8");
+    const certChain = [certPem.replace(/-----[^-]+-----|\s/g, "")];
+    const requestJwt = await buildStandardCs02Jar({
+      client_id: computeX509HashClientIdFromLeafCertBase64(certChain[0]),
+      verifierSigningMaterial: {
+        certChain,
+        privateKeyPkcs8: fs.readFileSync("x509EC/ec_private_pkcs8.key", "utf8"),
+      },
+    });
     const header = jose.decodeProtectedHeader(requestJwt);
     const payload = jose.decodeJwt(requestJwt);
 
@@ -186,7 +197,8 @@ describe("CS-02 verifier request generation (Phase 3)", () => {
     expect(payload.client_id).to.match(/^x509_hash:/);
     expect(payload.dcql_query.credentials[0].id).to.equal("cmwallet");
     expect(payload.state).to.equal("state-phase3");
-    expect(payload.exp - payload.iat).to.be.at.most(300);
+    expect(header.iat).to.be.a("number");
+    expect(payload.exp - header.iat).to.be.at.most(300);
     expect(payload.presentation_definition).to.equal(undefined);
   });
 

@@ -16,6 +16,7 @@ import {
   validateCs02JarGenerationInput,
   validateCs02TransactionDataEntries,
   applyCs02JarTimestamps,
+  requiresCs02ProtectedIat,
   validateCs02SignedJar,
   filterClientMetadataForCs02,
   resolveCs02JarSigningPolicy,
@@ -632,6 +633,9 @@ export async function buildVpRequestJWT(
     jwtPayload.transaction_data = transaction_data;
   }
 
+  const issuedAtHeader = requiresCs02ProtectedIat(response_mode, cs02Options)
+    ? { iat: jwtPayload.iat }
+    : {};
   let signedJwt;
   const verifierMaterial = () => verifierSigningMaterial || loadVerifierP12();
   const suppliedVerifierSigning = verifierSigningMaterial
@@ -692,6 +696,7 @@ export async function buildVpRequestJWT(
 
     const header = {
       alg: x509Alg,
+      ...issuedAtHeader,
       typ: "oauth-authz-req+jwt",
       x5c: buildPresentationRequestX5c(certChain),
     };
@@ -746,6 +751,7 @@ export async function buildVpRequestJWT(
 
     const header = {
       alg: x509Alg,
+      ...issuedAtHeader,
       typ: "oauth-authz-req+jwt",
       x5c: buildPresentationRequestX5c(certChain),
     };

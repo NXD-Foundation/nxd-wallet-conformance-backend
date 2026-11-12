@@ -30,13 +30,14 @@ describe("strict wallet presentation error submission", () => {
     const base = `http://127.0.0.1:${server.address().port}`;
     try {
       const key = await importPKCS8(fs.readFileSync("x509EC/ec_private_pkcs8.key", "utf8"), "ES256");
+      const now = Math.floor(Date.now() / 1000);
       jwt = await new SignJWT({
         client_id: clientId, response_uri: `${base}/response`, state: "echo-this-state",
         nonce: "nonce-123", response_type: "vp_token", response_mode: "direct_post",
         aud: "https://self-issued.me/v2",
         dcql_query: { credentials: [{ id: "pid", format: "dc+sd-jwt", meta: { vct_values: ["urn:test:pid"] } }] },
-      }).setProtectedHeader({ alg: "ES256", typ: "oauth-authz-req+jwt", x5c })
-        .setIssuedAt().setExpirationTime("5m").sign(key);
+      }).setProtectedHeader({ alg: "ES256", typ: "oauth-authz-req+jwt", iat: now, x5c })
+        .setExpirationTime(now + 300).sign(key);
       setWalletTrustSessionStorageForTests({ get: async () => { throw new Error("Verifier trust check failed"); } });
       let failure;
       try {
