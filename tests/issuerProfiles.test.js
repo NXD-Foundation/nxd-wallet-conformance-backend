@@ -14,7 +14,11 @@ describe("pilot issuer profiles", () => {
     expect(getIssuerProfile("pid").credentialConfigurationIds).to.include("urn:eu.europa.ec.eudi:pid:1");
     expect(getIssuerProfile("pub-eaa").credentialConfigurationIds).to.include("PhotoID");
     expect(getIssuerProfile("eaa").credentialConfigurationIds).to.include("VerifiableStudentIDSDJWT");
-    expect(getIssuerProfile("qeaa").credentialConfigurationIds).to.be.empty;
+    expect(getIssuerProfile("pid").credentialConfigurationIds).to.include("urn:eudi:pid:se:1");
+    expect(getIssuerProfile("pub-eaa").credentialConfigurationIds).to.include("uri:eu.eudi.eucc.1");
+    expect(getIssuerProfile("qeaa").credentialConfigurationIds).to.deep.equal([
+      "https://credentials.webuild.eu/power-of-x/v7",
+    ]);
   });
 
   it("constructs an issuer identifier under the existing public prefix", () => {

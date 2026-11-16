@@ -4102,6 +4102,82 @@
           "key_attestations_required": {}
         }
       }
+    },
+    "urn:eudi:pid:se:1": {
+      "scope": "urn:eudi:pid:se:1",
+      "cryptographic_binding_methods_supported": ["jwk"],
+      "credential_metadata": {
+        "display": [{ "name": "BU6 Swedish PID", "locale": "en-GB" }],
+        "claims": [
+          { "path": ["given_name"] },
+          { "path": ["family_name"] },
+          { "path": ["birthdate"] },
+          { "path": ["place_of_birth", "locality"] },
+          { "path": ["nationalities"] },
+          { "path": ["personal_administrative_number"] },
+          { "path": ["date_of_expiry"] },
+          { "path": ["issuing_authority"] },
+          { "path": ["issuing_country"] }
+        ]
+      },
+      "credential_signing_alg_values_supported": ["ES256"],
+      "format": "dc+sd-jwt",
+      "vct": "urn:eudi:pid:se:1",
+      "proof_types_supported": {
+        "jwt": { "proof_signing_alg_values_supported": ["ES256"], "key_attestations_required": {} },
+        "attestation": { "proof_signing_alg_values_supported": ["ES256"], "key_attestations_required": {} }
+      }
+    },
+    "https://credentials.webuild.eu/power-of-x/v7": {
+      "scope": "https://credentials.webuild.eu/power-of-x/v7",
+      "cryptographic_binding_methods_supported": ["jwk"],
+      "credential_metadata": {
+        "display": [{ "name": "Power of Representation", "locale": "en-GB" }],
+        "claims": [
+          { "path": ["credential", "type"] },
+          { "path": ["credential", "legal_category"] },
+          { "path": ["represented_economic_operator", "legal_name"] },
+          { "path": ["represented_economic_operator", "identifier", "value"] },
+          { "path": ["proxy", "entity_type"] },
+          { "path": ["proxy", "natural_entity_proxy"] },
+          { "path": ["authority", "authority_source"] },
+          { "path": ["authority", "proxy_position"] }
+        ]
+      },
+      "credential_signing_alg_values_supported": ["ES256"],
+      "format": "dc+sd-jwt",
+      "vct": "https://credentials.webuild.eu/power-of-x/v7",
+      "proof_types_supported": {
+        "jwt": { "proof_signing_alg_values_supported": ["ES256"], "key_attestations_required": {} },
+        "attestation": { "proof_signing_alg_values_supported": ["ES256"], "key_attestations_required": {} }
+      }
+    },
+    "uri:eu.eudi.eucc.1": {
+      "scope": "uri:eu.eudi.eucc.1",
+      "cryptographic_binding_methods_supported": ["jwk"],
+      "credential_metadata": {
+        "display": [{ "name": "EU Company Certificate", "locale": "en-GB" }],
+        "claims": [
+          { "path": ["legal_person_name"] },
+          { "path": ["legal_person_id"] },
+          { "path": ["legal_form_type"] },
+          { "path": ["registration_member_state"] },
+          { "path": ["registered_address", "full_address"] },
+          { "path": ["registration_date"] },
+          { "path": ["legal_person_status"] },
+          { "path": ["legal_person_activity"] },
+          { "path": ["legal_representative"] },
+          { "path": ["issuing_authority"] },
+          { "path": ["issuing_country"] }
+        ]
+      },
+      "credential_signing_alg_values_supported": ["ES256"],
+      "format": "dc+sd-jwt",
+      "vct": "uri:eu.eudi.eucc.1",
+      "proof_types_supported": {
+        "jwt": { "proof_signing_alg_values_supported": ["ES256"], "key_attestations_required": {} },
+        "attestation": { "proof_signing_alg_values_supported": ["ES256"], "key_attestations_required": {} }
+      }
     }
   }
 }

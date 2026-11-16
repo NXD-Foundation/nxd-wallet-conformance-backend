@@ -121,6 +121,7 @@ import {
   isDeferredCredentialDenied,
 } from "../../utils/deferredCredentialPoll.js";
 import { applyIssuerOwnedCredentialStatus, issueDeferredCredentialOnce, publishedCredentialStatus, recordCredentialStatus } from "../../utils/credentialStatusIssuance.js";
+import { bu6AlwaysPublishesStatusList } from "../../utils/bu6CredentialPayloads.js";
 import { sessionRevocationEnabled } from "../../utils/sessionContext.js";
 import { sessionWalletAttestation } from "../../utils/sessionContext.js";
 import {
@@ -916,7 +917,8 @@ const handleImmediateCredentialIssuance = async (
   }
 
   recordCredentialStatus(sessionObject, applyIssuerOwnedCredentialStatus(requestBody, {
-    enabled: sessionRevocationEnabled(sessionObject) && (format === "dc+sd-jwt" || format === "vc+sd-jwt"),
+    enabled: (sessionRevocationEnabled(sessionObject) || bu6AlwaysPublishesStatusList(effectiveConfigurationId))
+      && (format === "dc+sd-jwt" || format === "vc+sd-jwt"),
     allocate: () => allocateIssuedCredentialStatus({ baseUrl: getServerUrl(), revoked: sessionObject?.issueRevoked === true }),
   }));
 
@@ -2677,7 +2679,7 @@ sharedRouter.post("/credential_deferred", async (req, res) => {
 
     const { credential, reused } = await issueDeferredCredentialOnce(sessionObject, () => {
       recordCredentialStatus(sessionObject, applyIssuerOwnedCredentialStatus(sessionObject.requestBody, {
-        enabled: sessionRevocationEnabled(sessionObject),
+        enabled: sessionRevocationEnabled(sessionObject) || bu6AlwaysPublishesStatusList(sessionObject.requestBody?.vct),
         allocate: () => allocateIssuedCredentialStatus({ baseUrl: getServerUrl(), revoked: sessionObject?.issueRevoked === true }),
       }));
       return handleCredentialGenerationBasedOnFormatDeferred(sessionObject, sessionIssuerUrl(getServerUrl(), sessionObject));

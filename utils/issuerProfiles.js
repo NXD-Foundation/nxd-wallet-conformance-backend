@@ -1,10 +1,12 @@
-// Pilot assignments; payment/SCA and credentials awaiting a role are deliberately
-// absent until their applicable rulebook and onboarding are agreed.
+// Pilot role assignments. Payment and SCA credentials stay off these lists.
+// The BU6 Swedish PID, EU Company Certificate, and Power of X sit on the role
+// named by the workbook's legal category.
 export const issuerProfiles = Object.freeze({
   pid: Object.freeze({ role: "pid-provider", credentialConfigurationIds: Object.freeze([
     "VerifiablePIDSDJWT", "VerifiablePIDSDJWTWUA", "VerifiablePIDSDJWTAttestation",
     "urn:eu.europa.ec.eudi:pid:1", "urn:eudi:pid:1", "urn:eu.europa.ec.eudi:pid:1:mso_mdoc",
     "urn:eudi:pid:lsp:1", "urn:eudi:pid:lsp:1:mso_mdoc",
+    "urn:eudi:pid:se:1",
   ]) }),
   eaa: Object.freeze({ role: "eaa-provider", credentialConfigurationIds: Object.freeze([
     "VerifiableStudentIDSDJWT", "VerifiableFerryBoardingPassCredentialSDJWT", "VerifiableReceipt", "LoyaltyCard",
@@ -12,8 +14,11 @@ export const issuerProfiles = Object.freeze({
   "pub-eaa": Object.freeze({ role: "pub-eaa-provider", credentialConfigurationIds: Object.freeze([
     "VerifiablePortableDocumentA1SDJWT", "VerifiablePortableDocumentA2SDJWT",
     "VerifiableePassportCredentialSDJWT", "PhotoID", "PCD",
+    "uri:eu.eudi.eucc.1",
   ]) }),
-  qeaa: Object.freeze({ role: "qeaa-provider", credentialConfigurationIds: Object.freeze([]) }),
+  qeaa: Object.freeze({ role: "qeaa-provider", credentialConfigurationIds: Object.freeze([
+    "https://credentials.webuild.eu/power-of-x/v7",
+  ]) }),
 });
 
 export function getIssuerProfile(id) {

@@ -37,7 +37,11 @@ codebase as well: the issuer, the verifier, and `wallet-client/` perform them,
 and an ITB suite drives those implementations.
 
 The primary supported credential families are SD-JWT VC, JWT VC, and
-`mso_mdoc` (mDL/PID). Redis provides session, state, nonce, and deferred
+`mso_mdoc` (mDL/PID). The default issuer also issues the BU6 Swedish PID
+`urn:eudi:pid:se:1`, Power of Representation
+`https://credentials.webuild.eu/power-of-x/v7`, and EU Company Certificate
+`uri:eu.eudi.eucc.1`. Those three are advertised again on the pid, qeaa, and
+pub-eaa role profiles respectively. Redis provides session, state, nonce, and deferred
 issuance storage. The public protocol shape is mostly configured through
 `data/issuer-config.json`, `data/verifier-config.json`, and
 `data/oauth-config.json`.

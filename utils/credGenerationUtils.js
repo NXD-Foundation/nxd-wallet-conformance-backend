@@ -23,6 +23,7 @@ import {
 import fs from "fs";
 import { SDJwtVcInstance } from "@sd-jwt/sd-jwt-vc";
 import { disclosureFrameWithoutStatus, embedIssuerOwnedStatus } from "./credentialStatusIssuance.js";
+import { bu6SdJwtPayload } from "./bu6CredentialPayloads.js";
 
 /** JWT typ header for SD-JWT credentials 
  * https://www.w3.org/TR/vc-jose-cose/?utm_source=chatgpt.com#securing-with-sd-jwt 
@@ -602,8 +603,11 @@ export async function handleCredentialGenerationBasedOnFormat(
 
   // Determine credential payload based on type
   const callerPayload = resolveConfiguredCallerSdJwtPayload(sessionObject, credType, format);
+  const bu6Payload = callerPayload ? null : bu6SdJwtPayload(credType);
   if (callerPayload) {
     credPayload = callerPayload;
+  } else if (bu6Payload) {
+    credPayload = bu6Payload;
   } else {
     switch (credType) {
     case "VerifiableIdCardJwtVc":
@@ -677,7 +681,9 @@ export async function handleCredentialGenerationBasedOnFormat(
   const now = new Date();
   const expiryDate = new Date(now);
   expiryDate.setMonth(now.getMonth() + 6);
-  if (isTs12ScaCredentialType(credType)) {
+  if (credPayload.expiresAt) {
+    expiryDate.setTime(Date.parse(credPayload.expiresAt));
+  } else if (isTs12ScaCredentialType(credType)) {
     const cappedExp = capScaExpiryUnix(
       Math.floor(expiryDate.getTime() / 1000),
       requestBody._wuaExp,
@@ -1463,7 +1469,10 @@ export async function handleCredentialGenerationBasedOnFormatDeferred(
   }
 
   // Determine credential payload based on type
-  switch (credType) {
+  const deferredBu6Payload = bu6SdJwtPayload(credType);
+  if (deferredBu6Payload) {
+    credPayload = deferredBu6Payload;
+  } else switch (credType) {
     case "VerifiableIdCardJwtVc":
     case "VerifiablePIDSDJWT":
     case "VerifiablePIDSDJWTAttestation":
@@ -1556,7 +1565,9 @@ export async function handleCredentialGenerationBasedOnFormatDeferred(
   const now = new Date();
   const expiryDate = new Date(now);
   expiryDate.setMonth(now.getMonth() + 6);
-  if (isTs12ScaCredentialType(credType)) {
+  if (credPayload.expiresAt) {
+    expiryDate.setTime(Date.parse(credPayload.expiresAt));
+  } else if (isTs12ScaCredentialType(credType)) {
     const cappedExp = capScaExpiryUnix(
       Math.floor(expiryDate.getTime() / 1000),
       requestBody._wuaExp,
