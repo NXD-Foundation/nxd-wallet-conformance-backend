@@ -106,7 +106,7 @@ function isTestEnv(env = process.env) {
 
 async function getStorage() {
   if (storage) return storage;
-  if (isTestEnv()) {
+  if (isTestEnv() || process.env.WALLET_STATUS_LIST_STORAGE === "memory") {
     storage = createMemoryStatusListStorage();
     return storage;
   }
