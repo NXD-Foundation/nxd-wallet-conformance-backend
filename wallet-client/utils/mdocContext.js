@@ -5,9 +5,10 @@ import { hkdf } from "@panva/hkdf";
 import * as x509 from "@peculiar/x509";
 import { X509Certificate } from "@peculiar/x509";
 import { exportJWK, importX509 } from "jose";
+import { X509Certificate as NodeX509Certificate } from "node:crypto";
 import * as mdoc from "@animo-id/mdoc";
 
-const { CoseKey, KeyOps, KeyType, MacAlgorithm, hex, stringToBytes } = mdoc;
+const { COSEKey, KeyOps, KeyType, MacAlgorithm, hex, stringToBytes } = mdoc;
 
 function asUint8Array(value) {
   if (value instanceof Uint8Array) return value;
@@ -70,16 +71,26 @@ export const mdocContext = {
         const sig = p256.sign(hashed, asUint8Array(Buffer.from(jwk.d, "base64url")));
         return sig.toCompactRawBytes();
       },
-      verify: async ({ sign1, key }) => {
+      verify: async ({ sign1, jwk }) => {
         if (!sign1.signature) {
           throw new Error("signature is required for sign1 verification");
         }
 
-        const hashed = sha256(asUint8Array(sign1.toBeSigned));
+        const publicJwk = typeof jwk?.toJWK === "function" ? jwk.toJWK() : jwk;
+        const publicKey = jwk?.publicKey || (publicJwk?.x && publicJwk?.y
+          ? Buffer.concat([
+            Buffer.from([0x04]),
+            Buffer.from(publicJwk.x, "base64url"),
+            Buffer.from(publicJwk.y, "base64url"),
+          ])
+          : null);
+        if (!publicKey) throw new Error("Issuer COSE key does not contain an EC public key");
+        const { data } = sign1.getRawSigningData();
+        const hashed = sha256(asUint8Array(data));
         return p256.verify(
           asUint8Array(sign1.signature),
           hashed,
-          asUint8Array(key.publicKey),
+          asUint8Array(publicKey),
         );
       },
     },
@@ -93,7 +104,19 @@ export const mdocContext = {
     getPublicKey: async ({ certificate, alg }) => {
       const parsed = new X509Certificate(certificate);
       const key = await importX509(parsed.toString(), alg, { extractable: true });
-      return CoseKey.fromJwk(await exportJWK(key));
+      return COSEKey.fromJWK(await exportJWK(key));
+    },
+    getCertificateData: async ({ certificate }) => {
+      const parsed = new NodeX509Certificate(Buffer.from(certificate));
+      return {
+        issuerName: parsed.issuer,
+        subjectName: parsed.subject,
+        serialNumber: parsed.serialNumber,
+        thumbprint: parsed.fingerprint256,
+        notBefore: new Date(parsed.validFrom),
+        notAfter: new Date(parsed.validTo),
+        pem: parsed.toString(),
+      };
     },
     validateCertificateChain: async ({ trustedCertificates, x5chain: certificateChain }) => {
       if (certificateChain.length === 0) {

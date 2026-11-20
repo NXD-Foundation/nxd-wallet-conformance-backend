@@ -54,7 +54,7 @@ import {
   describeWuaStatusListPublisher,
 } from "./lib/wuaStatusList.js";
 import { createWuaStatusListRouter } from "./routes/wuaStatusListRoutes.js";
-import { applyWalletTrustDirective, normalizeTrustFrameworkFlag, trustFrameworkSessionProps, walletTrustDirective, checkAccessCertificateTrust, trustDecisionAccepted } from "../../utils/trustFrameworkPolicy.js";
+import { applyWalletTrustDirective, normalizeTrustFrameworkFlag, trustFrameworkSessionProps, walletTrustDirective, checkAccessCertificateTrust, trustDecisionAccepted, isTrustFrameworkSession } from "../../utils/trustFrameworkPolicy.js";
 import { certificatesFromX5c } from "../../trust/crypto.js";
 import { createWalletContext } from "../../utils/sessionContext.js";
 import { toPublicLogs } from "../../utils/publicLogView.js";
@@ -2076,7 +2076,12 @@ async function validateAndStoreCredential({ configurationId, credential, issuerM
       // Potential mdoc base64url
       console.log("[validate] detected potential mdoc format"); 
       try { slog("[validate] validating mdoc", { detectedFormat }); } catch {}
-      const mdocResult = await verifyReceivedMdlToken(token, { validateStructure: true, includeMetadata: false });
+      const walletTrustSession = await loadWalletTrustSession(logSessionId);
+      const mdocResult = await verifyReceivedMdlToken(token, {
+        validateStructure: true,
+        includeMetadata: false,
+        verifyIssuerAuthenticity: isTrustFrameworkSession(walletTrustSession) || process.env.WALLET_MDL_STRICT === "true",
+      }, detectedDoctype || undefined);
       if (!mdocResult.success) {
         console.error("[validate] mdoc validation failed:", mdocResult.error); 
         try { slog("[validate] mdoc validation failed", { error: mdocResult.error }); } catch {}
@@ -2112,13 +2117,18 @@ async function validateAndStoreCredential({ configurationId, credential, issuerM
           `mdoc_doctype_mismatch: issuer metadata doctype ${credentialConfig.doctype} does not match credential docType ${detectedDoctype}`,
         );
       }
-      // The mdoc parser currently validates structure but does not expose a
-      // cryptographically verified issuer x5chain. Opted-in trust sessions
-      // must fail closed rather than store a structurally valid but untrusted credential.
-      await enforceIssuedCredentialTrust({ sessionId: logSessionId, payload: null, header: null, format: detectedFormat, vct: credentialConfig.vct || null, doctype: detectedDoctype });
-      if (process.env.WALLET_MDL_STRICT === 'true') {
-        try { slog("[validate] mdoc crypto verification not implemented"); } catch {}
-        throw new Error("mdoc_crypto_verification_not_implemented: provide trust anchors and crypto verifier");
+      await enforceIssuedCredentialTrust({
+        sessionId: logSessionId,
+        payload: null,
+        header: null,
+        format: detectedFormat,
+        vct: credentialConfig.vct || null,
+        doctype: detectedDoctype,
+        issuerCertificateEvidence: mdocResult.issuerCertificate,
+        trustEvidenceBound: mdocResult.issuerSignatureVerified === true,
+      });
+      if (process.env.WALLET_MDL_STRICT === "true" && mdocResult.issuerSignatureVerified !== true) {
+        throw new Error("mdoc_issuer_authentication_failed: issuer signature and data integrity must be verified");
       }
     } else {
       console.error("[validate] unknown credential format, token type:", typeof token); 

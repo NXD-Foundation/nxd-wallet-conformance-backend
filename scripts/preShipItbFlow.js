@@ -1,10 +1,12 @@
 import { spawn } from "node:child_process";
+import { rmSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import net from "node:net";
 import { mkdtemp, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { preparePreShipMetadataSigningMaterial } from "./preShipItbMaterial.js";
 import {
   CASES,
   caseRequest,
@@ -19,6 +21,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const trustFramework = !process.argv.includes("--no-trust");
 const CASE_TIMEOUT_MS = 180_000;
 const children = [];
+const temporaryDirectories = [];
 
 function selectedCases() {
   const arg = process.argv.find((item) => item.startsWith("--case="));
@@ -192,6 +195,9 @@ function stopChildren() {
   if (startedRedisContainer) {
     spawn("docker", ["stop", "pre-ship-redis"], { stdio: "ignore" });
   }
+  for (const directory of temporaryDirectories.splice(0)) {
+    rmSync(directory, { recursive: true, force: true });
+  }
 }
 
 async function ensureRedis() {
@@ -226,7 +232,7 @@ async function ensureRedis() {
   throw new Error("Redis is not accepting connections on localhost:6379, and the test container did not become ready");
 }
 
-async function ensureIssuer(issuer) {
+async function ensureIssuer(issuer, metadataSigningP12Path) {
   const ready = async () => {
     const response = await requestJson(`${issuer}/.well-known/openid-credential-issuer`, { timeoutMs: 3_000 });
     return response.httpStatus === 200 && response.body && typeof response.body === "object";
@@ -243,6 +249,7 @@ async function ensureIssuer(issuer) {
   spawnService("node", ["server.js"], {
     ...process.env,
     SERVER_URL: issuer,
+    ...(metadataSigningP12Path ? { ISSUER_METADATA_SIGNING_P12_PATH: metadataSigningP12Path } : {}),
     VERIFIER_CS02_COMPATIBILITY: "",
     CS02_COMPATIBILITY: "",
   }, root);
@@ -359,7 +366,10 @@ async function main() {
   const cases = selectedCases();
   await ensureRedis();
   const urls = await resolveUrls();
-  await ensureIssuer(urls.issuer);
+  const metadataMaterial = trustFramework
+    ? await preparePreShipMetadataSigningMaterial({ root, env: process.env, temporaryDirectories })
+    : null;
+  await ensureIssuer(urls.issuer, metadataMaterial?.path);
   await ensureWallet(urls.wallet);
   const results = [];
   let stopPresentations = false;

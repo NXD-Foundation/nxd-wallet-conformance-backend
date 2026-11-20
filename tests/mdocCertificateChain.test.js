@@ -3,8 +3,10 @@ import fs from "node:fs";
 import { X509Certificate, verify } from "node:crypto";
 import * as jose from "jose";
 import { decode, encode } from "cbor-x";
+import { cborDecode, cborEncode } from "@animo-id/mdoc";
 import { handleCredentialGenerationBasedOnFormat } from "../utils/credGenerationUtils.js";
 import { buildMdocPresentation } from "../wallet-client/utils/mdlVerification.js";
+import { verifyReceivedMdlToken as verifyWalletReceivedMdlToken } from "../wallet-client/utils/mdlVerification.js";
 import { verifyMdlToken } from "../utils/mdlVerification.js";
 import { extractMdocIssuerCertificate } from "../utils/mdocClaims.js";
 import { certificateFingerprint } from "../trust/crypto.js";
@@ -12,6 +14,7 @@ import { evaluateTrust } from "../trust/evaluate.js";
 import { loadTrustProfile } from "../trust/profile.js";
 import { trustFrameworkSessionProps, setTrustResolverForTests, clearTrustResolverForTests } from "../utils/trustFrameworkPolicy.js";
 import { validateCs02SdJwtEntriesInVpToken } from "../utils/cs02VerifierResponse.js";
+import { enforceIssuedCredentialTrust, setWalletTrustSessionStorageForTests } from "../wallet-client/src/lib/trustFramework.js";
 
 const session = trustFrameworkSessionProps({ trustFramework: true });
 const chain = fs.readFileSync("certs/id-union-pid-certificate.pem", "utf8")
@@ -54,7 +57,10 @@ describe("mdoc COSE certificate-chain extraction", () => {
 });
 
 describe("Trust Framework Integration mdoc PID issuance and presentation", () => {
-  afterEach(clearTrustResolverForTests);
+  afterEach(() => {
+    clearTrustResolverForTests();
+    setWalletTrustSessionStorageForTests(null);
+  });
   for (const configuration of doctypes) {
     it(`preserves the configured CA chain through wallet presentation for ${configuration}`, async () => {
       const docType = doctypes[0];
@@ -65,6 +71,53 @@ describe("Trust Framework Integration mdoc PID issuance and presentation", () =>
       const issued = await handleCredentialGenerationBasedOnFormat({
         vct: `${configuration}:mso_mdoc`, proofs: { jwt: [proof] },
       }, { signatureType: "x509", isHaip: false, ...session }, "http://localhost:3000", "mDL");
+      const walletStructuralValidation = await verifyWalletReceivedMdlToken(issued, {
+        validateStructure: true,
+        includeMetadata: false,
+      }, docType);
+      expect(walletStructuralValidation.success).to.equal(true, walletStructuralValidation.error);
+      expect(walletStructuralValidation.issuerCertificate.certificateChain.map(certificateFingerprint))
+        .to.deep.equal(chain.map(certificateFingerprint));
+
+      const walletIssuerValidation = await verifyWalletReceivedMdlToken(issued, {
+        validateStructure: true,
+        includeMetadata: false,
+        verifyIssuerAuthenticity: true,
+      }, docType);
+      expect(walletIssuerValidation.success).to.equal(true, walletIssuerValidation.error);
+      expect(walletIssuerValidation.issuerSignatureVerified).to.equal(true);
+      expect(walletIssuerValidation.issuerCertificate.certificateChain.map(certificateFingerprint))
+        .to.deep.equal(chain.map(certificateFingerprint));
+
+      const walletTrustSessionId = `wallet-mdoc-${configuration}`;
+      const walletSessions = new Map([[
+        `wallet:test-session:${walletTrustSessionId}`,
+        JSON.stringify({ sessionId: walletTrustSessionId, trustPolicy: session.trustPolicy }),
+      ]]);
+      setWalletTrustSessionStorageForTests({
+        get: async (key) => walletSessions.get(key) || null,
+        set: async (key, value) => walletSessions.set(key, value),
+      });
+      setTrustResolverForTests(await listedCaResolver());
+      const walletTrust = await enforceIssuedCredentialTrust({
+        sessionId: walletTrustSessionId,
+        format: "mso_mdoc",
+        doctype: docType,
+        issuerCertificateEvidence: walletIssuerValidation.issuerCertificate,
+        trustEvidenceBound: walletIssuerValidation.issuerSignatureVerified,
+      });
+      expect(walletTrust).to.include({ trusted: true, reasonCode: "TRUSTED" });
+
+      const tamperedIssuerSigned = cborDecode(Buffer.from(issued, "base64url"));
+      tamperedIssuerSigned.get("issuerAuth")[3][0] ^= 0x01;
+      const tamperedResult = await verifyWalletReceivedMdlToken(
+        Buffer.from(cborEncode(tamperedIssuerSigned)).toString("base64url"),
+        { validateStructure: true, includeMetadata: false, verifyIssuerAuthenticity: true },
+        docType,
+      );
+      expect(tamperedResult.success).to.equal(false);
+      expect(tamperedResult.error).to.match(/issuer authentication failed/i);
+
       const issuerSigned = decode(Buffer.from(issued, "base64url"));
       const evidence = extractMdocIssuerCertificate(issued);
       expect(evidence.certificateChain.map(certificateFingerprint)).to.deep.equal(chain.map(certificateFingerprint));

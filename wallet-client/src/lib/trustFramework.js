@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { X509Certificate } from "node:crypto";
-import forge from "node-forge";
 import { decodeProtectedHeader, importX509, jwtVerify } from "jose";
 import { walletRedisClient } from "./cache.js";
 import { makeSessionLogger } from "./logger.js";
@@ -164,7 +163,7 @@ export function x5cEvidence(header) {
   return { certificatePem: certificateFromX5c(header.x5c), certificateChain: certificatesFromX5c(header.x5c) };
 }
 
-export async function enforceIssuedCredentialTrust({ sessionId, payload, header, format, vct, doctype, scopeEvidence = null, trustEvidenceBound = true }) {
+export async function enforceIssuedCredentialTrust({ sessionId, payload, header, format, vct, doctype, scopeEvidence = null, trustEvidenceBound = true, issuerCertificateEvidence = null }) {
   const { session, enabled } = await isWalletTrustEnabled(sessionId);
   if (!enabled) return null;
   if (!trustEvidenceBound) {
@@ -177,7 +176,7 @@ export async function enforceIssuedCredentialTrust({ sessionId, payload, header,
     await recordWalletTrustDecision(sessionId, decision, "wallet-store-credential");
     throw new WalletTrustError("Trust-enabled credential storage requires the presented x5c certificate to verify the issuer signature", decision);
   }
-  const evidence = x5cEvidence(header);
+  const evidence = issuerCertificateEvidence || x5cEvidence(header);
   if (!evidence) {
     const decision = { trusted: false, state: "not_trusted", reasonCode: "ANCHOR_MISMATCH", evidence: { operation: "wallet-store-credential", format, vct, doctype, role: null } };
     await recordWalletTrustDecision(sessionId, decision, "wallet-store-credential");
@@ -214,12 +213,21 @@ export async function enforceIssuedCredentialTrust({ sessionId, payload, header,
   return decision;
 }
 
-function certificateSubject(certificatePem) {
-  const attributes = forge.pki.certificateFromPem(certificatePem).subject.attributes;
-  const find = (names) => attributes.find((attribute) => names.includes(attribute.type) || names.includes(attribute.name))?.value || null;
+export function certificateSubject(certificatePem) {
+  // node-forge's X.509 parser only supports RSA SubjectPublicKeyInfo. WRPACs
+  // use EC keys, so parse the subject with Node's algorithm-agnostic X509 API.
+  const attributes = new X509Certificate(certificatePem).subject
+    .split(/\n|,(?=\s*[A-Za-z][A-Za-z0-9.]*\s*=)/)
+    .map((entry) => entry.trim())
+    .map((entry) => {
+      const separator = entry.indexOf("=");
+      return separator < 0 ? null : [entry.slice(0, separator).trim(), entry.slice(separator + 1).trim()];
+    })
+    .filter(Boolean);
+  const find = (names) => attributes.find(([name]) => names.includes(name))?.[1] || null;
   return {
     entityId: find(["2.5.4.97", "organizationIdentifier"]) || find(["2.5.4.5", "serialNumber"]),
-    commonName: find(["2.5.4.3", "commonName"]),
+    commonName: find(["2.5.4.3", "CN", "commonName"]),
   };
 }
 

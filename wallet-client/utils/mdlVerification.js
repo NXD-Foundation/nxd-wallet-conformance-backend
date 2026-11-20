@@ -1,12 +1,50 @@
 import { decode } from 'cbor-x';
 import base64url from 'base64url';
 import crypto from "node:crypto";
-import { DeviceResponse } from "@animo-id/mdoc";
+import { DeviceResponse, Verifier, cborDecode, parseIssuerSigned } from "@animo-id/mdoc";
 import { mdocContext } from "./mdocContext.js";
+import { derToPem } from "../../trust/crypto.js";
+import { extractMdocIssuerCertificate } from "../../utils/mdocClaims.js";
 import {
   extractMdocClaimsByNamespace,
   selectSatisfiedMdocClaimSet,
 } from "./mdocClaims.js";
+
+function mapValue(value, key) {
+  return value instanceof Map ? value.get(key) : value?.[key];
+}
+
+async function verifyIssuerAuth(buffer, expectedDocType) {
+  const decoded = cborDecode(buffer);
+  const documents = mapValue(decoded, "documents");
+  const document = Array.isArray(documents) ? documents[0] : decoded;
+  const issuerSigned = mapValue(document, "issuerSigned") || document;
+  if (!(issuerSigned instanceof Map)) throw new Error("IssuerSigned must be a CBOR map");
+
+  const parsed = parseIssuerSigned(issuerSigned, expectedDocType || undefined);
+  const checks = [];
+  const verifier = new Verifier();
+  const onCheckG = (check) => checks.push(check);
+  await verifier.verifyIssuerSignature({
+    trustedCertificates: [],
+    issuerAuth: parsed.issuerSigned.issuerAuth,
+    disableCertificateChainValidation: true,
+    onCheckG,
+  }, mdocContext);
+  await verifier.verifyData({ mdoc: parsed, onCheckG }, mdocContext);
+  const failedChecks = checks.filter((check) => check.status === "FAILED");
+  if (failedChecks.length > 0) {
+    throw new Error(`mso_mdoc issuer authentication failed: ${failedChecks.map((check) => check.check).join(", ")}`);
+  }
+
+  const certificateChain = parsed.issuerSigned.issuerAuth.certificateChain.map(derToPem);
+  if (certificateChain.length === 0) throw new Error("mso_mdoc issuerAuth has no x5chain");
+  return {
+    certificatePem: certificateChain[0],
+    certificateChain,
+    issuerSignatureVerified: true,
+  };
+}
 
 /**
  * Custom mDL verification using cbor-x decoder
@@ -23,7 +61,8 @@ export async function verifyReceivedMdlToken(vpTokenBase64, options = {}, docume
   const {
     requestedFields = null,
     validateStructure = true,
-    includeMetadata = true
+    includeMetadata = true,
+    verifyIssuerAuthenticity = false,
   } = options;
   
   try {
@@ -194,13 +233,19 @@ export async function verifyReceivedMdlToken(vpTokenBase64, options = {}, docume
     //   });
     // }
     
+    const verifiedIssuerEvidence = verifyIssuerAuthenticity
+      ? await verifyIssuerAuth(buffer, document.docType)
+      : null;
+
     // Step 7: Build result object
     const result = {
       success: true,
       docType: document.docType,
       version: deviceResponse.version,
       status: deviceResponse.status,
-      claims: claims
+      claims,
+      issuerCertificate: verifiedIssuerEvidence || extractMdocIssuerCertificate(vpTokenBase64),
+      ...(verifiedIssuerEvidence ? { issuerSignatureVerified: true } : {}),
     };
     
     // Add metadata if requested
