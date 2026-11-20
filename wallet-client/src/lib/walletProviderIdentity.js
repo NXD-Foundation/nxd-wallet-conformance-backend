@@ -118,13 +118,14 @@ export async function buildWiaBundleForParOrToken({
   endpointAudience,
   authorizationServerIssuer,
   wiaTtlSeconds = 3600,
+  clientId = null,
   challenge = null,
   cnfKeyPair = null,
 }) {
   const material = loadWuaSigningMaterial();
   const providerKeys = await ensureWalletProviderKeyPair();
   const providerId = resolveWalletProviderIdSync(providerKeys.publicJwk);
-  const instanceId = await getOrCreateWalletInstanceId();
+  const instanceId = clientId || await getOrCreateWalletInstanceId();
   const cnfJwk = cnfKeyPair?.publicJwk || providerKeys.publicJwk;
   const wiaJwt = await createWiaJwt({
     privateKeyPem: material.privateKeyPem,
@@ -190,6 +191,7 @@ export async function resolveWiaForParOrToken({
     const bundle = await buildWiaBundleForParOrToken({
       endpointAudience,
       authorizationServerIssuer,
+      clientId,
       wiaTtlSeconds,
       challenge,
       cnfKeyPair,

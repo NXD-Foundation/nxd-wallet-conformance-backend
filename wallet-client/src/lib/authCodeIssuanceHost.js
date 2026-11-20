@@ -5,6 +5,7 @@ import { ensureOrCreateEcKeyPair } from "./crypto.js";
 import { computeAthForDpop } from "../../utils/tokenUtils.js";
 import fetch from "node-fetch";
 import { createAuthorizationCodeIssuance } from "./authorizationCodeIssuance.js";
+import { isWebuildCs01Profile } from "./profile.js";
 import { createWalletUnitAttestationClientAuth } from "./walletUnitAttestation.js";
 import {
   createAttestationChallengeState,
@@ -96,6 +97,9 @@ async function createAttestationHeadersForRequest({
     challenge: challengeState?.consume() ?? null,
     cnfKeyPair,
   });
+  if (!isWebuildCs01Profile(profile) && challengeState?.dpopCombined) {
+    delete attestation.headers["OAuth-Client-Attestation-PoP"];
+  }
   return attestation.headers;
 }
 

@@ -1,4 +1,7 @@
 import { expect } from "chai";
+import { decodeJwt, decodeProtectedHeader, importX509, jwtVerify } from "jose";
+import { X509Certificate } from "node:crypto";
+import fs from "node:fs";
 import { Readable } from "node:stream";
 import { Response } from "node-fetch";
 import { createAuthCodeIssuanceHost } from "../src/lib/authCodeIssuanceHost.js";
@@ -106,10 +109,29 @@ describe("auth handoff pending context", () => {
 });
 
 describe("authorization code prepare (handoff)", () => {
-  it("preserves streamed PAR and token responses after HTTP logging", async () => {
+  for (const combined of [false, true]) {
+  it(`preserves certificate-backed PAR and token authentication through handoff (combined=${combined})`, async () => {
     const host = createAuthCodeIssuanceHost({
-      discoverAuthorizationServerMetadata: async () => cs01AuthorizationServerMetadata,
-      httpPostForm: async (url) => {
+      discoverAuthorizationServerMetadata: async () => ({ ...cs01AuthorizationServerMetadata,
+        token_endpoint_auth_methods_supported: combined ? ["attest_jwt_client_auth_dpop"] : ["attest_jwt_client_auth"],
+        client_attestation_pop_methods_supported: combined ? ["dpop_combined"] : ["attestation_pop_jwt"],
+      }),
+      httpPostForm: async (url, params, sessionId, dpop, headers) => {
+        expect(params).not.to.have.property("client_assertion");
+        expect(params).not.to.have.property("client_assertion_type");
+        expect(Boolean(headers["OAuth-Client-Attestation-PoP"])).to.equal(!combined);
+        const wia = headers["OAuth-Client-Attestation"];
+        const header = decodeProtectedHeader(wia);
+        expect(header.jwk).to.equal(undefined);
+        expect(header.x5c).to.have.length(1);
+        const leaf = new X509Certificate(Buffer.from(header.x5c[0], "base64"));
+        const ca = new X509Certificate(fs.readFileSync(new URL("../x509EC/wallet_provider_ca.crt", import.meta.url)));
+        expect(leaf.verify(ca.publicKey)).to.equal(true);
+        const { payload } = await jwtVerify(wia, await importX509(leaf.toString(), header.alg));
+        expect(payload.sub).to.equal(CS01_CLIENT_ID);
+        expect(payload.iss).to.be.a("string").and.not.equal(payload.sub);
+        expect(payload.cnf.jwk).to.deep.equal(decodeProtectedHeader(dpop).jwk);
+
         const body = String(url).includes("/par")
           ? { request_uri: "urn:example:par:streamed", expires_in: 120 }
           : { access_token: "at", token_type: "Bearer", authorization_details: [{
@@ -150,6 +172,8 @@ describe("authorization code prepare (handoff)", () => {
       expect(error.message).to.equal("reached nonce endpoint");
     }
   });
+
+  }
 
   it("returns authorizationUrl without fetching /authorize", async () => {
     const fetchCalls = [];

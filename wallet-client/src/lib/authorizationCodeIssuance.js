@@ -123,6 +123,8 @@ function resolveAuthorizationServerBase(issuerMeta, apiBase, authorizationServer
 
 async function initializeAttestationChallengeState(asMeta) {
   const state = createAttestationChallengeState();
+  state.dpopCombined = asMeta?.token_endpoint_auth_methods_supported?.includes("attest_jwt_client_auth_dpop") ||
+    asMeta?.client_attestation_pop_methods_supported?.includes("dpop_combined") || false;
   if (asMeta?.challenge_endpoint) {
     const challenge = await fetchAttestationChallenge(asMeta.challenge_endpoint);
     state.set(challenge);
@@ -152,6 +154,7 @@ export function serializePendingContext(prepared) {
     parExpiresIn: prepared.parExpiresIn,
     scopeResolution: prepared.scopeResolution,
     issuanceContext: prepared.issuanceContext,
+    dpopCombined: prepared.attestationChallengeState?.dpopCombined === true,
     attestationChallenge: prepared.attestationChallengeState?.current ?? null,
     dpopBinding: prepared.dpopBinding ? {
       privateJwk: prepared.dpopBinding.privateJwk,
@@ -166,6 +169,7 @@ export function deserializePendingContext(raw) {
     throw new Error("invalid_pending_context");
   }
   const attestationChallengeState = createAttestationChallengeState(raw.attestationChallenge);
+  attestationChallengeState.dpopCombined = raw.dpopCombined === true;
   return {
     ...raw,
     attestationChallengeState,

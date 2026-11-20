@@ -7,6 +7,7 @@
  */
 
 import fs from "fs";
+import { resolveWiaForParOrToken } from "./walletProviderIdentity.js";
 import path from "path";
 import { fileURLToPath } from "url";
 import { decodeJwt, decodeProtectedHeader } from "jose";
@@ -156,9 +157,9 @@ export function describeAttestationConfiguration(profile, env = process.env) {
   };
 }
 
-/** CS-01 uses Wallet Unit Attestation headers only; no parallel OAuth body client_assertion. */
-export function allowsLegacyBodyClientAssertion(profile) {
-  return !isWebuildCs01Profile(profile);
+/** All supported issuance profiles authenticate through attestation headers only. */
+export function allowsLegacyBodyClientAssertion() {
+  return false;
 }
 
 /**
@@ -225,6 +226,18 @@ async function createLocalKeyWalletUnitAttestationClientAuth({
   cs01 = false,
 }) {
   const cnfKeys = cnfKeyPair || (await ensureOrCreateEcKeyPair(keyPath, alg));
+  if (!cs01) {
+    const bundle = await resolveWiaForParOrToken({
+      clientId, endpointAudience, authorizationServerIssuer, challenge, cnfKeyPair: cnfKeys,
+    });
+    return {
+      source: ATTESTATION_SOURCES.LOCAL_KEY,
+      trustFrameworkIntegrated: false,
+      cnfKeyPair: cnfKeys,
+      attestationJti: markAttestationJwtUsedOnce(bundle.wiaJwt, "WIA"),
+      headers: bundle.wiaHeaders,
+    };
+  }
   const { privateJwk, publicJwk } = cnfKeys;
   const now = Math.floor(Date.now() / 1000);
   const walletProvider = cs01 ? loadWalletProviderFixtureMaterial() : null;
