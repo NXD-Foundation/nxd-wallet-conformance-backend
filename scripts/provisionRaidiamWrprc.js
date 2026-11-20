@@ -17,14 +17,18 @@ export async function main(env = process.env, argv = process.argv.slice(2)) {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   const entityId = env.RAIDIAM_RPID || RAIDiam_ENTITY;
   const serviceId = env.RAIDIAM_SID || RAIDiam_SERVICE;
+  const modeArg = argv.find(value => value.startsWith('--trust-validation-mode='));
+  const validationMode = modeArg?.split('=')[1] || 'pilot';
+  if (!['pilot', 'cs18-draft'].includes(validationMode)) throw new Error('--trust-validation-mode must be pilot or cs18-draft');
+  const operationalArgs = argv.filter(value => value !== modeArg);
   const bodiesDir = path.join(root, 'data/trust/intended_uses');
   const bodies = await Promise.all((await fs.readdir(bodiesDir)).filter(f => f.endsWith('.json')).sort().map(async file => ({ scenario: file.slice(0, -5), body: JSON.parse(await fs.readFile(path.join(bodiesDir, file), 'utf8')) })));
-  if (argv.includes('--dry-run')) {
-    console.log(JSON.stringify({ entityId, serviceId, scenarios: bodies.map(b => b.scenario), privacyUrl: 'https://www.aegean.gr/', networkRequests: false }, null, 2));
+  if (operationalArgs.includes('--dry-run')) {
+    console.log(JSON.stringify({ entityId, serviceId, scenarios: bodies.map(b => b.scenario), privacyUrl: 'https://www.aegean.gr/', trustValidationMode: validationMode, networkRequests: false }, null, 2));
     return true;
   }
-  const activateOnly = argv.length === 1 && argv[0] === '--activate-quarantined';
-  if (argv.length && !activateOnly) throw new Error('Only --dry-run or --activate-quarantined is supported');
+  const activateOnly = operationalArgs.length === 1 && operationalArgs[0] === '--activate-quarantined';
+  if (operationalArgs.length && !activateOnly) throw new Error('Only --dry-run or --activate-quarantined is supported');
   const access = new X509Certificate(await fs.readFile(resolveProvisioningWrpacPath(env, root)));
   // The WRPAC supplies the fixed relying-party entity/service identity.
   const subject = access.subject.split('\n');
@@ -32,9 +36,9 @@ export async function main(env = process.env, argv = process.argv.slice(2)) {
   if (Date.parse(access.validFrom) > Date.now() || Date.parse(access.validTo) <= Date.now()) throw new Error('Local certificate is outside its validity period');
   const registryUrl = env.RAIDIAM_REGISTRY_URI || `https://data.sandbox.eudi.raidiam.io/wrp/${entityId}/services/${serviceId}`;
   const verify = async (token, bindings) => {
-    const result = await verifyWrprc(token, { ...bindings, checkTrust: async input => {
-      const decision = await checkAccessCertificateTrust({ session: { trustPolicy: { mode: 'webuild', profile: 'webuild-wp4-pilot' } }, ...input });
-      if (!decision?.trusted) {
+    const result = await verifyWrprc(token, { ...bindings, validationMode, checkTrust: async input => {
+      const decision = await checkAccessCertificateTrust({ session: { trustPolicy: { mode: 'webuild', profile: 'webuild-wp4-pilot', validationMode } }, ...input });
+      if (!(decision?.trusted || (validationMode === 'cs18-draft' && decision?.accepted))) {
         const reason = /^[A-Z0-9_]+$/.test(decision?.reasonCode || '') ? decision.reasonCode : 'UNKNOWN';
         throw new Error(`WRPRC: registrar trust rejected (${reason})`);
       }

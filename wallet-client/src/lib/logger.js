@@ -145,6 +145,13 @@ export function logError(sessionId, ...args) {
   return runWithLogContext(sessionId, () => console.error(...args));
 }
 
+export function logSessionFlowError(sessionId, label, error) {
+  return logError(sessionId, label, {
+    error: error?.message || String(error),
+    errorCode: error?.errorCode || error?.name || undefined,
+  });
+}
+
 export function installProcessLogHandlers() {
   if (processHandlersInstalled) return;
   processHandlersInstalled = true;

@@ -73,6 +73,7 @@ import jwt from "jsonwebtoken";
 import {
   handleCredentialGenerationBasedOnFormat,
   handleCredentialGenerationBasedOnFormatDeferred,
+  resolveIssuerSigningMaterial,
 } from "../../utils/credGenerationUtils.js";
 import {
   validateWIA,
@@ -133,6 +134,7 @@ import {
   checkWalletProviderTrust,
   recordTrustDecision,
   recordTrustFailure,
+  trustDecisionAccepted,
 } from "../../utils/trustFrameworkPolicy.js";
 import { offeredCredentialConfigurationIds } from "../../utils/dcApiIssuance.js";
 import {
@@ -888,6 +890,14 @@ const handleAuthorizationCodeFlow = async (
   return tokenResponse;
 };
 
+function issuedCredentialStatus(sessionObject) {
+  return allocateIssuedCredentialStatus({
+    baseUrl: getServerUrl(),
+    revoked: sessionObject?.issueRevoked === true,
+    signing: resolveIssuerSigningMaterial(sessionObject, getServerUrl()),
+  });
+}
+
 // Handle immediate credential issuance
 const handleImmediateCredentialIssuance = async (
   requestBody,
@@ -919,7 +929,7 @@ const handleImmediateCredentialIssuance = async (
   recordCredentialStatus(sessionObject, applyIssuerOwnedCredentialStatus(requestBody, {
     enabled: (sessionRevocationEnabled(sessionObject) || bu6AlwaysPublishesStatusList(effectiveConfigurationId))
       && (format === "dc+sd-jwt" || format === "vc+sd-jwt"),
-    allocate: () => allocateIssuedCredentialStatus({ baseUrl: getServerUrl(), revoked: sessionObject?.issueRevoked === true }),
+    allocate: () => issuedCredentialStatus(sessionObject),
   }));
 
   const credential = await handleCredentialGenerationBasedOnFormat(
@@ -1069,13 +1079,7 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
       bindSessionLoggingContext(req, res, sessionId);
       
       // Log HTTP request
-      const logParams = { ...req.body };
-      if (logParams.code) logParams.code = "<redacted>";
-      if (logParams["pre-authorized_code"]) logParams["pre-authorized_code"] = "<redacted>";
-      if (logParams.refresh_token) logParams.refresh_token = "<redacted>";
-      if (logParams.code_verifier) logParams.code_verifier = "<redacted>";
-      
-      requestId = logHttpRequest(slog, "POST", "/token_endpoint", req.headers, logParams);
+      requestId = logHttpRequest(slog, "POST", "/token_endpoint", req.headers, req.body);
       try { slog("[TOKEN] [START] Token endpoint request", { grant_type, hasCode: !!code, hasPreAuthCode: !!preAuthorizedCode }); } catch {}
     }
 
@@ -1253,7 +1257,7 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
         operation: "verify-wia",
       });
       await recordTrustDecision({ session: tokenTrustSession, decision: trustDecision, store: tokenSessionStore, sessionKey: sessionId, sessionId, slog });
-      if (!trustDecision.trusted) {
+      if (!trustDecisionAccepted(trustDecision)) {
         return res.status(401).json({
           error: "invalid_client",
           error_description: `Wallet Provider trust rejected: ${trustDecision.reasonCode}`,
@@ -1639,10 +1643,7 @@ sharedRouter.post("/token_endpoint", async (req, res) => {
 
     // Log HTTP response
     if (slog) {
-      const logResponse = { ...tokenResponse };
-      if (logResponse.access_token) logResponse.access_token = "<redacted>";
-      if (logResponse.refresh_token) logResponse.refresh_token = "<redacted>";
-      logHttpResponse(slog, requestId, "/token_endpoint", 200, "OK", res.getHeaders(), logResponse);
+      logHttpResponse(slog, requestId, "/token_endpoint", 200, "OK", res.getHeaders(), tokenResponse);
       try { slog("[TOKEN] [COMPLETE] Token endpoint request", { success: true, hasAccessToken: !!tokenResponse.access_token }); } catch {}
     }
 
@@ -1752,13 +1753,7 @@ sharedRouter.post("/credential", async (req, res) => {
       bindSessionLoggingContext(req, res, sessionId);
       
       // Log HTTP request
-      const logBody = { ...requestBody };
-      if (logBody.proof) logBody.proof = "<redacted>";
-      if (logBody.proofs) logBody.proofs = "<redacted>";
-      if (logBody.proofJwt) logBody.proofJwt = "<redacted>";
-      if (logBody.proofAttestationJwt) logBody.proofAttestationJwt = "<redacted>";
-      
-      requestId = logHttpRequest(slog, "POST", "/credential", req.headers, logBody);
+      requestId = logHttpRequest(slog, "POST", "/credential", req.headers, requestBody);
       try { slog("[CREDENTIAL] [START] Credential request", { credential_configuration_id: requestBody.credential_configuration_id, credential_identifier: requestBody.credential_identifier }); } catch {}
     }
     
@@ -1945,7 +1940,7 @@ sharedRouter.post("/credential", async (req, res) => {
           });
           const store = flowType === "code" ? storeCodeFlowSession : storePreAuthSession;
           await recordTrustDecision({ session: sessionObject, decision: trustDecision, store, sessionKey, sessionId, slog });
-          if (!trustDecision.trusted) {
+          if (!trustDecisionAccepted(trustDecision)) {
             if (slog) try { slog("[CREDENTIAL] [ERROR] Wallet Provider trust rejected", { reasonCode: trustDecision.reasonCode }); } catch {}
             return res.status(400).json({ error: "invalid_proof", error_description: `Wallet Provider trust rejected: ${trustDecision.reasonCode}` });
           }
@@ -2314,9 +2309,7 @@ sharedRouter.post("/credential", async (req, res) => {
         );
         if (slog) {
           try { slog("[CREDENTIAL] Credential issued successfully", { effectiveConfigurationId, notification_id: response.notification_id }); } catch {}
-          const logResponse = { ...response };
-          if (logResponse.credential) logResponse.credential = "<redacted>";
-          logHttpResponse(slog, requestId, "/credential", 200, "OK", res.getHeaders(), logResponse);
+          logHttpResponse(slog, requestId, "/credential", 200, "OK", res.getHeaders(), response);
           try { slog("[CREDENTIAL] [COMPLETE] Credential request", { success: true }); } catch {}
         }
 
@@ -2680,7 +2673,7 @@ sharedRouter.post("/credential_deferred", async (req, res) => {
     const { credential, reused } = await issueDeferredCredentialOnce(sessionObject, () => {
       recordCredentialStatus(sessionObject, applyIssuerOwnedCredentialStatus(sessionObject.requestBody, {
         enabled: sessionRevocationEnabled(sessionObject) || bu6AlwaysPublishesStatusList(sessionObject.requestBody?.vct),
-        allocate: () => allocateIssuedCredentialStatus({ baseUrl: getServerUrl(), revoked: sessionObject?.issueRevoked === true }),
+        allocate: () => issuedCredentialStatus(sessionObject),
       }));
       return handleCredentialGenerationBasedOnFormatDeferred(sessionObject, sessionIssuerUrl(getServerUrl(), sessionObject));
     });

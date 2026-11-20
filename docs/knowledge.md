@@ -41,7 +41,8 @@ The primary supported credential families are SD-JWT VC, JWT VC, and
 `urn:eudi:pid:se:1`, Power of Representation
 `https://credentials.webuild.eu/power-of-x/v7`, and EU Company Certificate
 `uri:eu.eudi.eucc.1`. Those three are advertised again on the pid, qeaa, and
-pub-eaa role profiles respectively. Redis provides session, state, nonce, and deferred
+pub-eaa role profiles respectively. Each of them always carries this issuer's
+Token Status List, because each stays valid for more than 24 hours. Redis provides session, state, nonce, and deferred
 issuance storage. The public protocol shape is mostly configured through
 `data/issuer-config.json`, `data/verifier-config.json`, and
 `data/oauth-config.json`.
@@ -63,8 +64,10 @@ legacy flat fields stay present while routes are migrated. Issuance sessions
 record `sessionContext.revocation.enabled`, mirrored to `revocationEnabled`.
 Pre-authorized, authorization-code, DC API, and batch offer builders copy that
 flag from the offer request. While revocation is enabled, revocable SD-JWT
-credentials share one active status list and receive a random unused index in
-that list. The retrieval path is `/credential-status/{listId}`. `/status-lists/`
+credentials that share a signing key share one active status list and receive a random unused index in
+that list. A different certificate or key gets its own list. The published
+Status List Token is signed with that credential key and repeats the
+credential header's `x5c` or `kid`. The retrieval path is `/credential-status/{listId}`. `/status-lists/`
 belongs to the wallet provider's WIA and KA lists. An offer may also set `issueRevoked=true`; the issuer then marks
 that index INVALID before the credential response is returned, so a wallet
 under test receives an already-revoked credential. A credential request cannot supply `status` or
@@ -81,8 +84,11 @@ is async-scoped with `AsyncLocalStorage`, so concurrent requests cannot assign
 one session's console output to another session.
 
 This repository is a test framework: `/logs` intentionally exposes captured
-protocol diagnostics for interoperability analysis. It is not a production-safe
-public logging interface and must not be exposed with real credentials or tokens.
+protocol diagnostics for interoperability analysis, including complete protocol
+payloads when a caller logged them. Long or multiline messages include a short
+`message` summary and preserve their original text in `detail`; structured
+`data` or `metadata` is returned in full. This is not a production-safe public
+logging interface and must not be exposed with real credentials or tokens.
 
 The logging-context migration is complete: issuer, verifier, and wallet-client
 entry points use the shared async context, and the former process-global
@@ -183,6 +189,14 @@ usage restriction still applies, and WRPAC requirements are unchanged. See
 RFC/ETSI rationale, scope, and `--activate-quarantined` command. On 21 October
 2026 all 13 retained WRPRCs passed live trust, signature, expiry, binding, scope
 and dataset checks and were activated; original quarantine files remain retained.
+
+### Opt-in CS-18 draft trust validation
+
+Trust-enabled requests default to pilot validation and may opt into the pinned
+CS-18 draft rules with `trustValidationMode: "cs18-draft"`. This mode is a
+partial implementation and is not a full CS-18 conformance claim. See
+[CS-18 trust validation](./cs18-trust-validation.md) for the implemented
+foundation, acceptance policy, and remaining work.
 
 
 

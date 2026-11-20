@@ -33,10 +33,18 @@ describe("Phase 3 Wallet Provider trust policy", () => {
 
   it("normalizes the explicit request flag into a session policy", () => {
     expect(trustFrameworkSessionProps({ trustFramework: true })).to.deep.equal({
-      trustPolicy: { mode: "webuild", profile: "webuild-wp4-pilot" },
+      trustPolicy: { mode: "webuild", profile: "webuild-wp4-pilot", validationMode: "pilot" },
     });
     expect(trustFrameworkSessionProps({ trustFramework: false })).to.deep.equal({});
     expect(isTrustFrameworkSession({ trustPolicy: { mode: "webuild", profile: "webuild-wp4-pilot" } })).to.equal(true);
+  });
+
+  it("selects only the opt-in CS-18 draft mode and requires trust enforcement", () => {
+    expect(trustFrameworkSessionProps({ trustFramework: true, trustValidationMode: "cs18-draft" }).trustPolicy)
+      .to.deep.equal({ mode: "webuild", profile: "webuild-wp4-pilot", validationMode: "cs18-draft" });
+    expect(() => trustFrameworkSessionProps({ trustValidationMode: "cs18-draft" })).to.throw("requires trustFramework=true");
+    expect(() => trustFrameworkSessionProps({ trustFramework: true, trustValidationMode: "future" })).to.throw("trustValidationMode");
+    expect(() => walletTrustDirective(false, { trustValidationMode: "cs18-draft" })).to.throw("requires trustFramework=true");
   });
 
   it("replaces session trust from the request and clears it on an explicit false", () => {

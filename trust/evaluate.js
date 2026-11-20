@@ -2,6 +2,15 @@ import { certificateFingerprint, validateCertificatePath } from "./crypto.js";
 import { listTypeProfile } from "./profile.js";
 import { TRUST_REASON_CODES } from "./errors.js";
 
+const STRICT_ISSUANCE_SERVICE_TYPES = Object.freeze({
+  "pid-provider": "http://uri.etsi.org/19602/SvcType/PID/Issuance",
+  "wallet-provider": "http://uri.etsi.org/19602/SvcType/WalletSolution/Issuance",
+  "wrpac-provider": "http://uri.etsi.org/19602/SvcType/WRPAC/Issuance",
+  "wrprc-provider": "http://uri.etsi.org/19602/SvcType/WRPRC/Issuance",
+  "pub-eaa-provider": "http://uri.etsi.org/19602/SvcType/PubEAA/Issuance",
+  "qeaa-provider": "http://uri.etsi.org/TrstSvc/Svctype/EAA/Q",
+});
+
 function identityMatches(entity, presentedIdentity) {
   if (!presentedIdentity) return true;
   const values = [presentedIdentity.entityId, presentedIdentity.issuer, presentedIdentity.name].filter(Boolean);
@@ -43,7 +52,7 @@ function listEvidence(list) {
   };
 }
 
-export function evaluateTrust({ snapshot, role, operation = null, presentedIdentity = {}, credentialContext = {}, evaluationTime = new Date(), acceptedStatuses = snapshot.profile.acceptedStatuses }) {
+export function evaluateTrust({ snapshot, role, operation = null, presentedIdentity = {}, credentialContext = {}, evaluationTime = new Date(), acceptedStatuses = snapshot.profile.acceptedStatuses, validationMode = "pilot" }) {
   listTypeProfile(snapshot.profile, role);
   const lists = listCandidates(snapshot, role);
   const pointerFailures = snapshot.listFailures?.[role] || [];
@@ -51,6 +60,10 @@ export function evaluateTrust({ snapshot, role, operation = null, presentedIdent
     return result(snapshot, false, pointerFailures.length ? TRUST_REASON_CODES.TRUST_EVALUATION_INDETERMINATE : TRUST_REASON_CODES.POINTER_NOT_FOUND, { role, operation, credentialContext, pointerFailures });
   }
   const fingerprint = presentedIdentity.certificatePem ? certificateFingerprint(presentedIdentity.certificatePem) : presentedIdentity.certificateFingerprint;
+  const strictServiceType = validationMode === "cs18-draft" ? STRICT_ISSUANCE_SERVICE_TYPES[role] : null;
+  if (validationMode === "cs18-draft" && !strictServiceType) {
+    return result(snapshot, false, TRUST_REASON_CODES.UNSUPPORTED_ROLE, { role, operation, credentialContext, error: "No strict CS-18 service mapping is defined for this role" });
+  }
   const negatives = [];
   for (const list of lists) {
     const entity = list.entities.find((candidate) => identityMatches(candidate, presentedIdentity));
@@ -59,7 +72,7 @@ export function evaluateTrust({ snapshot, role, operation = null, presentedIdent
       continue;
     }
     const service = entity.services.find((candidate) => {
-      if (credentialContext.serviceType && candidate.type !== credentialContext.serviceType) return false;
+      if ((strictServiceType || credentialContext.serviceType) && candidate.type !== (strictServiceType || credentialContext.serviceType)) return false;
       const chainFingerprints = (presentedIdentity.certificateChain || []).map((certificatePem) => certificateFingerprint(certificatePem));
       if (fingerprint && !candidate.certificates.some((cert) => cert === fingerprint || cert === presentedIdentity.certificateFingerprint || chainFingerprints.includes(cert))) return false;
       return true;
@@ -75,7 +88,10 @@ export function evaluateTrust({ snapshot, role, operation = null, presentedIdent
     let certificatePath = null;
     try {
       if (presentedIdentity.certificateChain?.length && service.certificatePems?.length) {
-        certificatePath = validateCertificatePath({ certificateChain: presentedIdentity.certificateChain, anchorCertificates: service.certificatePems, evaluationTime, allowMissingKeyUsageForListedLeaf: role === "wrprc-provider" });
+        certificatePath = validateCertificatePath({ certificateChain: presentedIdentity.certificateChain, anchorCertificates: service.certificatePems, evaluationTime,
+          requireDigitalSignature: true,
+          validationMode,
+          allowMissingKeyUsageForListedLeaf: validationMode !== "cs18-draft" && role === "wrprc-provider" });
       }
     } catch (error) {
       negatives.push(result(snapshot, false, error.reasonCode || TRUST_REASON_CODES.CERTIFICATE_PATH_INVALID, { role, entity: entity.id, service: service.type, operation, credentialContext, list: listEvidence(list) }));

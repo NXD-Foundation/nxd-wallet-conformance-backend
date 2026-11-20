@@ -54,7 +54,7 @@ import {
   validateCs03CredentialResponses,
 } from "../../utils/cs03Validation.js";
 import { validateSdJwtKeyBindingMatchesCredential } from "../../utils/sdJwtKeyBinding.js";
-import { checkVerifierCredentialTrust, isTrustFrameworkSession } from "../../utils/trustFrameworkPolicy.js";
+import { checkVerifierCredentialTrust, isTrustFrameworkSession, trustDecisionAccepted } from "../../utils/trustFrameworkPolicy.js";
 import { selectTs12ScaValidationClaims, validateTs12PaymentPresentationResponse } from "../../utils/ts12Validation.js";
 import {
   Cs02VerifierResponseError,
@@ -449,11 +449,7 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
     let requestId = null;
     
     if (slog) {
-      const logBody = { ...req.body };
-      if (logBody.vp_token && typeof logBody.vp_token === 'string') {
-        logBody.vp_token = logBody.vp_token.substring(0, 200) + "...<truncated for size>";
-      }
-      requestId = logHttpRequest(slog, "POST", `/direct_post/${sessionId}`, req.headers, logBody);
+      requestId = logHttpRequest(slog, "POST", `/direct_post/${sessionId}`, req.headers, req.body);
       try { slog("[PRESENTATION] [START] Processing direct_post VP response", { sessionId }); } catch {}
     }
     
@@ -842,7 +838,7 @@ verifierRouter.post("/direct_post/:id", async (req, res) => {
             evaluatedAt: new Date().toISOString(),
           };
           await logInfo(sessionId, "mDL issuer trust decision evaluated", vpSession.trustDecision);
-          if (!trustDecision?.trusted) {
+          if (!trustDecisionAccepted(trustDecision)) {
             vpSession.status = "failed";
             vpSession.error = "invalid_credential";
             vpSession.error_description = `Credential issuer trust rejected: ${trustDecision?.reasonCode || "TRUST_EVALUATION_INDETERMINATE"}`;

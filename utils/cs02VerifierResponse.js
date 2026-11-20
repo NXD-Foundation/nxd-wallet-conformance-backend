@@ -37,7 +37,7 @@ import {
   selectSatisfiedSdJwtClaimSet,
 } from "./sdJwtClaims.js";
 import { isSupportedCs02ClaimPathSegment, validateSupportedCs02ClaimPath, evaluateCs02CredentialSets, isCs02PresentationCardinalityValid } from "./cs02DcqlCore.js";
-import { checkVerifierCredentialTrust, isTrustFrameworkSession } from "./trustFrameworkPolicy.js";
+import { checkVerifierCredentialTrust, isTrustFrameworkSession, trustDecisionAccepted } from "./trustFrameworkPolicy.js";
 import { sessionContextFor } from "./sessionContext.js";
 import { decryptJWE } from "./cryptoUtils.js";
 import { loadVerifierEncryptionKey } from "./verifierEncryptionKeys.js";
@@ -1144,7 +1144,7 @@ export async function validateCs02SdJwtPresentation({
       vct: issuerPayload?.vct,
       operation: "verify-credential",
     });
-    if (!credentialTrust?.trusted) {
+    if (!trustDecisionAccepted(credentialTrust)) {
       const trustError = new Cs02VerifierResponseError(
         `Credential issuer trust rejected: ${credentialTrust?.reasonCode || "TRUST_EVALUATION_INDETERMINATE"}`,
         "invalid_credential",
@@ -1237,7 +1237,7 @@ export async function validateCs02SdJwtEntriesInVpToken(
             doctype: credQuery?.meta?.doctype_value,
             operation: "verify-credential",
           });
-          if (!credentialTrust?.trusted) {
+          if (!trustDecisionAccepted(credentialTrust)) {
             const trustError = new Cs02VerifierResponseError(
               `Credential issuer trust rejected: ${credentialTrust?.reasonCode || "TRUST_EVALUATION_INDETERMINATE"}`,
               "invalid_credential",

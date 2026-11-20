@@ -12,6 +12,7 @@ import {
   certificateFingerprint,
   stableJsonStringify,
   validateCertificatePath,
+  validateCertificatePathWithPkijs,
   XMLDSIG_ECDSA_SHA256,
   XMLDSIG_RSA_SHA256,
   XmlDsigEcdsaSha256,
@@ -159,6 +160,7 @@ describe("Directly listed WRPRC signer Key Usage", () => {
     const cert = certificate();
     expect(validateCertificatePath(options(cert)).keyUsage).to.equal('absent-directly-listed-signer');
     expect(() => validateCertificatePath({ ...options(cert), allowMissingKeyUsageForListedLeaf: false })).to.throw('not permitted');
+    expect(() => validateCertificatePath({ ...options(cert), validationMode: 'cs18-draft' })).to.throw('not permitted');
   });
   it("never overrides an explicit Key Usage that excludes digitalSignature", () => {
     const cert = certificate({ keyUsage: { keyEncipherment: true } });
@@ -177,5 +179,64 @@ describe("Directly listed WRPRC signer Key Usage", () => {
   it("still rejects an expired directly listed signer", () => {
     const cert = certificate({ expired: true });
     expect(() => validateCertificatePath(options(cert))).to.throw('validity period');
+  });
+
+  it("rejects an unsupported critical extension in a strict signer certificate", async () => {
+    const cert = forge.pki.createCertificate();
+    cert.publicKey = keys.publicKey;
+    cert.serialNumber = String(nextSerial++).padStart(2, "0");
+    cert.validity.notBefore = new Date("2020-01-01");
+    cert.validity.notAfter = new Date("2035-01-01");
+    cert.setSubject([{ name: "commonName", value: "Unknown critical extension" }]);
+    cert.setIssuer(cert.subject.attributes);
+    cert.setExtensions([
+      { name: "keyUsage", digitalSignature: true },
+      { id: "1.2.3.4.999", critical: true, value: "\x05\x00" },
+    ]);
+    cert.sign(keys.privateKey, forge.md.sha256.create());
+    const pem = forge.pki.certificateToPem(cert);
+    try {
+      await validateCertificatePathWithPkijs({ certificateChain: [pem], anchorCertificates: [pem], evaluationTime: "2026-10-21T12:00:00Z" });
+      expect.fail("unsupported critical extension must be rejected");
+    } catch (error) {
+      expect(error.message).to.include("Unsupported critical certificate extension");
+    }
+  });
+
+  it("rejects a strict certificate path that exceeds the root path-length constraint", async () => {
+    const rootKeys = forge.pki.rsa.generateKeyPair(2048);
+    const intermediateKeys = forge.pki.rsa.generateKeyPair(2048);
+    const leafKeys = forge.pki.rsa.generateKeyPair(2048);
+    function issue({ keys, subject, issuerCert = null, issuerKeys = keys, ca = false, pathLen }) {
+      const cert = forge.pki.createCertificate();
+      cert.publicKey = keys.publicKey;
+      cert.serialNumber = String(nextSerial++).padStart(2, "0");
+      cert.validity.notBefore = new Date("2020-01-01");
+      cert.validity.notAfter = new Date("2035-01-01");
+      cert.setSubject([{ name: "commonName", value: subject }]);
+      cert.setIssuer((issuerCert || cert).subject.attributes);
+      cert.setExtensions([
+        { name: "basicConstraints", cA: ca, ...(pathLen === undefined ? {} : { pathLenConstraint: pathLen }) },
+        { name: "keyUsage", ...(ca ? { keyCertSign: true, cRLSign: true } : { digitalSignature: true }) },
+      ]);
+      cert.sign(issuerKeys.privateKey, forge.md.sha256.create());
+      return cert;
+    }
+    const root = issue({ keys: rootKeys, subject: "root", ca: true, pathLen: 0 });
+    const intermediate = issue({ keys: intermediateKeys, subject: "intermediate", issuerCert: root, issuerKeys: rootKeys, ca: true, pathLen: 0 });
+    const leaf = issue({ keys: leafKeys, subject: "leaf", issuerCert: intermediate, issuerKeys: intermediateKeys });
+    const pem = cert => forge.pki.certificateToPem(cert);
+    expect(() => validateCertificatePath({
+      certificateChain: [pem(leaf), pem(intermediate), pem(root)], anchorCertificates: [pem(root)],
+      evaluationTime: "2026-10-21T12:00:00Z", validationMode: "cs18-draft",
+    })).to.throw("path-length constraint");
+    const validRoot = issue({ keys: rootKeys, subject: "valid-root", ca: true, pathLen: 1 });
+    const validIntermediate = issue({ keys: intermediateKeys, subject: "valid-intermediate", issuerCert: validRoot, issuerKeys: rootKeys, ca: true, pathLen: 0 });
+    const validLeaf = issue({ keys: leafKeys, subject: "valid-leaf", issuerCert: validIntermediate, issuerKeys: intermediateKeys });
+    const strictPath = validateCertificatePath({
+      certificateChain: [pem(validLeaf), pem(validIntermediate), pem(validRoot)], anchorCertificates: [pem(validRoot)],
+      evaluationTime: "2026-10-21T12:00:00Z", validationMode: "cs18-draft",
+    });
+    await validateCertificatePathWithPkijs({ certificateChain: strictPath.chain, anchorCertificates: [pem(validRoot)], evaluationTime: "2026-10-21T12:00:00Z" });
   });
 });

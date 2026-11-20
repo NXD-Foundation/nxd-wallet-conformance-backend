@@ -1577,37 +1577,6 @@ export async function performPresentation(
       Object.keys(body),
     );
 
-    // Log the request body being sent (with redaction for sensitive tokens)
-    const logBody = { ...body };
-    if (logBody.vp_token) {
-      if (typeof logBody.vp_token === "string") {
-        logBody.vp_token =
-          logBody.vp_token.substring(0, 200) + "...<truncated for size>";
-      } else if (
-        typeof logBody.vp_token === "object" &&
-        logBody.vp_token !== null
-      ) {
-        // For DCQL object format, show structure but truncate values
-        const truncated = {};
-        for (const [key, value] of Object.entries(logBody.vp_token)) {
-          if (typeof value === "string") {
-            truncated[key] = value.substring(0, 50) + "...<truncated>";
-          } else if (Array.isArray(value)) {
-            truncated[key] = value.map((v) =>
-              typeof v === "string" ? v.substring(0, 50) + "...<truncated>" : v,
-            );
-          } else {
-            truncated[key] = value;
-          }
-        }
-        logBody.vp_token = truncated;
-      }
-    }
-    if (logBody.response && typeof logBody.response === "string") {
-      logBody.response =
-        logBody.response.substring(0, 200) + "...<truncated for size>";
-    }
-
     try {
       slog("[PRESENTATION] [REQUEST] Sending to verifier", {
         requestId: presRequestId,
@@ -1615,7 +1584,7 @@ export async function performPresentation(
         url: responseUri,
         contentType,
         headers: { "content-type": contentType },
-        body: logBody,
+        body,
       });
     } catch {}
 

@@ -19,6 +19,7 @@ import { loadProfileCredentialSigningMaterial } from "./issuerProfileSigning.js"
 import {
   computeDidJwkIssuerDidAndKidFromDidKeys,
   getIssuerJwkPairAlignedWithDidDocument,
+  loadDidIssuerPems,
 } from "../utils/issuerDidKeys.js";
 import fs from "fs";
 import { SDJwtVcInstance } from "@sd-jwt/sd-jwt-vc";
@@ -103,6 +104,30 @@ function resolveX509IssuanceMaterial(sessionObject) {
     certificatePem: certificatePemX509,
     x5c: [pemToBase64Der(certificatePemX509)],
   };
+}
+
+// Status lists are verified with the key that signed the credential.
+export function resolveIssuerSigningMaterial(sessionObject = {}, serverURL) {
+  const resolvedServerURL = serverURL ?? process.env.SERVER_URL ?? "http://localhost:3000";
+  const effectiveSignatureType =
+    sessionObject?.isHaip && process.env.ISSUER_SIGNATURE_TYPE === "x509"
+      ? "x509"
+      : sessionObject?.signatureType || "kid-jwk";
+
+  if (effectiveSignatureType === "x509") {
+    const material = resolveX509IssuanceMaterial(sessionObject);
+    return { privateKeyPem: material.privateKeyPem, header: { x5c: material.x5c } };
+  }
+  if (effectiveSignatureType === "did:web" || effectiveSignatureType === "did:jwk") {
+    const kid = effectiveSignatureType === "did:web"
+      ? `${computeDidWebFromServerURL(resolvedServerURL)}#keys-1`
+      : computeDidJwkIssuerDidAndKidFromDidKeys().kid;
+    return { privateKeyPem: loadDidIssuerPems().privatePem, header: { kid } };
+  }
+  if (effectiveSignatureType === "jwk") {
+    return { privateKeyPem: privateKey, header: { alg: "ES256", jwk: pemToJWK(publicKeyPem, "public") } };
+  }
+  return { privateKeyPem: privateKey, header: { kid: defaultSigningKid } };
 }
 // DID Web key pair - must match the keys published in the DID document
 let privateKeyPemDidWeb = null;

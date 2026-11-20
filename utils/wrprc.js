@@ -79,14 +79,22 @@ export function decodeRegistrationCertificate(data) {
   return token;
 }
 
-export async function verifyWrprc(token, { entityId, intendedUseId, serviceId, checkTrust, currentDate, allowIntermediary = false } = {}) {
+export async function verifyWrprc(token, { entityId, intendedUseId, serviceId, checkTrust, currentDate, allowIntermediary = false, validationMode = "pilot" } = {}) {
   encodeRegistrationCertificate(token);
   if (!entityId || typeof checkTrust !== "function") fail("entity identity and trust callback required");
   const header = decodeProtectedHeader(token);
   if (header.typ !== "rc-wrp+jwt" || !["ES256", "ES384", "ES512", "PS256", "PS384", "PS512", "RS256", "RS384", "RS512", "EdDSA"].includes(header.alg)) fail("unsupported certificate type or algorithm");
   if (!Array.isArray(header.x5c) || !header.x5c.length || header.x5c.some((cert) => typeof cert !== "string" || !/^[A-Za-z0-9+/]+={0,2}$/.test(cert))) fail("signing certificate chain required");
   const certificateChain = header.x5c.map((cert) => derToPem(Buffer.from(cert, "base64")));
-  const { payload } = await jwtVerify(token, await importX509(certificateChain[0], header.alg), { algorithms: [header.alg], requiredClaims: ["exp", "sub"], currentDate });
+  const strict = validationMode === "cs18-draft";
+  const { payload } = await jwtVerify(token, await importX509(certificateChain[0], header.alg), { algorithms: [header.alg], requiredClaims: strict ? ["sub"] : ["exp", "sub"], currentDate });
+  if (strict) {
+    if (!Array.isArray(payload.policy_id) || !payload.policy_id.includes("0.4.0.19475.3.1")) fail("required policy_id is missing");
+    if (typeof payload.iat !== "number" || !Number.isFinite(payload.iat)) fail("iat must be a finite numeric claim");
+    const now = Math.floor((currentDate ? new Date(currentDate) : new Date()).getTime() / 1000);
+    if (payload.iat > now + 60) fail("iat is too far in the future");
+    if (payload.exp !== undefined && (typeof payload.exp !== "number" || !Number.isFinite(payload.exp) || payload.exp < payload.iat)) fail("exp must be numeric and not earlier than iat");
+  }
   if (allowIntermediary && Object.hasOwn(payload, "intermediary")) {
     const intermediary = payload.intermediary;
     if (!intermediary || typeof intermediary !== "object" || Array.isArray(intermediary) || typeof intermediary.sub !== "string" || !intermediary.sub) fail("intermediary subject is missing or malformed");
@@ -94,7 +102,7 @@ export async function verifyWrprc(token, { entityId, intendedUseId, serviceId, c
   } else if (payload.sub !== entityId) fail("subject does not match WRPAC");
   if (!Array.isArray(payload.entitlements) || !payload.entitlements.includes("https://uri.etsi.org/19475/Entitlement/Service_Provider")) fail("Service Provider entitlement required");
   const trustDecision = await checkTrust({ certificatePem: certificateChain[0], certificateChain, role: "wrprc-provider", operation: "verify-registration-certificate" });
-  if (!trustDecision?.trusted) fail("registration signing chain is not trusted");
+  if (!(trustDecision?.trusted || (validationMode === "cs18-draft" && trustDecision?.accepted))) fail("registration signing chain is not trusted");
   const intendedUse = resolveRegistrationIntendedUse(payload, { intendedUseId, serviceId });
   return { payload, header, intendedUse, trustDecision };
 }

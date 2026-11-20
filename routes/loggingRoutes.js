@@ -6,6 +6,7 @@ import {
   client, // Import the existing Redis client
 } from "../services/cacheServiceRedis.js";
 import { createErrorResponse } from "../utils/routeUtils.js";
+import { toPublicLogs } from "../utils/publicLogView.js";
 
 const loggingRouter = express.Router();
 
@@ -29,12 +30,10 @@ loggingRouter.get("/logs/:sessionId", async (req, res) => {
   try {
     // const sessionId = req.params.sessionId;
     const sessionId = req.query.sessionId || req.params.sessionId || req.params.id;
-    await logInfo(sessionId, "Retrieving session logs", { endpoint: "/logs/:sessionId" });
-    
     const logs = await getSessionLogs(sessionId);
     res.json({
       sessionId,
-      logs,
+      logs: toPublicLogs(logs),
       count: logs.length
     });
   } catch (error) {
@@ -81,7 +80,7 @@ loggingRouter.post("/logs/batch", async (req, res) => {
       try {
         const logs = await getSessionLogs(sessionId);
         results[sessionId] = {
-          logs,
+          logs: toPublicLogs(logs),
           count: logs.length
         };
       } catch (error) {

@@ -13,21 +13,37 @@ const state = {
 };
 
 function list(id) {
-  if (!state.lists.has(id)) state.lists.set(id, { statuses: new Uint8Array(LIST_SIZE), iat: 0 });
+  if (!state.lists.has(id)) state.lists.set(id, { statuses: new Uint8Array(LIST_SIZE), iat: 0, signing: null });
   return state.lists.get(id);
 }
 
-function openList() {
+function stableJson(value) {
+  if (Array.isArray(value)) return `[${value.map((item) => stableJson(item)).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function describeCredentialStatusSigning(signing = {}) {
+  const privateKeyPem = signing.privateKeyPem || fs.readFileSync("./private-key.pem", "utf8");
+  const header = signing.header || { kid: "aegean#authentication-key" };
+  const publicDer = crypto.createPublicKey(privateKeyPem).export({ type: "spki", format: "der" });
+  const id = crypto.createHash("sha256").update(publicDer).update(stableJson(header)).digest("hex");
+  return { id, privateKeyPem, header };
+}
+
+function openList(signing) {
   const id = crypto.randomUUID();
-  state.lists.set(id, { statuses: new Uint8Array(LIST_SIZE), iat: 0 });
+  state.lists.set(id, { statuses: new Uint8Array(LIST_SIZE), iat: 0, signing });
   state.used.set(id, new Set());
   state.activeIds.push(id);
   return id;
 }
 
-function chooseListId() {
-  const open = state.activeIds.filter((id) => state.used.get(id).size < LIST_SIZE);
-  if (open.length === 0) return openList();
+function chooseListId(signing) {
+  const open = state.activeIds.filter((id) => state.lists.get(id).signing?.id === signing.id && state.used.get(id).size < LIST_SIZE);
+  if (open.length === 0) return openList(signing);
   return open[crypto.randomInt(0, open.length)];
 }
 
@@ -41,8 +57,9 @@ function unusedIndex(taken) {
   throw new Error("status list is full");
 }
 
-export function allocateCredentialStatus({ issuer, baseUrl }) {
-  const id = chooseListId();
+export function allocateCredentialStatus({ issuer, baseUrl, signing } = {}) {
+  const described = describeCredentialStatusSigning(signing);
+  const id = chooseListId(described);
   const taken = state.used.get(id);
   const idx = unusedIndex(taken);
   taken.add(idx);
@@ -55,8 +72,8 @@ export function allocateCredentialStatus({ issuer, baseUrl }) {
   };
 }
 
-export function allocateIssuedCredentialStatus({ baseUrl, revoked = false } = {}) {
-  const allocated = allocateCredentialStatus({ baseUrl });
+export function allocateIssuedCredentialStatus({ baseUrl, revoked = false, signing } = {}) {
+  const allocated = allocateCredentialStatus({ baseUrl, signing });
   if (revoked === true) revokeCredentialStatus(allocated.listId, allocated.idx);
   return allocated.status;
 }
@@ -81,13 +98,14 @@ function encodedList(entry) {
   return zlib.deflateSync(bytes, { level: 9 }).toString("base64url");
 }
 
-export async function signCredentialStatusList(listId, { issuer, privateKeyPath = "./private-key.pem", now = Math.floor(Date.now() / 1000) } = {}) {
+export async function signCredentialStatusList(listId, { issuer, now = Math.floor(Date.now() / 1000) } = {}) {
   const entry = list(listId);
+  if (!entry.signing) entry.signing = describeCredentialStatusSigning();
   const uri = credentialStatusListUri(issuer || process.env.SERVER_URL || "http://localhost:3000", listId);
-  const key = crypto.createPrivateKey(fs.readFileSync(privateKeyPath, "utf8"));
+  const key = crypto.createPrivateKey(entry.signing.privateKeyPem);
   entry.iat = now;
   return new SignJWT({ sub: uri, iat: now, exp: now + TTL, ttl: TTL, status_list: { bits: 1, lst: encodedList(entry) } })
-    .setProtectedHeader({ alg: "ES256", typ: "statuslist+jwt", kid: "aegean#authentication-key" }).sign(key);
+    .setProtectedHeader({ ...entry.signing.header, alg: "ES256", typ: "statuslist+jwt" }).sign(key);
 }
 
 export function readCredentialStatusToken(token, idx) {

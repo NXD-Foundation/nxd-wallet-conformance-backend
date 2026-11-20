@@ -4,6 +4,7 @@ import { X509Certificate } from 'node:crypto';
 import { verifyWrprc, assertQueryScope, assertRegistrarDataset, encodeRegistrationCertificate } from './wrprc.js';
 import { checkAccessCertificateTrust } from './trustFrameworkPolicy.js';
 import { declarationHash, registrarDatasetForRegistration } from './raidiamProvisioning.js';
+import { sessionTrustPolicy } from './sessionContext.js';
 
 export const DEFAULT_WRPRC_MANIFEST = 'certs/raidiam/registration/manifest.json';
 const DEFAULT_DECLARATIONS = 'data/trust/intended_uses';
@@ -82,6 +83,7 @@ export async function validatePinnedWrprc({ selection, query, certificatePem, se
   if (selection.entityId !== entityId) throw new Error('WRPRC: manifest entity does not match WRPAC');
   const verified = await verifyWrprc(selection.token, {
     entityId, intendedUseId: selection.intendedUseId, serviceId: selection.serviceId, currentDate,
+    validationMode: sessionTrustPolicy(session)?.validationMode || 'pilot',
     checkTrust: checkTrust || (evidence => checkAccessCertificateTrust({ ...evidence, session })),
   });
   assertQueryScope(query, verified.intendedUse);

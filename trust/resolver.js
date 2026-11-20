@@ -3,6 +3,8 @@ import { listTypeProfile } from "./profile.js";
 import { TRUST_REASON_CODES, TrustListError } from "./errors.js";
 import { checkCertificateRevocation } from "./revocation.js";
 import { evaluateRegistrarScope } from "./scope.js";
+import { certificateFingerprint } from "./crypto.js";
+import { validateCertificatePathWithPkijs } from "./crypto.js";
 
 const ROLES = new Set([
   "pid-provider", "wallet-provider", "wrpac-provider", "wrprc-provider",
@@ -31,8 +33,13 @@ function normalizePolicy(request, profile) {
   if (!Array.isArray(acceptedStatuses) || acceptedStatuses.some((status) => typeof status !== "string")) {
     throw new TrustListError("policy.acceptedStatuses must be an array of strings", TRUST_REASON_CODES.INVALID_REQUEST);
   }
+  const validationMode = policy.validationMode || request.validationMode || "pilot";
+  if (!["pilot", "cs18-draft"].includes(validationMode)) {
+    throw new TrustListError("policy.validationMode must be pilot or cs18-draft", TRUST_REASON_CODES.INVALID_REQUEST);
+  }
   return {
     acceptedStatuses,
+    validationMode,
     requireRevocation: policy.requireRevocation === true,
     allowStaleSnapshot: policy.allowStaleSnapshot === true,
   };
@@ -40,8 +47,11 @@ function normalizePolicy(request, profile) {
 
 function outputError(snapshot, request, error) {
   const safeRequest = request || {};
+  const strict = safeRequest.validationMode === "cs18-draft" || safeRequest.policy?.validationMode === "cs18-draft";
+  const availability = error.reasonCode === TRUST_REASON_CODES.REVOCATION_UNKNOWN;
   return {
     trusted: false,
+    ...(strict ? { accepted: availability } : {}),
     state: error.reasonCode === TRUST_REASON_CODES.TRUST_EVALUATION_INDETERMINATE || error.reasonCode === TRUST_REASON_CODES.REVOCATION_UNKNOWN ? "indeterminate" : "not_trusted",
     reasonCode: error.reasonCode || TRUST_REASON_CODES.TRUST_EVALUATION_INDETERMINATE,
     evidence: {
@@ -104,6 +114,9 @@ export function createTrustResolver({ profile, snapshot = null, snapshotProvider
       try {
         validateResolutionRequest(request, profile);
         const policy = normalizePolicy(request, profile);
+        if (policy.validationMode === "cs18-draft" && !request.presentedIdentity.certificateChain?.length) {
+          throw new TrustListError("Strict validation requires a presented X.509 certificate chain", TRUST_REASON_CODES.CERTIFICATE_PATH_INVALID);
+        }
         listTypeProfile(profile, request.role);
         const currentSnapshot = snapshotProvider
           ? await snapshotProvider({ profile, request })
@@ -129,7 +142,25 @@ export function createTrustResolver({ profile, snapshot = null, snapshotProvider
           credentialContext,
           evaluationTime,
           acceptedStatuses: policy.acceptedStatuses,
+          validationMode: policy.validationMode,
         });
+        if (policy.validationMode === "cs18-draft") {
+          result.accepted = result.trusted;
+          result.evidence.validationMode = policy.validationMode;
+          result.evidence.acceptancePolicy = "continue-on-status-availability-failure";
+          result.evidence.checkedAt = evaluationTime.toISOString();
+          const signerChain = request.presentedIdentity.certificateChain || [];
+          result.evidence.signerFingerprint = signerChain[0] ? certificateFingerprint(signerChain[0]) : request.presentedIdentity.certificateFingerprint || null;
+          result.evidence.presentedPathFingerprints = signerChain.map((certificate) => certificateFingerprint(certificate));
+          if (!result.trusted) return result;
+          if (result.evidence.certificatePath?.chain?.length && result.evidence.certificatePath?.anchorPem) {
+            await validateCertificatePathWithPkijs({
+              certificateChain: result.evidence.certificatePath.chain,
+              anchorCertificates: [result.evidence.certificatePath.anchorPem],
+              evaluationTime,
+            });
+          }
+        }
         if (result.trusted && policy.requireRevocation) {
           const selectedUrl = result.evidence.list?.url;
           const selectedList = lists.find((list) => list?.source?.url === selectedUrl);
@@ -142,16 +173,30 @@ export function createTrustResolver({ profile, snapshot = null, snapshotProvider
           }
         }
         if (result.trusted && request.presentedIdentity.certificateChain?.length) {
-          const chain = request.presentedIdentity.certificateChain;
-          const issuerPem = chain[1] || null;
-          const revocation = await checkCertificateRevocation({
-            certificatePem: chain[0], issuerPem, evaluationTime,
-            network: { timeoutMs: profile.network.timeoutMs, maxBytes: profile.network.maxBytes, allowInsecureHttp: profile.network.allowInsecureHttp === true },
-          });
-          result.evidence.revocation = revocation;
+          const presentedPath = request.presentedIdentity.certificateChain;
+          const path = policy.validationMode === "cs18-draft"
+            ? (result.evidence.certificatePath?.chain || presentedPath)
+            : presentedPath.slice(0, 1);
+          const anchorFingerprint = result.evidence.certificatePath?.anchorFingerprint;
+          const nonAnchors = path.filter((pem) => !anchorFingerprint || certificateFingerprint(pem) !== anchorFingerprint);
+          const revocationEvidence = [];
+          for (let index = 0; index < nonAnchors.length; index++) {
+            const revocation = await checkCertificateRevocation({
+              certificatePem: nonAnchors[index], issuerPem: nonAnchors[index + 1] || null, evaluationTime,
+              strict: policy.validationMode === "cs18-draft",
+              network: { timeoutMs: profile.network.timeoutMs, maxBytes: profile.network.maxBytes, allowInsecureHttp: profile.network.allowInsecureHttp === true },
+            });
+            revocationEvidence.push(revocation);
+            if (policy.validationMode === "cs18-draft" && revocation.status !== "good") {
+              return { ...result, trusted: false, accepted: true, state: "indeterminate", reasonCode: TRUST_REASON_CODES.REVOCATION_UNKNOWN,
+                evidence: { ...result.evidence, status: "unknown", revocation: revocationEvidence } };
+            }
+          }
+          result.evidence.revocation = revocationEvidence;
         }
         return {
           ...result,
+          ...(policy.validationMode === "cs18-draft" ? { accepted: result.trusted } : {}),
           reasonCode: result.trusted ? TRUST_REASON_CODES.TRUSTED : result.reasonCode,
           evidence: { ...result.evidence, policy, framework: request.framework },
         };

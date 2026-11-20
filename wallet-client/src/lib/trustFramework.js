@@ -6,12 +6,13 @@ import forge from "node-forge";
 import { decodeProtectedHeader, importX509, jwtVerify } from "jose";
 import { walletRedisClient } from "./cache.js";
 import { makeSessionLogger } from "./logger.js";
-import { createWalletContext } from "../../../utils/sessionContext.js";
+import { createWalletContext, sessionTrustPolicy } from "../../../utils/sessionContext.js";
 import {
   applyWalletTrustDirective,
   checkAccessCertificateTrust,
   checkVerifierCredentialTrust,
   isTrustFrameworkSession,
+  trustDecisionAccepted,
   walletTrustDirective,
 } from "../../../utils/trustFrameworkPolicy.js";
 import { validateVerifierAttestationTrust } from "../../../utils/cs02TrustPolicy.js";
@@ -58,8 +59,8 @@ export async function loadWalletTrustSession(sessionId) {
   return raw ? JSON.parse(raw) : null;
 }
 
-export async function storeWalletTrustDirective({ sessionId, trustFramework, flow = "issuance", replace = false, trustPolicy = null } = {}) {
-  const directive = walletTrustDirective(trustFramework, { replace });
+export async function storeWalletTrustDirective({ sessionId, trustFramework, trustValidationMode = "pilot", flow = "issuance", replace = false, trustPolicy = null } = {}) {
+  const directive = walletTrustDirective(trustFramework, { replace, trustValidationMode });
   if (trustPolicy && directive.action === "enable") {
     directive.trustPolicy = trustPolicy;
     directive.trustEnabled = true;
@@ -74,6 +75,12 @@ export async function storeWalletTrustDirective({ sessionId, trustFramework, flo
     return null;
   }
   const existing = await loadWalletTrustSession(sessionId);
+  if (existing?.trustPolicy && directive.trustPolicy
+    && (existing.trustPolicy.validationMode || "pilot") !== (directive.trustPolicy.validationMode || "pilot")) {
+    const error = new Error("trustValidationMode cannot change within an active transaction");
+    error.errorCode = "invalid_request";
+    throw error;
+  }
   const next = applyWalletTrustDirective(existing || { sessionId, status: "pending" }, directive, { sessionId, flow });
   await setSessionValue(`wallet:test-session:${sessionId}`, Number(process.env.WALLET_TEST_SESSION_TTL || 86400), JSON.stringify(next));
   return next;
@@ -105,7 +112,7 @@ export async function recordWalletTrustDecision(sessionId, decision, operation) 
     trustDecisions: [...(current.trustDecisions || []), enriched],
   });
   await setSessionValue(key, Number(process.env.WALLET_TEST_SESSION_TTL || 86400), JSON.stringify(next));
-  try { makeSessionLogger(sessionId)("[TRUST] wallet decision", { operation, trusted: decision.trusted, reasonCode: decision.reasonCode, state: decision.state }); } catch {}
+  try { makeSessionLogger(sessionId)("[TRUST] wallet decision", { operation, trusted: decision.trusted, accepted: decision.accepted, reasonCode: decision.reasonCode, state: decision.state }); } catch {}
 }
 
 export async function isWalletTrustEnabled(sessionId) {
@@ -190,7 +197,7 @@ export async function enforceIssuedCredentialTrust({ sessionId, payload, header,
       format, vct, doctype, role, scopeEvidence, operation: "wallet-store-credential",
     });
     decision ||= candidate;
-    if (candidate?.trusted) {
+    if (trustDecisionAccepted(candidate)) {
       decision = candidate;
       break;
     }
@@ -202,7 +209,7 @@ export async function enforceIssuedCredentialTrust({ sessionId, payload, header,
   });
   decision = withScopeOmission(decision, omission);
   await recordWalletTrustDecision(sessionId, decision, "wallet-store-credential");
-  if (!decision?.trusted) throw new WalletTrustError(`Credential issuer trust rejected: ${decision?.reasonCode || "TRUST_EVALUATION_INDETERMINATE"}`, decision);
+  if (!trustDecisionAccepted(decision)) throw new WalletTrustError(`Credential issuer trust rejected: ${decision?.reasonCode || "TRUST_EVALUATION_INDETERMINATE"}`, decision);
   logScopeOmission(sessionId, omission);
   return decision;
 }
@@ -277,7 +284,7 @@ async function verifyRegistrationCertificate(registrationCert, session, expected
     role: "wrprc-provider",
     operation: "wallet-verify-wrprc",
   });
-  if (!decision?.trusted) throw new WalletTrustError(`Verifier registration certificate trust rejected: ${decision?.reasonCode || "TRUST_EVALUATION_INDETERMINATE"}`, decision);
+  if (!trustDecisionAccepted(decision)) throw new WalletTrustError(`Verifier registration certificate trust rejected: ${decision?.reasonCode || "TRUST_EVALUATION_INDETERMINATE"}`, decision);
   const verified = await jwtVerify(registrationCert, await importX509(evidence.certificatePem, header.alg || "ES256"));
   const payload = verified.payload;
   if (expectedEntityId && payload.sub !== expectedEntityId) throw new WalletTrustError("Verifier registration certificate entity does not match WRPAC");
@@ -338,7 +345,7 @@ export async function enforceVerifierPresentationTrust({ sessionId, requestHeade
     operation: "wallet-verify-wrpac",
   });
   await recordWalletTrustDecision(sessionId, accessDecision, "wallet-verify-wrpac");
-  if (!accessDecision?.trusted) throw new WalletTrustError(`Verifier access certificate trust rejected: ${accessDecision?.reasonCode || "TRUST_EVALUATION_INDETERMINATE"}`, accessDecision);
+  if (!trustDecisionAccepted(accessDecision)) throw new WalletTrustError(`Verifier access certificate trust rejected: ${accessDecision?.reasonCode || "TRUST_EVALUATION_INDETERMINATE"}`, accessDecision);
   try {
     const { dataset, token } = parseVerifierInfo(requestPayload?.verifier_info);
     const intendedUseId = dataset?.intendedUseIdentifier;
@@ -346,6 +353,7 @@ export async function enforceVerifierPresentationTrust({ sessionId, requestHeade
     const accessServiceId = new X509Certificate(evidence.certificatePem).subject.match(/(?:^|\n)OU\s*=\s*([^\n]+)/)?.[1]?.trim();
     const { payload: registration, intendedUse, trustDecision } = await verifyWrprc(token, {
       entityId, intendedUseId, serviceId, allowIntermediary: true,
+      validationMode: sessionTrustPolicy(session)?.validationMode || "pilot",
       checkTrust: (material) => checkAccessCertificateTrust({ ...material, session, operation: "wallet-verify-wrprc" }),
     });
     const intermediated = Object.hasOwn(registration, "intermediary");

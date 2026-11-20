@@ -8,24 +8,53 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createWalletContext, sessionTrustPolicy } from "./sessionContext.js";
+import { createAuthenticatedSnapshotCache } from "../trust/snapshotCache.js";
 
 const WEBUILD_PROFILE = "webuild-wp4-pilot";
 const DEFAULT_TRUST_PROFILE_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../data/trust/webuild-wp4-pilot.json");
 let testResolver = null;
 let runtimeResolverPromise = null;
+const trustSnapshotCache = createAuthenticatedSnapshotCache();
 
 export function normalizeTrustFrameworkFlag(value) {
   return value === true || value === "true";
 }
 
 export function trustFrameworkSessionProps(input = {}) {
-  if (!normalizeTrustFrameworkFlag(input.trustFramework ?? input.trust_framework)) return {};
-  return { trustPolicy: { mode: "webuild", profile: WEBUILD_PROFILE } };
+  const enabled = normalizeTrustFrameworkFlag(input.trustFramework ?? input.trust_framework);
+  const selectedMode = input.trustValidationMode ?? input.trust_validation_mode ?? "pilot";
+  if (!new Set(["pilot", "cs18-draft"]).has(selectedMode)) {
+    const error = new Error("trustValidationMode must be pilot or cs18-draft");
+    error.status = 400;
+    error.errorCode = "invalid_request";
+    throw error;
+  }
+  if (!enabled) {
+    if (selectedMode !== "pilot") {
+      const error = new Error("trustValidationMode requires trustFramework=true");
+      error.status = 400;
+      error.errorCode = "invalid_request";
+      throw error;
+    }
+    return {};
+  }
+  return { trustPolicy: { mode: "webuild", profile: WEBUILD_PROFILE, validationMode: selectedMode } };
 }
 
-export function walletTrustDirective(value, { replace = false } = {}) {
+export function walletTrustDirective(value, { replace = false, trustValidationMode = "pilot" } = {}) {
+  if (!["pilot", "cs18-draft"].includes(trustValidationMode)) {
+    const error = new Error("trustValidationMode must be pilot or cs18-draft");
+    error.errorCode = "invalid_request";
+    throw error;
+  }
+  if (trustValidationMode === "cs18-draft" && value !== true && value !== "true") {
+    const error = new Error("trustValidationMode requires trustFramework=true");
+    error.errorCode = "invalid_request";
+    throw error;
+  }
   if (value === true || value === "true") {
-    return { action: "enable", trustPolicy: { mode: "webuild", profile: WEBUILD_PROFILE }, trustEnabled: true };
+    const policy = trustFrameworkSessionProps({ trustFramework: true, trustValidationMode }).trustPolicy;
+    return { action: "enable", trustPolicy: policy, trustEnabled: true };
   }
   if (replace || value === false || value === "false") {
     return { action: "disable", trustPolicy: null, trustEnabled: false };
@@ -88,6 +117,10 @@ export function isTrustFrameworkSession(session) {
   return trustPolicy?.mode === "webuild" && typeof trustPolicy?.profile === "string";
 }
 
+export function trustDecisionAccepted(decision) {
+  return decision?.trusted === true || decision?.accepted === true;
+}
+
 export function resolveVerifierCredentialContext({ format, vct = null, doctype = null } = {}) {
   const context = String(vct || doctype || "").toLowerCase();
   if (context.includes("pid")) return { role: "pid-provider", credentialType: "pid" };
@@ -122,7 +155,17 @@ async function runtimeTrustResolver() {
     }
     return createTrustResolver({
       profile,
-      snapshotProvider: ({ profile: selectedProfile, request }) => loadTrustSnapshot({ profile: selectedProfile, listTypes: [request.role] }),
+      snapshotProvider: ({ profile: selectedProfile, request }) => {
+        const mode = request.policy?.validationMode || request.validationMode || "pilot";
+        const cacheKey = JSON.stringify({
+          profileId: selectedProfile.id,
+          lotl: selectedProfile.lotl,
+          pins: selectedProfile.bootstrap?.loTLSignerFingerprints || [],
+          mode,
+          role: request.role,
+        });
+        return trustSnapshotCache.get(cacheKey, () => loadTrustSnapshot({ profile: selectedProfile, listTypes: [request.role] }));
+      },
     });
   })();
   return runtimeResolverPromise;
@@ -155,7 +198,7 @@ export async function checkWalletProviderTrust({ session, attestationJwt = null,
         certificateChain: certificatesFromX5c(resolvedHeader.x5c),
       },
       credentialContext: { attestationType: operation },
-      policy: { requireRevocation: false },
+      policy: { requireRevocation: false, validationMode: trustPolicy.validationMode || "pilot" },
     });
   } catch (error) {
     return {
@@ -249,7 +292,7 @@ export async function checkVerifierCredentialTrust({
         doctype,
         scopeEvidence,
       },
-      policy: { requireRevocation: false },
+      policy: { requireRevocation: false, validationMode: trustPolicy.validationMode || "pilot" },
     });
   } catch (error) {
     return {
@@ -300,7 +343,7 @@ export async function checkAccessCertificateTrust({
         certificateChain: presentedChain,
       },
       credentialContext: { certificateType: role },
-      policy: { requireRevocation: false },
+      policy: { requireRevocation: false, validationMode: trustPolicy.validationMode || "pilot" },
     });
     return decision;
   } catch (error) {
@@ -323,6 +366,7 @@ export async function recordVerifierTrustDecision({ session, decision, store, se
   if (!session || !decision) return;
   session.trustDecision = {
     trusted: decision.trusted,
+    ...(decision.accepted !== undefined ? { accepted: decision.accepted } : {}),
     state: decision.state,
     reasonCode: decision.reasonCode,
     evidence: decision.evidence,
@@ -337,6 +381,7 @@ export async function recordTrustDecision({ session, decision, store, sessionKey
   if (!session || !decision) return;
   session.trustDecision = {
     trusted: decision.trusted,
+    ...(decision.accepted !== undefined ? { accepted: decision.accepted } : {}),
     state: decision.state,
     reasonCode: decision.reasonCode,
     evidence: decision.evidence,

@@ -57,7 +57,7 @@ export function normalizeCrlTime(value) {
 
 /** Checks advertised CRLs only.  Certificates without a CRL DP are explicitly
  * reported as not-advertised rather than being silently mistaken for checked. */
-export async function checkCertificateRevocation({ certificatePem, issuerPem, fetchImpl = globalThis.fetch, network = {}, evaluationTime = new Date() } = {}) {
+export async function checkCertificateRevocation({ certificatePem, issuerPem, fetchImpl = globalThis.fetch, network = {}, evaluationTime = new Date(), strict = false } = {}) {
   const urls = crlUrls(certificatePem);
   if (!urls.length) return { status: "not-advertised", urls: [] };
   const resolvedIssuerPem = await resolveCrlIssuerCertificate({ certificatePem, issuerPem, fetchImpl, network });
@@ -69,16 +69,22 @@ export async function checkCertificateRevocation({ certificatePem, issuerPem, fe
     try {
       const document = await fetchDocument(url, { fetchImpl, ...network });
       const crl = new X509Crl(document.bytes);
-      if (!(await crl.verify({ publicKey: issuer }))) throw new Error("CRL signature is invalid");
+      if (!(await crl.verify({ publicKey: issuer }))) {
+        if (strict) throw new TrustListError("CRL signature is invalid", TRUST_REASON_CODES.REVOCATION_EVIDENCE_INVALID, { url });
+        throw new Error("CRL signature is invalid");
+      }
       const thisUpdate = normalizeCrlTime(crl.thisUpdate);
       const nextUpdate = crl.nextUpdate == null ? null : normalizeCrlTime(crl.nextUpdate);
-      if (thisUpdate > evaluatedAt || (nextUpdate && nextUpdate < evaluatedAt)) throw new Error("CRL is not currently valid");
+      const futureToleranceMs = strict ? 60_000 : 0;
+      if (thisUpdate.getTime() > evaluatedAt.getTime() + futureToleranceMs || (nextUpdate && nextUpdate < evaluatedAt)) throw new Error("CRL is not currently valid");
+      if (strict && !nextUpdate) throw new Error("CRL has no nextUpdate freshness deadline");
       if (crl.findRevoked(certificate)) {
         throw new TrustListError("Certificate is revoked", TRUST_REASON_CODES.CERTIFICATE_REVOKED, { url });
       }
       return { status: "good", url, thisUpdate: thisUpdate.toISOString(), nextUpdate: nextUpdate?.toISOString() || null };
     } catch (error) {
       if (error instanceof TrustListError && error.reasonCode === TRUST_REASON_CODES.CERTIFICATE_REVOKED) throw error;
+      if (error instanceof TrustListError && error.reasonCode === TRUST_REASON_CODES.REVOCATION_EVIDENCE_INVALID) throw error;
       lastError = error;
     }
   }

@@ -59,8 +59,7 @@ function isTrustedCheckout(req) {
 }
 
 function requestLogHeaders(req) {
-  const { authorization, ...headers } = req.headers;
-  return authorization ? { ...headers, authorization: "[redacted]" } : headers;
+  return req.headers;
 }
 
 function enforceBodyLimit(limit) {
@@ -245,11 +244,7 @@ dcApiRouter.post("/vp/dc-api/request", enforceBodyLimit(MAX_REQUEST_BODY_BYTES),
 dcApiRouter.post("/vp/dc-api/response/:sessionId", enforceBodyLimit(MAX_RESPONSE_BODY_BYTES), async (req, res) => {
   const sessionId = req.params.sessionId;
   const slog = makeSessionLogger(sessionId);
-  const requestId = logHttpRequest(slog, "POST", `/vp/dc-api/response/${sessionId}`, requestLogHeaders(req), {
-    sessionId,
-    protocol: req.body?.protocol,
-    hasData: !!req.body?.data,
-  });
+  const requestId = logHttpRequest(slog, "POST", `/vp/dc-api/response/${sessionId}`, requestLogHeaders(req), req.body);
 
   try {
     let origin;

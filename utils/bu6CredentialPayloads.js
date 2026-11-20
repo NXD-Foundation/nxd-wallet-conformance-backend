@@ -7,7 +7,7 @@ const POX_EXPIRES_AT = "2027-07-01T00:00:00.000Z";
 const BOLAGSVERKET_ID = "BOLSE-E81458556";
 
 export function bu6AlwaysPublishesStatusList(configurationId) {
-  return configurationId === BU6_EUCC_VCT;
+  return configurationId === BU6_PID_VCT || configurationId === BU6_POX_VCT || configurationId === BU6_EUCC_VCT;
 }
 
 function swedishPidClaims() {

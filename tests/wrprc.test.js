@@ -98,6 +98,16 @@ describe("WRPRC cryptographic verification", () => {
     await rejects(await token({ exp: undefined }), options(), "exp");
     await rejects(await token({ sub: "other" }), options(), "subject");
   });
+  it("applies CS-18 draft policy and time claims while allowing omitted exp", async () => {
+    const strict = { ...options(), validationMode: "cs18-draft" };
+    const base = { policy_id: ["0.4.0.19475.3.1"], iat: Math.floor(Date.parse("2026-01-01T00:00:00Z") / 1000) };
+    expect((await verifyWrprc(await token({ ...base, exp: undefined }), strict)).payload.exp).to.equal(undefined);
+    await rejects(await token({ ...base, policy_id: ["wrong"] }), strict, "policy_id");
+    await rejects(await token({ ...base, iat: base.iat + 61 }), strict, "future");
+    await rejects(await token({ ...base, iat: "not-a-number" }), strict, "iat");
+    await rejects(await token({ ...base, exp: base.iat - 1 }), strict, "exp");
+    await rejects(await token({ ...base, exp: 100 }), strict, "exp");
+  });
   it("binds an intermediary registration to its named intermediary without weakening direct binding", async () => {
     const value = await token({ sub: "bank", intermediary: { sub: "rp" } });
     expect((await verifyWrprc(value, { ...options(), allowIntermediary: true })).payload.sub).to.equal("bank");

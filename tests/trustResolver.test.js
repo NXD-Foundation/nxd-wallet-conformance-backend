@@ -8,11 +8,22 @@ import { loadTrustProfile } from "../trust/profile.js";
 import { createTrustResolver } from "../trust/resolver.js";
 import { createTrustResolverServer } from "../trust/http.js";
 import { evaluateTrust } from "../trust/evaluate.js";
+import forge from "node-forge";
 
 const execFileAsync = promisify(execFile);
 const roles = ["pid-provider", "wallet-provider", "wrpac-provider", "wrprc-provider", "pub-eaa-provider", "eaa-provider", "qeaa-provider", "ebwoid-provider"];
 
 function snapshotFor(profile) {
+  const serviceTypes = {
+    "pid-provider": "http://uri.etsi.org/19602/SvcType/PID/Issuance",
+    "wallet-provider": "http://uri.etsi.org/19602/SvcType/WalletSolution/Issuance",
+    "wrpac-provider": "http://uri.etsi.org/19602/SvcType/WRPAC/Issuance",
+    "wrprc-provider": "http://uri.etsi.org/19602/SvcType/WRPRC/Issuance",
+    "pub-eaa-provider": "http://uri.etsi.org/19602/SvcType/PubEAA/Issuance",
+    "eaa-provider": "service-eaa-provider",
+    "qeaa-provider": "http://uri.etsi.org/TrstSvc/Svctype/EAA/Q",
+    "ebwoid-provider": "service-ebwoid-provider",
+  };
   return {
     profile,
     profileId: profile.id,
@@ -21,7 +32,7 @@ function snapshotFor(profile) {
       format: "json",
       source: { url: `https://example.test/${role}.json` },
       scheme: { sequence: 1 },
-      entities: [{ id: `entity-${role}`, name: `entity-${role}`, services: [{ type: `service-${role}`, status: "valid", certificates: [] }] }],
+      entities: [{ id: `entity-${role}`, name: `entity-${role}`, services: [{ type: serviceTypes[role], status: "valid", certificates: [] }] }],
     }])),
   };
 }
@@ -46,6 +57,65 @@ describe("Phase 2 explicit trust resolver", () => {
       expect(result).to.include({ trusted: true, state: "trusted", reasonCode: "TRUSTED" });
       expect(result.evidence.role).to.equal(role);
     }
+  });
+
+  it("marks strict-mode trust acceptance separately from trust status", async () => {
+    const rootPair = forge.pki.rsa.generateKeyPair(1024);
+    const root = forge.pki.createCertificate();
+    root.publicKey = rootPair.publicKey; root.serialNumber = "01";
+    root.validity.notBefore = new Date("2020-01-01"); root.validity.notAfter = new Date("2035-01-01");
+    root.setSubject([{ name: "commonName", value: "Strict test root" }]); root.setIssuer(root.subject.attributes);
+    root.setExtensions([{ name: "basicConstraints", cA: true, pathLenConstraint: 0 }, { name: "keyUsage", keyCertSign: true, cRLSign: true }]);
+    root.sign(rootPair.privateKey, forge.md.sha256.create());
+    const pair = forge.pki.rsa.generateKeyPair(1024);
+    const cert = forge.pki.createCertificate();
+    cert.publicKey = pair.publicKey; cert.serialNumber = "02";
+    cert.validity.notBefore = new Date("2020-01-01"); cert.validity.notAfter = new Date("2035-01-01");
+    cert.setSubject([{ name: "commonName", value: "Strict PID Provider" }]); cert.setIssuer(root.subject.attributes);
+    cert.setExtensions([{ name: "keyUsage", digitalSignature: true }, { name: "basicConstraints", cA: false }]);
+    cert.sign(rootPair.privateKey, forge.md.sha256.create());
+    const certificatePem = forge.pki.certificateToPem(cert);
+    const rootPem = forge.pki.certificateToPem(root);
+    const certificateFingerprint = (await import("../trust/crypto.js")).certificateFingerprint(certificatePem);
+    const rootFingerprint = (await import("../trust/crypto.js")).certificateFingerprint(rootPem);
+    const strictSnapshot = structuredClone(snapshot);
+    strictSnapshot.lists["pid-provider"].entities[0].services[0].certificates = [rootFingerprint];
+    strictSnapshot.lists["pid-provider"].entities[0].services[0].certificatePems = [rootPem];
+    const resolver = createTrustResolver({ profile, snapshot: strictSnapshot, clock: () => new Date("2026-10-21T12:00:00Z") });
+    const unknown = await resolver.resolve({
+      framework: profile.id, role: "pid-provider", operation: "resolve-provider",
+      presentedIdentity: { entityId: "entity-pid-provider", certificateFingerprint, certificateChain: [certificatePem, rootPem] },
+      policy: { validationMode: "cs18-draft" },
+    });
+    expect(unknown).to.include({ trusted: false, accepted: true, state: "indeterminate", reasonCode: "REVOCATION_UNKNOWN" });
+    expect(unknown.evidence).to.include({ validationMode: "cs18-draft", acceptancePolicy: "continue-on-status-availability-failure", status: "unknown" });
+    const rejectedSnapshot = structuredClone(strictSnapshot);
+    rejectedSnapshot.lists["pid-provider"].entities = [];
+    const rejected = await createTrustResolver({ profile, snapshot: rejectedSnapshot }).resolve({
+      framework: profile.id, role: "pid-provider", operation: "resolve-provider",
+      presentedIdentity: { entityId: "unlisted", certificateFingerprint, certificateChain: [certificatePem, rootPem] },
+      policy: { validationMode: "cs18-draft" },
+    });
+    expect(rejected).to.include({ trusted: false, accepted: false, state: "not_trusted" });
+    const wrongServiceSnapshot = structuredClone(strictSnapshot);
+    wrongServiceSnapshot.lists["pid-provider"].entities[0].services[0].type = "http://uri.etsi.org/19602/SvcType/WRPAC/Issuance";
+    const wrongService = await createTrustResolver({ profile, snapshot: wrongServiceSnapshot }).resolve({
+      framework: profile.id, role: "pid-provider", operation: "resolve-provider",
+      presentedIdentity: { entityId: "entity-pid-provider", certificateFingerprint, certificateChain: [certificatePem, rootPem] }, policy: { validationMode: "cs18-draft" },
+    });
+    expect(wrongService).to.include({ trusted: false, accepted: false, reasonCode: "ANCHOR_MISMATCH" });
+  });
+
+  it("does not use availability continuation for missing or invalid trust evidence", async () => {
+    const missing = createTrustResolver({ profile, snapshot: null, snapshotProvider: async () => null });
+    const result = await missing.resolve({ framework: profile.id, role: "pid-provider", operation: "resolve", presentedIdentity: { entityId: "entity-pid-provider" }, policy: { validationMode: "cs18-draft" } });
+    expect(result).to.include({ trusted: false, accepted: false });
+  });
+
+  it("rejects unsupported validation modes at the resolver boundary", async () => {
+    const resolver = createTrustResolver({ profile, snapshot });
+    const result = await resolver.resolve({ framework: profile.id, role: "pid-provider", operation: "resolve", presentedIdentity: { entityId: "entity-pid-provider" }, policy: { validationMode: "unknown" } });
+    expect(result).to.include({ trusted: false, reasonCode: "INVALID_REQUEST" });
   });
 
   it("returns stable negative and indeterminate results", async () => {

@@ -118,6 +118,17 @@ describe("wallet WE BUILD trust framework helpers", () => {
     expect(required?.message).to.include("wallet trust session");
   });
 
+  it("persists the selected strict validation mode and prevents changing it mid-session", async () => {
+    const sessions = new Map();
+    setWalletTrustSessionStorageForTests({ get: async (key) => sessions.get(key) ?? null, set: async (key, value) => sessions.set(key, value) });
+    const enabled = await storeWalletTrustDirective({ sessionId: "strict-mode", trustFramework: true, trustValidationMode: "cs18-draft" });
+    expect(enabled.sessionContext.trust.policy.validationMode).to.equal("cs18-draft");
+    expect(enabled.trustPolicy.validationMode).to.equal("cs18-draft");
+    let caught;
+    try { await storeWalletTrustDirective({ sessionId: "strict-mode", trustFramework: true, trustValidationMode: "pilot" }); } catch (error) { caught = error; }
+    expect(caught?.message).to.include("cannot change");
+  });
+
   it("declares node-forge so Docker wallet installs can load trustFramework", async () => {
     // Regression: trustFramework.js imports node-forge, but the wallet image only
     // installs wallet-client/package.json deps (not the repo root package.json).

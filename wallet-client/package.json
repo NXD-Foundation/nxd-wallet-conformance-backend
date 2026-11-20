@@ -29,6 +29,7 @@
     "jsonwebtoken": "^9.0.2",
     "node-fetch": "^3.3.2",
     "node-forge": "^1.4.3",
+    "pkijs": "^3.4.3",
     "redis": "^4.7.0",
     "xml-crypto": "^6.1.2",
     "xpath": "^0.0.33"

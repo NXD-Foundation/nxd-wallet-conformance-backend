@@ -30,7 +30,7 @@ describe("BU6 credential payloads", () => {
       attestation_legal_category: "PUB-EAA",
     });
     assert.deepEqual(payload.disclosureFrame._sd, Object.keys(payload.claims));
-    assert.equal(bu6AlwaysPublishesStatusList(BU6_PID_VCT), false);
+    assert.equal(bu6AlwaysPublishesStatusList(BU6_PID_VCT), true);
   });
 
   it("builds the Swedish power of representation from the workbook table", () => {
@@ -70,6 +70,7 @@ describe("BU6 credential payloads", () => {
     assert.equal(payload.disclosureFrame._sd, undefined);
     assert.equal(payload.disclosureFrame.credential, undefined);
     assert.equal(payload.disclosureFrame.credential_metadata, undefined);
+    assert.equal(bu6AlwaysPublishesStatusList(BU6_POX_VCT), true);
   });
 
   it("builds an EU Company Certificate whose company claims stay in the clear", () => {

@@ -14,7 +14,7 @@ import {
 import { selectWrprc, validatePinnedWrprc, selectRegistrarDataset, validatePinnedRegistrarDataset } from "./wrprcRegistry.js";
 import { computeX509HashClientIdFromLeafCertBase64 } from "./cs02ClientIdBinding.js";
 import { certificateFromX5c, certificatesFromX5c } from "../trust/crypto.js";
-import { checkAccessCertificateTrust, isTrustFrameworkSession } from "./trustFrameworkPolicy.js";
+import { checkAccessCertificateTrust, isTrustFrameworkSession, trustDecisionAccepted } from "./trustFrameworkPolicy.js";
 import {
   filterClientMetadataForCs02,
   createOpenId4VpRequestUrl,
@@ -1368,7 +1368,7 @@ export async function generateVPRequest(params) {
       operation: "verify-access-certificate",
     });
     sessionData.accessCertificateTrust = accessDecision;
-    if (!accessDecision?.trusted) {
+    if (!trustDecisionAccepted(accessDecision)) {
       await storeVPSessionData(sessionId, sessionData);
       throw new Error(`Verifier access certificate trust rejected: ${accessDecision?.reasonCode || "TRUST_EVALUATION_INDETERMINATE"}`);
     }

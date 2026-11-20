@@ -1,6 +1,5 @@
 import { createDpopNonceState } from "./lib/dpopNonce.js";
 import { postFormWithAttestationNonceRetry, requestWithResourceDpop, requestCredentialNonce } from "./lib/dpopIssuanceTransport.js";
-import { redactHttpLog } from "./lib/httpLogRedaction.js";
 import express from "express";
 import fetch from "node-fetch";
 import { createPkcePair } from "./lib/crypto.js";
@@ -55,9 +54,10 @@ import {
   describeWuaStatusListPublisher,
 } from "./lib/wuaStatusList.js";
 import { createWuaStatusListRouter } from "./routes/wuaStatusListRoutes.js";
-import { applyWalletTrustDirective, normalizeTrustFrameworkFlag, trustFrameworkSessionProps, walletTrustDirective, checkAccessCertificateTrust } from "../../utils/trustFrameworkPolicy.js";
+import { applyWalletTrustDirective, normalizeTrustFrameworkFlag, trustFrameworkSessionProps, walletTrustDirective, checkAccessCertificateTrust, trustDecisionAccepted } from "../../utils/trustFrameworkPolicy.js";
 import { certificatesFromX5c } from "../../trust/crypto.js";
 import { createWalletContext } from "../../utils/sessionContext.js";
+import { toPublicLogs } from "../../utils/publicLogView.js";
 import { credentialTypeFromJwtVcPayload, enforceIssuedCredentialTrust, resolveIssuerScopeEvidence, loadWalletTrustSession, metadataTrustSessionFor, storeWalletTrustDirective } from "./lib/trustFramework.js";
 import {
   buildCredentialProofRequest,
@@ -95,6 +95,7 @@ import {
 import {
   installProcessLogHandlers,
   logError,
+  logSessionFlowError,
   logInfo,
   logWarn,
   makeSessionLogger,
@@ -117,14 +118,14 @@ export function isDirectWalletTrustEnabled(trustFramework) {
   return normalizeTrustFrameworkFlag(trustFramework);
 }
 
-async function issuerMetadataTrustSession(trustFramework, sessionId, { replace = false } = {}) {
-  const required = walletTrustDirective(trustFramework, { replace }).action === "enable";
+async function issuerMetadataTrustSession(trustFramework, sessionId, { replace = false, trustValidationMode = "pilot" } = {}) {
+  const required = walletTrustDirective(trustFramework, { replace, trustValidationMode }).action === "enable";
   return metadataTrustSessionFor(sessionId, { required });
 }
 
-async function ensureDirectWalletTrustSession({ sessionId, trustFramework, flow, trustPolicy = null }) {
+async function ensureDirectWalletTrustSession({ sessionId, trustFramework, trustValidationMode = "pilot", flow, trustPolicy = null }) {
   if (!isDirectWalletTrustEnabled(trustFramework)) return;
-  await storeWalletTrustDirective({ sessionId, trustFramework, flow, trustPolicy });
+  await storeWalletTrustDirective({ sessionId, trustFramework, trustValidationMode, flow, trustPolicy });
 }
 
 function logFlowError(slog, label, error, extra = {}) {
@@ -162,7 +163,7 @@ async function runGuardedAsync(slog, label, fn, extra = {}) {
 app.post("/issue", async (req, res) => {
   return runWithLogContext(req.body.sessionId, async () => {
     try {
-      await storeWalletTrustDirective({ sessionId: req.body.sessionId, trustFramework: req.body.trustFramework, flow: "issuance" });
+      await storeWalletTrustDirective({ sessionId: req.body.sessionId, trustFramework: req.body.trustFramework, trustValidationMode: req.body.trustValidationMode, flow: "issuance" });
       const issuerBase = (req.body.issuer || "http://localhost:3000").replace(/\/$/, "");
       const deepLink = req.body.offer || (await getOfferDeepLink(issuerBase, req.body.fetchOfferPath, req.body.credential));
       await logInfo(req.body.sessionId, "[/issue] deepLink:", deepLink || "<none>");
@@ -180,7 +181,7 @@ app.post("/issue", async (req, res) => {
       } catch {}
       const { grants } = offerConfig;
       const apiBase = (offerConfig.credential_issuer || issuerBase).replace(/\/$/, "");
-      const issuerMeta = await discoverIssuerMetadata(apiBase, req.body.sessionId, fetch, { trustSession: await issuerMetadataTrustSession(req.body.trustFramework, req.body.sessionId) });
+      const issuerMeta = await discoverIssuerMetadata(apiBase, req.body.sessionId, fetch, { trustSession: await issuerMetadataTrustSession(req.body.trustFramework, req.body.sessionId, { trustValidationMode: req.body.trustValidationMode }) });
       try {
         await logInfo(req.body.sessionId, "[/issue] issuerMeta.token_endpoint=", issuerMeta?.token_endpoint);
         await logInfo(req.body.sessionId, "[/issue] issuerMeta.credential_endpoint=", issuerMeta?.credential_endpoint);
@@ -301,7 +302,7 @@ async function handleSessionLogs(req, res) {
     if (!logs) {
       return res.status(404).json({ error: "not_found", error_description: "No logs for session" });
     }
-    return res.json({ sessionId, logs });
+    return res.json({ sessionId, logs: toPublicLogs(logs) });
   } catch (e) {
     await logError(req.params.sessionId, "[logs] error:", e);
     return res.status(500).json({ error: "server_error", error_description: e.message || String(e) });
@@ -317,7 +318,7 @@ async function handleGlobalLogs(req, res) {
     if (!logs) {
       return res.status(404).json({ error: "not_found", error_description: "No global logs" });
     }
-    return res.json({ logs });
+    return res.json({ logs: toPublicLogs(logs) });
   } catch (e) {
     await logError(undefined, "[logs] global error:", e);
     return res.status(500).json({ error: "server_error", error_description: e.message || String(e) });
@@ -444,7 +445,7 @@ app.get("/session-status/:sessionId", async (req, res) => {
 //   - If authorization_code grant → run /issue-codeflow flow
 // - Updates Redis status to "ok" on success, "failed" on error
 app.post("/session", async (req, res) => {
-  const { deepLink, sessionId, pin, trustFramework } = req.body || {};
+  const { deepLink, sessionId, pin, trustFramework, trustValidationMode } = req.body || {};
   if (!deepLink || !sessionId) {
     return res.status(400).json({ error: "invalid_request", error_description: "deepLink and sessionId are required" });
   }
@@ -459,7 +460,7 @@ app.post("/session", async (req, res) => {
       previous = stored ? JSON.parse(stored) : null;
     } catch {}
     const flow = isOpenId4VpDeepLink(deepLink) ? "presentation" : "issuance";
-    const directive = replaceTrust ? walletTrustDirective(trustFramework, { replace: true }) : null;
+    const directive = replaceTrust ? walletTrustDirective(trustFramework, { replace: true, trustValidationMode }) : null;
     const legacySession = {
       ...(directive ? applyWalletTrustDirective(previous, directive, { sessionId, flow, status }) : { sessionContext: previous?.sessionContext }),
       sessionId,
@@ -509,7 +510,7 @@ app.post("/session", async (req, res) => {
       const offeredConfigurationIds = getOfferedConfigurationIds(offerCfg);
       const { grants } = offerCfg;
       const apiBase = (offerCfg.credential_issuer || issuerBaseDefault).replace(/\/$/, "");
-      const issuerMeta = await discoverIssuerMetadata(apiBase, sessionId, fetch, { trustSession: await issuerMetadataTrustSession(trustFramework, sessionId, { replace: true }) });
+      const issuerMeta = await discoverIssuerMetadata(apiBase, sessionId, fetch, { trustSession: await issuerMetadataTrustSession(trustFramework, sessionId, { replace: true, trustValidationMode }) });
       try {
         sessionLog("[/session] offer.credential_issuer=", offerCfg?.credential_issuer);
         sessionLog("[/session] offer.config_ids=", offeredConfigurationIds);
@@ -565,7 +566,7 @@ app.post("/session", async (req, res) => {
           const okPayload = await setStatus("ok", { result });
           return res.json(okPayload);
         } catch (err) {
-          await logError(sessionId, "[/session] pre-authorized issuance error:", err);
+          logSessionFlowError(sessionId, "[/session] pre-authorized issuance error:", err);
           const failed = await setStatus("failed", { error: err.message || String(err) });
           return res.status(500).json({ error: "server_error", error_description: err.message || String(err), state: failed });
         }
@@ -616,7 +617,7 @@ app.post("/session", async (req, res) => {
               authorizationUrl: prepared.authorizationUrl,
               expiresAt: prepared.expiresAt,
               ttlSeconds: prepared.ttlSeconds,
-              trustFrameworkSessionProps: trustFrameworkSessionProps({ trustFramework }),
+              trustFrameworkSessionProps: trustFrameworkSessionProps({ trustFramework, trustValidationMode: req.body.trustValidationMode }),
               previousSession: await walletRedisClient
                 .get(`wallet:test-session:${sessionId}`)
                 .then((raw) => (raw ? JSON.parse(raw) : null))
@@ -719,7 +720,7 @@ app.post("/reissue", async (req, res) => {
 app.post("/present", async (req, res) => {
   return runWithLogContext(req.body.sessionId, async () => {
     try {
-      await ensureDirectWalletTrustSession({ sessionId: req.body.sessionId, trustFramework: req.body.trustFramework, flow: "presentation" });
+      await ensureDirectWalletTrustSession({ sessionId: req.body.sessionId, trustFramework: req.body.trustFramework, trustValidationMode: req.body.trustValidationMode, flow: "presentation" });
       const verifierBase = (req.body.verifier || "http://localhost:3000").replace(/\/$/, "");
       const deepLink = req.body.deepLink || (req.body.fetchPath ? await resolveDeepLinkFromEndpoint(verifierBase, req.body.fetchPath) : undefined);
       if (!deepLink) return res.status(400).json({ error: "invalid_request", error_description: "Missing deepLink or fetchPath" });
@@ -742,7 +743,7 @@ app.post("/present", async (req, res) => {
 app.post("/issue-codeflow", async (req, res) => {
   return runWithLogContext(req.body.sessionId, async () => {
     try {
-      await storeWalletTrustDirective({ sessionId: req.body.sessionId, trustFramework: req.body.trustFramework, flow: "issuance" });
+      await storeWalletTrustDirective({ sessionId: req.body.sessionId, trustFramework: req.body.trustFramework, trustValidationMode: req.body.trustValidationMode, flow: "issuance" });
       const issuerBaseInput = (req.body.issuer || "http://localhost:3000").replace(/\/$/, "");
       const deepLink = req.body.offer || (await getOfferDeepLink(issuerBaseInput, req.body.fetchOfferPath, req.body.credential));
       await logInfo(req.body.sessionId, "[/issue-codeflow] deepLink:", deepLink || "<none>");
@@ -758,7 +759,7 @@ app.post("/issue-codeflow", async (req, res) => {
       } catch {}
       const { grants } = offerCfg;
       const apiBase = (offerCfg.credential_issuer || issuerBaseInput).replace(/\/$/, "");
-      const issuerMeta = await discoverIssuerMetadata(apiBase, req.body.sessionId, fetch, { trustSession: await issuerMetadataTrustSession(req.body.trustFramework, req.body.sessionId) });
+      const issuerMeta = await discoverIssuerMetadata(apiBase, req.body.sessionId, fetch, { trustSession: await issuerMetadataTrustSession(req.body.trustFramework, req.body.sessionId, { trustValidationMode: req.body.trustValidationMode }) });
       try {
         await logInfo(req.body.sessionId, "[/issue-codeflow] issuerMeta.token_endpoint=", issuerMeta?.token_endpoint);
         await logInfo(req.body.sessionId, "[/issue-codeflow] issuerMeta.credential_endpoint=", issuerMeta?.credential_endpoint);
@@ -943,7 +944,7 @@ export async function discoverIssuerMetadata(credentialIssuerBase, logSessionId,
               if (verified.payload?.credential_issuer !== credentialIssuerBase) throw new Error("signed issuer metadata credential_issuer does not match issuer");
               const chain = certificatesFromX5c(header.x5c);
               const decision = await checkAccessCertificateTrust({ session: trustSession, certificatePem: chain[0], certificateChain: chain, operation: "verify-issuer-metadata" });
-              if (!decision?.trusted) throw new Error(`issuer metadata access certificate is not trusted: ${decision?.reasonCode || "unknown"}`);
+              if (!trustDecisionAccepted(decision)) throw new Error(`issuer metadata access certificate is not trusted: ${decision?.reasonCode || "unknown"}`);
             }
             meta = { ...verified.payload, _signedMetadata: true, _metadataX5c: header.x5c };
           } else {
@@ -1168,11 +1169,7 @@ async function httpPostJson(url, body, logSessionId, extraHeaders = null) {
       requestId,
       method: "POST",
       url, 
-      headers: {
-        ...headers,
-        authorization: headers.authorization ? "<redacted>" : undefined,
-        DPoP: headers.DPoP ? "<redacted>" : undefined,
-      },
+      headers,
       body: body || {}
     }); 
   } catch {}
@@ -1194,8 +1191,8 @@ async function httpPostJson(url, body, logSessionId, extraHeaders = null) {
       url, 
       status: res.status,
       statusText: res.statusText,
-      headers: redactHttpLog(Object.fromEntries(res.headers.entries())),
-      body: responseBody ? redactHttpLog(responseBody) : (responseText ? "<non-JSON response>" : "")
+      headers: Object.fromEntries(res.headers.entries()),
+      body: responseBody ?? responseText
     }); 
   } catch {}
   return res;
@@ -1208,12 +1205,6 @@ async function httpPostForm(url, params, logSessionId, dpopHeader = null, extraH
   const requestId = `req_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
   
   try { console.log("[http] POST FORM ->", url); } catch {}
-  // Log form parameters (redact sensitive values like tokens)
-  const logParams = { ...params };
-  if (logParams.client_assertion) logParams.client_assertion = "<redacted>";
-  if (logParams.code) logParams.code = "<redacted>";
-  if (logParams.access_token) logParams.access_token = "<redacted>";
-  
   const headers = { "content-type": "application/x-www-form-urlencoded" };
   if (dpopHeader) {
     headers["DPoP"] = dpopHeader;
@@ -1227,13 +1218,8 @@ async function httpPostForm(url, params, logSessionId, dpopHeader = null, extraH
       requestId,
       method: "POST",
       url, 
-      headers: {
-        ...headers,
-        DPoP: dpopHeader ? "<redacted>" : undefined,
-        "OAuth-Client-Attestation": headers["OAuth-Client-Attestation"] ? "<redacted>" : undefined,
-        "OAuth-Client-Attestation-PoP": headers["OAuth-Client-Attestation-PoP"] ? "<redacted>" : undefined,
-      },
-      params: logParams,
+      headers,
+      params,
       hasDPoP: !!dpopHeader
     }); 
   } catch {}
@@ -1257,8 +1243,8 @@ async function httpPostForm(url, params, logSessionId, dpopHeader = null, extraH
       url, 
       status: res.status,
       statusText: res.statusText,
-      headers: redactHttpLog(Object.fromEntries(res.headers.entries())),
-      body: responseBody ? redactHttpLog(responseBody) : (responseText ? "<non-JSON response>" : "")
+      headers: Object.fromEntries(res.headers.entries()),
+      body: responseBody ?? responseText
     }); 
   } catch {}
   return res;
@@ -1683,8 +1669,8 @@ async function runPreAuthorizedIssuance({ profile = activeWalletProfile, walletC
   });
   console.log("[preauth] tokenRes.status=", tokenRes.status); 
   try { slog("[preauth] tokenRes.status", { status: tokenRes.status }); } catch {}
-  console.log("[preauth] tokenRes.headers:", redactHttpLog(Object.fromEntries(tokenRes.headers.entries())));
-  try { slog("[preauth] tokenRes.headers", { headers: redactHttpLog(Object.fromEntries(tokenRes.headers.entries())) }); } catch {}
+  console.log("[preauth] tokenRes.headers:", Object.fromEntries(tokenRes.headers.entries()));
+  try { slog("[preauth] tokenRes.headers", { headers: Object.fromEntries(tokenRes.headers.entries()) }); } catch {}
   
   const tokenResponseText = await tokenRes.text().catch(() => "");
   console.log("[preauth] tokenRes.body length:", tokenResponseText.length); 
@@ -1840,7 +1826,7 @@ async function runPreAuthorizedIssuance({ profile = activeWalletProfile, walletC
 
   console.log("[preauth] credentialEndpoint=", credentialEndpoint); try { slog("[preauth] credentialEndpoint", { credentialEndpoint }); } catch {}
   console.log("[preauth] requesting credential..."); try { slog("[preauth] requesting credential"); } catch {}
-  console.log("[preauth] credential request:", JSON.stringify({ ...credReq, proofs: { jwt: ["<redacted>"] } }, null, 2)); try { slog("[preauth] credential request body", { hasBody: true }); } catch {}
+  console.log("[preauth] credential request:", JSON.stringify(credReq, null, 2)); try { slog("[preauth] credential request body", { body: credReq }); } catch {}
   if (accessToken) {
     console.log("[preauth] access token received"); try { slog("[preauth] access token received", { hasAccessToken: true }); } catch {}
   } else {
@@ -1868,8 +1854,8 @@ async function runPreAuthorizedIssuance({ profile = activeWalletProfile, walletC
       requestId: credRequestId,
       endpoint: credentialEndpoint,
       method: "POST",
-      headers: { "content-type": "application/json", authorization: "DPoP <redacted>", DPoP: credentialDpopJwt ? "<redacted>" : undefined },
-      body: { ...credReq, proofs: { jwt: ["<redacted>"] } }
+      headers: credHeaders,
+      body: credReq
     }); 
   } catch {}
   const credRes = await requestWithResourceDpop({
@@ -1892,15 +1878,15 @@ async function runPreAuthorizedIssuance({ profile = activeWalletProfile, walletC
       endpoint: credentialEndpoint,
       status: credRes.status,
       statusText: credRes.statusText,
-      headers: redactHttpLog(Object.fromEntries(credRes.headers.entries())),
-      body: responseBody ? redactHttpLog(responseBody) : (responseText ? "<non-JSON response>" : "")
+      headers: Object.fromEntries(credRes.headers.entries()),
+      body: responseBody ?? responseText
     }); 
   } catch {}
 
   if (!credRes.ok) {
     console.error("[preauth] credential error", credRes.status); 
     try { slog("[preauth] credential error start", { status: credRes.status }); } catch {}
-    console.error("[preauth] credential error response headers:", redactHttpLog(Object.fromEntries(credRes.headers.entries())));
+    console.error("[preauth] credential error response headers:", Object.fromEntries(credRes.headers.entries()));
     console.error("[preauth] credential error response body:", responseText);
     
     let err = {};

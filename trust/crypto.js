@@ -1,9 +1,11 @@
 import { createHash, createPrivateKey, createPublicKey, createSign, createVerify, X509Certificate } from "node:crypto";
 import { compactVerify } from "jose";
 import { DOMParser } from "@xmldom/xmldom";
+import * as asn1js from "asn1js";
+import { Certificate as PkiCertificate, CertificateChainValidationEngine } from "pkijs";
 import xmlCrypto from "xml-crypto";
 import xpathModule from "xpath";
-import { KeyUsageFlags, KeyUsagesExtension, X509Certificate as PeculiarX509Certificate } from "@peculiar/x509";
+import { BasicConstraintsExtension, KeyUsageFlags, KeyUsagesExtension, X509Certificate as PeculiarX509Certificate } from "@peculiar/x509";
 import { TRUST_REASON_CODES, TrustListError } from "./errors.js";
 
 const { SignedXml } = xmlCrypto;
@@ -76,7 +78,7 @@ export function hasDigitalSignatureKeyUsage(certPem) {
  * or an x5c chain terminating at a service CA certificate.  The trusted list
  * remains the source of anchors; an x5c chain never introduces an anchor.
  */
-export function validateCertificatePath({ certificateChain, anchorCertificates = [], evaluationTime = new Date(), requireDigitalSignature = true, allowMissingKeyUsageForListedLeaf = false } = {}) {
+export function validateCertificatePath({ certificateChain, anchorCertificates = [], evaluationTime = new Date(), requireDigitalSignature = true, allowMissingKeyUsageForListedLeaf = false, validationMode = "pilot" } = {}) {
   const chain = (certificateChain || []).map((pem) => ({ pem, cert: certificateAt(pem, evaluationTime) }));
   const anchors = (anchorCertificates || []).map((pem) => ({ pem, cert: certificateAt(pem, evaluationTime) }));
   if (!chain.length || !anchors.length) {
@@ -90,18 +92,19 @@ export function validateCertificatePath({ certificateChain, anchorCertificates =
     // RFC 5280 4.2.1.3: absent KU is not an explicit restriction. This narrow
     // opt-in is for a WRPRC signing key published directly by its trusted list,
     // not for arbitrary descendants of a listed CA or WRPAC profile validation.
-    acceptedMissingKeyUsage = allowMissingKeyUsageForListedLeaf && !keyUsage && !leaf.cert.ca && directlyListed;
+    acceptedMissingKeyUsage = validationMode !== "cs18-draft" && allowMissingKeyUsageForListedLeaf && !keyUsage && !leaf.cert.ca && directlyListed;
     if (!acceptedMissingKeyUsage) {
       throw new TrustListError("Presented certificate is not permitted for digital signatures", TRUST_REASON_CODES.CERTIFICATE_PATH_INVALID);
     }
   }
   const candidates = [...chain.slice(1), ...anchors];
   let current = leaf;
+  const validatedPath = [leaf];
   const seen = new Set([certificateFingerprint(current.pem)]);
   for (;;) {
     const exactAnchor = anchors.find((anchor) => certificateFingerprint(anchor.pem) === certificateFingerprint(current.pem));
     if (exactAnchor) {
-      return { leafPem: leaf.pem, chain: chain.map((entry) => entry.pem), anchorPem: exactAnchor.pem, anchorFingerprint: certificateFingerprint(exactAnchor.pem), ...(acceptedMissingKeyUsage ? { keyUsage: "absent-directly-listed-signer" } : {}) };
+      return { leafPem: leaf.pem, chain: validatedPath.map((entry) => entry.pem), anchorPem: exactAnchor.pem, anchorFingerprint: certificateFingerprint(exactAnchor.pem), ...(acceptedMissingKeyUsage ? { keyUsage: "absent-directly-listed-signer" } : {}) };
     }
     const issuer = candidates.find((candidate) => {
       const fingerprint = certificateFingerprint(candidate.pem);
@@ -112,8 +115,89 @@ export function validateCertificatePath({ certificateChain, anchorCertificates =
         leafFingerprint: certificateFingerprint(leaf.pem),
       });
     }
+    if (validationMode === "cs18-draft") {
+      const peculiar = new PeculiarX509Certificate(issuer.cert.raw);
+      const constraints = peculiar.getExtension(BasicConstraintsExtension);
+      const subordinateCas = validatedPath.slice(1).filter((entry) => entry.cert.ca && !(entry.cert.checkIssued(entry.cert) && entry.cert.verify(entry.cert.publicKey))).length;
+      if (constraints?.pathLength !== undefined && subordinateCas > constraints.pathLength) {
+        throw new TrustListError("Certificate path exceeds a CA path-length constraint", TRUST_REASON_CODES.CERTIFICATE_PATH_INVALID, {
+          issuerFingerprint: certificateFingerprint(issuer.pem), pathLength: constraints.pathLength, subordinateCas,
+        });
+      }
+      const issuerUsage = peculiar.getExtension(KeyUsagesExtension);
+      if (issuerUsage && (issuerUsage.usages & KeyUsageFlags.keyCertSign) !== KeyUsageFlags.keyCertSign) {
+        throw new TrustListError("CA certificate Key Usage does not permit certificate signing", TRUST_REASON_CODES.CERTIFICATE_PATH_INVALID, {
+          issuerFingerprint: certificateFingerprint(issuer.pem),
+        });
+      }
+    }
     seen.add(certificateFingerprint(issuer.pem));
+    validatedPath.push(issuer);
     current = issuer;
+  }
+}
+
+function pkiCertificateFromPem(pem) {
+  const der = Buffer.from(String(pem).replace(/-----[^-]+-----/g, "").replace(/\s+/g, ""), "base64");
+  const view = new Uint8Array(der.buffer, der.byteOffset, der.byteLength);
+  const parsed = asn1js.fromBER(view);
+  if (parsed.offset === -1) throw new Error("Certificate is not valid DER");
+  return new PkiCertificate({ schema: parsed.result });
+}
+
+/** Strict RFC 5280 path validation against only the supplied authenticated anchors. */
+export async function validateCertificatePathWithPkijs({ certificateChain, anchorCertificates = [], evaluationTime = new Date() } = {}) {
+  if (!Array.isArray(certificateChain) || !certificateChain.length || !Array.isArray(anchorCertificates) || !anchorCertificates.length) {
+    throw new TrustListError("A presented certificate chain and listed trust anchor are required", TRUST_REASON_CODES.CERTIFICATE_PATH_INVALID);
+  }
+  try {
+    const certs = certificateChain.map(pkiCertificateFromPem);
+    const trustedCerts = anchorCertificates.map(pkiCertificateFromPem);
+    const all = [...certs, ...trustedCerts];
+    const processedCriticalExtensions = new Set([
+      "2.5.29.14", "2.5.29.15", "2.5.29.17", "2.5.29.18", "2.5.29.19",
+      "2.5.29.30", "2.5.29.31", "2.5.29.32", "2.5.29.33", "2.5.29.34",
+      "2.5.29.35", "2.5.29.36", "2.5.29.37", "2.5.29.54",
+    ]);
+    for (const certificate of all) {
+      for (const extension of certificate.extensions || []) {
+        if (extension.critical && (!extension.parsedValue || !processedCriticalExtensions.has(extension.extnID))) {
+          throw new Error(`Unsupported critical certificate extension ${extension.extnID}`);
+        }
+      }
+    }
+    const leafFingerprint = certificateFingerprint(certificateChain[0]);
+    if (anchorCertificates.some((anchor) => certificateFingerprint(anchor) === leafFingerprint)) {
+      certificateAt(certificateChain[0], evaluationTime);
+      return { certificatePath: certs, anchorCertificates };
+    }
+    const anchorFingerprints = new Set(anchorCertificates.map(certificateFingerprint));
+    const untrustedCerts = certs.filter((_, index) => !anchorFingerprints.has(certificateFingerprint(certificateChain[index]))).reverse();
+    const allPems = [...certificateChain, ...anchorCertificates];
+    const allCertificates = [...certs, ...trustedCerts];
+    const pkiPem = new Map(allCertificates.map((certificate) => [certificateFingerprint(derToPem(certificate.toSchema().toBER(false))), certificate]));
+    const engine = new CertificateChainValidationEngine({
+      certs: untrustedCerts,
+      trustedCerts,
+      checkDate: new Date(evaluationTime),
+      findIssuer: async (certificate) => {
+        const currentPem = allPems.find((pem) => certificateFingerprint(pem) === certificateFingerprint(derToPem(certificate.toSchema().toBER(false))));
+        if (!currentPem) return [];
+        const current = new X509Certificate(currentPem);
+        return [...certificateChain.slice(1), ...anchorCertificates].filter((candidate) => {
+          try {
+            const issuer = new X509Certificate(candidate);
+            return current.checkIssued(issuer) && current.verify(issuer.publicKey);
+          } catch { return false; }
+        }).map((pem) => pkiPem.get(certificateFingerprint(pem))).filter(Boolean);
+      },
+    });
+    const result = await engine.verify({}, globalThis.crypto);
+    if (!result.result) throw new Error(result.resultMessage || "PKI.js certificate path validation failed");
+    return { certificatePath: result.certificatePath || certs, anchorCertificates };
+  } catch (error) {
+    if (error instanceof TrustListError) throw error;
+    throw new TrustListError(`Strict certificate path validation failed: ${error.message}`, TRUST_REASON_CODES.CERTIFICATE_PATH_INVALID, { error: error.message, stack: error.stack });
   }
 }
 

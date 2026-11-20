@@ -2,6 +2,7 @@ import { assertTs12ScaPresentationConstraints } from "../src/lib/ts12Presentatio
 import { strict as assert } from "assert";
 import {
   makeSessionLogger,
+  logSessionFlowError,
   registerLogSinks,
   runWithLogContext,
 } from "../src/lib/logger.js";
@@ -65,5 +66,21 @@ describe("wallet logger", () => {
     assert.equal(sessionEntries[1].entry.level, "info");
     assert.equal(sessionEntries[1].entry.step, 1);
     assert.deepEqual(sessionEntries[1].entry.data, { ok: true });
+  });
+
+  it("records pre-authorized issuance errors without expanding the stack into the message", async () => {
+    const error = new Error("token response is not DPoP-bound");
+    error.name = "DpopRequiredError";
+    error.errorCode = "dpop_required";
+    logSessionFlowError("preauth-session", "[/session] pre-authorized issuance error:", error);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(sessionEntries.length, 1);
+    assert.equal(sessionEntries[0].sessionId, "preauth-session");
+    assert.equal(sessionEntries[0].entry.message, "[/session] pre-authorized issuance error:");
+    assert.deepEqual(sessionEntries[0].entry.data, {
+      error: "token response is not DPoP-bound",
+      errorCode: "dpop_required",
+    });
   });
 });
