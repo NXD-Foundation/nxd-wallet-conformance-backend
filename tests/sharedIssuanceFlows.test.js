@@ -303,6 +303,15 @@ describe('Shared Issuance Flows', function () {
   };
 
   describe('POST /par', () => {
+    it('CS-01 rejects a PAR request with missing state as invalid_request', async () => {
+      const { validateCs01ParRequiredParameters } = codeFlowModule;
+      const validationError = validateCs01ParRequiredParameters({
+        client_id: 'wallet', scope: 'openid', response_type: 'code',
+        redirect_uri: 'https://wallet.example/callback', code_challenge: 'challenge-value', nonce: 'nonce-value',
+      });
+      expect(validationError).to.match(/state/i);
+    });
+
     const setupBusinessPar = async () => {
       const provider = await getX509ProviderMaterial();
       const clientPair = await jose.generateKeyPair('ES256', { extractable: true });

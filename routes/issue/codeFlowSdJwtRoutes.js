@@ -232,6 +232,12 @@ function validateAuthorizationRequest(response_type, code_challenge, authorizati
   return errors;
 }
 
+export function validateCs01ParRequiredParameters(request) {
+  const required = ["client_id", "scope", "code_challenge", "redirect_uri", "response_type", "state", "nonce"];
+  const missing = required.filter((name) => request[name] === undefined || request[name] === null || request[name] === "");
+  return missing.length ? `CS-01 requires PAR parameter(s): ${missing.join(", ")}` : null;
+}
+
 async function handlePARRequest(request_uri) {
   if (!request_uri) return null;
 
@@ -644,6 +650,9 @@ codeFlowRouterSDJWT.post(["/par", "/authorize/par"], async (req, res) => {
       wallet_issuer_id: req.body.wallet_issuer_id,
       user_hint: req.body.user_hint,
     };
+
+    const cs01MissingParameter = validateCs01ParRequiredParameters(requestData);
+    if (cs01MissingParameter) return res.status(400).json({ error: "invalid_request", error_description: cs01MissingParameter });
 
     if (slog) {
       const bodyForLog = { ...req.body };
