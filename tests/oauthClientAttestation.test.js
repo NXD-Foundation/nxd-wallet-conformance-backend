@@ -11,6 +11,7 @@ import {
   validateOAuthClientAttestationFromRequest,
   getOAuthClientAttestationHeaders,
   validateWiaStructureClaims,
+  resolveWiaVerificationKey,
 } from "../utils/oauthClientAttestation.js";
 import { resolveWalletAttestationProfile } from "../utils/trustFrameworkPolicy.js";
 
@@ -69,6 +70,18 @@ function corruptJwtSignature(jwt) {
   parts[2] = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
   return parts.join(".");
 }
+
+describe("WIA x5c signature binding", () => {
+  it("rejects a WIA signed by configured JWKS when its x5c leaf has a different key", async () => {
+    const fs = await import("node:fs/promises");
+    const { attester, attesterPub } = await mintKeyPairs();
+    const cert = await fs.readFile("tests/fixtures/trust/webuild-wp4/keys/pid.crt", "utf8");
+    const x5c = [cert.replace(/-----[^-]+-----/g, "").replace(/\s/g, "")];
+    const token = await new jose.SignJWT({ sub: "wallet", exp: Math.floor(Date.now() / 1000) + 300 })
+      .setProtectedHeader({ alg: ALG, typ: CLIENT_ATTESTATION_JWT_TYP, kid: attesterPub.kid, x5c }).sign(attester.privateKey);
+    await assert.rejects(() => resolveWiaVerificationKey(token, { keys: [attesterPub] }));
+  });
+});
 
 describe("oauthClientAttestation", () => {
   it("rejects unknown session profiles as invalid_request input", () => {

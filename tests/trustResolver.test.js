@@ -88,9 +88,18 @@ describe("Phase 2 explicit trust resolver", () => {
     setTrustResolverForTests(resolver);
     try {
       const header = { x5c: [leafPem.replace(/-----[^-]+-----/g, "").replace(/\s/g, "")] };
+      const { certificatesFromX5c } = await import("../trust/crypto.js");
+      const rootB64 = rootPem.replace(/-----[^-]+-----/g, "").replace(/\s/g, "");
+      expect(certificatesFromX5c([...header.x5c, rootB64])).to.have.length(2);
+      expect(() => certificatesFromX5c([rootB64, ...header.x5c])).to.throw(/order/i);
       const result = await checkWalletProviderTrust({ session: { trustPolicy: { mode: "webuild", profile: profile.id } }, payload: { wallet_name: "Listed Wallet" }, header });
       expect(result).to.include({ trusted: true });
       expect(result.evidence.certificatePath.anchorFingerprint).to.equal(certificateFingerprint(rootPem));
+      const withAnchor = await checkWalletProviderTrust({
+        session: { trustPolicy: { mode: "webuild", profile: profile.id } },
+        payload: { wallet_name: "Listed Wallet" }, header: { x5c: [...header.x5c, rootB64] },
+      });
+      expect(withAnchor).to.include({ trusted: true });
       const unrelated = structuredClone(candidate.lists["wallet-provider"].entities[0]);
       unrelated.id = unrelated.name = "misleading-legacy-issuer";
       unrelated.services[0].certificates = [];

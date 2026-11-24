@@ -53,7 +53,16 @@ export function certificatesFromX5c(x5c) {
   if (!Array.isArray(x5c) || !x5c.length || x5c.some((value) => typeof value !== "string")) {
     throw new TrustListError("Signed document does not contain an X.509 certificate chain", TRUST_REASON_CODES.LIST_SIGNATURE_INVALID);
   }
-  return x5c.map((value) => derToPem(Buffer.from(value, "base64")));
+  const chain = x5c.map((value) => derToPem(Buffer.from(value, "base64")));
+  const certificates = chain.map((pem) => new X509Certificate(pem));
+  for (let i = 1; i < certificates.length; i++) {
+    const child = certificates[i - 1];
+    const issuer = certificates[i];
+    if (child.raw.equals(issuer.raw) || !child.checkIssued(issuer) || !child.verify(issuer.publicKey)) {
+      throw new TrustListError("x5c certificates must be ordered from signer to issuer", TRUST_REASON_CODES.CERTIFICATE_PATH_INVALID);
+    }
+  }
+  return chain;
 }
 
 function certificateAt(certPem, evaluationTime) {

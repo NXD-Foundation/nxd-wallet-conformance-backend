@@ -740,7 +740,11 @@ Section 3.6 and Section 4.2.
   CS-04 WIA validation requires a non-blank string `wallet_name`. For opted-in
   WIA trust decisions it must exactly match the certificate-matched service's
   `ServiceName` (case-sensitive, without trimming or alias normalization).
-  KA trust decisions do not require a wallet name. Validity, chain signatures, CA constraints, and
+  KA trust decisions do not require a wallet name.
+  Presented `x5c` chains must be ordered signer-first, with each following
+  certificate issuing the previous one. The listed anchor may be included or
+  omitted. WIA verification checks the same `x5c` leaf used for LoTE trust;
+  configured attester JWKS remain an additional signature constraint. Validity, chain signatures, CA constraints, and
   digital-signature key usage are checked. If a certificate advertises CRL
   distribution points, invalid, stale, unavailable, or revoking CRLs fail an
   opted-in decision; certificates without endpoints are recorded as

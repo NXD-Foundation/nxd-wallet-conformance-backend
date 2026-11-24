@@ -9,6 +9,7 @@ import fs from "fs";
 import path from "path";
 import { createHash } from "node:crypto";
 import * as jose from "jose";
+import { certificatesFromX5c } from "../trust/crypto.js";
 import { classifyBusinessWalletAttestation } from "./businessWalletProfile.js";
 import {
   buildWiaStatusListEvidence,
@@ -276,6 +277,16 @@ export async function resolveWiaVerificationKey(attestationJwt, trustedJwks, pro
   const header = protectedHeader ?? jose.decodeProtectedHeader(attestationJwt);
   const alg = header?.alg || "ES256";
 
+  // Bind signature verification to the same leaf supplied to LoTE evaluation.
+  // Configured JWKS, when present, remain an additional verification constraint.
+  let x5cVerification = null;
+  if (header?.x5c !== undefined) {
+    const chain = certificatesFromX5c(header.x5c);
+    const key = await jose.importX509(chain[0], alg);
+    await jose.jwtVerify(attestationJwt, key, { algorithms: [alg], typ: CLIENT_ATTESTATION_JWT_TYP });
+    x5cVerification = { verified: true, protectedHeader: header, alg, verificationJwk: publicJwkOnly(await jose.exportJWK(key)) };
+  }
+
   if (trustedJwks?.keys?.length) {
     const JWKS = jose.createLocalJWKSet(trustedJwks);
     const { protectedHeader: verifiedHeader } = await jose.jwtVerify(attestationJwt, JWKS, {
@@ -283,15 +294,10 @@ export async function resolveWiaVerificationKey(attestationJwt, trustedJwks, pro
       algorithms: [alg],
     });
     const verificationJwk = await matchingTrustedAttesterJwk(attestationJwt, trustedJwks, alg);
-    return { verified: true, protectedHeader: verifiedHeader, alg, verificationJwk };
+    return x5cVerification || { verified: true, protectedHeader: verifiedHeader, alg, verificationJwk };
   }
 
-  if (Array.isArray(header?.x5c) && header.x5c.length > 0) {
-    const key = await jose.importX509(base64DerToPem(header.x5c[0]), alg);
-    await jose.jwtVerify(attestationJwt, key, { algorithms: [alg], typ: CLIENT_ATTESTATION_JWT_TYP });
-    const verificationJwk = publicJwkOnly(await jose.exportJWK(key));
-    return { verified: true, protectedHeader: header, alg, verificationJwk };
-  }
+  if (x5cVerification) return x5cVerification;
 
   if (header?.jwk) {
     const key = await jose.importJWK(header.jwk, alg);
