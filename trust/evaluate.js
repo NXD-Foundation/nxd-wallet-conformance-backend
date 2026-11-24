@@ -11,7 +11,18 @@ const STRICT_ISSUANCE_SERVICE_TYPES = Object.freeze({
   "qeaa-provider": "http://uri.etsi.org/TrstSvc/Svctype/EAA/Q",
 });
 
-function identityMatches(entity, presentedIdentity) {
+function chainsToService(service, presentedIdentity, evaluationTime, validationMode) {
+  if (!presentedIdentity.certificateChain?.length || !service.certificatePems?.length) return false;
+  try {
+    validateCertificatePath({ certificateChain: presentedIdentity.certificateChain,
+      anchorCertificates: service.certificatePems, evaluationTime, validationMode });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function identityMatches(entity, presentedIdentity, evaluationTime, validationMode) {
   if (!presentedIdentity) return true;
   const values = [presentedIdentity.entityId, presentedIdentity.issuer, presentedIdentity.name].filter(Boolean);
   if (values.includes(entity.id) || values.includes(entity.name)) return true;
@@ -19,7 +30,8 @@ function identityMatches(entity, presentedIdentity) {
     const chainFingerprints = (presentedIdentity.certificateChain || []).map((certificatePem) => certificateFingerprint(certificatePem));
     return entity.services?.some((service) =>
       service.certificates?.includes(presentedIdentity.certificateFingerprint)
-      || service.certificates?.some((fingerprint) => chainFingerprints.includes(fingerprint)),
+      || service.certificates?.some((fingerprint) => chainFingerprints.includes(fingerprint))
+      || chainsToService(service, presentedIdentity, evaluationTime, validationMode),
     ) || false;
   }
   return false;
@@ -66,15 +78,18 @@ export function evaluateTrust({ snapshot, role, operation = null, presentedIdent
   }
   const negatives = [];
   for (const list of lists) {
-    const entity = list.entities.find((candidate) => identityMatches(candidate, presentedIdentity));
+    const entity = list.entities.find((candidate) => identityMatches(candidate, presentedIdentity, evaluationTime, validationMode));
     if (!entity) {
       negatives.push(result(snapshot, false, TRUST_REASON_CODES.ENTITY_NOT_LISTED, { role, operation, credentialContext, list: listEvidence(list) }));
       continue;
     }
     const service = entity.services.find((candidate) => {
+      if (Object.hasOwn(credentialContext, "walletName") &&
+        (typeof credentialContext.walletName !== "string" || !credentialContext.walletName.trim() || candidate.name !== credentialContext.walletName)) return false;
       if ((strictServiceType || credentialContext.serviceType) && candidate.type !== (strictServiceType || credentialContext.serviceType)) return false;
       const chainFingerprints = (presentedIdentity.certificateChain || []).map((certificatePem) => certificateFingerprint(certificatePem));
-      if (fingerprint && !candidate.certificates.some((cert) => cert === fingerprint || cert === presentedIdentity.certificateFingerprint || chainFingerprints.includes(cert))) return false;
+      if (fingerprint && !candidate.certificates.some((cert) => cert === fingerprint || cert === presentedIdentity.certificateFingerprint || chainFingerprints.includes(cert))
+        && !chainsToService(candidate, presentedIdentity, evaluationTime, validationMode)) return false;
       return true;
     });
     if (!service) {

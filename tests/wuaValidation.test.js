@@ -213,6 +213,11 @@ describe("validateWIA", () => {
       .sign(privateKey);
   }
 
+  it("accepts a TS3 WIA without the removed iss claim", async () => {
+    const token = await signWia({ sub: "wallet-instance", exp: Math.floor(Date.now() / 1000) + 3600 });
+    expect(await validateWIA(token)).to.include({ valid: true });
+  });
+
   it("accepts a WIA that omits optional iat when exp is present", async () => {
     const now = Math.floor(Date.now() / 1000);
     const jwt = await signWia({

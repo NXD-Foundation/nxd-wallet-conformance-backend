@@ -102,6 +102,7 @@ export async function signWia({
 } = {}) {
   const now = Math.floor(Date.now() / 1000);
   return new jose.SignJWT({
+    wallet_name: "Test Wallet",
     sub: clientId,
     iat: now,
     exp: now + 3600,

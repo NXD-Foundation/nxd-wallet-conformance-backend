@@ -36,6 +36,7 @@ async function signAttestation({
 }) {
   const now = Math.floor(Date.now() / 1000);
   return new jose.SignJWT({
+    wallet_name: "Test Wallet",
     iss: attesterIss,
     sub: clientId,
     ...(includeIat ? { iat: now } : {}),
@@ -165,6 +166,14 @@ describe("oauthClientAttestation", () => {
   });
 
   describe("validateOAuthClientAttestationFromRequest", () => {
+    it("rejects a CS-04 WIA with missing, blank, or non-string wallet_name", () => {
+      const payload = { sub: "wallet", exp: Math.floor(Date.now() / 1000) + 300,
+        cnf: { jwk: { kty: "EC", crv: "P-256", x: "x", y: "y" } } };
+      for (const wallet_name of [undefined, "", "  ", 42]) {
+        expect(() => validateWiaStructureClaims({ ...payload, wallet_name })).to.throw(/wallet_name/);
+      }
+    });
+
     it("classifies complete business claims as CS-05 and rejects partial business identity", () => {
       const now = Math.floor(Date.now() / 1000);
       const payload = {
@@ -183,6 +192,7 @@ describe("oauthClientAttestation", () => {
     it("accepts a WIA that omits optional iat when exp is present", () => {
       const now = Math.floor(Date.now() / 1000);
       const payload = {
+        wallet_name: "Test Wallet",
         sub: "wallet-instance",
         exp: now + 3600,
         cnf: { jwk: { kty: "EC", crv: "P-256", x: "x", y: "y" } },
@@ -194,6 +204,7 @@ describe("oauthClientAttestation", () => {
     it("rejects a WIA that omits required exp", () => {
       const now = Math.floor(Date.now() / 1000);
       expect(() => validateWiaStructureClaims({
+        wallet_name: "Test Wallet",
         sub: "wallet-instance",
         iat: now,
         cnf: { jwk: { kty: "EC", crv: "P-256", x: "x", y: "y" } },
@@ -203,6 +214,7 @@ describe("oauthClientAttestation", () => {
     it("still rejects a WIA whose exp-iat span is 24 hours or more", () => {
       const now = Math.floor(Date.now() / 1000);
       expect(() => validateWiaStructureClaims({
+        wallet_name: "Test Wallet",
         sub: "wallet-instance",
         iat: now,
         exp: now + 24 * 3600,
@@ -213,6 +225,7 @@ describe("oauthClientAttestation", () => {
     it("warns instead of rejecting a WIA whose iat is more than 60 seconds in the future", () => {
       const now = Math.floor(Date.now() / 1000);
       const payload = {
+        wallet_name: "Test Wallet",
         sub: "wallet-instance", iat: now + 600, exp: now + 3600,
         cnf: { jwk: { kty: "EC", crv: "P-256", x: "x", y: "y" } },
       };
@@ -266,6 +279,24 @@ describe("oauthClientAttestation", () => {
       expect(r.attestationPayload.sub).to.equal(clientId);
       expect(r.attestationPayload.exp).to.be.a("number");
       expect(r.attestationPayload.iat).to.equal(undefined);
+    });
+
+    it("accepts an omitted WIA iss while still rejecting a mismatched PoP iss", async () => {
+      const { attester, wallet, attesterPub, walletPub } = await mintKeyPairs();
+      const clientId = "wallet-without-wia-iss";
+      const att = await signAttestation({ attesterPrivateKey: attester.privateKey, walletPub, clientId, attesterIss: undefined });
+      // signAttestation defaults its issuer; mint the actual TS3 payload without it.
+      const { iss, ...claims } = jose.decodeJwt(att);
+      const withoutIss = await new jose.SignJWT(claims).setProtectedHeader(jose.decodeProtectedHeader(att)).sign(attester.privateKey);
+      for (const popIssuer of [clientId, "wrong-wallet"]) {
+        const pop = await signPop({ walletPrivateKey: wallet.privateKey, clientId: popIssuer });
+        const result = await validateOAuthClientAttestationFromRequest({
+          headers: { "oauth-client-attestation": withoutIss, "oauth-client-attestation-pop": pop },
+          clientId, authorizationServerIssuer: AS_ISSUER, trustedJwks: { keys: [attesterPub] },
+        });
+        expect(result.ok).to.equal(popIssuer === clientId);
+        if (popIssuer !== clientId) expect(result.errorDescription).to.match(/PoP iss does not match attestation sub/);
+      }
     });
 
     it("succeeds end-to-end for a valid pair", async () => {

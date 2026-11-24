@@ -732,7 +732,15 @@ Section 3.6 and Section 4.2.
   configuration supplies the distinct certificate through
   `TRUST_WRPRC_CERT_PATH`; otherwise no WRPRC decision is attempted.
 - Listed certificates are accepted as an exact service leaf or as a CA anchor
-  for a presented chain. Validity, chain signatures, CA constraints, and
+  for a presented chain. Candidate selection also tries listed CA anchors absent
+  from the presented chain; a WIA need not carry the anchor or an `iss` lookup
+  hint. Required intermediates must still be supplied. WIA `iss` is ignored for
+  Wallet Provider lookup and is not required by the legacy WIA validator
+  (TS3 v1.5+). The separate Client Attestation PoP `iss` must still equal WIA `sub`.
+  CS-04 WIA validation requires a non-blank string `wallet_name`. For opted-in
+  WIA trust decisions it must exactly match the certificate-matched service's
+  `ServiceName` (case-sensitive, without trimming or alias normalization).
+  KA trust decisions do not require a wallet name. Validity, chain signatures, CA constraints, and
   digital-signature key usage are checked. If a certificate advertises CRL
   distribution points, invalid, stale, unavailable, or revoking CRLs fail an
   opted-in decision; certificates without endpoints are recorded as

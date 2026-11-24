@@ -51,6 +51,7 @@ const ALG = "ES256";
 async function signSelfContainedWia({ privateKey, publicJwk, clientId = "wua-test-client", clientStatusExpOffsetSeconds = 86400 * 60 }) {
   const now = Math.floor(Date.now() / 1000);
   return new jose.SignJWT({
+    wallet_name: "Test Wallet",
     sub: clientId,
     iat: now,
     exp: now + 3600,
@@ -507,6 +508,7 @@ describe("strict WIA validation (oauthClientAttestation)", () => {
   it("validateWiaStructureClaims rejects expired client_status", () => {
     const now = Math.floor(Date.now() / 1000);
     expect(() => validateWiaStructureClaims({
+      wallet_name: "Test Wallet",
       sub: "client-1",
       iat: now - 3600,
       exp: now + 3600,
@@ -521,6 +523,7 @@ describe("strict WIA validation (oauthClientAttestation)", () => {
   it("validateWiaStructureClaims warns when client_status is absent unless required", () => {
     const now = Math.floor(Date.now() / 1000);
     const { warnings } = validateWiaStructureClaims({
+      wallet_name: "Test Wallet",
       sub: "client-1",
       iat: now,
       exp: now + 3600,
@@ -528,6 +531,7 @@ describe("strict WIA validation (oauthClientAttestation)", () => {
     });
     expect(warnings.some((w) => /client_status/i.test(w))).to.equal(true);
     expect(() => validateWiaStructureClaims({
+      wallet_name: "Test Wallet",
       sub: "client-1",
       iat: now,
       exp: now + 3600,
@@ -538,6 +542,7 @@ describe("strict WIA validation (oauthClientAttestation)", () => {
   it("validateWiaStructureClaims rejects incomplete status_list when required", () => {
     const now = Math.floor(Date.now() / 1000);
     expect(() => validateWiaStructureClaims({
+      wallet_name: "Test Wallet",
       sub: "client-1",
       iat: now,
       exp: now + 3600,

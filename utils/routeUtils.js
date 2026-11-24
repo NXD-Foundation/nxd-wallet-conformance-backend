@@ -1968,11 +1968,6 @@ export const validateWIA = async (wiaJwt, sessionId = null) => {
       return { valid: false, error: withSpecRef('WIA JWT has expired', WUA_SPEC_REF, OID4VCI_WALLET_ATTESTATION_SPEC_REF) };
     }
 
-    // Check required claims (basic structure check)
-    if (!decoded.payload.iss) {
-      return { valid: false, error: withSpecRef('WIA JWT missing iss claim', WUA_SPEC_REF, OID4VCI_WALLET_ATTESTATION_SPEC_REF) };
-    }
-
     // draft-ietf-oauth-attestation-based-client-auth-08 §5.1: exp is REQUIRED, iat is OPTIONAL.
     // CS-04 §7.1 time-to-live under 24 hours is checked only when iat is present.
     if (typeof decoded.payload.exp !== 'number') {

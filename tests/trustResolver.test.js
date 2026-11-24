@@ -59,6 +59,67 @@ describe("Phase 2 explicit trust resolver", () => {
     }
   });
 
+  it("trusts a WIA leaf when its listed CA is omitted from x5c and iss is absent", async () => {
+    const { checkWalletProviderTrust, setTrustResolverForTests, clearTrustResolverForTests } = await import("../utils/trustFrameworkPolicy.js");
+    const { certificateFingerprint } = await import("../trust/crypto.js");
+    const pair = forge.pki.rsa.generateKeyPair(1024);
+    const root = forge.pki.createCertificate();
+    root.publicKey = pair.publicKey; root.serialNumber = "10";
+    root.validity.notBefore = new Date("2020-01-01"); root.validity.notAfter = new Date("2035-01-01");
+    root.setSubject([{ name: "commonName", value: "Wallet CA" }]); root.setIssuer(root.subject.attributes);
+    root.setExtensions([{ name: "basicConstraints", cA: true }, { name: "keyUsage", keyCertSign: true }]);
+    root.sign(pair.privateKey, forge.md.sha256.create());
+    const leaf = forge.pki.createCertificate();
+    leaf.publicKey = forge.pki.rsa.generateKeyPair(1024).publicKey; leaf.serialNumber = "11";
+    leaf.validity.notBefore = root.validity.notBefore; leaf.validity.notAfter = root.validity.notAfter;
+    leaf.setSubject([{ name: "commonName", value: "Wallet signer" }]); leaf.setIssuer(root.subject.attributes);
+    leaf.setExtensions([{ name: "keyUsage", digitalSignature: true }]);
+    leaf.sign(pair.privateKey, forge.md.sha256.create());
+    const rootPem = forge.pki.certificateToPem(root);
+    const leafPem = forge.pki.certificateToPem(leaf);
+    const candidate = structuredClone(snapshot);
+    const service = candidate.lists["wallet-provider"].entities[0].services[0];
+    service.name = "Listed Wallet";
+    service.certificates = [certificateFingerprint(rootPem)]; service.certificatePems = [rootPem];
+    const resolver = createTrustResolver({ profile, snapshot: candidate });
+    const request = { framework: profile.id, role: "wallet-provider", operation: "verify-wia",
+      presentedIdentity: { certificateFingerprint: certificateFingerprint(leafPem), certificateChain: [leafPem] } };
+    expect(await resolver.resolve(request)).to.include({ trusted: true });
+    setTrustResolverForTests(resolver);
+    try {
+      const header = { x5c: [leafPem.replace(/-----[^-]+-----/g, "").replace(/\s/g, "")] };
+      const result = await checkWalletProviderTrust({ session: { trustPolicy: { mode: "webuild", profile: profile.id } }, payload: { wallet_name: "Listed Wallet" }, header });
+      expect(result).to.include({ trusted: true });
+      expect(result.evidence.certificatePath.anchorFingerprint).to.equal(certificateFingerprint(rootPem));
+      const unrelated = structuredClone(candidate.lists["wallet-provider"].entities[0]);
+      unrelated.id = unrelated.name = "misleading-legacy-issuer";
+      unrelated.services[0].certificates = [];
+      unrelated.services[0].certificatePems = [];
+      candidate.lists["wallet-provider"].entities.unshift(unrelated);
+      const legacyIssuerResult = await checkWalletProviderTrust({
+        session: { trustPolicy: { mode: "webuild", profile: profile.id } },
+        payload: { iss: unrelated.id, wallet_name: "Listed Wallet" }, header,
+      });
+      expect(legacyIssuerResult).to.include({ trusted: true });
+      expect(legacyIssuerResult.evidence.entity).to.equal("entity-wallet-provider");
+      const otherService = structuredClone(service);
+      otherService.name = "Other Wallet";
+      otherService.certificates = [];
+      otherService.certificatePems = [];
+      candidate.lists["wallet-provider"].entities[1].services.push(otherService);
+      for (const wallet_name of [undefined, "Other Wallet", "listed wallet"]) {
+        const mismatch = await checkWalletProviderTrust({
+          session: { trustPolicy: { mode: "webuild", profile: profile.id } }, payload: { wallet_name }, header,
+        });
+        expect(mismatch).to.include({ trusted: false });
+      }
+      // A matching provider name cannot authorize an unrelated certificate.
+      request.presentedIdentity.entityId = "entity-wallet-provider";
+      request.presentedIdentity.certificateChain = [await fs.readFile("tests/fixtures/trust/webuild-wp4/keys/pid.crt", "utf8")];
+      expect(await resolver.resolve(request)).to.include({ trusted: false });
+    } finally { clearTrustResolverForTests(); }
+  });
+
   it("marks strict-mode trust acceptance separately from trust status", async () => {
     const rootPair = forge.pki.rsa.generateKeyPair(1024);
     const root = forge.pki.createCertificate();

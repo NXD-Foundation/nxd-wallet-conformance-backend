@@ -192,12 +192,10 @@ export async function checkWalletProviderTrust({ session, attestationJwt = null,
       role: "wallet-provider",
       operation,
       presentedIdentity: {
-        issuer: resolvedPayload.iss || null,
-        entityId: resolvedPayload.iss || null,
         certificateFingerprint: certificateFingerprint(certPem),
         certificateChain: certificatesFromX5c(resolvedHeader.x5c),
       },
-      credentialContext: { attestationType: operation },
+      credentialContext: { attestationType: operation, ...(operation === "verify-wia" ? { walletName: resolvedPayload.wallet_name ?? null } : {}) },
       policy: { requireRevocation: false, validationMode: trustPolicy.validationMode || "pilot" },
     });
   } catch (error) {

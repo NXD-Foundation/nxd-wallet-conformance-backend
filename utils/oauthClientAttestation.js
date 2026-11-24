@@ -353,6 +353,9 @@ export function validateWiaStructureClaims(payload, { requireClientStatus = fals
   }
   assertCnfJwkIsPublicOnly(payload.cnf.jwk);
   const walletProfile = classifyBusinessWalletAttestation(payload, requestedProfile);
+  if (walletProfile.resolvedProfile === "cs04" && (typeof payload.wallet_name !== "string" || !payload.wallet_name.trim())) {
+    throw new Error("CS-04 WIA wallet_name is required");
+  }
   const requireStatus = requireClientStatus || walletProfile.resolvedProfile === "cs05";
 
   if (!payload.client_status) {
